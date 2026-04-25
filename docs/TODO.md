@@ -8,11 +8,11 @@ Ordered by what blocks the most other things. Pick from the top.
 
 - [ ] **`StatsUpdater`** — `ThreadStatsEntity` is never written after `FirstLaunchSyncWorker`. Stats screen shows zeros for new messages. Needs an incremental updater called from `SmsSyncHandler` on every insert/delete.
 
-- [ ] **Wire "Back up now"** — `BackupSettingsScreen` has a dead button. Inject `BackupScheduler` via `hiltViewModel` or a Hilt entry point and call `runNow()`.
+- [x] **Wire "Back up now"** — `BackupSettingsViewModel` injects `BackupScheduler` via `@HiltViewModel`; button calls `viewModel.runNow()`.
 
 - [ ] **SMS send** — `SmsManagerWrapper.sendTextMessage()` exists but nothing calls it. Add a reply bar to `ThreadScreen` and wire it up.
 
-- [ ] **Selection → Export** — `ThreadScreen` has selection mode UI but Copy/Share buttons are no-ops. Pass selected messages to `ExportBottomSheet`.
+- [x] **Selection → Export** — Copy/Share toolbar buttons in `ThreadScreen` now open `ExportBottomSheet` with the selected messages.
 
 ---
 

@@ -30,8 +30,8 @@ Build order follows the spec. Each phase depends on the previous.
 - [ ] **Range select** — long-press first message, tap last to select range
 - [ ] **Message grouping** — consecutive messages from same sender within a few minutes cluster visually (no gap, shared bubble radius)
 - [ ] Wire "Select day" to `ThreadViewModel.selectDay()`
-- [ ] Wire Copy action to `ExportFormatter` + clipboard
-- [ ] Wire Share to `ExportBottomSheet`
+- [x] Wire Copy action to `ExportFormatter` + clipboard
+- [x] Wire Share to `ExportBottomSheet`
 - [ ] Per-thread backup policy UI — `⋮` menu → 3-option radio dialog
 - [ ] SMS send UI — reply bar at bottom, calls `SmsManagerWrapper`
 
@@ -45,7 +45,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Retention count (1–30, default 5)
 - [x] Last backup status in SharedPrefs
 - [x] `BackupSettingsScreen` scaffold
-- [ ] Wire "Back up now" button to `BackupScheduler.runNow()` via injected instance
+- [x] Wire "Back up now" button to `BackupScheduler.runNow()` via injected instance
 - [ ] Show backup history list (scan `getExternalFilesDir("backups")`)
 - [ ] `WorkManager` status observer — show live "Backup running…" indicator
 - [ ] Backup restore (read JSON, apply to Room with migration version check)
@@ -57,7 +57,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] `ExportFormatter.formatForCopy()` — clean labeled transcript per spec
 - [x] `ExportBottomSheet` — Copy + Share buttons
 - [ ] **Rendered image export** — draw conversation to `Canvas`, convert to `Bitmap`, share via `FileProvider` + `ACTION_SEND`
-- [ ] Wire selection → `ExportBottomSheet` from `ThreadScreen`
+- [x] Wire selection → `ExportBottomSheet` from `ThreadScreen`
 - [ ] AI Export as distinct format option (same as Copy but labelled separately in sheet)
 
 ---
