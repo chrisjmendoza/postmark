@@ -105,6 +105,30 @@ See Phase 3 above for remaining items.
 
 ---
 
+## Phase 9 — Monetization (one-time unlock, no subscription)
+
+Philosophy: core app is free forever. A single one-time "Postmark Pro" purchase unlocks power features. No ads. No subscription. You buy it, you own it.
+
+### Free tier (everyone)
+- Full SMS inbox, send/receive
+- Thread view with search
+- Apple Reaction parsing
+- Basic backup (last 1 backup, global policy only)
+- Export as text (copy/share)
+
+### Postmark Pro (one-time purchase via Google Play Billing)
+- [ ] **In-app purchase flow** — single non-consumable SKU ("Postmark Pro"); verify via Google Play Billing Library; store entitlement in encrypted SharedPrefs
+- [ ] **Image export** — render conversation to PNG, share via FileProvider (already on roadmap; gate behind Pro)
+- [ ] **Backup power features** — configurable retention (1–30), per-thread backup policy, backup restore, Wi-Fi/charging-only toggles (gate advanced options behind Pro; basic 1-backup still free)
+- [ ] **Stats charts and heatmap** — monthly bar chart, sent/received doughnut, GitHub-style heatmap (gate behind Pro)
+- [ ] **Extended Apple Reaction language packs** — additional locale JSON assets downloadable at runtime
+- [ ] **Search filters** — date range, thread filter, reaction emoji filter (gate advanced filters behind Pro; basic text search stays free)
+
+### Support the dev (tip jar)
+- [ ] **"Buy me a coffee" SKU** — consumable Play Billing item; shown as a low-pressure prompt after ~30 days of use or after a Pro feature is tried; never shown more than once per session
+
+---
+
 ## Future / Nice-to-have
 
 - MMS full sync (image/video attachments stored as file references)
