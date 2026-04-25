@@ -1,0 +1,3 @@
+-keep class com.plusorminustwo.postmark.data.db.entity.** { *; }
+-keep class com.plusorminustwo.postmark.domain.model.** { *; }
+-keepattributes *Annotation*

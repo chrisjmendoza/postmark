@@ -1,0 +1,70 @@
+{
+  "patterns": [
+    {
+      "emoji": "❤️",
+      "verbs": ["Loved", "Vond geweldig", "aimé", "liebte", "Le encantó"],
+      "removeVerbs": [
+        "Removed a heart from",
+        "Verwijderde een hart van",
+        "supprimé un cœur de",
+        "entfernte ein Herz von",
+        "eliminó un corazón de"
+      ]
+    },
+    {
+      "emoji": "😂",
+      "verbs": ["Laughed at", "Lacte om", "rit de", "lachte über", "Se rio de"],
+      "removeVerbs": [
+        "Removed a laugh from",
+        "Verwijderde een lach van",
+        "supprimé un rire de",
+        "entfernte ein Lachen von",
+        "eliminó una risa de"
+      ]
+    },
+    {
+      "emoji": "👍",
+      "verbs": ["Liked", "Vond leuk", "a aimé", "mochte", "Le gustó"],
+      "removeVerbs": [
+        "Removed a like from",
+        "Verwijderde een vind-ik-leuk van",
+        "supprimé un j'aime de",
+        "entfernte ein Gefällt mir von",
+        "eliminó un me gusta de"
+      ]
+    },
+    {
+      "emoji": "👎",
+      "verbs": ["Disliked", "Vond niet leuk", "n'a pas aimé", "mochte nicht", "No le gustó"],
+      "removeVerbs": [
+        "Removed a dislike from",
+        "Verwijderde een niet-leuk van",
+        "supprimé un je n'aime pas de",
+        "entfernte ein Gefällt mir nicht von",
+        "eliminó un no me gusta de"
+      ]
+    },
+    {
+      "emoji": "‼️",
+      "verbs": ["Emphasized", "Benadrukte", "a mis l'accent sur", "betonte", "Enfatizó"],
+      "removeVerbs": [
+        "Removed an exclamation mark from",
+        "Verwijderde een uitroepteken van",
+        "supprimé un point d'exclamation de",
+        "entfernte ein Ausrufezeichen von",
+        "eliminó una exclamación de"
+      ]
+    },
+    {
+      "emoji": "❓",
+      "verbs": ["Questioned", "Vond het vreemd", "a trouvé cela étrange", "hinterfragte", "Cuestionó"],
+      "removeVerbs": [
+        "Removed a question mark from",
+        "Verwijderde een vraagteken van",
+        "supprimé un point d'interrogation de",
+        "entfernte ein Fragezeichen von",
+        "eliminó una pregunta de"
+      ]
+    }
+  ]
+}
