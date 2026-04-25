@@ -12,7 +12,8 @@ import com.plusorminustwo.postmark.data.db.entity.*
         ThreadEntity::class,
         MessageEntity::class,
         ReactionEntity::class,
-        ThreadStatsEntity::class
+        ThreadStatsEntity::class,
+        MessageFtsEntity::class
     ],
     version = 1,
     exportSchema = true
@@ -31,18 +32,8 @@ abstract class PostmarkDatabase : RoomDatabase() {
 
         val FTS_CALLBACK = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
-                // FTS5 virtual table — content table mirrors messages so no data is duplicated
-                db.execSQL("""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
-                    USING fts5(
-                        body,
-                        content='messages',
-                        content_rowid='id',
-                        tokenize='unicode61'
-                    )
-                """.trimIndent())
-
-                // Triggers keep FTS index in sync with the messages table
+                // The messages_fts virtual table is created by Room (declared as @Fts4 entity).
+                // Triggers below keep the FTS index in sync with the messages table.
                 db.execSQL("""
                     CREATE TRIGGER IF NOT EXISTS messages_fts_insert
                     AFTER INSERT ON messages BEGIN
@@ -50,11 +41,11 @@ abstract class PostmarkDatabase : RoomDatabase() {
                     END
                 """.trimIndent())
 
+                // FTS4 uses plain DELETE for removing rows, not the FTS5 'delete' command form
                 db.execSQL("""
                     CREATE TRIGGER IF NOT EXISTS messages_fts_update
                     AFTER UPDATE ON messages BEGIN
-                        INSERT INTO messages_fts(messages_fts, rowid, body)
-                            VALUES ('delete', old.id, old.body);
+                        DELETE FROM messages_fts WHERE rowid = old.id;
                         INSERT INTO messages_fts(rowid, body) VALUES (new.id, new.body);
                     END
                 """.trimIndent())
@@ -62,8 +53,7 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 db.execSQL("""
                     CREATE TRIGGER IF NOT EXISTS messages_fts_delete
                     AFTER DELETE ON messages BEGIN
-                        INSERT INTO messages_fts(messages_fts, rowid, body)
-                            VALUES ('delete', old.id, old.body);
+                        DELETE FROM messages_fts WHERE rowid = old.id;
                     END
                 """.trimIndent())
             }
