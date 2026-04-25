@@ -12,9 +12,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.service.backup.BackupFrequency
-import com.plusorminustwo.postmark.service.backup.BackupScheduler
-import dagger.hilt.android.EntryPointAccessors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -22,7 +21,8 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BackupSettingsScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    viewModel: BackupSettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE) }
@@ -130,10 +130,7 @@ fun BackupSettingsScreen(
 
             // Manual backup
             Button(
-                onClick = {
-                    // BackupScheduler injected via EntryPoint in production;
-                    // placeholder action here
-                },
+                onClick = { viewModel.runNow() },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Back up now")

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -34,6 +35,17 @@ fun ThreadScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
+    var showExportSheet by remember { mutableStateOf(false) }
+
+    if (showExportSheet) {
+        val selectedMessages = uiState.messages.filter { it.id in uiState.selectedMessageIds }
+        ExportBottomSheet(
+            messages = selectedMessages,
+            threadDisplayName = uiState.thread?.displayName ?: "",
+            ownAddress = "",
+            onDismiss = { showExportSheet = false }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -41,8 +53,8 @@ fun ThreadScreen(
                 SelectionTopBar(
                     selectedCount = uiState.selectedMessageIds.size,
                     onClose = { viewModel.exitSelectionMode() },
-                    onCopy = { /* handled in export */ },
-                    onShare = { /* handled in export */ }
+                    onCopy = { showExportSheet = true },
+                    onShare = { showExportSheet = true }
                 )
             } else {
                 TopAppBar(
