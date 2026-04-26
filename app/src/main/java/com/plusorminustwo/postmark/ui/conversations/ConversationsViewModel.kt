@@ -30,6 +30,7 @@ class ConversationsViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val workManager = WorkManager.getInstance(context)
+    private val prefs get() = context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
 
     val threads: StateFlow<List<Thread>> = threadRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -39,9 +40,27 @@ class ConversationsViewModel @Inject constructor(
         .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    // Last known sync result — reads from SharedPreferences (written by the worker),
+    // and updates live when a new work run completes.
+    val syncStatus: StateFlow<String?> = workManager
+        .getWorkInfosForUniqueWorkFlow(FirstLaunchSyncWorker.WORK_NAME)
+        .map { infos ->
+            val latest = infos.firstOrNull()
+            when (latest?.state) {
+                WorkInfo.State.SUCCEEDED ->
+                    latest.outputData.getString(FirstLaunchSyncWorker.KEY_STATUS)
+                        ?: prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null)
+                WorkInfo.State.FAILED ->
+                    latest.outputData.getString(FirstLaunchSyncWorker.KEY_ERROR)
+                        ?.let { "Error: $it" }
+                        ?: prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null)
+                else -> prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null)
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null))
+
     fun triggerSync() {
-        context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
-            .edit().remove("first_sync_completed").apply()
+        prefs.edit().remove("first_sync_completed").apply()
         workManager.enqueueUniqueWork(
             FirstLaunchSyncWorker.WORK_NAME,
             ExistingWorkPolicy.REPLACE,
@@ -56,7 +75,6 @@ class ConversationsViewModel @Inject constructor(
             val hr = 60 * min
             val day = 24 * hr
 
-            // Threads with fixed IDs well outside real SMS ID range
             val sampleThreads = listOf(
                 Thread(9_001L, "Sarah Johnson", "+12125550101", now - 20 * min, "Sounds good, see you then!", BackupPolicy.GLOBAL),
                 Thread(9_002L, "Mike Chen",     "+13105550102", now - day - 3 * hr, "Haha yeah that was wild", BackupPolicy.GLOBAL),

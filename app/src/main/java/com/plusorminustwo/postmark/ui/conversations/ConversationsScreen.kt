@@ -38,6 +38,7 @@ fun ConversationsScreen(
 ) {
     val threads by viewModel.threads.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
+    val syncStatus by viewModel.syncStatus.collectAsState()
 
     Scaffold(
         topBar = {
@@ -73,17 +74,34 @@ fun ConversationsScreen(
                         OutlinedButton(onClick = { viewModel.loadSampleData() }) {
                             Text("Load sample data")
                         }
+                        syncStatus?.let {
+                            Text(
+                                text = "Last sync: $it",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 32.dp)
+                            )
+                        }
                     }
                 }
             }
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = padding
-            ) {
-                items(threads, key = { it.id }) { thread ->
-                    ThreadRow(thread = thread, onClick = { onThreadClick(thread.id) })
-                    HorizontalDivider()
+            Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(threads, key = { it.id }) { thread ->
+                        ThreadRow(thread = thread, onClick = { onThreadClick(thread.id) })
+                        HorizontalDivider()
+                    }
+                }
+                syncStatus?.let {
+                    Text(
+                        text = "Last sync: $it",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
                 }
             }
         }

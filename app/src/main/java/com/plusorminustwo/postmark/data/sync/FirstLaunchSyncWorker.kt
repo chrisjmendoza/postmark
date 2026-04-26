@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Telephony
+import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
 import com.plusorminustwo.postmark.data.repository.MessageRepository
@@ -26,21 +27,33 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
+        Log.d(TAG, "doWork() started — attempt ${runAttemptCount + 1}")
         return try {
-            val synced = syncAllSms()
-            if (!synced) return if (runAttemptCount < 3) Result.retry() else Result.failure()
-            applicationContext.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
+            val result = syncAllSms()
+            if (result.threadCount < 0) {
+                val msg = "SMS cursor was null — provider unavailable or permission denied"
+                Log.w(TAG, msg)
+                writeStatus("Failed: $msg")
+                return if (runAttemptCount < 3) Result.retry()
+                else Result.failure(workDataOf(KEY_ERROR to msg))
+            }
+            val status = "OK: ${result.threadCount} threads, ${result.messageCount} messages"
+            Log.i(TAG, "Sync complete — $status")
+            writeStatus(status)
+            applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putBoolean("first_sync_completed", true).apply()
-            Result.success()
+            Result.success(workDataOf(KEY_STATUS to status))
         } catch (e: Exception) {
-            if (runAttemptCount < 3) Result.retry() else Result.failure()
+            val msg = "${e.javaClass.simpleName}: ${e.message}"
+            Log.e(TAG, "Sync exception — $msg", e)
+            writeStatus("Error: $msg")
+            if (runAttemptCount < 3) Result.retry()
+            else Result.failure(workDataOf(KEY_ERROR to msg))
         }
     }
 
-    private suspend fun syncAllSms(): Boolean {
-        val threads = mutableMapOf<Long, Thread>()
-        val messages = mutableListOf<Message>()
-
+    private suspend fun syncAllSms(): SyncResult {
+        Log.d(TAG, "Querying content://sms …")
         val cursor = applicationContext.contentResolver.query(
             Telephony.Sms.CONTENT_URI,
             arrayOf(
@@ -53,7 +66,16 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             ),
             null, null,
             "${Telephony.Sms.DATE} ASC"
-        ) ?: return false
+        )
+
+        if (cursor == null) {
+            Log.w(TAG, "content://sms query returned null cursor")
+            return SyncResult(-1, -1)
+        }
+
+        Log.d(TAG, "Cursor opened — ${cursor.count} rows")
+        val threads = mutableMapOf<Long, Thread>()
+        val messages = mutableListOf<Message>()
 
         cursor.use {
             val idIdx = it.getColumnIndexOrThrow(Telephony.Sms._ID)
@@ -96,17 +118,15 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
                 messages.add(Message(id, threadId, address, body, date, isSent, type))
                 processed++
-                setProgress(workDataOf("progress" to (processed * 100 / total)))
+                if (total > 0) setProgress(workDataOf("progress" to (processed * 100 / total)))
             }
         }
 
-        // Persist in batches
+        Log.d(TAG, "Persisting ${threads.size} threads, ${messages.size} messages …")
         threadRepository.upsertAll(threads.values.toList())
-        messages.chunked(500).forEach { chunk ->
-            messageRepository.insertAll(chunk)
-        }
+        messages.chunked(500).forEach { chunk -> messageRepository.insertAll(chunk) }
 
-        // Run Apple reaction parser over all messages
+        Log.d(TAG, "Running reaction parser …")
         threads.keys.forEach { threadId ->
             val threadMsgs = messageRepository.getByThread(threadId)
             threadMsgs.forEach { msg ->
@@ -118,9 +138,10 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             }
         }
 
-        // Compute thread stats for every thread after all messages are in Room
+        Log.d(TAG, "Computing thread stats …")
         statsUpdater.computeForAllThreads(threads.keys)
-        return true
+
+        return SyncResult(threads.size, messages.size)
     }
 
     private fun lookupContactName(address: String): String? {
@@ -143,8 +164,19 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         }
     }
 
+    private fun writeStatus(status: String) {
+        applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY_STATUS, status).apply()
+    }
+
+    private data class SyncResult(val threadCount: Int, val messageCount: Int)
+
     companion object {
         const val WORK_NAME = "first_launch_sms_sync"
+        const val KEY_STATUS = "last_sync_status"
+        const val KEY_ERROR  = "last_sync_error"
+        private const val TAG   = "PostmarkSync"
+        private const val PREFS = "postmark_prefs"
 
         fun buildRequest(): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<FirstLaunchSyncWorker>()
