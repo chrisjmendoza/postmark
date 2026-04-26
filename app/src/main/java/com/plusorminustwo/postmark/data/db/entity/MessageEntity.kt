@@ -6,6 +6,12 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.plusorminustwo.postmark.domain.model.Message
 
+const val DELIVERY_STATUS_NONE = 0
+const val DELIVERY_STATUS_PENDING = 1
+const val DELIVERY_STATUS_SENT = 2
+const val DELIVERY_STATUS_DELIVERED = 3
+const val DELIVERY_STATUS_FAILED = 4
+
 @Entity(
     tableName = "messages",
     foreignKeys = [
@@ -25,7 +31,8 @@ data class MessageEntity(
     val body: String,
     val timestamp: Long,
     val isSent: Boolean,
-    val type: Int = 1
+    val type: Int = 1,
+    val deliveryStatus: Int = DELIVERY_STATUS_NONE
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -35,7 +42,8 @@ fun MessageEntity.toDomain() = Message(
     body = body,
     timestamp = timestamp,
     isSent = isSent,
-    type = type
+    type = type,
+    deliveryStatus = deliveryStatus
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -45,5 +53,6 @@ fun Message.toEntity() = MessageEntity(
     body = body,
     timestamp = timestamp,
     isSent = isSent,
-    type = type
+    type = type,
+    deliveryStatus = deliveryStatus
 )

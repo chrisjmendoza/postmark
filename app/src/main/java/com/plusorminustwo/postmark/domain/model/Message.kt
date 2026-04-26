@@ -8,5 +8,6 @@ data class Message(
     val timestamp: Long,
     val isSent: Boolean,
     val type: Int,
+    val deliveryStatus: Int = 0,
     val reactions: List<Reaction> = emptyList()
 )

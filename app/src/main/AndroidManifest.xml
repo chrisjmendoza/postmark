@@ -73,6 +73,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- Receives SMS_SENT / SMS_DELIVERED callbacks from SmsManagerWrapper -->
+        <receiver
+            android:name=".service.sms.SmsSentDeliveryReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.plusorminustwo.postmark.SMS_SENT" />
+                <action android:name="com.plusorminustwo.postmark.SMS_DELIVERED" />
+            </intent-filter>
+        </receiver>
+
         <!-- FileProvider for sharing exported images -->
         <provider
             android:name="androidx.core.content.FileProvider"

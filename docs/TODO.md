@@ -6,13 +6,13 @@ Ordered by what blocks the most other things. Pick from the top.
 
 ## 🔴 Blocking / Core correctness
 
-- [ ] **`StatsUpdater`** — `ThreadStatsEntity` is never written after `FirstLaunchSyncWorker`. Stats screen shows zeros for new messages. Needs an incremental updater called from `SmsSyncHandler` on every insert/delete.
+- [x] **`StatsUpdater`** — `StatsUpdater` singleton computes full stats after `FirstLaunchSyncWorker` and does incremental updates from `SmsSyncHandler` on every insert. Stats screen observes via Flow.
 
 - [x] **Wire "Back up now"** — `BackupSettingsViewModel` injects `BackupScheduler` via `@HiltViewModel`; button calls `viewModel.runNow()`.
 
 - [x] **Runtime permissions + first-launch sync** — `MainActivity` requests `READ_SMS` + `READ_CONTACTS` at runtime (chains from role-request callback). `FirstLaunchSyncWorker` is enqueued exactly once via a `postmark_prefs` flag after permissions are granted. `ThreadEntity` gained a `lastMessagePreview` column (Room migration 1→2). `ConversationsScreen` now shows real threads with contact name, snippet, and timestamp.
 
-- [ ] **SMS send** — `SmsManagerWrapper.sendTextMessage()` exists but nothing calls it. Add a reply bar to `ThreadScreen` and wire it up.
+- [x] **SMS send** — Reply bar in `ThreadScreen` with expandable text field, character/part counter, optimistic insert with delivery status tracking (PENDING → SENT → DELIVERED via `SmsSentDeliveryReceiver`), and default-SMS-app gate dialog.
 
 - [x] **Selection → Export** — Copy/Share toolbar buttons in `ThreadScreen` now open `ExportBottomSheet` with the selected messages.
 
@@ -84,4 +84,4 @@ Ordered by what blocks the most other things. Pick from the top.
 - [ ] Add `@SmallTest` / `@MediumTest` / `@LargeTest` annotations to test classes
 - [ ] Set up CI (GitHub Actions) — run unit tests on every push, instrumented tests on merge to main
 - [ ] Suppress the CRLF line-ending warnings by adding a `.gitattributes` with `* text=auto`
-- [x] Room schema migration pattern established — `MIGRATION_1_2` (adds `lastMessagePreview` column) sets the template; `fallbackToDestructiveMigration` is not used
+- [x] Room schema migration pattern established — `MIGRATION_1_2` (adds `lastMessagePreview` column), `MIGRATION_2_3` (adds `deliveryStatus` column); `fallbackToDestructiveMigration` is not used

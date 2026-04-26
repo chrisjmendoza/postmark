@@ -24,7 +24,8 @@ class SmsSyncHandler @Inject constructor(
     @ApplicationContext private val context: Context,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val reactionParser: AppleReactionParser
+    private val reactionParser: AppleReactionParser,
+    private val statsUpdater: StatsUpdater
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -64,8 +65,11 @@ class SmsSyncHandler @Inject constructor(
 
             val message = Message(id, threadId, address, body, date, isSent, type)
             messageRepository.insert(message)
+            // Remove any optimistic sent message that this real message replaces
+            messageRepository.deleteOptimisticMessages(threadId)
             threadRepository.updateLastMessageAt(threadId, date)
             threadRepository.updateLastMessagePreview(threadId, body)
+            statsUpdater.updateForNewMessage(threadId)
 
             // Check if this is an Apple reaction fallback
             val parsed = reactionParser.parse(body)

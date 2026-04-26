@@ -46,4 +46,16 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE threadId = :threadId ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatestForThread(threadId: Long): MessageEntity?
+
+    @Query("SELECT * FROM messages WHERE threadId = :threadId ORDER BY timestamp DESC LIMIT :n")
+    suspend fun getLatestNForThread(threadId: Long, n: Int): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND timestamp < :timestamp ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity?
+
+    @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :messageId")
+    suspend fun updateDeliveryStatus(messageId: Long, status: Int)
+
+    @Query("DELETE FROM messages WHERE threadId = :threadId AND id < 0")
+    suspend fun deleteOptimisticMessages(threadId: Long)
 }

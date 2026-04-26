@@ -23,7 +23,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val reactionParser: AppleReactionParser
+    private val reactionParser: AppleReactionParser,
+    private val statsUpdater: StatsUpdater
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -105,7 +106,6 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         }
 
         // Run Apple reaction parser over all messages
-        val allMessages = messageRepository.getByThread(0) // placeholder — iterate per thread
         threads.keys.forEach { threadId ->
             val threadMsgs = messageRepository.getByThread(threadId)
             threadMsgs.forEach { msg ->
@@ -116,6 +116,9 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 }
             }
         }
+
+        // Compute thread stats for every thread after all messages are in Room
+        statsUpdater.computeForAllThreads(threads.keys)
     }
 
     private fun lookupContactName(address: String): String? {

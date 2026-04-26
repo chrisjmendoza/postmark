@@ -16,7 +16,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         ThreadStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -35,6 +35,14 @@ abstract class PostmarkDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE threads ADD COLUMN lastMessagePreview TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN deliveryStatus INTEGER NOT NULL DEFAULT 0"
                 )
             }
         }

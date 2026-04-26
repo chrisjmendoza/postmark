@@ -19,7 +19,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): PostmarkDatabase =
         Room.databaseBuilder(context, PostmarkDatabase::class.java, PostmarkDatabase.DATABASE_NAME)
-            .addMigrations(PostmarkDatabase.MIGRATION_1_2)
+            .addMigrations(PostmarkDatabase.MIGRATION_1_2, PostmarkDatabase.MIGRATION_2_3)
             .addCallback(PostmarkDatabase.FTS_CALLBACK)
             .build()
 

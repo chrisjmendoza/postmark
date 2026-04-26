@@ -54,4 +54,10 @@ class MessageRepository @Inject constructor(
 
     suspend fun deleteReaction(messageId: Long, senderAddress: String, emoji: String) =
         reactionDao.deleteByMessageSenderAndEmoji(messageId, senderAddress, emoji)
+
+    suspend fun updateDeliveryStatus(messageId: Long, status: Int) =
+        messageDao.updateDeliveryStatus(messageId, status)
+
+    suspend fun deleteOptimisticMessages(threadId: Long) =
+        messageDao.deleteOptimisticMessages(threadId)
 }
