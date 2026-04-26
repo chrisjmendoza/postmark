@@ -184,6 +184,7 @@ fun ThreadScreen(
             if (uiState.isSelectionMode) {
                 SelectionTopBar(
                     selectedCount = uiState.selectedMessageIds.size,
+                    totalMessages = uiState.messages.size,
                     scope = uiState.selectionScope,
                     onClose = { viewModel.exitSelectionMode() },
                     onScopeChange = { viewModel.setSelectionScope(it) },
@@ -242,7 +243,7 @@ fun ThreadScreen(
                         DateHeader(
                             label = dateLabel,
                             isSelectionMode = uiState.isSelectionMode,
-                            selectionScope = uiState.selectionScope,
+                            isDayScope = uiState.selectionScope == SelectionScope.DAY,
                             selectedCount = messages.count { it.id in uiState.selectedMessageIds },
                             totalCount = messages.size,
                             onToggleDay = { viewModel.toggleMessageIds(messages.map { it.id }) }
@@ -267,12 +268,17 @@ fun ThreadScreen(
 @Composable
 private fun SelectionTopBar(
     selectedCount: Int,
+    totalMessages: Int,
     scope: SelectionScope,
     onClose: () -> Unit,
     onScopeChange: (SelectionScope) -> Unit,
     onCopy: () -> Unit,
     onShare: () -> Unit
 ) {
+    // "All" chip doubles as a deselect-all affordance: when every message is
+    // selected it shows "None" so the user has a clear way to clear the selection.
+    val allSelected = totalMessages > 0 && selectedCount == totalMessages
+
     Column {
         TopAppBar(
             title = { Text("$selectedCount selected") },
@@ -293,6 +299,7 @@ private fun SelectionTopBar(
                 .padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Scope chips — Messages and Day set the active tap target.
             FilterChip(
                 selected = scope == SelectionScope.MESSAGES,
                 onClick  = { onScopeChange(SelectionScope.MESSAGES) },
@@ -303,10 +310,12 @@ private fun SelectionTopBar(
                 onClick  = { onScopeChange(SelectionScope.DAY) },
                 label    = { Text("Day") }
             )
+            // Action chip: "All" selects every message; when all are already
+            // selected it flips to "None" so deselecting everything is obvious.
             FilterChip(
-                selected = scope == SelectionScope.ALL,
+                selected = allSelected,
                 onClick  = { onScopeChange(SelectionScope.ALL) },
-                label    = { Text("All") }
+                label    = { Text(if (allSelected) "None" else "All") }
             )
         }
     }
@@ -445,7 +454,7 @@ private fun MessageBubble(
 private fun DateHeader(
     label: String,
     isSelectionMode: Boolean,
-    selectionScope: SelectionScope,
+    isDayScope: Boolean,
     selectedCount: Int,
     totalCount: Int,
     onToggleDay: () -> Unit
@@ -472,7 +481,7 @@ private fun DateHeader(
         if (selectionIcon != null) {
             IconButton(
                 onClick  = onToggleDay,
-                enabled  = selectionScope == SelectionScope.DAY,
+                enabled  = isDayScope,
                 modifier = Modifier.size(32.dp)
             ) {
                 Icon(
