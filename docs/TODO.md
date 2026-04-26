@@ -10,6 +10,8 @@ Ordered by what blocks the most other things. Pick from the top.
 
 - [x] **Wire "Back up now"** — `BackupSettingsViewModel` injects `BackupScheduler` via `@HiltViewModel`; button calls `viewModel.runNow()`.
 
+- [x] **Runtime permissions + first-launch sync** — `MainActivity` requests `READ_SMS` + `READ_CONTACTS` at runtime (chains from role-request callback). `FirstLaunchSyncWorker` is enqueued exactly once via a `postmark_prefs` flag after permissions are granted. `ThreadEntity` gained a `lastMessagePreview` column (Room migration 1→2). `ConversationsScreen` now shows real threads with contact name, snippet, and timestamp.
+
 - [ ] **SMS send** — `SmsManagerWrapper.sendTextMessage()` exists but nothing calls it. Add a reply bar to `ThreadScreen` and wire it up.
 
 - [x] **Selection → Export** — Copy/Share toolbar buttons in `ThreadScreen` now open `ExportBottomSheet` with the selected messages.
@@ -17,6 +19,8 @@ Ordered by what blocks the most other things. Pick from the top.
 ---
 
 ## 🟡 High value, no hard blockers
+
+- [x] **Dark theme + Appearance setting** — Custom M3 `DarkColorScheme` and `LightColorScheme` in `Theme.kt` using all 14 brand colours. `PostmarkColors` extended-colours class + `LocalPostmarkColors` for use-site access (bubble colours, avatar pairs, etc.). `ThemePreferenceRepository` (SharedPreferences-backed `StateFlow`). Settings → Appearance section with Follow system / Always dark / Always light radio buttons; live switching without activity restart.
 
 - [ ] **Floating date pill** (`ThreadScreen`)
   - Show current visible date range as a pill at the top of the message list
@@ -80,4 +84,4 @@ Ordered by what blocks the most other things. Pick from the top.
 - [ ] Add `@SmallTest` / `@MediumTest` / `@LargeTest` annotations to test classes
 - [ ] Set up CI (GitHub Actions) — run unit tests on every push, instrumented tests on merge to main
 - [ ] Suppress the CRLF line-ending warnings by adding a `.gitattributes` with `* text=auto`
-- [ ] Configure Room `fallbackToDestructiveMigration(false)` and write a proper migration for any future schema change
+- [x] Room schema migration pattern established — `MIGRATION_1_2` (adds `lastMessagePreview` column) sets the template; `fallbackToDestructiveMigration` is not used
