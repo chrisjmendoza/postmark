@@ -37,9 +37,17 @@ object ExportFormatter {
             sb.append("$senderLabel ($time)\n")
             sb.append("${msg.body}\n")
 
-            msg.reactions.forEach { reaction ->
-                val reactorName = if (reaction.senderAddress == ownAddress) "You" else threadDisplayName
-                sb.append("${reaction.emoji} reacted by $reactorName\n")
+            if (msg.reactions.isNotEmpty()) {
+                val grouped = msg.reactions
+                    .groupBy { it.emoji }
+                    .map { (emoji, reactions) ->
+                        val names = reactions.joinToString(", ") { r ->
+                            if (r.senderAddress == ownAddress) "You" else threadDisplayName
+                        }
+                        "$emoji $names"
+                    }
+                    .joinToString("  ")
+                sb.append("  ↩ $grouped\n")
             }
             sb.append("\n")
         }

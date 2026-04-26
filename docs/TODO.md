@@ -79,6 +79,7 @@ Ordered by what blocks the most other things. Pick from the top.
 
 ## 🔵 Infrastructure / Housekeeping
 
+- [ ] **SMS sync not working on device (Samsung S24 Ultra)** — `content://sms` query silently returns null cursor despite permissions being granted. Logging and in-app status banner are wired up (tag: `PostmarkSync`). Deferred while building UI with sample data — revisit once core UI screens are solid.
 - [ ] Add `@VisibleForTesting` to `PostmarkDatabase.FTS_CALLBACK` and `DATABASE_NAME`
 - [ ] Replace `runBlocking` in instrumented tests with `runTest` from `kotlinx-coroutines-test`
 - [ ] Add `@SmallTest` / `@MediumTest` / `@LargeTest` annotations to test classes
