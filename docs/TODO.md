@@ -33,10 +33,10 @@ Ordered by what blocks the most other things. Pick from the top.
   - Tapping empty day → snap to nearest active date + `Snackbar` explaining the jump
   - `findNearestActiveDate()` in `DateNavigation.kt`, 11 unit tests in `DateNavigationTest`
 
-- [ ] **Message grouping** (`ThreadScreen`)
-  - Consecutive messages from the same sender within 3 minutes → cluster visually
-  - Top bubble: full radius corners. Middle: small top radius on sender side. Bottom: full radius.
-  - No timestamp shown per-bubble within a cluster (show once at cluster end)
+- [x] **Message grouping** (`ThreadScreen`)
+  - Consecutive same-sender messages within 3 min cluster; sender-side corners narrow for TOP/MIDDLE
+  - Timestamps suppressed for TOP/MIDDLE positions (shown once at cluster tail)
+  - `computeClusterPositions()` in `MessageGrouping.kt`, 11 unit tests in `MessageGroupingTest`
 
 - [ ] **Image export** (`ExportBottomSheet`)
   - Render conversation to `Canvas`, convert to `Bitmap`, compress to PNG

@@ -23,8 +23,8 @@ Build order follows the spec. Each phase depends on the previous.
 
 - [x] `LazyColumn` with `reverseLayout = true`
 - [x] Message bubbles (sent/received, colored by sender)
-- [x] Date header dividers with "Select day" button
-- [x] Selection mode — toolbar with Copy / Share actions
+- [x] Date header dividers
+- [x] **Selection system** — long-press to enter; scope chips (Messages / Day / All) below top bar; `DateHeader` shows tri-state icon; Copy / Share in top bar
 - [x] **Dark theme + Appearance setting** — Follow system / Always dark / Always light; live-switch via `ThemePreferenceRepository`
 - [x] **Message timestamps** — ALWAYS / ON_TAP (tap bubble to reveal) / NEVER preference via `TimestampPreferenceRepository`
 - [x] **Letter avatars** — deterministic color-hash across 8 hues, first initial
@@ -35,7 +35,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **Floating date pill** — overlay at list top, fades in on scroll, auto-hides after 1.8 s idle
 - [x] **Calendar picker** — month grid dialog; active days (blue dot), empty days grayed; tap empty → snap to nearest + `Snackbar`; `findNearestActiveDate()` with 11 unit tests
 - [ ] **Range select** — long-press first message, tap last to select range
-- [ ] **Message grouping** — consecutive same-sender messages within ~3 min cluster visually (shared bubble radius, single timestamp at cluster end)
+- [x] **Message grouping** — consecutive same-sender messages within 3 min cluster; sender-side corners narrow (TOP/MIDDLE); timestamp shown at cluster tail only
 - [ ] Per-thread backup policy UI — `⋮` overflow menu → 3-option radio dialog
 
 ---
