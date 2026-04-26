@@ -190,37 +190,21 @@ fun ThreadScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            if (uiState.isSelectionMode) {
-                SelectionTopBar(
-                    selectedCount = uiState.selectedMessageIds.size,
-                    onClose = { viewModel.exitSelectionMode() },
-                    onCopy = { showExportSheet = true },
-                    onShare = { showExportSheet = true }
-                )
-            } else {
-                TopAppBar(
-                    title = { Text(uiState.thread?.displayName ?: "") },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                        }
-                    },
-                    actions = {
-                        TextButton(onClick = { viewModel.enterSelectionMode() }) {
-                            Text("Select")
-                        }
+            TopAppBar(
+                title = { Text(uiState.thread?.displayName ?: "") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
-                )
-            }
+                }
+            )
         },
         bottomBar = {
-            if (!uiState.isSelectionMode) {
-                ReplyBar(
-                    text = uiState.replyText,
-                    onTextChange = { viewModel.onReplyTextChanged(it) },
-                    onSend = { viewModel.sendMessage() }
-                )
-            }
+            ReplyBar(
+                text = uiState.replyText,
+                onTextChange = { viewModel.onReplyTextChanged(it) },
+                onSend = { viewModel.sendMessage() }
+            )
         }
     ) { padding ->
         Box(
@@ -239,19 +223,13 @@ fun ThreadScreen(
                     items(msgs, key = { it.id }) { message ->
                         MessageBubble(
                             message = message,
-                            isSelected = message.id in uiState.selectedMessageIds,
-                            isSelectionMode = uiState.isSelectionMode,
-                            onToggleSelect = { viewModel.toggleSelection(message.id) },
                             timestampPref = timestampPref,
                             isTimestampExpanded = message.id in uiState.expandedTimestampIds,
                             onToggleTimestamp = { viewModel.toggleTimestamp(message.id) }
                         )
                     }
                     item(key = "header_$dateLabel") {
-                        DateHeader(
-                            label = dateLabel,
-                            onSelectDay = { viewModel.selectDay(dayStartMs(dateLabel), dayEndMs(dateLabel)) }
-                        )
+                        DateHeader(label = dateLabel)
                     }
                 }
             }
@@ -521,9 +499,6 @@ private fun smsCounter(length: Int): String? {
 @Composable
 private fun MessageBubble(
     message: Message,
-    isSelected: Boolean,
-    isSelectionMode: Boolean,
-    onToggleSelect: () -> Unit,
     timestampPref: TimestampPreference,
     isTimestampExpanded: Boolean,
     onToggleTimestamp: () -> Unit
@@ -541,18 +516,13 @@ private fun MessageBubble(
         TimestampPreference.NEVER  -> false
     }
 
-    // In selection mode tapping selects; otherwise tapping toggles timestamp (ON_TAP only)
-    val bubbleClick: (() -> Unit)? = when {
-        isSelectionMode -> onToggleSelect
-        timestampPref == TimestampPreference.ON_TAP -> onToggleTimestamp
-        else -> null
-    }
+    val bubbleClick: (() -> Unit)? =
+        if (timestampPref == TimestampPreference.ON_TAP) onToggleTimestamp else null
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (bubbleClick != null) Modifier.clickable { bubbleClick() } else Modifier)
-            .background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
             .padding(horizontal = 12.dp, vertical = 2.dp),
         horizontalAlignment = alignment
     ) {
@@ -615,7 +585,7 @@ private fun DeliveryStatusIndicator(status: Int, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun DateHeader(label: String, onSelectDay: () -> Unit) {
+private fun DateHeader(label: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -630,37 +600,8 @@ private fun DateHeader(label: String, onSelectDay: () -> Unit) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        TextButton(onClick = onSelectDay) {
-            Text("Select day", style = MaterialTheme.typography.labelSmall)
-        }
         HorizontalDivider(modifier = Modifier.weight(1f))
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SelectionTopBar(
-    selectedCount: Int,
-    onClose: () -> Unit,
-    onCopy: () -> Unit,
-    onShare: () -> Unit
-) {
-    TopAppBar(
-        title = { Text("$selectedCount selected") },
-        navigationIcon = {
-            IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, "Cancel selection")
-            }
-        },
-        actions = {
-            IconButton(onClick = onCopy) {
-                Icon(Icons.Default.ContentCopy, "Copy")
-            }
-            IconButton(onClick = onShare) {
-                Icon(Icons.Default.Share, "Share")
-            }
-        }
-    )
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
