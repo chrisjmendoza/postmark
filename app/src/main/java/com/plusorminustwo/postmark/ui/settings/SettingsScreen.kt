@@ -6,6 +6,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -16,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.ui.theme.ThemePreference
+import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -25,6 +27,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val themePreference by viewModel.themePreference.collectAsState()
+    val timestampPreference by viewModel.timestampPreference.collectAsState()
 
     Scaffold(
         topBar = {
@@ -54,6 +57,20 @@ fun SettingsScreen(
                 title = "Theme",
                 current = themePreference,
                 onSelect = viewModel::setTheme
+            )
+            HorizontalDivider()
+
+            SettingsSectionHeader(title = "Conversation")
+            RadioSettingRow(
+                icon = { Icon(Icons.Default.ChatBubbleOutline, null) },
+                title = "Message timestamps",
+                options = listOf(
+                    Triple(TimestampPreference.ALWAYS,  "Always",       "Time shown under every message"),
+                    Triple(TimestampPreference.ON_TAP,  "Tap to reveal","Tap a bubble to show its time"),
+                    Triple(TimestampPreference.NEVER,   "Never",        "No timestamps shown")
+                ),
+                current = timestampPreference,
+                onSelect = viewModel::setTimestamp
             )
             HorizontalDivider()
         }
@@ -159,5 +176,47 @@ private fun SettingsRow(
             modifier = Modifier.size(16.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun <T> RadioSettingRow(
+    icon: @Composable () -> Unit,
+    title: String,
+    options: List<Triple<T, String, String>>,  // value, label, subtitle
+    current: T,
+    onSelect: (T) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            icon()
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+        }
+        options.forEach { (value, label, subtitle) ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(value) }
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(selected = current == value, onClick = { onSelect(value) })
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }

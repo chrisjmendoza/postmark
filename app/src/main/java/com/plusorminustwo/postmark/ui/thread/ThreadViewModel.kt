@@ -6,10 +6,12 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
+import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -24,16 +26,18 @@ data class ThreadUiState(
     val isSelectionMode: Boolean = false,
     val replyText: String = "",
     val isSending: Boolean = false,
-    val showDefaultSmsDialog: Boolean = false
+    val showDefaultSmsDialog: Boolean = false,
+    val expandedTimestampIds: Set<Long> = emptySet()
 )
 
 @HiltViewModel
 class ThreadViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val smsManagerWrapper: SmsManagerWrapper
+    private val smsManagerWrapper: SmsManagerWrapper,
+    private val timestampPrefRepo: TimestampPreferenceRepository
 ) : ViewModel() {
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
@@ -43,16 +47,20 @@ class ThreadViewModel @Inject constructor(
     private val _replyText = MutableStateFlow("")
     private val _isSending = MutableStateFlow(false)
     private val _showDefaultSmsDialog = MutableStateFlow(false)
+    private val _expandedTimestampIds = MutableStateFlow(emptySet<Long>())
+
+    val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
     val uiState: StateFlow<ThreadUiState> = combine(
         threadRepository.observeById(threadId),
         messageRepository.observeByThread(threadId),
         _selectionState,
         _isSelectionMode,
-        combine(_replyText, _isSending, _showDefaultSmsDialog) { text, sending, dialog ->
-            Triple(text, sending, dialog)
+        combine(_replyText, _isSending, _showDefaultSmsDialog, _expandedTimestampIds) { text, sending, dialog, expandedIds ->
+            Triple(Triple(text, sending, dialog), expandedIds, Unit)
         }
-    ) { thread, messages, selected, selectionMode, (text, sending, dialog) ->
+    ) { thread, messages, selected, selectionMode, (innerTriple, expandedIds, _) ->
+        val (text, sending, dialog) = innerTriple
         ThreadUiState(
             thread = thread,
             messages = messages,
@@ -60,7 +68,8 @@ class ThreadViewModel @Inject constructor(
             isSelectionMode = selectionMode,
             replyText = text,
             isSending = sending,
-            showDefaultSmsDialog = dialog
+            showDefaultSmsDialog = dialog,
+            expandedTimestampIds = expandedIds
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
@@ -73,6 +82,12 @@ class ThreadViewModel @Inject constructor(
 
     fun toggleSelection(messageId: Long) {
         _selectionState.update { current ->
+            if (messageId in current) current - messageId else current + messageId
+        }
+    }
+
+    fun toggleTimestamp(messageId: Long) {
+        _expandedTimestampIds.update { current ->
             if (messageId in current) current - messageId else current + messageId
         }
     }

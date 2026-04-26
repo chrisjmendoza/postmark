@@ -30,6 +30,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
+import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,6 +43,7 @@ fun ThreadScreen(
     viewModel: ThreadViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val timestampPref by viewModel.timestampPreference.collectAsState()
     val listState = rememberLazyListState()
     var showExportSheet by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -121,7 +123,10 @@ fun ThreadScreen(
                         message = message,
                         isSelected = message.id in uiState.selectedMessageIds,
                         isSelectionMode = uiState.isSelectionMode,
-                        onToggleSelect = { viewModel.toggleSelection(message.id) }
+                        onToggleSelect = { viewModel.toggleSelection(message.id) },
+                        timestampPref = timestampPref,
+                        isTimestampExpanded = message.id in uiState.expandedTimestampIds,
+                        onToggleTimestamp = { viewModel.toggleTimestamp(message.id) }
                     )
                 }
                 item(key = "header_$dateLabel") {
@@ -215,7 +220,10 @@ private fun MessageBubble(
     message: Message,
     isSelected: Boolean,
     isSelectionMode: Boolean,
-    onToggleSelect: () -> Unit
+    onToggleSelect: () -> Unit,
+    timestampPref: TimestampPreference,
+    isTimestampExpanded: Boolean,
+    onToggleTimestamp: () -> Unit
 ) {
     val bubbleColor = if (message.isSent)
         MaterialTheme.colorScheme.primaryContainer
@@ -224,10 +232,23 @@ private fun MessageBubble(
 
     val alignment = if (message.isSent) Alignment.End else Alignment.Start
 
+    val showTimestamp = when (timestampPref) {
+        TimestampPreference.ALWAYS -> true
+        TimestampPreference.ON_TAP -> isTimestampExpanded
+        TimestampPreference.NEVER  -> false
+    }
+
+    // In selection mode tapping selects; otherwise tapping toggles timestamp (ON_TAP only)
+    val bubbleClick: (() -> Unit)? = when {
+        isSelectionMode -> onToggleSelect
+        timestampPref == TimestampPreference.ON_TAP -> onToggleTimestamp
+        else -> null
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (isSelectionMode) Modifier.clickable { onToggleSelect() } else Modifier)
+            .then(if (bubbleClick != null) Modifier.clickable { bubbleClick() } else Modifier)
             .background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
             .padding(horizontal = 12.dp, vertical = 2.dp),
         horizontalAlignment = alignment
@@ -240,6 +261,14 @@ private fun MessageBubble(
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (showTimestamp) {
+            Text(
+                text = timeFormatter.format(Date(message.timestamp)),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, bottom = 2.dp)
+            )
         }
         message.reactions.forEach { reaction ->
             Text(
@@ -341,7 +370,8 @@ private fun launchDefaultSmsRoleRequest(context: android.content.Context) {
     }
 }
 
-private val dayFormatter = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault())
+private val dayFormatter  = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault())
+private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault())
 
 private fun List<Message>.groupByDay(): Map<String, List<Message>> =
     groupBy { dayFormatter.format(Date(it.timestamp)) }
