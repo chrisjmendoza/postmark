@@ -17,6 +17,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import javax.inject.Inject
 
 data class ThreadUiState(
@@ -50,6 +53,17 @@ class ThreadViewModel @Inject constructor(
     private val _expandedTimestampIds = MutableStateFlow(emptySet<Long>())
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
+
+    val activeDates: StateFlow<Set<LocalDate>> = messageRepository
+        .observeByThread(threadId)
+        .map { messages ->
+            messages.mapTo(mutableSetOf()) { msg ->
+                Instant.ofEpochMilli(msg.timestamp)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     val uiState: StateFlow<ThreadUiState> = combine(
         threadRepository.observeById(threadId),

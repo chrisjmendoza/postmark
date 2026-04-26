@@ -4,12 +4,17 @@ import android.content.Intent
 import android.os.Build
 import android.app.role.RoleManager
 import android.provider.Telephony
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -23,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
@@ -31,9 +37,16 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
+
+private val PILL_HIDE_DELAY_MS = 1_800L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,9 +57,70 @@ fun ThreadScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val timestampPref by viewModel.timestampPreference.collectAsState()
+    val activeDates by viewModel.activeDates.collectAsState()
     val listState = rememberLazyListState()
-    var showExportSheet by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    var showExportSheet by remember { mutableStateOf(false) }
+    var showCalendarPicker by remember { mutableStateOf(false) }
+
+    // Pill auto-hide: show on scroll, hide 1.8 s after scroll stops
+    var pillVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            pillVisible = true
+        } else {
+            delay(PILL_HIDE_DELAY_MS)
+            pillVisible = false
+        }
+    }
+
+    // Build maps that mirror the LazyColumn item structure.
+    // grouped preserves insertion order: oldest date → newest date.
+    val grouped = remember(uiState.messages) { uiState.messages.groupByDay() }
+
+    // messageId → date label (for resolving visible message to its day)
+    val messageIdToDate = remember(grouped) {
+        grouped.flatMap { (label, msgs) -> msgs.map { it.id to label } }.toMap()
+    }
+
+    // date label → index of that day's header item in the LazyColumn.
+    // Items are laid out: [messages.reversed()..., header] for each day.
+    // With reverseLayout=true, higher indices appear visually higher (older dates).
+    val dateToHeaderIndex = remember(grouped) {
+        var idx = 0
+        buildMap<String, Int> {
+            grouped.forEach { (label, messages) ->
+                idx += messages.size   // skip message items
+                put(label, idx)        // header is at this index
+                idx++
+            }
+        }
+    }
+
+    // Date label of the topmost visible item (oldest message currently on screen).
+    // With reverseLayout=true, highest item index = visually highest (oldest).
+    val visibleDate by remember {
+        derivedStateOf {
+            val visible = listState.layoutInfo.visibleItemsInfo
+            if (visible.isEmpty()) return@derivedStateOf ""
+            val topItem = visible.maxByOrNull { it.index } ?: return@derivedStateOf ""
+            when (val key = topItem.key) {
+                is String -> key.removePrefix("header_")
+                is Long   -> messageIdToDate[key] ?: ""
+                else      -> ""
+            }
+        }
+    }
+
+    // Scroll to the date header for the given label.
+    fun scrollToDateLabel(label: String) {
+        dateToHeaderIndex[label]?.let { idx ->
+            scope.launch { listState.animateScrollToItem(idx) }
+        }
+    }
 
     if (showExportSheet) {
         val selectedMessages = uiState.messages.filter { it.id in uiState.selectedMessageIds }
@@ -55,6 +129,26 @@ fun ThreadScreen(
             threadDisplayName = uiState.thread?.displayName ?: "",
             ownAddress = "",
             onDismiss = { showExportSheet = false }
+        )
+    }
+
+    if (showCalendarPicker) {
+        CalendarPickerDialog(
+            activeDates = activeDates,
+            onDateSelected = { scrollTo, wasSnapped, tappedLabel ->
+                showCalendarPicker = false
+                val label = localDateToLabel(scrollTo)
+                scrollToDateLabel(label)
+                if (wasSnapped) {
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            "No messages on $tappedLabel — jumped to nearest day",
+                            duration = SnackbarDuration.Short
+                        )
+                    }
+                }
+            },
+            onDismiss = { showCalendarPicker = false }
         )
     }
 
@@ -76,6 +170,7 @@ fun ThreadScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             if (uiState.isSelectionMode) {
                 SelectionTopBar(
@@ -110,35 +205,224 @@ fun ThreadScreen(
             }
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            state = listState,
-            reverseLayout = true,
-            contentPadding = PaddingValues(vertical = 8.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
         ) {
-            val grouped = uiState.messages.groupByDay()
-            grouped.forEach { (dateLabel, messages) ->
-                items(messages.reversed(), key = { it.id }) { message ->
-                    MessageBubble(
-                        message = message,
-                        isSelected = message.id in uiState.selectedMessageIds,
-                        isSelectionMode = uiState.isSelectionMode,
-                        onToggleSelect = { viewModel.toggleSelection(message.id) },
-                        timestampPref = timestampPref,
-                        isTimestampExpanded = message.id in uiState.expandedTimestampIds,
-                        onToggleTimestamp = { viewModel.toggleTimestamp(message.id) }
-                    )
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                state = listState,
+                reverseLayout = true,
+                contentPadding = PaddingValues(vertical = 8.dp)
+            ) {
+                grouped.forEach { (dateLabel, messages) ->
+                    items(messages.reversed(), key = { it.id }) { message ->
+                        MessageBubble(
+                            message = message,
+                            isSelected = message.id in uiState.selectedMessageIds,
+                            isSelectionMode = uiState.isSelectionMode,
+                            onToggleSelect = { viewModel.toggleSelection(message.id) },
+                            timestampPref = timestampPref,
+                            isTimestampExpanded = message.id in uiState.expandedTimestampIds,
+                            onToggleTimestamp = { viewModel.toggleTimestamp(message.id) }
+                        )
+                    }
+                    item(key = "header_$dateLabel") {
+                        DateHeader(
+                            label = dateLabel,
+                            onSelectDay = { viewModel.selectDay(dayStartMs(dateLabel), dayEndMs(dateLabel)) }
+                        )
+                    }
                 }
-                item(key = "header_$dateLabel") {
-                    DateHeader(
-                        label = dateLabel,
-                        onSelectDay = { /* viewModel.selectDay(...) */ }
+            }
+
+            FloatingDatePill(
+                dateLabel = visibleDate,
+                visible = pillVisible,
+                onClick = { showCalendarPicker = true },
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+        }
+    }
+}
+
+// ── FloatingDatePill ───────────────────────────────────────────────────────────
+
+@Composable
+private fun FloatingDatePill(
+    dateLabel: String,
+    visible: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = visible && dateLabel.isNotEmpty(),
+        enter = fadeIn(animationSpec = tween(150)),
+        exit  = fadeOut(animationSpec = tween(300)),
+        modifier = modifier
+    ) {
+        Surface(
+            onClick = onClick,
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            tonalElevation = 3.dp,
+            shadowElevation = 2.dp,
+            modifier = Modifier.padding(top = 8.dp)
+        ) {
+            Text(
+                text = dateLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+    }
+}
+
+// ── CalendarPickerDialog ───────────────────────────────────────────────────────
+
+/**
+ * [onDateSelected] is called with (scrollTo, wasSnapped, tappedLabel) where:
+ *   scrollTo   — the LocalDate to navigate to (nearest active if tapped day had none)
+ *   wasSnapped — true when the navigation target differs from the tapped day
+ *   tappedLabel — human-readable label for the day the user tapped (for Snackbar text)
+ */
+@Composable
+private fun CalendarPickerDialog(
+    activeDates: Set<LocalDate>,
+    onDateSelected: (scrollTo: LocalDate, wasSnapped: Boolean, tappedLabel: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val defaultMonth = activeDates.maxOrNull()?.let { YearMonth.from(it) } ?: YearMonth.now()
+    var month by remember { mutableStateOf(defaultMonth) }
+
+    val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy") }
+    val tapLabelFormatter = remember { DateTimeFormatter.ofPattern("MMMM d") }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            tonalElevation = 6.dp
+        ) {
+            Column(modifier = Modifier.padding(bottom = 12.dp)) {
+                // Month navigation header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { month = month.minusMonths(1) }) {
+                        @Suppress("DEPRECATION")
+                        Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Previous month")
+                    }
+                    Text(
+                        text = month.format(monthFormatter),
+                        style = MaterialTheme.typography.titleMedium
                     )
+                    IconButton(onClick = { month = month.plusMonths(1) }) {
+                        @Suppress("DEPRECATION")
+                        Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Next month")
+                    }
+                }
+
+                // Day-of-week header row (Mon … Sun)
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    listOf("M", "T", "W", "T", "F", "S", "S").forEach { label ->
+                        Text(
+                            text = label,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                // Calendar grid (6 rows × 7 columns = 42 cells)
+                // Offset: Mon=0, Tue=1, … Sun=6
+                val firstDay = month.atDay(1)
+                val offset = (firstDay.dayOfWeek.value - 1)  // DayOfWeek.MONDAY.value == 1
+                val daysInMonth = month.lengthOfMonth()
+
+                (0 until 42).chunked(7).forEach { weekCells ->
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        weekCells.forEach { cell ->
+                            val dayNum = cell - offset + 1
+                            val date = if (dayNum in 1..daysInMonth) month.atDay(dayNum) else null
+                            CalendarDayCell(
+                                date = date,
+                                isActive = date != null && date in activeDates,
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    if (date == null) return@CalendarDayCell
+                                    val tappedLabel = date.format(tapLabelFormatter)
+                                    if (date in activeDates) {
+                                        onDateSelected(date, false, tappedLabel)
+                                    } else {
+                                        val nearest = findNearestActiveDate(date, activeDates)
+                                        if (nearest != null) {
+                                            onDateSelected(nearest, true, tappedLabel)
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun CalendarDayCell(
+    date: LocalDate?,
+    isActive: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val enabled = date != null
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center
+    ) {
+        if (date != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = date.dayOfMonth.toString(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isActive)
+                        MaterialTheme.colorScheme.onSurface
+                    else
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                )
+                if (isActive) {
+                    Spacer(Modifier.height(2.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(4.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
+                } else {
+                    Spacer(Modifier.height(6.dp)) // keep cell height stable
+                }
+            }
+        }
+    }
+}
+
+// ── Existing composables (unchanged) ──────────────────────────────────────────
 
 @Composable
 private fun ReplyBar(
@@ -361,6 +645,8 @@ private fun SelectionTopBar(
     )
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
 private fun launchDefaultSmsRoleRequest(context: android.content.Context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         val roleManager = context.getSystemService(RoleManager::class.java)
@@ -381,6 +667,18 @@ private val dayFormatter  = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()
 private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault()).also {
     it.timeZone = java.util.TimeZone.getDefault()
 }
+
+/** Converts a [LocalDate] to the same string format used as group keys in [groupByDay]. */
+private fun localDateToLabel(date: LocalDate): String =
+    dayFormatter.format(Date(date.atStartOfDay(java.time.ZoneId.systemDefault()).toEpochSecond() * 1000))
+
+/** Start of [dayLabel] in epoch-millis (midnight local time). */
+private fun dayStartMs(dayLabel: String): Long =
+    dayFormatter.parse(dayLabel)?.time ?: 0L
+
+/** End of [dayLabel] in epoch-millis (23:59:59.999 local time). */
+private fun dayEndMs(dayLabel: String): Long =
+    (dayFormatter.parse(dayLabel)?.time ?: 0L) + 86_400_000L - 1L
 
 private fun List<Message>.groupByDay(): Map<String, List<Message>> =
     groupBy { dayFormatter.format(Date(it.timestamp)) }
