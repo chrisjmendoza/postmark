@@ -44,9 +44,10 @@ Ordered by what blocks the most other things. Pick from the top.
   - Useful for exporting a full month or arbitrary span without selecting every date header individually
 
 - [ ] **Image export** (`ExportBottomSheet`)
-  - Render conversation to `Canvas`, convert to `Bitmap`, compress to PNG
+  - Render selected messages to `Canvas`, convert to `Bitmap`, compress to PNG
   - Write to `getExternalFilesDir("exports")/`, share via `FileProvider` + `ACTION_SEND`
-  - `ExportBottomSheet` currently falls back to text share
+  - Add "Share as image" button back to `ExportBottomSheet` once real rendering is in place
+  - Placeholder text-share fallback has been removed; sheet currently only has Copy
 
 - [ ] **Date range filter** (`SearchScreen`)
   - Two `DatePickerDialog`-triggered chips (From / To)

@@ -1,5 +1,7 @@
 package com.plusorminustwo.postmark.ui.thread
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Build
 import android.app.role.RoleManager
@@ -36,8 +38,8 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
+import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.Message
-import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -66,7 +68,6 @@ fun ThreadScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    var showExportSheet by remember { mutableStateOf(false) }
     var showCalendarPicker by remember { mutableStateOf(false) }
 
     // ── Floating date pill ────────────────────────────────────────────────────
@@ -132,16 +133,6 @@ fun ThreadScreen(
 
     // ── Dialogs ───────────────────────────────────────────────────────────────
 
-    if (showExportSheet) {
-        val selectedMessages = uiState.messages.filter { it.id in uiState.selectedMessageIds }
-        ExportBottomSheet(
-            messages = selectedMessages,
-            threadDisplayName = uiState.thread?.displayName ?: "",
-            ownAddress = "",
-            onDismiss = { showExportSheet = false }
-        )
-    }
-
     if (showCalendarPicker) {
         CalendarPickerDialog(
             activeDates = activeDates,
@@ -188,8 +179,19 @@ fun ThreadScreen(
                     scope = uiState.selectionScope,
                     onClose = { viewModel.exitSelectionMode() },
                     onScopeChange = { viewModel.setSelectionScope(it) },
-                    onCopy = { showExportSheet = true },
-                    onShare = { showExportSheet = true }
+                    onCopy = {
+                        val text = ExportFormatter.formatForCopy(
+                            uiState.messages.filter { it.id in uiState.selectedMessageIds },
+                            uiState.thread?.displayName ?: "",
+                            ""
+                        )
+                        val cb = context.getSystemService(ClipboardManager::class.java)
+                        cb.setPrimaryClip(ClipData.newPlainText("Postmark export", text))
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Copied", duration = SnackbarDuration.Short)
+                        }
+                        viewModel.exitSelectionMode()
+                    }
                 )
             } else {
                 TopAppBar(
@@ -271,8 +273,7 @@ private fun SelectionTopBar(
     scope: SelectionScope,
     onClose: () -> Unit,
     onScopeChange: (SelectionScope) -> Unit,
-    onCopy: () -> Unit,
-    onShare: () -> Unit
+    onCopy: () -> Unit
 ) {
     // "All" chip doubles as a deselect-all affordance: when every message is
     // selected it shows "None" so the user has a clear way to clear the selection.
@@ -287,8 +288,7 @@ private fun SelectionTopBar(
                 }
             },
             actions = {
-                IconButton(onClick = onCopy)  { Icon(Icons.Default.ContentCopy, "Copy") }
-                IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share") }
+                IconButton(onClick = onCopy) { Icon(Icons.Default.ContentCopy, "Copy") }
             }
         )
         Row(
