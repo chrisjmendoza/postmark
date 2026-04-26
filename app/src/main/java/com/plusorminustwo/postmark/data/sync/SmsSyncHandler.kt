@@ -65,6 +65,7 @@ class SmsSyncHandler @Inject constructor(
             val message = Message(id, threadId, address, body, date, isSent, type)
             messageRepository.insert(message)
             threadRepository.updateLastMessageAt(threadId, date)
+            threadRepository.updateLastMessagePreview(threadId, body)
 
             // Check if this is an Apple reaction fallback
             val parsed = reactionParser.parse(body)
@@ -95,14 +96,18 @@ class SmsSyncHandler @Inject constructor(
             ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
             Uri.encode(address)
         )
-        return context.contentResolver.query(
-            uri,
-            arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-            null, null, null
-        )?.use { cursor ->
-            if (cursor.moveToFirst())
-                cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
-            else null
+        return try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst())
+                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
+                else null
+            }
+        } catch (_: SecurityException) {
+            null
         }
     }
 }

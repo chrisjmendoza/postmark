@@ -11,10 +11,11 @@ data class ThreadEntity(
     val displayName: String,
     val address: String,
     val lastMessageAt: Long,
+    val lastMessagePreview: String = "",
     val backupPolicy: BackupPolicy = BackupPolicy.GLOBAL
 )
 
-fun ThreadEntity.toDomain(lastMessagePreview: String = "") = Thread(
+fun ThreadEntity.toDomain() = Thread(
     id = id,
     displayName = displayName,
     address = address,
@@ -28,5 +29,6 @@ fun Thread.toEntity() = ThreadEntity(
     displayName = displayName,
     address = address,
     lastMessageAt = lastMessageAt,
+    lastMessagePreview = lastMessagePreview,
     backupPolicy = backupPolicy
 )

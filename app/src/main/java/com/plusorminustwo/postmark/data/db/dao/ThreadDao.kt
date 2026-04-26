@@ -40,4 +40,7 @@ interface ThreadDao {
 
     @Query("UPDATE threads SET lastMessageAt = :timestamp WHERE id = :threadId")
     suspend fun updateLastMessageAt(threadId: Long, timestamp: Long)
+
+    @Query("UPDATE threads SET lastMessagePreview = :preview WHERE id = :threadId")
+    suspend fun updateLastMessagePreview(threadId: Long, preview: String)
 }

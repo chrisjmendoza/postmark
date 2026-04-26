@@ -20,7 +20,8 @@ class ThreadRepository @Inject constructor(
     fun observeById(threadId: Long): Flow<Thread?> =
         dao.observeById(threadId).map { it?.toDomain() }
 
-    suspend fun getById(threadId: Long): Thread? = dao.getById(threadId)?.toDomain()
+    suspend fun getById(threadId: Long): Thread? =
+        dao.getById(threadId)?.toDomain()
 
     suspend fun upsert(thread: Thread) = dao.insert(thread.toEntity())
 
@@ -37,4 +38,7 @@ class ThreadRepository @Inject constructor(
 
     suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) =
         dao.updateLastMessageAt(threadId, timestamp)
+
+    suspend fun updateLastMessagePreview(threadId: Long, preview: String) =
+        dao.updateLastMessagePreview(threadId, preview)
 }

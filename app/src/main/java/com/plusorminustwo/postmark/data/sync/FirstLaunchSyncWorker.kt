@@ -79,12 +79,16 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                         displayName = displayName,
                         address = address,
                         lastMessageAt = date,
+                        lastMessagePreview = body,
                         backupPolicy = BackupPolicy.GLOBAL
                     )
                 } else {
                     val existing = threads[threadId]!!
                     if (date > existing.lastMessageAt) {
-                        threads[threadId] = existing.copy(lastMessageAt = date)
+                        threads[threadId] = existing.copy(
+                            lastMessageAt = date,
+                            lastMessagePreview = body
+                        )
                     }
                 }
 
@@ -119,14 +123,18 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
             Uri.encode(address)
         )
-        return applicationContext.contentResolver.query(
-            uri,
-            arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-            null, null, null
-        )?.use { cursor ->
-            if (cursor.moveToFirst())
-                cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
-            else null
+        return try {
+            applicationContext.contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst())
+                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
+                else null
+            }
+        } catch (_: SecurityException) {
+            null
         }
     }
 
