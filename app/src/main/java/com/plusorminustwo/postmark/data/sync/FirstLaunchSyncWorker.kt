@@ -30,6 +30,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         return try {
             syncAllSms()
+            applicationContext.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
+                .edit().putBoolean("first_sync_completed", true).apply()
             Result.success()
         } catch (e: Exception) {
             if (runAttemptCount < 3) Result.retry() else Result.failure()

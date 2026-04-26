@@ -1,6 +1,14 @@
 package com.plusorminustwo.postmark.ui.navigation
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.background
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -24,13 +32,21 @@ sealed class Screen(val route: String) {
     data object BackupSettings : Screen("settings/backup")
 }
 
+private val ENTER = tween<Float>(280)
+private val EXIT  = tween<Float>(220)
+
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
 
     NavHost(
         navController = navController,
-        startDestination = Screen.Conversations.route
+        startDestination = Screen.Conversations.route,
+        modifier = Modifier.background(MaterialTheme.colorScheme.background),
+        enterTransition    = { slideInHorizontally(ENTER) { it } + fadeIn(ENTER) },
+        exitTransition     = { slideOutHorizontally(EXIT) { -it / 4 } + fadeOut(EXIT) },
+        popEnterTransition = { slideInHorizontally(ENTER) { -it / 4 } + fadeIn(ENTER) },
+        popExitTransition  = { slideOutHorizontally(EXIT) { it } + fadeOut(EXIT) }
     ) {
         composable(Screen.Conversations.route) {
             ConversationsScreen(
