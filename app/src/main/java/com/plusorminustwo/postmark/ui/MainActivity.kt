@@ -1,7 +1,6 @@
 package com.plusorminustwo.postmark.ui
 
 import android.Manifest
-import android.app.role.RoleManager
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -23,10 +22,6 @@ class MainActivity : ComponentActivity() {
 
     private val themeViewModel: AppThemeViewModel by viewModels()
 
-    private val roleRequestLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { requestPermissionsIfNeeded() }
-
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { triggerFirstLaunchSyncIfPermitted() }
@@ -34,22 +29,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        requestDefaultSmsRoleOrContinue()
+        requestPermissionsIfNeeded()
         setContent {
             val themePreference by themeViewModel.themePreference.collectAsState()
             PostmarkTheme(themePreference = themePreference) {
                 AppNavigation()
             }
-        }
-    }
-
-    private fun requestDefaultSmsRoleOrContinue() {
-        val roleManager = getSystemService(RoleManager::class.java)
-        if (!roleManager.isRoleHeld(RoleManager.ROLE_SMS)) {
-            val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS)
-            roleRequestLauncher.launch(intent)
-        } else {
-            requestPermissionsIfNeeded()
         }
     }
 
