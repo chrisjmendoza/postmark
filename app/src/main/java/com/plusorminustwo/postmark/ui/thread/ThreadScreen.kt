@@ -267,7 +267,12 @@ private fun MessageBubble(
                 text = timeFormatter.format(Date(message.timestamp)),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp, bottom = 2.dp)
+                modifier = Modifier.padding(
+                    start = if (!message.isSent) 4.dp else 0.dp,
+                    end   = if (message.isSent)  4.dp else 0.dp,
+                    top   = 2.dp,
+                    bottom = 2.dp
+                )
             )
         }
         message.reactions.forEach { reaction ->
@@ -370,8 +375,12 @@ private fun launchDefaultSmsRoleRequest(context: android.content.Context) {
     }
 }
 
-private val dayFormatter  = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault())
-private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault())
+private val dayFormatter  = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).also {
+    it.timeZone = java.util.TimeZone.getDefault()
+}
+private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault()).also {
+    it.timeZone = java.util.TimeZone.getDefault()
+}
 
 private fun List<Message>.groupByDay(): Map<String, List<Message>> =
     groupBy { dayFormatter.format(Date(it.timestamp)) }
