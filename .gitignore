@@ -12,3 +12,5 @@ app/release/
 app/schemas/
 app/build/
 .claude/
+
+.vscode/
