@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.room)
 }
 
 android {
@@ -43,9 +44,17 @@ android {
     }
 
     ksp {
-        arg("room.schemaLocation", "$projectDir/schemas")
         arg("room.incremental", "true")
-        arg("room.generateKotlin", "true")
+    }
+
+    room {
+        schemaDirectory("$projectDir/schemas")
+    }
+
+    sourceSets {
+        // Expose Room schema JSON files as androidTest assets so MigrationTestHelper
+        // can load them for schema-validation migration tests.
+        getByName("androidTest").assets.srcDirs(files("$projectDir/schemas"))
     }
 }
 
