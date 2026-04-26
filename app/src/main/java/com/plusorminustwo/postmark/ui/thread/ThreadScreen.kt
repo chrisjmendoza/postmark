@@ -96,7 +96,7 @@ fun ThreadScreen(
     val dateToHeaderIndex = remember(grouped) {
         var idx = 0
         buildMap<String, Int> {
-            grouped.forEach { (label, messages) ->
+            grouped.entries.reversed().forEach { (label, messages) ->
                 idx += messages.size
                 put(label, idx)
                 idx++
@@ -226,7 +226,7 @@ fun ThreadScreen(
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
-                grouped.forEach { (dateLabel, messages) ->
+                grouped.entries.reversed().forEach { (dateLabel, messages) ->
                     val msgs = reversedByDate[dateLabel] ?: emptyList()
                     items(msgs, key = { it.id }) { message ->
                         MessageBubble(
@@ -702,21 +702,12 @@ private fun launchDefaultSmsRoleRequest(context: android.content.Context) {
     }
 }
 
-private val dayFormatter  = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).also {
-    it.timeZone = java.util.TimeZone.getDefault()
-}
 private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault()).also {
     it.timeZone = java.util.TimeZone.getDefault()
 }
 
 private fun localDateToLabel(date: LocalDate): String =
-    dayFormatter.format(Date(date.atStartOfDay(java.time.ZoneId.systemDefault()).toEpochSecond() * 1000))
-
-private fun dayStartMs(dayLabel: String): Long = dayFormatter.parse(dayLabel)?.time ?: 0L
-private fun dayEndMs(dayLabel: String): Long   = (dayFormatter.parse(dayLabel)?.time ?: 0L) + 86_400_000L - 1L
-
-private fun List<Message>.groupByDay(): Map<String, List<Message>> =
-    groupBy { dayFormatter.format(Date(it.timestamp)) }
+    DAY_FORMATTER.format(Date(date.atStartOfDay(java.time.ZoneId.systemDefault()).toEpochSecond() * 1000))
 
 /**
  * Corner radii for message bubbles.

@@ -1,8 +1,24 @@
 package com.plusorminustwo.postmark.ui.thread
 
 import com.plusorminustwo.postmark.domain.model.Message
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 enum class ClusterPosition { SINGLE, TOP, MIDDLE, BOTTOM }
+
+internal val DAY_FORMATTER = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).also {
+    it.timeZone = java.util.TimeZone.getDefault()
+}
+
+/**
+ * Groups [this] list (expected in ascending timestamp order) into an ordered map of
+ * day-label → messages. The map preserves insertion order, so keys are in ascending
+ * chronological order — oldest day first. Callers that need newest-day-first should
+ * iterate [Map.entries] reversed.
+ */
+fun List<Message>.groupByDay(): Map<String, List<Message>> =
+    groupBy { DAY_FORMATTER.format(Date(it.timestamp)) }
 
 private val CLUSTER_GAP_MS = 3 * 60 * 1_000L  // 3 minutes
 
