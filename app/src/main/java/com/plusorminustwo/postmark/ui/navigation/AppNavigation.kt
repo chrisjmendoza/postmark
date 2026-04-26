@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -32,8 +33,10 @@ sealed class Screen(val route: String) {
     data object BackupSettings : Screen("settings/backup")
 }
 
-private val ENTER = tween<Float>(280)
-private val EXIT  = tween<Float>(220)
+private val SLIDE_IN  = tween<IntOffset>(280)
+private val SLIDE_OUT = tween<IntOffset>(220)
+private val FADE_IN   = tween<Float>(280)
+private val FADE_OUT  = tween<Float>(220)
 
 @Composable
 fun AppNavigation() {
@@ -43,10 +46,10 @@ fun AppNavigation() {
         navController = navController,
         startDestination = Screen.Conversations.route,
         modifier = Modifier.background(MaterialTheme.colorScheme.background),
-        enterTransition    = { slideInHorizontally(ENTER) { it } + fadeIn(ENTER) },
-        exitTransition     = { slideOutHorizontally(EXIT) { -it / 4 } + fadeOut(EXIT) },
-        popEnterTransition = { slideInHorizontally(ENTER) { -it / 4 } + fadeIn(ENTER) },
-        popExitTransition  = { slideOutHorizontally(EXIT) { it } + fadeOut(EXIT) }
+        enterTransition    = { slideInHorizontally(SLIDE_IN) { it } + fadeIn(FADE_IN) },
+        exitTransition     = { slideOutHorizontally(SLIDE_OUT) { -it / 4 } + fadeOut(FADE_OUT) },
+        popEnterTransition = { slideInHorizontally(SLIDE_IN) { -it / 4 } + fadeIn(FADE_IN) },
+        popExitTransition  = { slideOutHorizontally(SLIDE_OUT) { it } + fadeOut(FADE_OUT) }
     ) {
         composable(Screen.Conversations.route) {
             ConversationsScreen(
