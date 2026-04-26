@@ -3,8 +3,10 @@ package com.plusorminustwo.postmark.ui.settings
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -16,6 +18,7 @@ fun DevOptionsScreen(
     viewModel: DevOptionsViewModel = hiltViewModel()
 ) {
     val feedback by viewModel.feedback.collectAsState()
+    val isRecomputing by viewModel.isRecomputing.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(feedback) {
@@ -45,6 +48,30 @@ fun DevOptionsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            DevSectionHeader("Stats")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Recalculate stats", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Recompute all conversation statistics",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (isRecomputing) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    IconButton(onClick = viewModel::recomputeStats) {
+                        Icon(Icons.Default.Refresh, "Recalculate")
+                    }
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
             DevSectionHeader("Sample data")
             DevButton("Load sample data", "Insert 5 threads + ~70 messages") {
                 viewModel.loadSampleData()

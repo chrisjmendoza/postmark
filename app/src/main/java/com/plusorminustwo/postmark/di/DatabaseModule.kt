@@ -19,7 +19,11 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): PostmarkDatabase =
         Room.databaseBuilder(context, PostmarkDatabase::class.java, PostmarkDatabase.DATABASE_NAME)
-            .addMigrations(PostmarkDatabase.MIGRATION_1_2, PostmarkDatabase.MIGRATION_2_3)
+            .addMigrations(
+                PostmarkDatabase.MIGRATION_1_2,
+                PostmarkDatabase.MIGRATION_2_3,
+                PostmarkDatabase.MIGRATION_3_4
+            )
             .addCallback(PostmarkDatabase.FTS_CALLBACK)
             .build()
 
@@ -27,5 +31,6 @@ object DatabaseModule {
     @Provides fun provideMessageDao(db: PostmarkDatabase): MessageDao = db.messageDao()
     @Provides fun provideReactionDao(db: PostmarkDatabase): ReactionDao = db.reactionDao()
     @Provides fun provideThreadStatsDao(db: PostmarkDatabase): ThreadStatsDao = db.threadStatsDao()
+    @Provides fun provideGlobalStatsDao(db: PostmarkDatabase): GlobalStatsDao = db.globalStatsDao()
     @Provides fun provideSearchDao(db: PostmarkDatabase): SearchDao = db.searchDao()
 }

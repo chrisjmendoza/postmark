@@ -14,9 +14,10 @@ import com.plusorminustwo.postmark.data.db.entity.*
         MessageEntity::class,
         ReactionEntity::class,
         ThreadStatsEntity::class,
+        GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -26,6 +27,7 @@ abstract class PostmarkDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun reactionDao(): ReactionDao
     abstract fun threadStatsDao(): ThreadStatsDao
+    abstract fun globalStatsDao(): GlobalStatsDao
     abstract fun searchDao(): SearchDao
 
     companion object {
@@ -44,6 +46,27 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE messages ADD COLUMN deliveryStatus INTEGER NOT NULL DEFAULT 0"
                 )
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS global_stats (
+                        id INTEGER NOT NULL PRIMARY KEY DEFAULT 1,
+                        totalMessages INTEGER NOT NULL DEFAULT 0,
+                        sentCount INTEGER NOT NULL DEFAULT 0,
+                        receivedCount INTEGER NOT NULL DEFAULT 0,
+                        threadCount INTEGER NOT NULL DEFAULT 0,
+                        activeDayCount INTEGER NOT NULL DEFAULT 0,
+                        longestStreakDays INTEGER NOT NULL DEFAULT 0,
+                        avgResponseTimeMs INTEGER NOT NULL DEFAULT 0,
+                        topEmojisJson TEXT NOT NULL DEFAULT '[]',
+                        byDayOfWeekJson TEXT NOT NULL DEFAULT '{}',
+                        byMonthJson TEXT NOT NULL DEFAULT '{}',
+                        lastUpdatedAt INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
             }
         }
 
