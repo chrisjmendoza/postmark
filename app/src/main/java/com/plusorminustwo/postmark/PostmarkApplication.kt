@@ -3,9 +3,7 @@ package com.plusorminustwo.postmark
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
-import com.plusorminustwo.postmark.data.sync.FirstLaunchSyncWorker
 import com.plusorminustwo.postmark.data.sync.SmsContentObserver
-import androidx.work.WorkManager
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -22,17 +20,9 @@ class PostmarkApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        // Register content observer so incremental SMS changes are picked up
+        // while the app is running. The initial bulk sync is triggered by
+        // MainActivity after permissions are granted.
         smsContentObserver.register()
-        scheduleFirstLaunchSyncIfNeeded()
-    }
-
-    private fun scheduleFirstLaunchSyncIfNeeded() {
-        val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
-        if (prefs.getBoolean("first_launch_sync_done", false)) return
-
-        WorkManager.getInstance(this)
-            .enqueue(FirstLaunchSyncWorker.buildRequest())
-
-        prefs.edit().putBoolean("first_launch_sync_done", true).apply()
     }
 }
