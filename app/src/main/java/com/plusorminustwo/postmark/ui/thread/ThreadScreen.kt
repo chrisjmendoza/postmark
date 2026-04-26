@@ -38,6 +38,7 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.time.LocalDate
@@ -66,15 +67,21 @@ fun ThreadScreen(
     var showExportSheet by remember { mutableStateOf(false) }
     var showCalendarPicker by remember { mutableStateOf(false) }
 
-    // Pill auto-hide: show on scroll, hide 1.8 s after scroll stops
+    // Pill show/hide: collectLatest on a snapshotFlow so that rapid
+    // isScrollInProgress oscillations during flings don't restart the
+    // coroutine via LaunchedEffect key-change, which could briefly set
+    // pillVisible = false before the scroll continuation fires.
     var pillVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(listState.isScrollInProgress) {
-        if (listState.isScrollInProgress) {
-            pillVisible = true
-        } else {
-            delay(PILL_HIDE_DELAY_MS)
-            pillVisible = false
-        }
+    LaunchedEffect(Unit) {
+        snapshotFlow { listState.isScrollInProgress }
+            .collectLatest { scrolling ->
+                if (scrolling) {
+                    pillVisible = true
+                } else {
+                    delay(PILL_HIDE_DELAY_MS)
+                    pillVisible = false
+                }
+            }
     }
 
     // Build maps that mirror the LazyColumn item structure.
@@ -114,6 +121,11 @@ fun ThreadScreen(
             }
         }
     }
+
+    // Stable label for the pill: hold the last non-empty value so the pill
+    // never shows blank text during layout-recalculation gaps at day boundaries.
+    var pillDateLabel by remember { mutableStateOf("") }
+    if (visibleDate.isNotEmpty()) pillDateLabel = visibleDate
 
     // Scroll to the date header for the given label.
     fun scrollToDateLabel(label: String) {
@@ -238,7 +250,7 @@ fun ThreadScreen(
             }
 
             FloatingDatePill(
-                dateLabel = visibleDate,
+                dateLabel = pillDateLabel,
                 visible = pillVisible,
                 onClick = { showCalendarPicker = true },
                 modifier = Modifier.align(Alignment.TopCenter)
@@ -257,7 +269,7 @@ private fun FloatingDatePill(
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
-        visible = visible && dateLabel.isNotEmpty(),
+        visible = visible,
         enter = fadeIn(animationSpec = tween(150)),
         exit  = fadeOut(animationSpec = tween(300)),
         modifier = modifier
