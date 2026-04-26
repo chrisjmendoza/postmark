@@ -17,6 +17,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import javax.inject.Inject
 
 data class ThreadUiState(
@@ -24,6 +27,7 @@ data class ThreadUiState(
     val messages: List<Message> = emptyList(),
     val selectedMessageIds: Set<Long> = emptySet(),
     val isSelectionMode: Boolean = false,
+    val selectionScope: SelectionScope = SelectionScope.MESSAGES,
     val replyText: String = "",
     val isSending: Boolean = false,
     val showDefaultSmsDialog: Boolean = false,
@@ -42,64 +46,139 @@ class ThreadViewModel @Inject constructor(
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
 
-    private val _selectionState = MutableStateFlow(emptySet<Long>())
+    private val _selectionState  = MutableStateFlow(emptySet<Long>())
     private val _isSelectionMode = MutableStateFlow(false)
-    private val _replyText = MutableStateFlow("")
-    private val _isSending = MutableStateFlow(false)
-    private val _showDefaultSmsDialog = MutableStateFlow(false)
-    private val _expandedTimestampIds = MutableStateFlow(emptySet<Long>())
+    private val _selectionScope  = MutableStateFlow(SelectionScope.MESSAGES)
+    private val _replyText       = MutableStateFlow("")
+    private val _isSending       = MutableStateFlow(false)
+    private val _showDefaultSmsDialog  = MutableStateFlow(false)
+    private val _expandedTimestampIds  = MutableStateFlow(emptySet<Long>())
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
+
+    val activeDates: StateFlow<Set<LocalDate>> = messageRepository
+        .observeByThread(threadId)
+        .map { messages ->
+            messages.mapTo(mutableSetOf()) { msg ->
+                Instant.ofEpochMilli(msg.timestamp)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    // Replaces the previous Triple(Triple(...), ...) hack with a named holder.
+    private data class InnerState(
+        val replyText: String,
+        val isSending: Boolean,
+        val showDefaultSmsDialog: Boolean,
+        val expandedTimestampIds: Set<Long>,
+        val selectionScope: SelectionScope
+    )
 
     val uiState: StateFlow<ThreadUiState> = combine(
         threadRepository.observeById(threadId),
         messageRepository.observeByThread(threadId),
         _selectionState,
         _isSelectionMode,
-        combine(_replyText, _isSending, _showDefaultSmsDialog, _expandedTimestampIds) { text, sending, dialog, expandedIds ->
-            Triple(Triple(text, sending, dialog), expandedIds, Unit)
+        combine(_replyText, _isSending, _showDefaultSmsDialog, _expandedTimestampIds, _selectionScope) {
+            text, sending, dialog, expandedIds, scope ->
+            InnerState(text, sending, dialog, expandedIds, scope)
         }
-    ) { thread, messages, selected, selectionMode, (innerTriple, expandedIds, _) ->
-        val (text, sending, dialog) = innerTriple
+    ) { thread, messages, selected, selectionMode, inner ->
         ThreadUiState(
             thread = thread,
             messages = messages,
             selectedMessageIds = selected,
             isSelectionMode = selectionMode,
-            replyText = text,
-            isSending = sending,
-            showDefaultSmsDialog = dialog,
-            expandedTimestampIds = expandedIds
+            selectionScope = inner.selectionScope,
+            replyText = inner.replyText,
+            isSending = inner.isSending,
+            showDefaultSmsDialog = inner.showDefaultSmsDialog,
+            expandedTimestampIds = inner.expandedTimestampIds
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
-    fun enterSelectionMode() { _isSelectionMode.value = true }
+    // ── Selection ─────────────────────────────────────────────────────────────
+
+    /** Standard toolbar entry — no message pre-selected. */
+    fun enterSelectionMode() {
+        _isSelectionMode.value = true
+        _selectionScope.value  = SelectionScope.MESSAGES
+    }
+
+    /** Long-press entry — selects [messageId] immediately. */
+    fun enterSelectionModeWithMessage(messageId: Long) {
+        _isSelectionMode.value = true
+        _selectionScope.value  = SelectionScope.MESSAGES
+        _selectionState.update { it + messageId }
+    }
 
     fun exitSelectionMode() {
         _isSelectionMode.value = false
-        _selectionState.value = emptySet()
+        _selectionState.value  = emptySet()
+        _selectionScope.value  = SelectionScope.MESSAGES
     }
 
     fun toggleSelection(messageId: Long) {
-        _selectionState.update { current ->
-            if (messageId in current) current - messageId else current + messageId
+        _selectionState.update { cur ->
+            if (messageId in cur) cur - messageId else cur + messageId
         }
     }
 
-    fun toggleTimestamp(messageId: Long) {
-        _expandedTimestampIds.update { current ->
-            if (messageId in current) current - messageId else current + messageId
+    /**
+     * Toggles all [ids] as a unit:
+     *   • if every id is already selected → deselect all of them
+     *   • otherwise → select all of them
+     */
+    fun toggleMessageIds(ids: List<Long>) {
+        val idSet = ids.toSet()
+        _selectionState.update { cur ->
+            if (idSet.all { it in cur }) cur - idSet else cur + idSet
         }
     }
 
-    fun selectDay(dayStartMs: Long, dayEndMs: Long) {
-        viewModelScope.launch {
-            val dayMessages = messageRepository.getByThreadAndDateRange(threadId, dayStartMs, dayEndMs)
-            _selectionState.update { current -> current + dayMessages.map { it.id } }
+    /**
+     * Changes the active selection scope.
+     * Switching to [SelectionScope.ALL] immediately selects every loaded message;
+     * tapping ALL again when everything is already selected clears the selection
+     * and reverts to MESSAGES scope.
+     */
+    fun setSelectionScope(scope: SelectionScope) {
+        if (scope == SelectionScope.ALL) {
+            val allIds = uiState.value.messages.map { it.id }.toSet()
+            if (_selectionState.value == allIds) {
+                _selectionState.value = emptySet()
+                _selectionScope.value = SelectionScope.MESSAGES
+            } else {
+                _selectionState.value = allIds
+                _selectionScope.value = SelectionScope.ALL
+            }
+        } else {
+            _selectionScope.value = scope
         }
     }
 
     fun clearSelection() = exitSelectionMode()
+
+    // ── Timestamps ────────────────────────────────────────────────────────────
+
+    fun toggleTimestamp(messageId: Long) {
+        _expandedTimestampIds.update { cur ->
+            if (messageId in cur) cur - messageId else cur + messageId
+        }
+    }
+
+    // ── Day select (kept for backward compatibility) ──────────────────────────
+
+    fun selectDay(dayStartMs: Long, dayEndMs: Long) {
+        viewModelScope.launch {
+            val dayMessages = messageRepository.getByThreadAndDateRange(threadId, dayStartMs, dayEndMs)
+            _selectionState.update { cur -> cur + dayMessages.map { it.id } }
+        }
+    }
+
+    // ── Reply / Send ──────────────────────────────────────────────────────────
 
     fun onReplyTextChanged(text: String) { _replyText.value = text }
 
@@ -119,8 +198,8 @@ class ThreadViewModel @Inject constructor(
 
         viewModelScope.launch {
             _isSending.value = true
-            val now = System.currentTimeMillis()
-            val tempId = -now  // negative ID marks optimistic messages
+            val now    = System.currentTimeMillis()
+            val tempId = -now
             val optimistic = Message(
                 id = tempId,
                 threadId = threadId,

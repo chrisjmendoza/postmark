@@ -1,5 +1,8 @@
 package com.plusorminustwo.postmark.domain.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class Message(
     val id: Long,
     val threadId: Long,

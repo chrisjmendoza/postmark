@@ -69,7 +69,8 @@ class ExportFormatterTest {
         )
         val msg = sent(t1, "Hi back").copy(reactions = listOf(reaction))
         val result = ExportFormatter.formatForCopy(listOf(msg), displayName, ownAddress)
-        assertTrue(result.contains("❤️ reacted by $displayName"))
+        // Format: "  ↩ ❤️ Sarah" (grouped-per-message style introduced in 9d5ff2d)
+        assertTrue(result.contains("↩ ❤️ $displayName"))
     }
 
     @Test
@@ -80,7 +81,7 @@ class ExportFormatterTest {
         )
         val msg = received(t1, "something").copy(reactions = listOf(reaction))
         val result = ExportFormatter.formatForCopy(listOf(msg), displayName, ownAddress)
-        assertTrue(result.contains("😂 reacted by You"))
+        assertTrue(result.contains("↩ 😂 You"))
     }
 
     @Test

@@ -22,26 +22,32 @@ Ordered by what blocks the most other things. Pick from the top.
 
 - [x] **Dark theme + Appearance setting** — Custom M3 `DarkColorScheme` and `LightColorScheme` in `Theme.kt` using all 14 brand colours. `PostmarkColors` extended-colours class + `LocalPostmarkColors` for use-site access (bubble colours, avatar pairs, etc.). `ThemePreferenceRepository` (SharedPreferences-backed `StateFlow`). Settings → Appearance section with Follow system / Always dark / Always light radio buttons; live switching without activity restart.
 
-- [ ] **Floating date pill** (`ThreadScreen`)
-  - Show current visible date range as a pill at the top of the message list
-  - Fade in when scrolling, auto-hide after 1.8 s of idle (use `LaunchedEffect` + `delay`)
-  - Tappable → open calendar picker
+- [x] **Floating date pill** (`ThreadScreen`)
+  - Shows date of topmost visible message; fades in on scroll, auto-hides after 1.8 s idle
+  - Tappable → opens calendar picker
 
-- [ ] **Calendar picker** (`ThreadScreen`)
-  - Custom `Dialog` with a month grid
-  - Highlight days with messages (blue dot), gray out empty days
-  - Tapping an empty day: find nearest day with messages, scroll there, show `Snackbar` explaining the jump
-  - Data: `MessageRepository.getActiveDatesForThread()` already exists
+- [x] **Calendar picker** (`ThreadScreen`)
+  - Custom `Dialog` with a month grid; prev/next month navigation
+  - Active days (messages exist) shown with a blue dot; empty days grayed out
+  - Tapping active day → dismiss + scroll to that date header
+  - Tapping empty day → snap to nearest active date + `Snackbar` explaining the jump
+  - `findNearestActiveDate()` in `DateNavigation.kt`, 11 unit tests in `DateNavigationTest`
 
-- [ ] **Message grouping** (`ThreadScreen`)
-  - Consecutive messages from the same sender within 3 minutes → cluster visually
-  - Top bubble: full radius corners. Middle: small top radius on sender side. Bottom: full radius.
-  - No timestamp shown per-bubble within a cluster (show once at cluster end)
+- [x] **Message grouping** (`ThreadScreen`)
+  - Consecutive same-sender messages within 3 min cluster; sender-side corners narrow for TOP/MIDDLE
+  - Timestamps suppressed for TOP/MIDDLE positions (shown once at cluster tail)
+  - `computeClusterPositions()` in `MessageGrouping.kt`, 11 unit tests in `MessageGroupingTest`
+
+- [ ] **Custom date range selection** (`ThreadScreen`)
+  - Add a "Date range" option in selection mode that lets the user input start/end dates instead of tapping day-by-day
+  - Design TBD — likely a two-field date picker bottom sheet; selecting the range auto-selects all messages within it
+  - Useful for exporting a full month or arbitrary span without selecting every date header individually
 
 - [ ] **Image export** (`ExportBottomSheet`)
-  - Render conversation to `Canvas`, convert to `Bitmap`, compress to PNG
+  - Render selected messages to `Canvas`, convert to `Bitmap`, compress to PNG
   - Write to `getExternalFilesDir("exports")/`, share via `FileProvider` + `ACTION_SEND`
-  - `ExportBottomSheet` currently falls back to text share
+  - Add "Share as image" button back to `ExportBottomSheet` once real rendering is in place
+  - Placeholder text-share fallback has been removed; sheet currently only has Copy
 
 - [ ] **Date range filter** (`SearchScreen`)
   - Two `DatePickerDialog`-triggered chips (From / To)
