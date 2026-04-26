@@ -243,7 +243,6 @@ fun ThreadScreen(
                         DateHeader(
                             label = dateLabel,
                             isSelectionMode = uiState.isSelectionMode,
-                            isDayScope = uiState.selectionScope == SelectionScope.DAY,
                             selectedCount = messages.count { it.id in uiState.selectedMessageIds },
                             totalCount = messages.size,
                             onToggleDay = { viewModel.toggleMessageIds(messages.map { it.id }) }
@@ -299,23 +298,15 @@ private fun SelectionTopBar(
                 .padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Scope chips — Messages and Day set the active tap target.
             FilterChip(
                 selected = scope == SelectionScope.MESSAGES,
                 onClick  = { onScopeChange(SelectionScope.MESSAGES) },
                 label    = { Text("Messages") }
             )
             FilterChip(
-                selected = scope == SelectionScope.DAY,
-                onClick  = { onScopeChange(SelectionScope.DAY) },
-                label    = { Text("Day") }
-            )
-            // Action chip: "All" selects every message; when all are already
-            // selected it flips to "None" so deselecting everything is obvious.
-            FilterChip(
                 selected = allSelected,
                 onClick  = { onScopeChange(SelectionScope.ALL) },
-                label    = { Text(if (allSelected) "None" else "All") }
+                label    = { Text("All") }
             )
         }
     }
@@ -454,7 +445,6 @@ private fun MessageBubble(
 private fun DateHeader(
     label: String,
     isSelectionMode: Boolean,
-    isDayScope: Boolean,
     selectedCount: Int,
     totalCount: Int,
     onToggleDay: () -> Unit
@@ -481,7 +471,7 @@ private fun DateHeader(
         if (selectionIcon != null) {
             IconButton(
                 onClick  = onToggleDay,
-                enabled  = isDayScope,
+                enabled  = isSelectionMode,
                 modifier = Modifier.size(32.dp)
             ) {
                 Icon(

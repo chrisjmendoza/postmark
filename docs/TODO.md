@@ -38,6 +38,11 @@ Ordered by what blocks the most other things. Pick from the top.
   - Timestamps suppressed for TOP/MIDDLE positions (shown once at cluster tail)
   - `computeClusterPositions()` in `MessageGrouping.kt`, 11 unit tests in `MessageGroupingTest`
 
+- [ ] **Custom date range selection** (`ThreadScreen`)
+  - Add a "Date range" option in selection mode that lets the user input start/end dates instead of tapping day-by-day
+  - Design TBD — likely a two-field date picker bottom sheet; selecting the range auto-selects all messages within it
+  - Useful for exporting a full month or arbitrary span without selecting every date header individually
+
 - [ ] **Image export** (`ExportBottomSheet`)
   - Render conversation to `Canvas`, convert to `Bitmap`, compress to PNG
   - Write to `getExternalFilesDir("exports")/`, share via `FileProvider` + `ACTION_SEND`

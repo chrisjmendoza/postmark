@@ -201,13 +201,12 @@ class StatsUpdater @Inject constructor(
 
 internal fun computeLongestStreak(sortedDays: List<String>): Int {
     if (sortedDays.isEmpty()) return 0
-    val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
     var maxStreak = 1
     var current = 1
     for (i in 1 until sortedDays.size) {
-        val prev = fmt.parse(sortedDays[i - 1]) ?: continue
-        val curr = fmt.parse(sortedDays[i]) ?: continue
-        if (TimeUnit.MILLISECONDS.toDays(curr.time - prev.time) == 1L) {
+        val prev = java.time.LocalDate.parse(sortedDays[i - 1])
+        val curr = java.time.LocalDate.parse(sortedDays[i])
+        if (java.time.temporal.ChronoUnit.DAYS.between(prev, curr) == 1L) {
             current++
             if (current > maxStreak) maxStreak = current
         } else {
