@@ -6,8 +6,6 @@ import android.provider.ContactsContract
 import android.provider.Telephony
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
-import com.plusorminustwo.postmark.data.db.entity.MessageEntity
-import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -29,7 +27,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         return try {
-            syncAllSms()
+            val synced = syncAllSms()
+            if (!synced) return if (runAttemptCount < 3) Result.retry() else Result.failure()
             applicationContext.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
                 .edit().putBoolean("first_sync_completed", true).apply()
             Result.success()
@@ -38,7 +37,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         }
     }
 
-    private suspend fun syncAllSms() {
+    private suspend fun syncAllSms(): Boolean {
         val threads = mutableMapOf<Long, Thread>()
         val messages = mutableListOf<Message>()
 
@@ -54,7 +53,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             ),
             null, null,
             "${Telephony.Sms.DATE} ASC"
-        ) ?: return
+        ) ?: return false
 
         cursor.use {
             val idIdx = it.getColumnIndexOrThrow(Telephony.Sms._ID)
@@ -121,6 +120,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
         // Compute thread stats for every thread after all messages are in Room
         statsUpdater.computeForAllThreads(threads.keys)
+        return true
     }
 
     private fun lookupContactName(address: String): String? {
