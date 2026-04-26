@@ -39,6 +39,9 @@ interface ReactionDao {
         WHERE messageId IN (SELECT id FROM messages WHERE threadId = :threadId)
     """)
     fun observeByThread(threadId: Long): Flow<List<ReactionEntity>>
+
+    @Query("DELETE FROM reactions")
+    suspend fun deleteAll()
 }
 
 data class EmojiCount(val emoji: String, val count: Int)

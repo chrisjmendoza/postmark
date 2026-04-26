@@ -58,4 +58,7 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE threadId = :threadId AND id < 0")
     suspend fun deleteOptimisticMessages(threadId: Long)
+
+    @Query("DELETE FROM messages")
+    suspend fun deleteAll()
 }

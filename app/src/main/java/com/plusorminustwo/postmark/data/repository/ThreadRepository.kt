@@ -41,4 +41,6 @@ class ThreadRepository @Inject constructor(
 
     suspend fun updateLastMessagePreview(threadId: Long, preview: String) =
         dao.updateLastMessagePreview(threadId, preview)
+
+    suspend fun deleteAll() = dao.deleteAll()
 }

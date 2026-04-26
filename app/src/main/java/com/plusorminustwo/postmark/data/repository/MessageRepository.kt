@@ -60,4 +60,9 @@ class MessageRepository @Inject constructor(
 
     suspend fun deleteOptimisticMessages(threadId: Long) =
         messageDao.deleteOptimisticMessages(threadId)
+
+    suspend fun deleteAll() {
+        reactionDao.deleteAll()
+        messageDao.deleteAll()
+    }
 }

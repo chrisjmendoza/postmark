@@ -18,6 +18,7 @@ import androidx.navigation.navArgument
 import com.plusorminustwo.postmark.ui.conversations.ConversationsScreen
 import com.plusorminustwo.postmark.ui.search.SearchScreen
 import com.plusorminustwo.postmark.ui.settings.BackupSettingsScreen
+import com.plusorminustwo.postmark.ui.settings.DevOptionsScreen
 import com.plusorminustwo.postmark.ui.settings.SettingsScreen
 import com.plusorminustwo.postmark.ui.stats.StatsScreen
 import com.plusorminustwo.postmark.ui.thread.ThreadScreen
@@ -31,6 +32,7 @@ sealed class Screen(val route: String) {
     data object Stats : Screen("stats")
     data object Settings : Screen("settings")
     data object BackupSettings : Screen("settings/backup")
+    data object DevOptions : Screen("settings/dev")
 }
 
 private val SLIDE_IN  = tween<IntOffset>(280)
@@ -94,12 +96,19 @@ fun AppNavigation() {
         composable(Screen.Settings.route) {
             SettingsScreen(
                 onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) },
+                onDevOptionsClick = { navController.navigate(Screen.DevOptions.route) },
                 onBack = { navController.popBackStack() }
             )
         }
 
         composable(Screen.BackupSettings.route) {
             BackupSettingsScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.DevOptions.route) {
+            DevOptionsScreen(
                 onBack = { navController.popBackStack() }
             )
         }

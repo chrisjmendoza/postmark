@@ -7,6 +7,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -23,6 +24,7 @@ import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 @Composable
 fun SettingsScreen(
     onBackupSettingsClick: () -> Unit,
+    onDevOptionsClick: () -> Unit,
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -48,6 +50,15 @@ fun SettingsScreen(
                 title = "Backup",
                 subtitle = "Schedule automatic backups",
                 onClick = onBackupSettingsClick
+            )
+            HorizontalDivider()
+
+            SettingsSectionHeader(title = "Developer")
+            SettingsRow(
+                icon = { Icon(Icons.Default.Code, null) },
+                title = "Developer options",
+                subtitle = "Sample data, sync controls",
+                onClick = onDevOptionsClick
             )
             HorizontalDivider()
 
