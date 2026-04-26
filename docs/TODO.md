@@ -77,6 +77,8 @@ Ordered by what blocks the most other things. Pick from the top.
 
 - [ ] **MMS support** — read `content://mms` during first sync, store attachments as file paths in a new `Attachment` entity.
 
+- [ ] **Rich media in reply bar** (`ThreadScreen`) — add attachment button (➕ or 📎) left of the text field; initially supports: image picker (`ActivityResultContracts.PickVisualMedia`), camera capture, emoji picker, sticker sheet. Each attachment type produces an MMS send. Requires default-SMS-app role for MMS send and `READ_MEDIA_IMAGES` / `CAMERA` permissions.
+
 - [ ] **Notification for incoming SMS** — show a heads-up notification from `SmsReceiver`. Requires `POST_NOTIFICATIONS` permission on API 33+.
 
 - [ ] **Real app icon** — replace the placeholder envelope with proper branded artwork.

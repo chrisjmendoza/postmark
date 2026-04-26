@@ -38,6 +38,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
+import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
@@ -195,7 +196,16 @@ fun ThreadScreen(
                 )
             } else {
                 TopAppBar(
-                    title = { Text(uiState.thread?.displayName ?: "") },
+                    title = {
+                        val name = uiState.thread?.displayName ?: ""
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            LetterAvatar(name = name, size = 36.dp)
+                            Text(name)
+                        }
+                    },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -635,52 +645,56 @@ private fun ReplyBar(
     modifier: Modifier = Modifier
 ) {
     val counterText = remember(text.length) { smsCounter(text.length) }
-    Surface(modifier = modifier, tonalElevation = 3.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.Bottom
-        ) {
-            TextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message") },
-                maxLines = 4,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor   = MaterialTheme.colorScheme.surfaceVariant,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    focusedIndicatorColor   = MaterialTheme.colorScheme.surfaceVariant,
-                    unfocusedIndicatorColor = MaterialTheme.colorScheme.surfaceVariant
-                ),
-                shape = RoundedCornerShape(24.dp),
-                textStyle = MaterialTheme.typography.bodyMedium,
-                trailingIcon = counterText?.let { ct ->
-                    {
-                        Text(
-                            text = ct,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (text.length > 160) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                    }
-                }
-            )
-            Spacer(Modifier.width(4.dp))
-            IconButton(
-                onClick = onSend,
-                enabled = text.isNotBlank(),
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = if (text.isNotBlank()) MaterialTheme.colorScheme.primary
-                                     else MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor   = if (text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
-                                     else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+    Column(modifier = modifier) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.Bottom
             ) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                TextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Message") },
+                    maxLines = 4,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        focusedIndicatorColor   = androidx.compose.ui.graphics.Color.Transparent,
+                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                        disabledIndicatorColor  = androidx.compose.ui.graphics.Color.Transparent,
+                    ),
+                    shape = RoundedCornerShape(24.dp),
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    trailingIcon = counterText?.let { ct ->
+                        {
+                            Text(
+                                text = ct,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (text.length > 160) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
+                    }
+                )
+                Spacer(Modifier.width(4.dp))
+                IconButton(
+                    onClick = onSend,
+                    enabled = text.isNotBlank(),
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor         = MaterialTheme.colorScheme.primary,
+                        contentColor           = MaterialTheme.colorScheme.onPrimary,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                }
             }
         }
     }
