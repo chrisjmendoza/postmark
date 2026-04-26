@@ -88,6 +88,12 @@ fun ThreadScreen(
     // grouped preserves insertion order: oldest date → newest date.
     val grouped = remember(uiState.messages) { uiState.messages.groupByDay() }
 
+    // Pre-reverse each day's message list once so the LazyColumn DSL block
+    // never allocates a new List per composition pass.
+    val reversedByDate = remember(grouped) {
+        grouped.mapValues { (_, msgs) -> msgs.reversed() }
+    }
+
     // messageId → date label (for resolving visible message to its day)
     val messageIdToDate = remember(grouped) {
         grouped.flatMap { (label, msgs) -> msgs.map { it.id to label } }.toMap()
@@ -228,8 +234,9 @@ fun ThreadScreen(
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
-                grouped.forEach { (dateLabel, messages) ->
-                    items(messages.reversed(), key = { it.id }) { message ->
+                grouped.forEach { (dateLabel, _) ->
+                    val msgs = reversedByDate[dateLabel] ?: emptyList()
+                    items(msgs, key = { it.id }) { message ->
                         MessageBubble(
                             message = message,
                             isSelected = message.id in uiState.selectedMessageIds,
@@ -552,8 +559,7 @@ private fun MessageBubble(
         Box(
             modifier = Modifier
                 .widthIn(max = 280.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(bubbleColor)
+                .background(bubbleColor, RoundedCornerShape(16.dp))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
