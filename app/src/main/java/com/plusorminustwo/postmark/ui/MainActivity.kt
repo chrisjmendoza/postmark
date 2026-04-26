@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
         if (prefs.getBoolean("first_sync_completed", false)) return
         WorkManager.getInstance(this).enqueueUniqueWork(
             FirstLaunchSyncWorker.WORK_NAME,
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.REPLACE,
             FirstLaunchSyncWorker.buildRequest()
         )
     }
