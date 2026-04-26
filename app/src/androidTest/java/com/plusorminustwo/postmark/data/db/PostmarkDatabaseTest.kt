@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
@@ -194,6 +197,93 @@ class PostmarkDatabaseTest {
         assertEquals(1L, results[0].threadId)
     }
 
+    // ── New MessageDao methods ─────────────────────────────────────────────
+
+    @Test
+    fun getLatestNForThread_returnsNMostRecentInDescOrder() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, ts = 1000L),
+            msg(2, 1, ts = 2000L),
+            msg(3, 1, ts = 3000L),
+            msg(4, 1, ts = 4000L)
+        ))
+        val result = db.messageDao().getLatestNForThread(1L, 2)
+        assertEquals(2, result.size)
+        assertEquals(4L, result[0].id)  // most recent first
+        assertEquals(3L, result[1].id)
+    }
+
+    @Test
+    fun getLatestNForThread_fewerMessagesThanN_returnsAll() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insert(msg(1, 1, ts = 1000L))
+        val result = db.messageDao().getLatestNForThread(1L, 5)
+        assertEquals(1, result.size)
+    }
+
+    @Test
+    fun getLatestBeforeForThread_returnsMessageStrictlyBeforeTimestamp() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, ts = 1000L),
+            msg(2, 1, ts = 2000L),
+            msg(3, 1, ts = 3000L)
+        ))
+        val result = db.messageDao().getLatestBeforeForThread(1L, 3000L)
+        assertNotNull(result)
+        assertEquals(2L, result!!.id)
+    }
+
+    @Test
+    fun getLatestBeforeForThread_noMessageBefore_returnsNull() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insert(msg(1, 1, ts = 5000L))
+        val result = db.messageDao().getLatestBeforeForThread(1L, 5000L)
+        assertNull(result)
+    }
+
+    @Test
+    fun updateDeliveryStatus_persistsNewStatus() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insert(msg(1, 1))
+        assertEquals(DELIVERY_STATUS_NONE, db.messageDao().getById(1L)!!.deliveryStatus)
+
+        db.messageDao().updateDeliveryStatus(1L, DELIVERY_STATUS_SENT)
+        assertEquals(DELIVERY_STATUS_SENT, db.messageDao().getById(1L)!!.deliveryStatus)
+
+        db.messageDao().updateDeliveryStatus(1L, DELIVERY_STATUS_DELIVERED)
+        assertEquals(DELIVERY_STATUS_DELIVERED, db.messageDao().getById(1L)!!.deliveryStatus)
+    }
+
+    @Test
+    fun deleteOptimisticMessages_removesNegativeIdRows_leavesPositiveIntact() = runBlocking {
+        db.threadDao().insert(thread(1))
+        // positive-ID real messages
+        db.messageDao().insertAll(listOf(msg(1, 1, ts = 1000L), msg(2, 1, ts = 2000L)))
+        // negative-ID optimistic messages
+        db.messageDao().insertAll(listOf(msg(-100, 1, ts = 3000L), msg(-200, 1, ts = 4000L)))
+        assertEquals(4, db.messageDao().countByThread(1L))
+
+        db.messageDao().deleteOptimisticMessages(1L)
+
+        val remaining = db.messageDao().getByThread(1L)
+        assertEquals(2, remaining.size)
+        assertTrue(remaining.all { it.id > 0 })
+    }
+
+    @Test
+    fun deleteOptimisticMessages_onlyAffectsSpecifiedThread() = runBlocking {
+        db.threadDao().insertAll(listOf(thread(1), thread(2)))
+        db.messageDao().insert(msg(-1, 1, ts = 1000L))
+        db.messageDao().insert(msg(-2, 2, ts = 1000L))
+
+        db.messageDao().deleteOptimisticMessages(1L)
+
+        assertNull(db.messageDao().getById(-1L))
+        assertNotNull(db.messageDao().getById(-2L))
+    }
+
     // ── Factories ─────────────────────────────────────────────────────────
 
     private fun thread(id: Long, policy: BackupPolicy = BackupPolicy.GLOBAL) = ThreadEntity(
@@ -201,9 +291,14 @@ class PostmarkDatabaseTest {
         lastMessageAt = System.currentTimeMillis(), backupPolicy = policy
     )
 
-    private fun msg(id: Long, threadId: Long, body: String = "test body") = MessageEntity(
+    private fun msg(
+        id: Long,
+        threadId: Long,
+        body: String = "test body",
+        ts: Long = System.currentTimeMillis()
+    ) = MessageEntity(
         id = id, threadId = threadId, address = "+1555",
-        body = body, timestamp = System.currentTimeMillis(), isSent = false, type = 1
+        body = body, timestamp = ts, isSent = false, type = 1
     )
 
     private fun reaction(
