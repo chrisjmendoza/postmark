@@ -395,9 +395,9 @@ private fun MessageBubble(
                     if (!isSelectionMode) onLongClick()
                 }
             )
-            .background(
-                if (isSelected) MaterialTheme.colorScheme.secondaryContainer
-                else MaterialTheme.colorScheme.surface
+            .then(
+                if (isSelected) Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
+                else Modifier
             )
             .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
         horizontalAlignment = alignment
