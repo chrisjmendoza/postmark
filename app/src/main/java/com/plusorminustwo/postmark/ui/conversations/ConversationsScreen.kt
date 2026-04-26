@@ -37,6 +37,7 @@ fun ConversationsScreen(
     viewModel: ConversationsViewModel = hiltViewModel()
 ) {
     val threads by viewModel.threads.collectAsState()
+    val isSyncing by viewModel.isSyncing.collectAsState()
 
     Scaffold(
         topBar = {
@@ -58,7 +59,19 @@ fun ConversationsScreen(
     ) { padding ->
         if (threads.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("No conversations yet", style = MaterialTheme.typography.bodyLarge)
+                if (isSyncing) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        CircularProgressIndicator()
+                        Text("Syncing messages…", style = MaterialTheme.typography.bodyLarge)
+                    }
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text("No conversations yet", style = MaterialTheme.typography.bodyLarge)
+                        Button(onClick = { viewModel.triggerSync() }) {
+                            Text("Sync messages")
+                        }
+                    }
+                }
             }
         } else {
             LazyColumn(
