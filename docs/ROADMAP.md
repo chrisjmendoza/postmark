@@ -6,14 +6,14 @@ Build order follows the spec. Each phase depends on the previous.
 
 ## Phase 1 — SMS Engine ✅ Done
 
-- [x] Request default SMS role via `RoleManager`
+- [x] Default SMS role via `RoleManager` — gated on send (not at startup; startup prompts READ_SMS/READ_CONTACTS only)
 - [x] `SmsReceiver` + `MmsReceiver` broadcast receivers
 - [x] `SmsManagerWrapper` for sending
 - [x] `SmsContentObserver` watching `content://sms`
 - [x] `SmsSyncHandler` — incremental sync from content provider to Room
-- [x] `FirstLaunchSyncWorker` — full historical sync with progress reporting
+- [x] `FirstLaunchSyncWorker` — full historical sync with retry; Logcat tag `PostmarkSync`; last-sync status written to SharedPrefs
 - [x] `AppleReactionParser` — 6 emoji × 5 languages, loaded from JSON asset
-- [x] Room schema: Thread, Message, Reaction, ThreadStats
+- [x] Room schema: Thread, Message, Reaction, ThreadStats; migrations 1→2 (lastMessagePreview), 2→3 (deliveryStatus)
 - [x] FTS4 virtual table with INSERT/UPDATE/DELETE sync triggers
 - [x] Hilt DI wired end-to-end
 
@@ -25,15 +25,18 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Message bubbles (sent/received, colored by sender)
 - [x] Date header dividers with "Select day" button
 - [x] Selection mode — toolbar with Copy / Share actions
-- [ ] **Floating date pill** — sticky at top, fades in on scroll, auto-hides after 1.8s idle
-- [ ] **Calendar picker** — tapping the date pill opens it; highlights days with messages (blue dot), grays out empty days; tapping empty day jumps to nearest with messages + shows toast
-- [ ] **Range select** — long-press first message, tap last to select range
-- [ ] **Message grouping** — consecutive messages from same sender within a few minutes cluster visually (no gap, shared bubble radius)
-- [ ] Wire "Select day" to `ThreadViewModel.selectDay()`
+- [x] **Dark theme + Appearance setting** — Follow system / Always dark / Always light; live-switch via `ThemePreferenceRepository`
+- [x] **Message timestamps** — ALWAYS / ON_TAP (tap bubble to reveal) / NEVER preference via `TimestampPreferenceRepository`
+- [x] **Letter avatars** — deterministic color-hash across 8 hues, first initial
+- [x] **SMS send** — reply bar, char/part counter, optimistic insert, `SmsSentDeliveryReceiver` (PENDING → SENT → DELIVERED icons)
 - [x] Wire Copy action to `ExportFormatter` + clipboard
 - [x] Wire Share to `ExportBottomSheet`
-- [ ] Per-thread backup policy UI — `⋮` menu → 3-option radio dialog
-- [ ] SMS send UI — reply bar at bottom, calls `SmsManagerWrapper`
+- [x] Wire "Select day" to `ThreadViewModel.selectDay()` — selects all messages for that day
+- [x] **Floating date pill** — overlay at list top, fades in on scroll, auto-hides after 1.8 s idle
+- [x] **Calendar picker** — month grid dialog; active days (blue dot), empty days grayed; tap empty → snap to nearest + `Snackbar`; `findNearestActiveDate()` with 11 unit tests
+- [ ] **Range select** — long-press first message, tap last to select range
+- [ ] **Message grouping** — consecutive same-sender messages within ~3 min cluster visually (shared bubble radius, single timestamp at cluster end)
+- [ ] Per-thread backup policy UI — `⋮` overflow menu → 3-option radio dialog
 
 ---
 
@@ -62,11 +65,11 @@ Build order follows the spec. Each phase depends on the previous.
 
 ---
 
-## Phase 5 — Stats 🚧 Scaffold only
+## Phase 5 — Stats 🚧 Charts/Heatmap pending
 
 - [x] `StatsScreen` with three-way segmented toggle (Numbers / Charts / Heatmap)
 - [x] Numbers view — global totals from `ThreadStatsEntity`
-- [ ] **`StatsUpdater`** — incremental update of `ThreadStatsEntity` on message insert/delete (streak, active days, avg response time, emoji counts, by-day-of-week, by-month)
+- [x] **`StatsUpdater`** — full compute after `FirstLaunchSyncWorker`, incremental update from `SmsSyncHandler`; streak, active days, avg response time, emoji counts, by-day-of-week, by-month; comprehensive integration test suite
 - [ ] **Charts view** — monthly bar chart (messages/month), sent/received doughnut, emoji horizontal bar chart
 - [ ] **Heatmap view** — GitHub-style activity grid, streak counter, most/least active day label
 - [ ] Per-thread drilldown — tap thread row in Numbers view → same three-style view filtered to that thread
