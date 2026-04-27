@@ -284,6 +284,95 @@ class PostmarkDatabaseTest {
         assertNotNull(db.messageDao().getById(-2L))
     }
 
+    // ── MessageDao range queries (month-scoped heatmap) ────────────────────
+
+    @Test
+    fun observeMessagesInRange_noMessages_returnsEmpty() = runBlocking {
+        db.threadDao().insert(thread(1))
+        val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun observeMessagesInRange_messageAtStartIncluded() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insert(msg(1, 1, ts = 1000L))
+        val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
+        assertEquals(1, result.size)
+    }
+
+    @Test
+    fun observeMessagesInRange_messageAtEndExcluded() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insert(msg(1, 1, ts = 2000L))
+        val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
+        assertTrue("timestamp == endMs should be excluded", result.isEmpty())
+    }
+
+    @Test
+    fun observeMessagesInRange_beforeRangeExcluded() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insert(msg(1, 1, ts = 999L))
+        val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun observeMessagesInRange_onlyIncludesMessagesWithinBounds() = runBlocking {
+        db.threadDao().insertAll(listOf(thread(1), thread(2)))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, ts = 500L),   // before range
+            msg(2, 1, ts = 1000L),  // at start — included
+            msg(3, 1, ts = 1500L),  // inside — included
+            msg(4, 1, ts = 1999L),  // inside — included
+            msg(5, 1, ts = 2000L),  // at end — excluded
+            msg(6, 2, ts = 1200L),  // different thread, inside — included
+        ))
+        val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
+        assertEquals(4, result.size)
+        assertTrue(result.none { it.timestamp < 1000L || it.timestamp >= 2000L })
+    }
+
+    @Test
+    fun observeMessagesInRangeForThread_onlyReturnsMatchingThread() = runBlocking {
+        db.threadDao().insertAll(listOf(thread(1), thread(2)))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, ts = 1000L),
+            msg(2, 2, ts = 1100L),
+            msg(3, 1, ts = 1200L),
+            msg(4, 2, ts = 1300L)
+        ))
+        val result = db.messageDao().observeMessagesInRangeForThread(1L, 0L, 5000L).first()
+        assertEquals(2, result.size)
+        assertTrue(result.all { it.threadId == 1L })
+    }
+
+    @Test
+    fun observeMessagesInRangeForThread_respectsTimestampBounds() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, ts = 500L),
+            msg(2, 1, ts = 1000L),
+            msg(3, 1, ts = 1500L),
+            msg(4, 1, ts = 2500L)
+        ))
+        val result = db.messageDao().observeMessagesInRangeForThread(1L, 1000L, 2000L).first()
+        assertEquals(2, result.size)
+        assertEquals(setOf(1L, 2L), result.map { it.id - 1L + 1L }.toSet())
+        assertTrue(result.all { it.timestamp >= 1000L && it.timestamp < 2000L })
+    }
+
+    @Test
+    fun observeMessagesInRangeForThread_noMatchForWrongThread() = runBlocking {
+        db.threadDao().insertAll(listOf(thread(1), thread(2)))
+        db.messageDao().insertAll(listOf(
+            msg(1, 2, ts = 1000L),
+            msg(2, 2, ts = 1500L)
+        ))
+        val result = db.messageDao().observeMessagesInRangeForThread(1L, 0L, 5000L).first()
+        assertTrue(result.isEmpty())
+    }
+
     // ── Factories ─────────────────────────────────────────────────────────
 
     private fun thread(id: Long, policy: BackupPolicy = BackupPolicy.GLOBAL) = ThreadEntity(

@@ -172,15 +172,102 @@ class StatsAlgorithmsTest {
     fun `tier 0 for zero count`() = assertEquals(0, heatmapTierForCount(0))
 
     @Test
+    fun `tier 0 for negative count`() = assertEquals(0, heatmapTierForCount(-5))
+
+    @Test
     fun `tier 1 for count 1 and 2`() {
         assertEquals(1, heatmapTierForCount(1))
         assertEquals(1, heatmapTierForCount(2))
     }
 
     @Test
+    fun `tier 2 for count 3 and 4`() {
+        assertEquals(2, heatmapTierForCount(3))
+        assertEquals(2, heatmapTierForCount(4))
+    }
+
+    @Test
+    fun `tier 3 for count 5 and 6`() {
+        assertEquals(3, heatmapTierForCount(5))
+        assertEquals(3, heatmapTierForCount(6))
+    }
+
+    @Test
+    fun `tier 4 for count 7 through 9`() {
+        assertEquals(4, heatmapTierForCount(7))
+        assertEquals(4, heatmapTierForCount(9))
+    }
+
+    @Test
+    fun `tier 5 for count 10 through 14`() {
+        assertEquals(5, heatmapTierForCount(10))
+        assertEquals(5, heatmapTierForCount(14))
+    }
+
+    @Test
     fun `tier 6 for count 15 or more`() {
         assertEquals(6, heatmapTierForCount(15))
         assertEquals(6, heatmapTierForCount(100))
+    }
+
+    // ── groupMessagesByDay ────────────────────────────────────────────────
+
+    @Test
+    fun `groupMessagesByDay empty list returns empty map`() {
+        assertTrue(groupMessagesByDay(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun `groupMessagesByDay single message counted for its day`() {
+        // 2025-04-26 00:00:00 UTC in millis
+        val ts = 1745625600_000L
+        val result = groupMessagesByDay(listOf(msg(1, isSent = true, t = ts)))
+        assertEquals(1, result.values.sum())
+        assertEquals(1, result.values.single())
+    }
+
+    @Test
+    fun `groupMessagesByDay multiple messages same day aggregated`() {
+        val dayStart = 1745625600_000L  // 2025-04-26 00:00 UTC
+        val msgs = listOf(
+            msg(1, isSent = true,  t = dayStart),
+            msg(2, isSent = false, t = dayStart + 3_600_000L),
+            msg(3, isSent = true,  t = dayStart + 7_200_000L)
+        )
+        val result = groupMessagesByDay(msgs)
+        assertEquals(3, result.values.sum())
+        assertEquals(1, result.keys.size)
+    }
+
+    @Test
+    fun `groupMessagesByDay messages on different days produce separate keys`() {
+        val day1 = 1745625600_000L  // 2025-04-26
+        val day2 = day1 + 86_400_000L  // 2025-04-27
+        val day3 = day2 + 86_400_000L  // 2025-04-28
+        val msgs = listOf(
+            msg(1, isSent = true,  t = day1),
+            msg(2, isSent = false, t = day2),
+            msg(3, isSent = true,  t = day3)
+        )
+        val result = groupMessagesByDay(msgs)
+        assertEquals(3, result.keys.size)
+        result.values.forEach { assertEquals(1, it) }
+    }
+
+    @Test
+    fun `groupMessagesByDay multiple messages across two days counted per day`() {
+        val day1 = 1745625600_000L
+        val day2 = day1 + 86_400_000L
+        val msgs = listOf(
+            msg(1, isSent = true,  t = day1),
+            msg(2, isSent = false, t = day1 + 1_000L),
+            msg(3, isSent = true,  t = day2),
+            msg(4, isSent = false, t = day2 + 1_000L),
+            msg(5, isSent = true,  t = day2 + 2_000L)
+        )
+        val result = groupMessagesByDay(msgs)
+        assertEquals(2, result.keys.size)
+        assertEquals(5, result.values.sum())
     }
 
     // ── helpers ───────────────────────────────────────────────────────────

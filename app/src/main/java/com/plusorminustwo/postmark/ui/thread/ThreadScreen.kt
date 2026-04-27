@@ -58,7 +58,11 @@ private val PILL_HIDE_DELAY_MS = 1_800L
 @Composable
 fun ThreadScreen(
     threadId: Long,
+    scrollToMessageId: Long = -1L,
+    scrollToDate: String = "",
     onBack: () -> Unit,
+    onViewStats: () -> Unit = {},
+    onBackupSettingsClick: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -105,6 +109,21 @@ fun ThreadScreen(
         }
     }
 
+    val messageIdToIndex = remember(grouped) {
+        var idx = 0
+        buildMap<Long, Int> {
+            grouped.entries.reversed().forEach { (dateLabel, _) ->
+                val msgs = reversedByDate[dateLabel] ?: emptyList()
+                msgs.forEachIndexed { i, msg -> put(msg.id, idx + i) }
+                idx += msgs.size + 1  // +1 for the date header
+            }
+        }
+    }
+
+    val initialScrollDateLabel = remember(scrollToDate) {
+        if (scrollToDate.isEmpty()) "" else localDateToLabel(LocalDate.parse(scrollToDate))
+    }
+
     // Cluster positions — pure display, computed once per message-set change.
     val clusterPositions = remember(uiState.messages) {
         computeClusterPositions(uiState.messages)
@@ -129,6 +148,23 @@ fun ThreadScreen(
     fun scrollToDateLabel(label: String) {
         dateToHeaderIndex[label]?.let { idx ->
             scope.launch { listState.animateScrollToItem(idx) }
+        }
+    }
+
+    // ── One-shot scroll to target message or date ─────────────────────────────
+
+    var initialScrollDone by remember { mutableStateOf(false) }
+    LaunchedEffect(uiState.messages) {
+        if (initialScrollDone || uiState.messages.isEmpty()) return@LaunchedEffect
+        if (scrollToMessageId == -1L && scrollToDate.isEmpty()) { initialScrollDone = true; return@LaunchedEffect }
+        val targetIdx = when {
+            scrollToMessageId != -1L            -> messageIdToIndex[scrollToMessageId]
+            initialScrollDateLabel.isNotEmpty() -> dateToHeaderIndex[initialScrollDateLabel]
+            else                                -> null
+        }
+        if (targetIdx != null) {
+            listState.scrollToItem(targetIdx)
+            initialScrollDone = true
         }
     }
 
@@ -212,8 +248,40 @@ fun ThreadScreen(
                         }
                     },
                     actions = {
-                        TextButton(onClick = { viewModel.enterSelectionMode() }) {
-                            Text("Select")
+                        var menuExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { menuExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, "More options")
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("View stats") },
+                                    onClick = { menuExpanded = false; onViewStats() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Select messages") },
+                                    onClick = { menuExpanded = false; viewModel.enterSelectionMode() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Search in thread") },
+                                    onClick = { menuExpanded = false }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Mute") },
+                                    onClick = { menuExpanded = false }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Backup settings") },
+                                    onClick = { menuExpanded = false; onBackupSettingsClick() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Block number") },
+                                    onClick = { menuExpanded = false }
+                                )
+                            }
                         }
                     }
                 )

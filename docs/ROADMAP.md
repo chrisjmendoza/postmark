@@ -65,14 +65,17 @@ Build order follows the spec. Each phase depends on the previous.
 
 ---
 
-## Phase 5 — Stats 🚧 Charts/Heatmap pending
+## Phase 5 — Stats ✅ Core done, 🚧 polish remaining
 
 - [x] `StatsScreen` with three-way segmented toggle (Numbers / Charts / Heatmap)
 - [x] Numbers view — global totals from `ThreadStatsEntity`
 - [x] **`StatsUpdater`** — full compute after `FirstLaunchSyncWorker`, incremental update from `SmsSyncHandler`; streak, active days, avg response time, emoji counts, by-day-of-week, by-month; comprehensive integration test suite
-- [ ] **Charts view** — monthly bar chart (messages/month), sent/received doughnut, emoji horizontal bar chart
-- [ ] **Heatmap view** — GitHub-style activity grid, streak counter, most/least active day label
-- [ ] Per-thread drilldown — tap thread row in Numbers view → same three-style view filtered to that thread
+- [x] **Charts view** — monthly bar chart (Jan–Dec) and day-of-week bar chart; month-scoped DOW data derived from `heatmapMessages`
+- [x] **Heatmap view** — month-navigation calendar grid with 7 intensity tiers; day-tap detail panel; multi-day selection; month/thread scoped; summary cards
+- [x] **Per-thread drilldown** — tap thread in Numbers view → same three-style view filtered to that thread; back restores correct origin scope (GLOBAL or PER_THREAD list)
+- [x] **Contacts card** — top 3 contacts for current month when no day selected; expand/collapse for full list; avatar-colored fixed-width bars
+- [ ] Heatmap — streak counter overlay and most/least active day label
+- [ ] Numbers view — "View in heatmap" shortcut from thread row
 
 ---
 

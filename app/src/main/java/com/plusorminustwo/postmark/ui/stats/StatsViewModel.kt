@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.ui.stats
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.db.dao.MessageDao
@@ -10,12 +11,19 @@ import com.plusorminustwo.postmark.data.sync.buildGlobalStatsData
 import com.plusorminustwo.postmark.data.sync.buildThreadStatsData
 import com.plusorminustwo.postmark.data.sync.computeResponseTimeBuckets
 import com.plusorminustwo.postmark.data.sync.groupMessagesByDay
-import com.plusorminustwo.postmark.data.sync.last56DayLabels
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.ZoneId
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import javax.inject.Inject
 
 enum class StatsDisplayStyle { NUMBERS, CHARTS, HEATMAP }
@@ -58,10 +66,9 @@ data class HeatmapData(
 class StatsViewModel @Inject constructor(
     private val threadDao: ThreadDao,
     private val messageDao: MessageDao,
-    private val statsUpdater: StatsUpdater
+    private val statsUpdater: StatsUpdater,
+    private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-
-    private val heatmapStartMs = System.currentTimeMillis() - 55L * 86_400_000L
 
     private val _selectedScope = MutableStateFlow(StatsScope.GLOBAL)
     val selectedScope: StateFlow<StatsScope> = _selectedScope
@@ -77,6 +84,27 @@ class StatsViewModel @Inject constructor(
 
     private val _isRecomputing = MutableStateFlow(false)
     val isRecomputing: StateFlow<Boolean> = _isRecomputing
+
+    // ── Heatmap month navigation ──────────────────────────────────────────────
+
+    private val _heatmapMonth = MutableStateFlow(YearMonth.now())
+    val heatmapMonth: StateFlow<YearMonth> = _heatmapMonth
+
+    private val _selectedHeatmapDays = MutableStateFlow<Set<LocalDate>>(emptySet())
+    val selectedHeatmapDays: StateFlow<Set<LocalDate>> = _selectedHeatmapDays
+
+    /** True when navigated directly from a thread (back goes to thread, not thread list). */
+    private val _directThreadNavigation = MutableStateFlow(false)
+    val directThreadNavigation: StateFlow<Boolean> = _directThreadNavigation
+
+    /** The scope the user was in before entering a drilldown via [selectThread]. Used to restore
+     *  on back so tapping a thread from GLOBAL returns to GLOBAL, not the PER_THREAD list. */
+    private val _originScope = MutableStateFlow(StatsScope.GLOBAL)
+
+    init {
+        val threadId = savedStateHandle.get<Long>("threadId") ?: -1L
+        if (threadId != -1L) preSelectThread(threadId)
+    }
 
     // ── Live message source ───────────────────────────────────────────────────
     //
@@ -149,32 +177,114 @@ class StatsViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), IntArray(4))
 
-    // ── Heatmap (live) ────────────────────────────────────────────────────────
+    // ── Heatmap (live, month-scoped) ──────────────────────────────────────────
 
-    val heatmapMessages: StateFlow<List<MessageEntity>> = _selectedThreadId
-        .flatMapLatest { id ->
-            if (id == null) messageDao.observeMessagesFrom(heatmapStartMs)
-            else messageDao.observeMessagesFromForThread(id, heatmapStartMs)
+    val heatmapMessages: StateFlow<List<MessageEntity>> =
+        combine(_selectedThreadId, _heatmapMonth) { id, month -> id to month }
+            .flatMapLatest { (id, month) ->
+                val startMs = month.atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                val endMs   = month.plusMonths(1).atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                if (id == null) messageDao.observeMessagesInRange(startMs, endMs)
+                else messageDao.observeMessagesInRangeForThread(id, startMs, endMs)
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val heatmapData: StateFlow<HeatmapData> =
+        combine(heatmapMessages, _heatmapMonth) { msgs, month ->
+            val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).also { it.timeZone = TimeZone.getDefault() }
+            val dayLabels = (1..month.lengthOfMonth()).map { day ->
+                fmt.format(Date(month.atDay(day).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()))
+            }
+            HeatmapData(dayLabels = dayLabels, countByDay = groupMessagesByDay(msgs))
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), run {
+            val month = YearMonth.now()
+            val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).also { it.timeZone = TimeZone.getDefault() }
+            val dayLabels = (1..month.lengthOfMonth()).map { day ->
+                fmt.format(Date(month.atDay(day).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()))
+            }
+            HeatmapData(dayLabels = dayLabels, countByDay = emptyMap())
+        })
+
+    /** Message count by day-of-week (Mon=0..Sun=6) for the currently displayed heatmap month
+     *  and scope — used by the "By day of week" chart so it reflects the visible month. */
+    val heatmapByDayOfWeek: StateFlow<IntArray> =
+        heatmapMessages
+            .map { msgs ->
+                val result = IntArray(7)
+                msgs.forEach { msg ->
+                    val dow = Instant.ofEpochMilli(msg.timestamp)
+                        .atZone(ZoneId.systemDefault())
+                        .dayOfWeek.value - 1  // Mon=0 .. Sun=6
+                    result[dow]++
+                }
+                result
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), IntArray(7))
+
+    val selectedDayMessages: StateFlow<List<MessageEntity>> =
+        combine(heatmapMessages, _selectedHeatmapDays) { msgs, days ->
+            if (days.isEmpty()) emptyList()
+            else {
+                val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).also { it.timeZone = TimeZone.getDefault() }
+                val dayStrings = days.map { it.toString() }.toSet()
+                msgs.filter { msg -> fmt.format(Date(msg.timestamp)) in dayStrings }
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val heatmapData: StateFlow<HeatmapData> = heatmapMessages
-        .map { msgs ->
-            HeatmapData(dayLabels = last56DayLabels(), countByDay = groupMessagesByDay(msgs))
-        }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5_000),
-            HeatmapData(last56DayLabels(), emptyMap())
-        )
-
     // ── Actions ───────────────────────────────────────────────────────────────
 
-    fun selectThread(id: Long?) { _selectedThreadId.value = id }
+    fun selectThread(id: Long?) {
+        if (id != null) {
+            _originScope.value = _selectedScope.value
+            if (_selectedScope.value != StatsScope.PER_THREAD) {
+                // Carry over the current global style so the user stays in the same
+                // view mode (e.g. HEATMAP) when drilling into a specific thread.
+                _threadStyle.value = _globalStyle.value
+                _selectedScope.value = StatsScope.PER_THREAD
+            }
+        } else {
+            // Exiting drilldown — restore the scope we came from so back from
+            // a GLOBAL-context drilldown returns to GLOBAL, not the thread list.
+            _selectedScope.value = _originScope.value
+        }
+        _selectedThreadId.value = id
+        _selectedHeatmapDays.value = emptySet()
+    }
 
     fun setScope(scope: StatsScope) {
+        if (scope == StatsScope.PER_THREAD) {
+            // Carry over the current global style so the user stays in the same
+            // view mode (e.g. HEATMAP) when drilling into a specific thread.
+            _threadStyle.value = _globalStyle.value
+        }
+        _originScope.value = scope  // explicit tab switch resets the drilldown origin
         _selectedScope.value = scope
         _selectedThreadId.value = null
+        _directThreadNavigation.value = false
+        _selectedHeatmapDays.value = emptySet()
+    }
+
+    fun setHeatmapMonth(month: YearMonth) {
+        _heatmapMonth.value = month
+        _selectedHeatmapDays.value = emptySet()
+    }
+
+    /** Adds [date] to the selection if not present, removes it if already selected. */
+    fun toggleHeatmapDay(date: LocalDate) {
+        val current = _selectedHeatmapDays.value
+        _selectedHeatmapDays.value =
+            if (date in current) current - date else current + date
+    }
+
+    fun clearHeatmapDays() { _selectedHeatmapDays.value = emptySet() }
+
+    /** Pre-select a thread (called when navigating here directly from a thread). */
+    fun preSelectThread(id: Long) {
+        _selectedScope.value = StatsScope.PER_THREAD
+        _selectedThreadId.value = id
+        _directThreadNavigation.value = true
     }
 
     fun setDisplayStyle(style: StatsDisplayStyle) {
