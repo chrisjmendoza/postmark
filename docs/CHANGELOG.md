@@ -4,7 +4,42 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
-## 2026-04-26 — Floating Pill Redesign, Emoji Stats, Frequency Ordering
+## 2026-04-27
+
+### Per-thread backup policy dialog
+- **`BackupPolicyDialog`** — `AlertDialog` with three `RadioButton` options (Global policy / Always include / Never include), accessible via a `MoreVert` overflow menu in `ThreadScreen`'s `TopAppBar`. Saving calls `ThreadViewModel.updateBackupPolicy()` → `ThreadRepository.updateBackupPolicy()`.
+
+### Backup history list
+- **`BackupSettingsScreen`** — new "Backup history" section lists all files in `getExternalFilesDir("backups")` sorted newest-first, showing filename, size (KB), and formatted timestamp. Each row has a **Delete** icon; a "Delete all" `TextButton` appears at the top when the list is non-empty. Both operations are guarded by confirmation `AlertDialog`s.
+- **`BackupFileInfo(name, sizeKb, modifiedAt)`** data class added.
+- **`BackupSettingsViewModel`** — `backupFiles: StateFlow<List<BackupFileInfo>>` with `deleteBackupFile(name)` and `deleteAllBackupFiles()`.
+
+### WorkManager status in backup settings
+- **`BackupStatus`** sealed class: `Idle | Running | LastRun(timestamp, success) | Never`.
+- **`mapWorkInfoToStatus(state, lastTimestamp)`** — pure JVM function mapping `WorkInfo.State` and the last-run timestamp (from SharedPrefs key already written by `BackupWorker`) to a `BackupStatus` value.
+- **`BackupStatusRow`** shown above the "Back up now" button: spinner + blue text for `Running`; green/red/grey dot for `LastRun`/`Never`/`Idle`.
+- **`BackupModule`** — new Hilt `@Singleton` binding for `WorkManager`, enabling injection and unit testing.
+
+### Search result → jump to message
+- **`Screen.Thread` route** extended with optional `scrollToMessageId` query param (default `-1L`).
+- **`ThreadScreen`** — `LaunchedEffect` waits for the target message to appear in the list, computes its flat item index in the reversed `LazyColumn`, calls `animateScrollToItem`, then highlights the bubble.
+- **`ThreadUiState.highlightedMessageId`** — highlighted message gets a `tertiaryContainer` background; auto-clears after 2 s via `compareAndSet`.
+- **`SearchScreen`** — `onMessageClick` now passes `messageId` through to navigation.
+
+### Thread filter chip in search
+- **`SearchScreen`** — new "Thread" `FilterChip` in the filter row. Tapping opens a `ModalBottomSheet` listing all threads by display name and address. Selecting a thread sets the filter and closes the sheet; chip shows the thread name with a clear icon when active.
+- **`SearchViewModel`** — injects `ThreadRepository`; exposes `threads: StateFlow<List<Thread>>` and `selectedThread: Thread?`; `setThreadFilter(thread)` updates both.
+- **`SearchUiState`** — gains `threads` and `selectedThread` fields.
+
+### Tests
+- `BackupPolicyTest` — 3 tests: one per `BackupPolicy` value verifying correct DAO call via `FakeThreadDao`.
+- `BackupHistoryTest` — 4 tests: list sort order, empty state, data class properties, date formatting.
+- `BackupStatusTest` — 7 tests: all `WorkInfo.State` values including null, prior-timestamp combos.
+- `SearchJumpTest` — search result carries correct `threadId` + `messageId`; thread filter set/clear behaviour.
+
+---
+
+
 
 ### Emoji reactions — UX redesign (floating pill + action bar)
 
@@ -84,11 +119,7 @@ Newest entries on top. Each day is a journal of work completed.
 - **`StatsViewModelHeatmapTest`** and **`StatsViewModelActionsTest`** — `FakeReactionDao` and
   `ActionsReactionDao` added; both `makeViewModel` functions pass the fake as 3rd constructor arg.
 
----
-
-## 2026-04-26 — Emoji Reactions
-
-### Emoji reactions on message bubbles
+### Emoji reactions — initial implementation (ModalBottomSheet)
 
 - **Long-press a message** → `EmojiReactionPickerSheet` bottom sheet slides up
   showing a preview of the tapped message and a row of 8 quick-pick emoji
@@ -110,10 +141,6 @@ Newest entries on top. Each day is a journal of work completed.
 - **No schema change required** — `reactions` table and `ReactionDao` were already in
   place. `MessageRepository.observeByThread` already joined reactions into
   `Message.reactions` via a combined Flow — the UI now consumes them.
-
----
-
-## 2026-04-26 — Stats Screen, Heatmap, Thread UI & Tests
 
 ### Heatmap: month navigation, day tap, detail panel
 
