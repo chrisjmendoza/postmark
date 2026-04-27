@@ -6,6 +6,7 @@ import com.plusorminustwo.postmark.data.db.entity.toDomain
 import com.plusorminustwo.postmark.data.db.entity.toEntity
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Reaction
+import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -48,6 +49,9 @@ class MessageRepository @Inject constructor(
 
     suspend fun getActiveDatesForThread(threadId: Long): List<String> =
         messageDao.getActiveDatesForThread(threadId)
+
+    fun observeTopUserEmojis(): Flow<List<String>> =
+        reactionDao.observeTopEmojisBySender(SELF_ADDRESS).map { counts -> counts.map { it.emoji } }
 
     suspend fun insertReaction(reaction: Reaction): Long =
         reactionDao.insert(reaction.toEntity())

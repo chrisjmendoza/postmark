@@ -4,6 +4,33 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-04-26 — Emoji Reactions
+
+### Emoji reactions on message bubbles
+
+- **Long-press a message** → `EmojiReactionPickerSheet` bottom sheet slides up
+  showing a preview of the tapped message and a row of 8 quick-pick emoji
+  (❤️ 👍 😂 😮 😢 👎 🔥 🎉).
+- Tapping an emoji that the user has **not** yet reacted with → inserts a
+  `ReactionEntity` row with `senderAddress = "self"`. Tapping one they have
+  already reacted with → removes it (toggle). Bottom sheet closes after either action.
+- **`ReactionPills`** row appears below the bubble when a message has reactions.
+  Each unique emoji is a `SuggestionChip` showing `emoji` or `emoji count` when
+  count > 1. Pills the user owns have a primary-coloured border and a tinted
+  background; others have the default outline. Tapping a pill toggles the same way
+  as picking from the sheet.
+- **Group / multi-user support**: multiple senders can react with the same emoji;
+  count reflects total reactors. Local (`"self"`) reactions are distinguished visually.
+- Long-press in **selection mode** does nothing; selection is still entered via the
+  ⋮ overflow menu “Select messages” item.
+- **`SELF_ADDRESS = "self"`** sentinel constant added to `Reaction.kt` (domain layer)
+  as the canonical identifier for the local user’s reactions.
+- **No schema change required** — `reactions` table and `ReactionDao` were already in
+  place. `MessageRepository.observeByThread` already joined reactions into
+  `Message.reactions` via a combined Flow — the UI now consumes them.
+
+---
+
 ## 2026-04-26 — Stats Screen, Heatmap, Thread UI & Tests
 
 ### Heatmap: month navigation, day tap, detail panel

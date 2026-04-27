@@ -4,8 +4,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.db.dao.MessageDao
+import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
+import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.data.sync.buildGlobalStatsData
 import com.plusorminustwo.postmark.data.sync.buildThreadStatsData
@@ -40,8 +42,10 @@ data class ParsedStats(
     val activeDayCount: Int = 0,
     val longestStreakDays: Int = 0,
     val avgResponseTimeMs: Long = 0L,
-    /** Top 6 (emoji, count) pairs sorted descending. */
+    /** Top 6 (emoji, count) pairs from message bodies, sorted descending. */
     val topEmojis: List<Pair<String, Int>> = emptyList(),
+    /** Top 6 (emoji, count) pairs from reactions, sorted descending. Tracked separately. */
+    val topReactionEmojis: List<Pair<String, Int>> = emptyList(),
     /** Index 0 = Monday … 6 = Sunday. */
     val byDayOfWeek: IntArray = IntArray(7),
     /** Index 0 = January … 11 = December. */
@@ -66,6 +70,7 @@ data class HeatmapData(
 class StatsViewModel @Inject constructor(
     private val threadDao: ThreadDao,
     private val messageDao: MessageDao,
+    private val reactionDao: ReactionDao,
     private val statsUpdater: StatsUpdater,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -116,6 +121,10 @@ class StatsViewModel @Inject constructor(
         messageDao.observeMessagesFrom(0L)
             .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
+    private val allReactions: SharedFlow<List<ReactionEntity>> =
+        reactionDao.observeAll()
+            .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
     // ── Global stats (live) ───────────────────────────────────────────────────
 
     /**
@@ -123,9 +132,9 @@ class StatsViewModel @Inject constructor(
      * subscription). Null also means "no messages yet".
      */
     val parsedGlobalStats: StateFlow<ParsedStats?> =
-        combine(allMessages, threadDao.observeAll()) { msgs, threads ->
+        combine(allMessages, allReactions, threadDao.observeAll()) { msgs, reactions, threads ->
             if (msgs.isEmpty()) null
-            else buildGlobalStatsData(msgs, threads.size).toParsed()
+            else buildGlobalStatsData(msgs, threads.size, reactions.map { it.emoji }).toParsed()
         }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -135,16 +144,20 @@ class StatsViewModel @Inject constructor(
      * any message changes.
      */
     val allLiveThreadStats: StateFlow<List<Pair<Long, ParsedStats>>> =
-        allMessages
-            .map { msgs ->
-                msgs.groupBy { it.threadId }
-                    .map { (threadId, threadMsgs) ->
-                        threadId to buildThreadStatsData(threadMsgs).toParsed()
-                    }
-                    .sortedByDescending { (_, stats) -> stats.totalMessages }
-            }
-            .flowOn(Dispatchers.Default)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        combine(allMessages, allReactions) { msgs, reactions ->
+            val msgToThread = msgs.associate { it.id to it.threadId }
+            val reactionsByThread = reactions
+                .groupBy { r -> msgToThread[r.messageId] ?: -1L }
+                .filterKeys { it != -1L }
+            msgs.groupBy { it.threadId }
+                .map { (threadId, threadMsgs) ->
+                    val threadReactionEmojis = reactionsByThread[threadId]?.map { it.emoji } ?: emptyList()
+                    threadId to buildThreadStatsData(threadMsgs, threadReactionEmojis).toParsed()
+                }
+                .sortedByDescending { (_, stats) -> stats.totalMessages }
+        }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** threadId → displayName for the thread list labels. */
     val threadNames: StateFlow<Map<Long, String>> = threadDao.observeAll()
@@ -160,11 +173,18 @@ class StatsViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Stats for the selected thread, derived live from its messages. */
-    val parsedSelectedStats: StateFlow<ParsedStats?> = selectedThreadMessages
-        .map { msgs ->
+    /** Reactions for the selected thread — switches automatically with the thread. */
+    private val selectedThreadReactions: StateFlow<List<ReactionEntity>> = _selectedThreadId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(emptyList()) else reactionDao.observeByThread(id)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Stats for the selected thread, derived live from its messages and reactions. */
+    val parsedSelectedStats: StateFlow<ParsedStats?> =
+        combine(selectedThreadMessages, selectedThreadReactions) { msgs, reactions ->
             if (msgs.isEmpty()) null
-            else buildThreadStatsData(msgs).toParsed()
+            else buildThreadStatsData(msgs, reactions.map { it.emoji }).toParsed()
         }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -320,6 +340,7 @@ class StatsViewModel @Inject constructor(
         longestStreakDays  = longestStreakDays,
         avgResponseTimeMs = avgResponseTimeMs,
         topEmojis         = topEmojis.entries.map { it.key to it.value },
+        topReactionEmojis = topReactionEmojis.entries.map { it.key to it.value },
         byDayOfWeek       = byDayOfWeek,
         byMonth           = byMonth,
         firstMessageAt    = firstMessageAt,
@@ -334,6 +355,7 @@ class StatsViewModel @Inject constructor(
         longestStreakDays  = longestStreakDays,
         avgResponseTimeMs = avgResponseTimeMs,
         topEmojis         = topEmojis.entries.map { it.key to it.value },
+        topReactionEmojis = topReactionEmojis.entries.map { it.key to it.value },
         byDayOfWeek       = byDayOfWeek,
         byMonth           = byMonth,
         threadCount       = threadCount

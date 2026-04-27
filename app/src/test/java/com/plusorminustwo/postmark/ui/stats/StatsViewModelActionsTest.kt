@@ -4,10 +4,12 @@ import androidx.lifecycle.SavedStateHandle
 import com.plusorminustwo.postmark.data.db.dao.GlobalCounts
 import com.plusorminustwo.postmark.data.db.dao.GlobalStatsDao
 import com.plusorminustwo.postmark.data.db.dao.MessageDao
+import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadStatsDao
 import com.plusorminustwo.postmark.data.db.entity.GlobalStatsEntity
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
+import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadStatsEntity
 import com.plusorminustwo.postmark.data.sync.StatsUpdater
@@ -61,6 +63,7 @@ class StatsViewModelActionsTest {
         return StatsViewModel(
             ActionsThreadDao(),
             dao,
+            ActionsReactionDao(),
             StatsUpdater(dao, ActionsThreadStatsDao(), ActionsGlobalStatsDao()),
             savedStateHandle
         )
@@ -336,6 +339,7 @@ class StatsViewModelHeatmapDowTest {
         return StatsViewModel(
             ActionsThreadDao(),
             dao,
+            ActionsReactionDao(),
             StatsUpdater(dao, ActionsThreadStatsDao(), ActionsGlobalStatsDao()),
             SavedStateHandle()
         )
@@ -551,4 +555,18 @@ private class ActionsGlobalStatsDao : GlobalStatsDao {
     override fun observe(): Flow<GlobalStatsEntity?> = flowOf(null)
     override suspend fun get(): GlobalStatsEntity? = null
     override suspend fun upsert(stats: GlobalStatsEntity) = Unit
+}
+
+private class ActionsReactionDao : ReactionDao {
+    override fun observeAll(): Flow<List<ReactionEntity>> = flowOf(emptyList())
+    override fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
+    override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
+    override suspend fun insert(reaction: ReactionEntity): Long = 0L
+    override suspend fun delete(reaction: ReactionEntity) = Unit
+    override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) = Unit
+    override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+    override suspend fun getTopEmojis(limit: Int): List<com.plusorminustwo.postmark.data.db.dao.EmojiCount> = emptyList()
+    override fun observeTopEmojisBySender(senderAddress: String): Flow<List<com.plusorminustwo.postmark.data.db.dao.EmojiCount>> = flowOf(emptyList())
+    override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
+    override suspend fun deleteAll() = Unit
 }

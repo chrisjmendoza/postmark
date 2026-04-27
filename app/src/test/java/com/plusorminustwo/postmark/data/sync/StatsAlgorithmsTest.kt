@@ -270,6 +270,67 @@ class StatsAlgorithmsTest {
         assertEquals(5, result.values.sum())
     }
 
+    // ── countReactionEmojis ────────────────────────────────────────────────
+
+    @Test
+    fun `empty list returns empty map`() {
+        assertTrue(countReactionEmojis(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun `single emoji returns count of 1`() {
+        val result = countReactionEmojis(listOf("❤️"))
+        assertEquals(1, result["❤️"])
+    }
+
+    @Test
+    fun `duplicate emoji counted correctly`() {
+        val result = countReactionEmojis(listOf("❤️", "❤️", "❤️", "👍"))
+        assertEquals(3, result["❤️"])
+        assertEquals(1, result["👍"])
+    }
+
+    @Test
+    fun `sorted descending by count`() {
+        val result = countReactionEmojis(listOf("👍", "❤️", "❤️", "❤️"))
+        val keys = result.keys.toList()
+        assertEquals("❤️", keys[0])
+        assertEquals("👍", keys[1])
+    }
+
+    @Test
+    fun `capped at 6 by default`() {
+        val reactions = listOf("❤️", "👍", "😂", "😮", "😢", "👎", "🔥", "🎉")  // 8 unique
+        assertTrue(countReactionEmojis(reactions).size <= 6)
+    }
+
+    @Test
+    fun `custom limit respected`() {
+        val reactions = listOf("❤️", "👍", "😂", "😮", "😢", "👎")
+        assertEquals(3, countReactionEmojis(reactions, limit = 3).size)
+    }
+
+    @Test
+    fun `reactions tracked separately from message emoji in buildThreadStatsData`() {
+        val msgs = listOf(msg(1, isSent = true, t = 0L, body = "😂😂 message"))
+        val reactions = listOf("👍", "👍", "🎉")
+        val result = buildThreadStatsData(msgs, reactions)
+        // message emoji from body
+        assertEquals(2, result.topEmojis["😂"])
+        assertNull(result.topEmojis["👍"])
+        // reaction emoji from reactions list
+        assertEquals(2, result.topReactionEmojis["👍"])
+        assertEquals(1, result.topReactionEmojis["🎉"])
+        assertNull(result.topReactionEmojis["😂"])
+    }
+
+    @Test
+    fun `reaction emojis empty when no reactions provided`() {
+        val msgs = listOf(msg(1, isSent = true, t = 0L, body = "hi"))
+        val result = buildThreadStatsData(msgs)
+        assertTrue(result.topReactionEmojis.isEmpty())
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
     private fun msg(

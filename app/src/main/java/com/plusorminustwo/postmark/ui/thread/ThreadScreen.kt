@@ -31,6 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -41,6 +43,8 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.Reaction
+import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -51,6 +55,15 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isUnspecified
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 
 private val PILL_HIDE_DELAY_MS = 1_800L
 
@@ -68,6 +81,7 @@ fun ThreadScreen(
     val uiState by viewModel.uiState.collectAsState()
     val timestampPref by viewModel.timestampPreference.collectAsState()
     val activeDates by viewModel.activeDates.collectAsState()
+    val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -204,13 +218,29 @@ fun ThreadScreen(
         )
     }
 
-    // ── Scaffold ──────────────────────────────────────────────────────────────
+    // ── Scaffold + overlay ────────────────────────────────────────────────────
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            if (uiState.isSelectionMode) {
-                SelectionTopBar(
+            when {
+                uiState.reactionPickerMessageId != null -> MessageActionTopBar(
+                    onCancel  = { viewModel.dismissReactionPicker() },
+                    onCopy    = {
+                        val msg = uiState.messages.find { it.id == uiState.reactionPickerMessageId }
+                        if (msg != null) {
+                            val cb = context.getSystemService(ClipboardManager::class.java)
+                            cb.setPrimaryClip(ClipData.newPlainText("message", msg.body))
+                            scope.launch { snackbarHostState.showSnackbar("Copied", duration = SnackbarDuration.Short) }
+                        }
+                        viewModel.dismissReactionPicker()
+                    },
+                    onSelect  = { viewModel.enterSelectionModeFromActionMode() },
+                    onForward = { uiState.reactionPickerMessageId?.let { viewModel.forwardMessage(it) } },
+                    onDelete  = { viewModel.dismissReactionPicker() }
+                )
+                uiState.isSelectionMode -> SelectionTopBar(
                     selectedCount = uiState.selectedMessageIds.size,
                     totalMessages = uiState.messages.size,
                     scope = uiState.selectionScope,
@@ -230,8 +260,7 @@ fun ThreadScreen(
                         viewModel.exitSelectionMode()
                     }
                 )
-            } else {
-                TopAppBar(
+                else -> TopAppBar(
                     title = {
                         val name = uiState.thread?.displayName ?: ""
                         Row(
@@ -288,7 +317,7 @@ fun ThreadScreen(
             }
         },
         bottomBar = {
-            if (!uiState.isSelectionMode) {
+            if (!uiState.isSelectionMode && uiState.reactionPickerMessageId == null) {
                 ReplyBar(
                     text = uiState.replyText,
                     onTextChange = { viewModel.onReplyTextChanged(it) },
@@ -313,7 +342,8 @@ fun ThreadScreen(
                             isSelected = message.id in uiState.selectedMessageIds,
                             isSelectionMode = uiState.isSelectionMode,
                             onToggleSelect = { viewModel.toggleSelection(message.id) },
-                            onLongClick = { viewModel.enterSelectionModeWithMessage(message.id) },
+                            onLongClick = { y -> viewModel.showReactionPicker(message.id, y) },
+                            onReactionClick = { emoji -> viewModel.toggleReaction(message.id, emoji) },
                             timestampPref = timestampPref,
                             isTimestampExpanded = message.id in uiState.expandedTimestampIds,
                             onToggleTimestamp = { viewModel.toggleTimestamp(message.id) }
@@ -339,6 +369,22 @@ fun ThreadScreen(
             )
         }
     }
+
+    // ── Emoji reaction popup (overlays full screen including action bar) ─────────────────
+
+        val reactionPickerMessage = uiState.reactionPickerMessageId?.let { id ->
+            uiState.messages.find { it.id == id }
+        }
+        reactionPickerMessage?.let { msg ->
+            EmojiReactionPopup(
+                message     = msg,
+                quickEmojis = quickReactionEmojis,
+                bubbleTopY  = uiState.reactionPickerBubbleY,
+                onReact     = { emoji -> viewModel.toggleReaction(msg.id, emoji) },
+                onDismiss   = { viewModel.dismissReactionPicker() }
+            )
+        }
+    } // end overlay Box
 }
 
 // ── SelectionTopBar ────────────────────────────────────────────────────────────
@@ -433,7 +479,8 @@ private fun MessageBubble(
     isSelected: Boolean,
     isSelectionMode: Boolean,
     onToggleSelect: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (bubbleTopY: Float) -> Unit,
+    onReactionClick: (String) -> Unit,
     timestampPref: TimestampPreference,
     isTimestampExpanded: Boolean,
     onToggleTimestamp: () -> Unit
@@ -459,9 +506,11 @@ private fun MessageBubble(
     val bottomPadding = if (clusterPosition == ClusterPosition.TOP    ||
                             clusterPosition == ClusterPosition.MIDDLE) 1.dp else 2.dp
 
+    val bubbleRootY = remember { FloatArray(1) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .onGloballyPositioned { coords -> bubbleRootY[0] = coords.positionInRoot().y }
             .combinedClickable(
                 onClick = {
                     when {
@@ -470,7 +519,7 @@ private fun MessageBubble(
                     }
                 },
                 onLongClick = {
-                    if (!isSelectionMode) onLongClick()
+                    if (!isSelectionMode) onLongClick(bubbleRootY[0])
                 }
             )
             .then(
@@ -501,11 +550,11 @@ private fun MessageBubble(
                 )
             )
         }
-        message.reactions.forEach { reaction ->
-            Text(
-                text = reaction.emoji,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 2.dp)
+        if (message.reactions.isNotEmpty()) {
+            ReactionPills(
+                reactions = message.reactions,
+                isSent = message.isSent,
+                onReactionClick = onReactionClick
             )
         }
         if (message.isSent) {
@@ -816,10 +865,199 @@ private fun bubbleShape(isSent: Boolean, position: ClusterPosition): RoundedCorn
     }
 }
 
+/**
+ * Calculates the top-Y offset (in pixels) for the emoji reaction pill.
+ * Places the pill above the bubble when there is enough room; falls back to below.
+ *
+ * Extracted as a pure function so it can be unit-tested without Compose.
+ */
+internal fun reactionPillTopPx(
+    bubbleTopY: Float,
+    pillHeightPx: Float,
+    gapPx: Float,
+    minTopPx: Float
+): Float = if (bubbleTopY > minTopPx + pillHeightPx + gapPx)
+    bubbleTopY - pillHeightPx - gapPx
+else
+    bubbleTopY + gapPx
+
 private fun smsCounter(length: Int): String? {
     if (length <= 120) return null
     if (length <= 160) return "$length / 160"
     val charsPerPart = 153
     val parts = (length + charsPerPart - 1) / charsPerPart
     return "${(length - 1) / charsPerPart + 1}/$parts"
+}
+
+// ── ReactionPills ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun ReactionPills(
+    reactions: List<Reaction>,
+    isSent: Boolean,
+    onReactionClick: (String) -> Unit
+) {
+    val grouped = reactions.groupBy { it.emoji }
+    Row(
+        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        grouped.forEach { (emoji, reactors) ->
+            val iMine = reactors.any { it.senderAddress == SELF_ADDRESS }
+            val count = reactors.size
+            val label = if (count > 1) "$emoji $count" else emoji
+            SuggestionChip(
+                onClick = { onReactionClick(emoji) },
+                label = {
+                    Text(label, style = MaterialTheme.typography.labelMedium)
+                },
+                modifier = Modifier.height(28.dp),
+                border = SuggestionChipDefaults.suggestionChipBorder(
+                    enabled = true,
+                    borderColor = if (iMine) MaterialTheme.colorScheme.primary
+                                  else MaterialTheme.colorScheme.outline,
+                    borderWidth = if (iMine) 1.5.dp else 0.5.dp
+                ),
+                colors = SuggestionChipDefaults.suggestionChipColors(
+                    containerColor = if (iMine)
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    else
+                        MaterialTheme.colorScheme.surfaceContainerHighest
+                )
+            )
+        }
+    }
+}
+
+// ── EmojiReactionPopup ────────────────────────────────────────────────────────
+
+@Composable
+private fun EmojiReactionPopup(
+    message: Message,
+    quickEmojis: List<String>,
+    bubbleTopY: Float,
+    onReact: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val density = LocalDensity.current
+    val myReactionEmojis = remember(message.reactions) {
+        message.reactions.filter { it.senderAddress == SELF_ADDRESS }.map { it.emoji }.toSet()
+    }
+
+    // Pill geometry
+    val pillHeightPx = with(density) { 64.dp.toPx() }
+    val gapPx        = with(density) { 8.dp.toPx() }
+    val minTopPx     = with(density) { 80.dp.toPx() }  // clears action bar + status bar
+
+    val pillTopPx = reactionPillTopPx(bubbleTopY, pillHeightPx, gapPx, minTopPx)
+
+    Box(Modifier.fillMaxSize()) {
+        // Scrim — full screen, tap anywhere outside pill dismisses
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.45f))
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { onDismiss() }
+        )
+
+        // Emoji pill — horizontally scrollable, floats above (or below) the bubble
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .offset { IntOffset(0, pillTopPx.toInt()) },
+            shape = RoundedCornerShape(32.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+            )
+        ) {
+            LazyRow(
+                modifier = Modifier.height(64.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                items(quickEmojis) { emoji ->
+                    val isSelected = emoji in myReactionEmojis
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                                else Color.Transparent
+                            )
+                            .clickable { onReact(emoji) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(emoji, fontSize = 28.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── MessageActionTopBar ───────────────────────────────────────────────────────
+
+@Composable
+private fun MessageActionTopBar(
+    onCancel: () -> Unit,
+    onCopy: () -> Unit,
+    onSelect: () -> Unit,
+    onForward: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .height(56.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ActionItem(Icons.Default.Close,            "Cancel",  onCancel,  MaterialTheme.colorScheme.error)
+            ActionItem(Icons.Default.ContentCopy,      "Copy",    onCopy)
+            ActionItem(Icons.Default.CheckBox,         "Select",  onSelect)
+            ActionItem(Icons.AutoMirrored.Filled.Send, "Forward", onForward)
+            ActionItem(Icons.Default.Delete,           "Delete",  onDelete,  MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun ActionItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    tint: Color = Color.Unspecified
+) {
+    val effectiveTint = if (tint.isUnspecified) LocalContentColor.current else tint
+    Column(
+        modifier = Modifier
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = effectiveTint,
+            modifier = Modifier.size(22.dp)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = effectiveTint
+        )
+    }
 }

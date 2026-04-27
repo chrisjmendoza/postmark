@@ -47,7 +47,7 @@ com.plusorminustwo.postmark
     └── parser              ← AppleReactionParser (scaffolded)
 
 ═══════════════════════════════════════════════════════
-DATABASE — ROOM SCHEMA v2
+DATABASE — ROOM SCHEMA v4
 ═══════════════════════════════════════════════════════
 Thread
 - id, displayName, address, lastMessageAt,
@@ -66,7 +66,8 @@ ThreadStats (pre-aggregated)
 - threadId, totalMessages, sentCount, receivedCount,
   firstMessageAt, lastMessageAt, activeDayCount,
   longestStreakDays, avgResponseTimeMs,
-  topEmojisJson, byDayOfWeekJson, byMonthJson,
+  topEmojisJson, topReactionEmojisJson,
+  byDayOfWeekJson, byMonthJson,
   lastUpdatedAt
 
 GlobalStats
@@ -82,6 +83,9 @@ emoji reaction querying.
 
 Migration 1→2: ALTER TABLE threads ADD COLUMN
 lastMessagePreview TEXT NOT NULL DEFAULT ''
+Migration 2→3: ALTER TABLE messages ADD COLUMN
+deliveryStatus INTEGER NOT NULL DEFAULT 0
+Migration 3→4: CREATE TABLE global_stats
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -119,7 +123,10 @@ WHAT IS WORKING (tested on device)
 ✅ Stats screen — Numbers style with real data:
    - Total messages, sent, received
    - Active days, longest streak, avg response time
-   - Top emoji grid
+   - Top Emoji (Messages) grid — emoji extracted
+     from message body text
+   - Top Emoji (Reactions) grid — emoji used as
+     reactions, tracked separately from message emoji
    - Messages by day of week bar chart
    - Conversations list
 ✅ Stats screen — Charts style (working)
@@ -174,6 +181,26 @@ WHAT IS WORKING (tested on device)
    back returns directly to the thread (not the
    contact list) — controlled by directThreadNavigation
    StateFlow flag on StatsViewModel
+✅ Emoji reactions on message bubbles:
+   REVISED UX (April 26):
+   - Long-press → highlights message + replaces top
+     bar with MessageActionTopBar (Cancel / Copy /
+     Select / Forward / Delete)
+   - Floating emoji pill appears above (or below if
+     near top) the tapped message — dark pill card,
+     horizontally scrollable LazyRow, 52dp emoji,
+     selected emoji get primaryContainer circle
+   - Full-screen scrim (45% black); tap anywhere
+     outside pill to dismiss
+   - Select button in action bar promotes to full
+     multi-select mode (selected message carries over)
+   - ReactionPills chips below bubble (count when > 1)
+   - Own reactions highlighted (primary border + tint)
+   - Toggle: tap to add, tap own reaction to remove
+   - Most-used emoji tracked via ReactionDao.observeTopEmojisBySender("self")
+     — user's top picks surface first in pill (left→right
+     most used → least); unused defaults fill remaining
+     slots up to 8
 
 ═══════════════════════════════════════════════════════
 DEFERRED — SAMSUNG RESTRICTION
@@ -226,9 +253,47 @@ IN PROGRESS / NEXT UP
    - Run AppleReactionParser on every incoming
      message and during initial sync
 
+4. EMOJI REACTIONS ON MESSAGES ✅ DONE (redesigned April 26)
+   Long-press a message bubble → floating pill picker + action bar.
+   - ReactionEntity / ReactionDao / MessageRepository join
+     were already in place
+   - SELF_ADDRESS = "self" sentinel in Reaction.kt domain model
+   - toggleReaction() in ThreadViewModel: adds if new, removes
+     if user already reacted with that emoji
+   - MessageActionTopBar: Cancel | Copy | Select | Forward | Delete
+     replaces TopAppBar on long-press; Cancel and Delete in error color
+   - EmojiReactionPopup: full-screen 45% scrim + floating pill card
+     (surfaceContainerHighest, 32dp corners, 8dp elevation)
+     anchored above bubble (falls below if within 80dp of top)
+     LazyRow — horizontally scrollable, 52dp emoji per item
+     Selected emoji highlighted with primaryContainer circle
+   - reactionPillTopPx() extracted as internal pure function (tested)
+   - Most-used-first ordering: observeTopEmojisBySender("self") in
+     ReactionDao drives buildQuickEmojiList() in ThreadViewModel companion
+   - ReactionPills row below bubble: SuggestionChip per unique
+     emoji, shows count when > 1; own reactions get primary-
+     coloured border + tinted background
+   - enterSelectionModeFromActionMode() promotes from single-message
+     action mode to full multi-select, preserving selected message
+
 ═══════════════════════════════════════════════════════
 UPCOMING FEATURES (designed, not yet built)
 ═══════════════════════════════════════════════════════
+DELIVERY TIMESTAMPS + READ RECEIPTS
+- content://sms has DATE (received) and DATE_SENT
+  (when message left device). Store both in MessageEntity
+  as sentAt: Long? and deliveredAt: Long? (nullable).
+- Room migration required: MessageEntity v → v+1
+- Bubble delivery indicator: extend DeliveryStatusIndicator
+  to show double-tick (✓✓) tinted in primary colour when
+  readAt is set (MMS only — SMS has no read receipts).
+- Info panel: tapping message action bar Info button
+  (deferred until data is available) slides up a bottom
+  sheet showing sent at / delivered at / read at /
+  character count / message parts count.
+- Read receipts require MMS support live; SMS has no
+  native mechanism. Document as RCS-future roadmap item.
+
 SEARCH
 - Global search + narrow to one thread
 - Filter chips: Reactions | Date range | Thread |
@@ -299,6 +364,31 @@ KEY DECISIONS LOCKED IN
 ═══════════════════════════════════════════════════════
 IMPLEMENTATION NOTES FOR FUTURE SESSIONS
 ═══════════════════════════════════════════════════════
+REACTION EMOJI STATS ARCHITECTURE
+- Emoji from message bodies and emoji from reactions
+  are tracked SEPARATELY. Users use them differently.
+- StatsAlgorithms.countReactionEmojis(reactions: List<String>)
+  groups by emoji, counts, sorts descending, caps at 6.
+  Input is already-extracted emoji strings (no body parsing).
+- buildThreadStatsData(messages, reactions) and
+  buildGlobalStatsData(messages, threadCount, reactions)
+  both accept optional reactions: List<String> = emptyList().
+  Existing callers (StatsUpdater) pass empty list — no
+  schema change or StatsUpdater change required yet.
+- ReactionDao.observeAll(): Flow<List<ReactionEntity>>
+  provides the global reaction stream for StatsViewModel.
+- StatsViewModel injects ReactionDao; derives:
+    allReactions SharedFlow (global)
+    selectedThreadReactions StateFlow (per-drilldown thread)
+  Both feed into buildThread/GlobalStatsData() calls.
+- ParsedStats.topReactionEmojis: List<Pair<String,Int>>
+  shown as a separate "Top Emoji (Reactions)" card in
+  StatsScreen (only visible when non-empty).
+- TODO: StatsUpdater.recomputeAll() does not yet persist
+  topReactionEmojis into ThreadStatsEntity JSON — stats are
+  computed live from Room Flows, so this is only needed for
+  widget/offline scenarios.
+
 HEATMAP / STATS ARCHITECTURE
 - Heatmap is month-scoped, NOT rolling 56-day.
   MessageDao has two Flow queries for this:
@@ -343,12 +433,32 @@ TESTING CONVENTIONS
 - Android instrumented tests: Room.inMemoryDatabaseBuilder
   + runBlocking + flow.first(). See PostmarkDatabaseTest
   for helper factories: thread(id), msg(id, threadId, ts).
-- Test files (117 passing as of 2026-04-26):
+- Gradle build + unit tests run after every implementation
+  session.
+- Test files (203 passing as of 2026-04-26):
     src/test/.../data/sync/StatsAlgorithmsTest.kt
+    src/test/.../data/sync/StatsComputationTest.kt
     src/test/.../ui/stats/StatsViewModelHeatmapTest.kt
     src/test/.../ui/stats/StatsViewModelActionsTest.kt
+    src/test/.../ui/thread/MessageGroupingTest.kt
+    src/test/.../ui/thread/DateNavigationTest.kt
+    src/test/.../ui/thread/ThreadViewModelReactionLogicTest.kt
+    src/test/.../ui/thread/ReactionPillPositionTest.kt
+    src/test/.../data/repository/MessageRepositoryReactionTest.kt
     src/androidTest/.../data/db/PostmarkDatabaseTest.kt
     src/androidTest/.../data/sync/StatsUpdaterIntegrationTest.kt
+
+CONTACT COLORS
+- avatarColor(name) hashes displayName into an
+  index across an 8-color palette
+- Deterministic — same name always yields same color
+- Used in LetterAvatar (circle background) and
+  ContactDayRow (proportional bar color) via the
+  same avatarColor() call
+- Seed is displayName not phone number — color will
+  change if an unsaved number later gets a contact
+  name saved. Low priority fix: swap seed to
+  thread.address for cross-install identity stability.
 
 APP ICON
 - Adaptive icon: ic_launcher.xml in mipmap-anydpi-v26

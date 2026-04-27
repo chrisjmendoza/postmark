@@ -23,8 +23,10 @@ internal data class ThreadStatsData(
     val activeDayCount: Int = 0,
     val longestStreakDays: Int = 0,
     val avgResponseTimeMs: Long = 0L,
-    /** Top 6 emoji → count, sorted descending by count. */
+    /** Top 6 emoji → count from message bodies, sorted descending. */
     val topEmojis: Map<String, Int> = emptyMap(),
+    /** Top 6 emoji → count from reactions (kept separate from message emoji). */
+    val topReactionEmojis: Map<String, Int> = emptyMap(),
     /** Index 0 = Monday … 6 = Sunday. */
     val byDayOfWeek: IntArray = IntArray(7),
     /** Index 0 = January … 11 = December. */
@@ -42,14 +44,31 @@ internal data class GlobalStatsData(
     val activeDayCount: Int = 0,
     val longestStreakDays: Int = 0,
     val avgResponseTimeMs: Long = 0L,
+    /** Top 6 emoji → count from message bodies, sorted descending. */
     val topEmojis: Map<String, Int> = emptyMap(),
+    /** Top 6 emoji → count from reactions (kept separate from message emoji). */
+    val topReactionEmojis: Map<String, Int> = emptyMap(),
     val byDayOfWeek: IntArray = IntArray(7),
     val byMonth: IntArray = IntArray(12)
 )
 
 // ── Core computation ──────────────────────────────────────────────────────────
 
-internal fun buildThreadStatsData(messages: List<MessageEntity>): ThreadStatsData {
+/**
+ * Count emoji strings (already-extracted) and return the top [limit] by frequency.
+ * Input is a flat list of emoji strings — no text extraction needed for reactions.
+ */
+internal fun countReactionEmojis(reactions: List<String>, limit: Int = 6): Map<String, Int> {
+    if (reactions.isEmpty()) return emptyMap()
+    return reactions.groupingBy { it }.eachCount()
+        .entries.sortedByDescending { it.value }
+        .take(limit).associate { it.key to it.value }
+}
+
+internal fun buildThreadStatsData(
+    messages: List<MessageEntity>,
+    reactions: List<String> = emptyList()
+): ThreadStatsData {
     if (messages.isEmpty()) return ThreadStatsData()
     val sorted = messages.sortedBy { it.timestamp }
 
@@ -69,24 +88,26 @@ internal fun buildThreadStatsData(messages: List<MessageEntity>): ThreadStatsDat
     }
 
     return ThreadStatsData(
-        totalMessages    = sorted.size,
-        sentCount        = sorted.count { it.isSent },
-        receivedCount    = sorted.count { !it.isSent },
-        firstMessageAt   = sorted.first().timestamp,
-        lastMessageAt    = sorted.last().timestamp,
-        activeDayCount   = activeDays.size,
-        longestStreakDays = computeLongestStreak(activeDays),
+        totalMessages     = sorted.size,
+        sentCount         = sorted.count { it.isSent },
+        receivedCount     = sorted.count { !it.isSent },
+        firstMessageAt    = sorted.first().timestamp,
+        lastMessageAt     = sorted.last().timestamp,
+        activeDayCount    = activeDays.size,
+        longestStreakDays  = computeLongestStreak(activeDays),
         avgResponseTimeMs = computeAvgResponseTimeMs(sorted),
-        topEmojis        = emojiCounts.entries.sortedByDescending { it.value }
-                               .take(6).associate { it.key to it.value },
-        byDayOfWeek      = dowArray,
-        byMonth          = monthArray
+        topEmojis         = emojiCounts.entries.sortedByDescending { it.value }
+                                .take(6).associate { it.key to it.value },
+        topReactionEmojis = countReactionEmojis(reactions),
+        byDayOfWeek       = dowArray,
+        byMonth           = monthArray
     )
 }
 
 internal fun buildGlobalStatsData(
     allMessages: List<MessageEntity>,
-    threadCount: Int
+    threadCount: Int,
+    reactions: List<String> = emptyList()
 ): GlobalStatsData {
     if (allMessages.isEmpty()) return GlobalStatsData(threadCount = threadCount)
     val sorted = allMessages.sortedBy { it.timestamp }
@@ -122,17 +143,18 @@ internal fun buildGlobalStatsData(
     val globalAvg = if (totalWeight > 0) totalAvgNumerator / totalWeight else 0L
 
     return GlobalStatsData(
-        totalMessages    = sorted.size,
-        sentCount        = sorted.count { it.isSent },
-        receivedCount    = sorted.count { !it.isSent },
-        threadCount      = threadCount,
-        activeDayCount   = activeDays.size,
-        longestStreakDays = computeLongestStreak(activeDays),
+        totalMessages     = sorted.size,
+        sentCount         = sorted.count { it.isSent },
+        receivedCount     = sorted.count { !it.isSent },
+        threadCount       = threadCount,
+        activeDayCount    = activeDays.size,
+        longestStreakDays  = computeLongestStreak(activeDays),
         avgResponseTimeMs = globalAvg,
-        topEmojis        = emojiCounts.entries.sortedByDescending { it.value }
-                               .take(6).associate { it.key to it.value },
-        byDayOfWeek      = dowArray,
-        byMonth          = monthArray
+        topEmojis         = emojiCounts.entries.sortedByDescending { it.value }
+                                .take(6).associate { it.key to it.value },
+        topReactionEmojis = countReactionEmojis(reactions),
+        byDayOfWeek       = dowArray,
+        byMonth           = monthArray
     )
 }
 

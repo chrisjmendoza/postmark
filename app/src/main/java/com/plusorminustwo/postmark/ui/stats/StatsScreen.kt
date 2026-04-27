@@ -256,7 +256,10 @@ private fun NumbersView(
             }
         }
         if (stats.topEmojis.isNotEmpty()) {
-            item { EmojiCard(stats.topEmojis) }
+            item { EmojiCard("Top Emoji (Messages)", stats.topEmojis) }
+        }
+        if (stats.topReactionEmojis.isNotEmpty()) {
+            item { EmojiCard("Top Emoji (Reactions)", stats.topReactionEmojis) }
         }
         item {
             ChartCard("Most Active Day") {
@@ -318,7 +321,10 @@ private fun ChartsView(stats: ParsedStats) {
             }
         }
         if (stats.topEmojis.isNotEmpty()) {
-            item { EmojiCard(stats.topEmojis) }
+            item { EmojiCard("Top Emoji (Messages)", stats.topEmojis) }
+        }
+        if (stats.topReactionEmojis.isNotEmpty()) {
+            item { EmojiCard("Top Emoji (Reactions)", stats.topReactionEmojis) }
         }
     }
 }
@@ -978,10 +984,10 @@ private fun ChartCard(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun EmojiCard(topEmojis: List<Pair<String, Int>>) {
+private fun EmojiCard(title: String, topEmojis: List<Pair<String, Int>>) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Top Emoji", style = MaterialTheme.typography.titleSmall)
+            Text(title, style = MaterialTheme.typography.titleSmall)
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
