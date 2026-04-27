@@ -136,18 +136,22 @@ WHAT IS WORKING (tested on device)
      This month total / Active days / Daily avg
      (update live on month change)
    - Day detail panel (appears below cards when
-     a day is selected):
-       Per-thread scope: flat message list for that
-         day in that thread, up to 5 shown with
-         "+X more" footer
-       Global scope: per-contact breakdown showing
-         each contact's count for that day with
-         proportional #378ADD bars, expandable to
-         show their actual messages
-   - DayMessageRow: sender name (You in #378ADD,
+     any days are selected, multi-day supported):
+       Per-thread scope: DayMessageRow list for each
+         selected day (newest day first, all messages
+         shown — no cap); tapping a message or day
+         header navigates to the thread at that point
+       Global scope: ContactsCard showing per-contact
+         counts for the selected day(s) with
+         proportional avatar-colored bars; tap contact
+         to drill into their thread
+   - No-selection per-thread panel: all messages
+     grouped by day (newest first), truncated at 30
+     with 'Load N more messages' button
+   - DayMessageRow: sender (You in #378ADD /
      contact in #8E8E93), body, time
    - ContactDayRow: letter avatar, name, count,
-     proportional bar, expandable
+     proportional bar, chevron
 ✅ StatsUpdater computing real stats from Room data
 ✅ GlobalStats aggregated across all threads
 ✅ Room schema v2 migration (non-destructive)
@@ -339,9 +343,10 @@ TESTING CONVENTIONS
 - Android instrumented tests: Room.inMemoryDatabaseBuilder
   + runBlocking + flow.first(). See PostmarkDatabaseTest
   for helper factories: thread(id), msg(id, threadId, ts).
-- Test files:
+- Test files (117 passing as of 2026-04-26):
     src/test/.../data/sync/StatsAlgorithmsTest.kt
     src/test/.../ui/stats/StatsViewModelHeatmapTest.kt
+    src/test/.../ui/stats/StatsViewModelActionsTest.kt
     src/androidTest/.../data/db/PostmarkDatabaseTest.kt
     src/androidTest/.../data/sync/StatsUpdaterIntegrationTest.kt
 
