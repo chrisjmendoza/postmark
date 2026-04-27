@@ -4,6 +4,88 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-04-26 — Floating Pill Redesign, Emoji Stats, Frequency Ordering
+
+### Emoji reactions — UX redesign (floating pill + action bar)
+
+- **`EmojiReactionPickerSheet` (ModalBottomSheet) replaced** with `EmojiReactionPopup`:
+  a full-screen overlay with 45% black scrim and a floating dark pill card
+  (surfaceContainerHighest, 32dp corners, 8dp elevation) anchored above the tapped
+  message. Falls below the bubble if the bubble is within 80dp of the screen top.
+- **`MessageActionTopBar`** replaces the standard TopAppBar while a message is held:
+  Cancel | Copy | Select | Forward | Delete. Cancel and Delete rendered in error colour.
+  Dismisses by tapping Cancel or the scrim.
+- **`EmojiReactionPopup`** has a horizontally scrollable `LazyRow` of 52dp emoji buttons.
+  Selected emoji highlighted with a `primaryContainer` circle background.
+- **`enterSelectionModeFromActionMode()`** promotes single-message action mode into full
+  multi-select, carrying the already-selected message over.
+- **`forwardMessage()` stub** wired (TODO: contact picker + actual send).
+- **`reactionPillTopPx(bubbleTopY, pillHeightPx, gapPx, minTopPx)`** extracted as an
+  `internal` top-level pure function for testability.
+
+### Emoji frequency tracking (most-used-first in picker)
+
+- **`ReactionDao.observeTopEmojisBySender(senderAddress)`** — new `@Query` counting and
+  ordering reactions by the given sender, returning `Flow<List<EmojiCount>>`.
+- **`MessageRepository.observeTopUserEmojis()`** — maps DAO output to `Flow<List<String>>`
+  using the `SELF_ADDRESS` sentinel.
+- **`ThreadViewModel.quickReactionEmojis`** `StateFlow` driven by `buildQuickEmojiList()`:
+  merges user's top-used emoji with `DEFAULT_QUICK_EMOJIS`, deduplicates, caps at 8.
+  Result surfaces in the emoji pill left→right most-used to least-used.
+- **`ThreadUiState.reactionPickerBubbleY: Float`** tracks the Y coordinate of the long-pressed
+  bubble so the popup knows where to anchor.
+- **`buildQuickEmojiList()`** moved to companion object for unit testability.
+
+### Emoji reaction stats (separate from message emoji)
+
+- **`StatsAlgorithms.countReactionEmojis(reactions: List<String>, limit: Int = 6)`** — new
+  pure function. Groups by emoji string, sorts descending by count, returns top `limit` entries
+  as `Map<String, Int>`.
+- **`ThreadStatsData.topReactionEmojis`** and **`GlobalStatsData.topReactionEmojis`** fields
+  added (default `emptyMap()`). Populated via `countReactionEmojis()`.
+- **`buildThreadStatsData`** and **`buildGlobalStatsData`** accept optional
+  `reactions: List<String> = emptyList()` parameter. Existing callers pass empty list.
+- **`ReactionDao.observeAll(): Flow<List<ReactionEntity>>`** — new global query for stats
+  aggregation (no filter by sender or thread).
+- **`StatsViewModel`** now injects `ReactionDao`. Derives:
+  - `allReactions: SharedFlow<List<ReactionEntity>>` — global reaction stream for global stats.
+  - `selectedThreadReactions: StateFlow<List<ReactionEntity>>` — filtered to selected thread
+    by joining `reactionId → messageId → threadId`.
+  - Both feed into `buildThread/GlobalStatsData()` calls via `parsedGlobalStats` and
+    `parsedSelectedStats`.
+- **`ParsedStats.topReactionEmojis: List<Pair<String, Int>>`** — reaction emoji counts in UI
+  form; empty list when no reactions exist.
+- **`StatsScreen`** — `EmojiCard` now takes a `title: String` parameter. Both global and
+  per-thread views show two separate cards:
+  `EmojiCard("Top Emoji (Messages)", stats.topEmojis)` and
+  `EmojiCard("Top Emoji (Reactions)", stats.topReactionEmojis)`.
+  Each card is only shown when non-empty.
+
+### Documentation
+
+- **`TODO.md`** — Added detailed MMS support items (inline media display, thread list preview,
+  group MMS, rich media in reply bar). Added delivery timestamps + read receipts item with full
+  schema/migration/UX design.
+- **`BRIEFING.md`** — Emoji reactions section rewritten to describe new popup/action bar design.
+  Timestamps + read receipts added to UPCOMING FEATURES. DB schema version corrected (v2→v4).
+  Reaction stats architecture section added to IMPLEMENTATION NOTES. Test count updated to 203.
+
+### Tests (203 total passing)
+
+- **`ReactionPillPositionTest`** (10 tests) — `reactionPillTopPx()`: above/below placement,
+  boundary conditions, range sweep, custom geometry, zero gap.
+- **`ThreadViewModelReactionLogicTest`** (12 tests) — `buildQuickEmojiList()`: empty top used,
+  deduplication, cap at limit, defaults fill when top short, all top used overrides defaults,
+  partial overlap cases.
+- **`MessageRepositoryReactionTest`** (6 tests) — `observeTopUserEmojis()`: empty reactions,
+  self only, others filtered out, ordering, deduplication at DAO level.
+- **`StatsAlgorithmsTest`** — 8 new tests: 6 for `countReactionEmojis()` (empty, single,
+  multi-emoji, limit respected, ordering), 2 for `buildThreadStatsData` with reactions param.
+- **`StatsViewModelHeatmapTest`** and **`StatsViewModelActionsTest`** — `FakeReactionDao` and
+  `ActionsReactionDao` added; both `makeViewModel` functions pass the fake as 3rd constructor arg.
+
+---
+
 ## 2026-04-26 — Emoji Reactions
 
 ### Emoji reactions on message bubbles

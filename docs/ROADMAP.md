@@ -74,6 +74,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **Heatmap view** — month-navigation calendar grid with 7 intensity tiers; day-tap detail panel; multi-day selection; month/thread scoped; summary cards
 - [x] **Per-thread drilldown** — tap thread in Numbers view → same three-style view filtered to that thread; back restores correct origin scope (GLOBAL or PER_THREAD list)
 - [x] **Contacts card** — top 3 contacts for current month when no day selected; expand/collapse for full list; avatar-colored fixed-width bars
+- [x] **Reaction emoji stats** — `countReactionEmojis()` in StatsAlgorithms; `ReactionDao.observeAll()` feeds `StatsViewModel`; separate "Top Emoji (Reactions)" card in Numbers tab (distinct from message body emoji)
 - [ ] Heatmap — streak counter overlay and most/least active day label
 - [ ] Numbers view — "View in heatmap" shortcut from thread row
 
