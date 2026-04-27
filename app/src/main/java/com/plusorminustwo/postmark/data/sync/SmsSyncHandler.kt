@@ -69,7 +69,7 @@ class SmsSyncHandler @Inject constructor(
             messageRepository.deleteOptimisticMessages(threadId)
             threadRepository.updateLastMessageAt(threadId, date)
             threadRepository.updateLastMessagePreview(threadId, body)
-            statsUpdater.updateForNewMessage(threadId)
+            statsUpdater.recomputeAll()
 
             // Check if this is an Apple reaction fallback
             val parsed = reactionParser.parse(body)

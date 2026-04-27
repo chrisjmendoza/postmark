@@ -143,12 +143,12 @@ class StatsComputationTest {
 
     @Test
     fun `empty list returns zero`() {
-        assertEquals(0L, computeAvgResponseTime(emptyList()))
+        assertEquals(0L, computeAvgResponseTimeMs(emptyList()))
     }
 
     @Test
     fun `single message returns zero (no pairs)`() {
-        assertEquals(0L, computeAvgResponseTime(listOf(msg(1, isSent = true, t = 1000L))))
+        assertEquals(0L, computeAvgResponseTimeMs(listOf(msg(1, isSent = true, t = 1000L))))
     }
 
     @Test
@@ -158,7 +158,7 @@ class StatsComputationTest {
             msg(2, isSent = true, t = 1000L),
             msg(3, isSent = true, t = 2000L)
         )
-        assertEquals(0L, computeAvgResponseTime(msgs))
+        assertEquals(0L, computeAvgResponseTimeMs(msgs))
     }
 
     @Test
@@ -167,7 +167,7 @@ class StatsComputationTest {
             msg(1, isSent = true, t = 0L),
             msg(2, isSent = false, t = 3_600_000L) // 1 hour later
         )
-        assertEquals(3_600_000L, computeAvgResponseTime(msgs))
+        assertEquals(3_600_000L, computeAvgResponseTimeMs(msgs))
     }
 
     @Test
@@ -179,7 +179,7 @@ class StatsComputationTest {
             msg(3, isSent = false, t = 2_000L), // same sender, skipped
             msg(4, isSent = true, t = 5_000L)
         )
-        assertEquals(2_000L, computeAvgResponseTime(msgs))
+        assertEquals(2_000L, computeAvgResponseTimeMs(msgs))
     }
 
     @Test
@@ -194,7 +194,19 @@ class StatsComputationTest {
             msg(3, isSent = false, t = 2_000L),
             msg(4, isSent = true, t = 5_000L)
         )
-        assertEquals(2_000L, computeAvgResponseTime(msgs))
+        assertEquals(2_000L, computeAvgResponseTimeMs(msgs))
+    }
+
+    @Test
+    fun `gap over 24 hours is excluded from average`() {
+        val day = 86_400_001L // just over 24 hours
+        val msgs = listOf(
+            msg(1, isSent = true, t = 0L),
+            msg(2, isSent = false, t = day),     // excluded: gap > 24 h
+            msg(3, isSent = true, t = day + 60_000L)  // 1 min response — included
+        )
+        // Only the 60_000ms pair counts
+        assertEquals(60_000L, computeAvgResponseTimeMs(msgs))
     }
 
     // ── helpers ───────────────────────────────────────────────────────────

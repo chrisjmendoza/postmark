@@ -77,7 +77,23 @@ Ordered by what blocks the most other things. Pick from the top.
 
 - [ ] **MMS support** — read `content://mms` during first sync, store attachments as file paths in a new `Attachment` entity.
 
+- [ ] **Inline media display in thread bubbles** — render image/video attachments directly in the message bubble. Images: `AsyncImage` (Coil) with `fillMaxWidth`, tap → full-screen viewer. Videos: thumbnail frame + play button overlay, tap → `ExoPlayer`/`VideoView` in a dialog or dedicated screen.
+
+- [ ] **MMS media in thread list preview** — when a conversation's last message is MMS-only (no text body), show a "📷 Photo" or "🎥 Video" placeholder as the snippet in `ConversationsScreen`.
+
+- [ ] **Group MMS** — `content://mms` group messages have multiple recipient addresses; resolve all to a single `Thread` with a comma-joined display name and address field. Display sender name/avatar per-bubble within the group thread.
+
+- [ ] **Rich media in reply bar** (`ThreadScreen`) — add attachment button (➕ or 📎) left of the text field; initially supports: image picker (`ActivityResultContracts.PickVisualMedia`), camera capture, emoji picker, sticker sheet. Each attachment type produces an MMS send. Requires default-SMS-app role for MMS send and `READ_MEDIA_IMAGES` / `CAMERA` permissions.
+
 - [ ] **Notification for incoming SMS** — show a heads-up notification from `SmsReceiver`. Requires `POST_NOTIFICATIONS` permission on API 33+.
+
+- [ ] **Delivery timestamps + read receipts** (`ThreadScreen`, `Message` entity)
+  - **Delivery timestamp**: `content://sms` includes `DATE_SENT` (when the message left the device) alongside `DATE` (when it was received/delivered). Store both in `MessageEntity` as `sentAt` and `deliveredAt` (nullable). Requires Room migration.
+  - **Read receipts**: MMS-only. Store `read` flag from `content://mms` in `MessageEntity`. For outgoing, Samsung and other OEMs may not reliably populate this.
+  - **Info panel**: Tapping the message action bar **Info** button (re-add once data exists) slides up a bottom sheet showing: sent at, delivered at, read at, message size (characters / parts), and thread address.
+  - **Bubble delivery indicator**: current `DeliveryStatusIndicator` shows PENDING / SENT / DELIVERED / FAILED — extend to show a read-receipt double-tick (✓✓) in accent colour when `readAt` is set.
+  - **Schema change**: `MessageEntity` gains `sentAt: Long?` and `readAt: Long?`; Room migration required (v3 → v4 or next available).
+  - Dependencies: requires default SMS role for `DATE_SENT` to be accurate; read receipts require MMS support to be live.
 
 - [ ] **Real app icon** — replace the placeholder envelope with proper branded artwork.
 

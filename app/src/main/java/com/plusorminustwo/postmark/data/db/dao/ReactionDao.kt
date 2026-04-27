@@ -7,6 +7,9 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ReactionDao {
 
+    @Query("SELECT * FROM reactions")
+    fun observeAll(): Flow<List<ReactionEntity>>
+
     @Query("SELECT * FROM reactions WHERE messageId = :messageId")
     fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>>
 
@@ -33,6 +36,13 @@ interface ReactionDao {
         GROUP BY emoji ORDER BY count DESC LIMIT :limit
     """)
     suspend fun getTopEmojis(limit: Int = 10): List<EmojiCount>
+
+    @Query("""
+        SELECT emoji, COUNT(*) as count FROM reactions
+        WHERE senderAddress = :senderAddress
+        GROUP BY emoji ORDER BY count DESC
+    """)
+    fun observeTopEmojisBySender(senderAddress: String): Flow<List<EmojiCount>>
 
     @Query("""
         SELECT * FROM reactions

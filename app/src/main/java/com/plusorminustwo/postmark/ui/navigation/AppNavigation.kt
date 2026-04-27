@@ -25,11 +25,21 @@ import com.plusorminustwo.postmark.ui.thread.ThreadScreen
 
 sealed class Screen(val route: String) {
     data object Conversations : Screen("conversations")
-    data object Thread : Screen("thread/{threadId}") {
-        fun route(threadId: Long) = "thread/$threadId"
+    data object Thread : Screen("thread/{threadId}?scrollToMessageId={scrollToMessageId}&scrollToDate={scrollToDate}") {
+        fun route(threadId: Long, scrollToMessageId: Long = -1L, scrollToDate: String = "") = buildString {
+            append("thread/$threadId")
+            val params = buildList<String> {
+                if (scrollToMessageId != -1L) add("scrollToMessageId=$scrollToMessageId")
+                if (scrollToDate.isNotEmpty()) add("scrollToDate=$scrollToDate")
+            }
+            if (params.isNotEmpty()) append("?${params.joinToString("&")}")
+        }
     }
     data object Search : Screen("search")
-    data object Stats : Screen("stats")
+    data object Stats : Screen("stats?threadId={threadId}") {
+        fun navRoute(threadId: Long? = null) =
+            if (threadId != null) "stats?threadId=$threadId" else "stats"
+    }
     data object Settings : Screen("settings")
     data object BackupSettings : Screen("settings/backup")
     data object DevOptions : Screen("settings/dev")
@@ -59,19 +69,29 @@ fun AppNavigation() {
                     navController.navigate(Screen.Thread.route(threadId))
                 },
                 onSearchClick = { navController.navigate(Screen.Search.route) },
-                onStatsClick = { navController.navigate(Screen.Stats.route) },
+                onStatsClick = { navController.navigate(Screen.Stats.navRoute()) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) }
             )
         }
 
         composable(
             route = Screen.Thread.route,
-            arguments = listOf(navArgument("threadId") { type = NavType.LongType })
+            arguments = listOf(
+                navArgument("threadId") { type = NavType.LongType },
+                navArgument("scrollToMessageId") { type = NavType.LongType; defaultValue = -1L },
+                navArgument("scrollToDate") { type = NavType.StringType; defaultValue = "" }
+            )
         ) { backStackEntry ->
-            val threadId = backStackEntry.arguments!!.getLong("threadId")
+            val threadId          = backStackEntry.arguments!!.getLong("threadId")
+            val scrollToMessageId = backStackEntry.arguments!!.getLong("scrollToMessageId")
+            val scrollToDate      = backStackEntry.arguments!!.getString("scrollToDate") ?: ""
             ThreadScreen(
-                threadId = threadId,
-                onBack = { navController.popBackStack() }
+                threadId          = threadId,
+                scrollToMessageId = scrollToMessageId,
+                scrollToDate      = scrollToDate,
+                onBack            = { navController.popBackStack() },
+                onViewStats       = { navController.navigate(Screen.Stats.navRoute(threadId)) },
+                onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) }
             )
         }
 
@@ -84,10 +104,16 @@ fun AppNavigation() {
             )
         }
 
-        composable(Screen.Stats.route) {
+        composable(
+            route = Screen.Stats.route,
+            arguments = listOf(navArgument("threadId") {
+                type = NavType.LongType
+                defaultValue = -1L
+            })
+        ) {
             StatsScreen(
-                onThreadClick = { threadId ->
-                    navController.navigate(Screen.Thread.route(threadId))
+                onOpenThreadAt = { threadId, scrollToMessageId, scrollToDate ->
+                    navController.navigate(Screen.Thread.route(threadId, scrollToMessageId, scrollToDate))
                 },
                 onBack = { navController.popBackStack() }
             )

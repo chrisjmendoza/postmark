@@ -10,6 +10,8 @@ import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepositor
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.Reaction
+import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
@@ -31,7 +33,9 @@ data class ThreadUiState(
     val replyText: String = "",
     val isSending: Boolean = false,
     val showDefaultSmsDialog: Boolean = false,
-    val expandedTimestampIds: Set<Long> = emptySet()
+    val expandedTimestampIds: Set<Long> = emptySet(),
+    val reactionPickerMessageId: Long? = null,
+    val reactionPickerBubbleY: Float = 0f
 )
 
 @HiltViewModel
@@ -51,8 +55,10 @@ class ThreadViewModel @Inject constructor(
     private val _selectionScope  = MutableStateFlow(SelectionScope.MESSAGES)
     private val _replyText       = MutableStateFlow("")
     private val _isSending       = MutableStateFlow(false)
-    private val _showDefaultSmsDialog  = MutableStateFlow(false)
-    private val _expandedTimestampIds  = MutableStateFlow(emptySet<Long>())
+    private val _showDefaultSmsDialog     = MutableStateFlow(false)
+    private val _expandedTimestampIds     = MutableStateFlow(emptySet<Long>())
+    private val _reactionPickerMessageId  = MutableStateFlow<Long?>(null)
+    private val _reactionPickerBubbleY    = MutableStateFlow(0f)
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
@@ -67,23 +73,46 @@ class ThreadViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
-    // Replaces the previous Triple(Triple(...), ...) hack with a named holder.
+    val quickReactionEmojis: StateFlow<List<String>> = messageRepository
+        .observeTopUserEmojis()
+        .map { topEmojis -> buildQuickEmojiList(topEmojis) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DEFAULT_QUICK_EMOJIS)
+
+    // Named holder for the action-related sub-state to stay within combine's 5-arg limit.
     private data class InnerState(
         val replyText: String,
         val isSending: Boolean,
         val showDefaultSmsDialog: Boolean,
         val expandedTimestampIds: Set<Long>,
-        val selectionScope: SelectionScope
+        val selectionScope: SelectionScope,
+        val reactionPickerMessageId: Long?,
+        val reactionPickerBubbleY: Float
     )
 
+    @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<ThreadUiState> = combine(
         threadRepository.observeById(threadId),
         messageRepository.observeByThread(threadId),
         _selectionState,
         _isSelectionMode,
-        combine(_replyText, _isSending, _showDefaultSmsDialog, _expandedTimestampIds, _selectionScope) {
-            text, sending, dialog, expandedIds, scope ->
-            InnerState(text, sending, dialog, expandedIds, scope)
+        combine(
+            _replyText,
+            _isSending,
+            _showDefaultSmsDialog,
+            _expandedTimestampIds,
+            _selectionScope,
+            _reactionPickerMessageId,
+            _reactionPickerBubbleY
+        ) { arr ->
+            InnerState(
+                replyText               = arr[0] as String,
+                isSending               = arr[1] as Boolean,
+                showDefaultSmsDialog    = arr[2] as Boolean,
+                expandedTimestampIds    = arr[3] as Set<Long>,
+                selectionScope          = arr[4] as SelectionScope,
+                reactionPickerMessageId = arr[5] as Long?,
+                reactionPickerBubbleY   = arr[6] as Float
+            )
         }
     ) { thread, messages, selected, selectionMode, inner ->
         ThreadUiState(
@@ -95,7 +124,9 @@ class ThreadViewModel @Inject constructor(
             replyText = inner.replyText,
             isSending = inner.isSending,
             showDefaultSmsDialog = inner.showDefaultSmsDialog,
-            expandedTimestampIds = inner.expandedTimestampIds
+            expandedTimestampIds = inner.expandedTimestampIds,
+            reactionPickerMessageId = inner.reactionPickerMessageId,
+            reactionPickerBubbleY   = inner.reactionPickerBubbleY
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
@@ -161,6 +192,59 @@ class ThreadViewModel @Inject constructor(
 
     fun clearSelection() = exitSelectionMode()
 
+    // ── Reactions ─────────────────────────────────────────────────────────────
+
+    fun showReactionPicker(messageId: Long, bubbleY: Float) {
+        _reactionPickerMessageId.value = messageId
+        _reactionPickerBubbleY.value   = bubbleY
+        _selectionState.value          = setOf(messageId)
+    }
+
+    fun dismissReactionPicker() {
+        _reactionPickerMessageId.value = null
+        _reactionPickerBubbleY.value   = 0f
+        _selectionState.value          = emptySet()
+    }
+
+    /** Transitions from single-message action mode into full multi-select mode. */
+    fun enterSelectionModeFromActionMode() {
+        _reactionPickerMessageId.value = null
+        _reactionPickerBubbleY.value   = 0f
+        _isSelectionMode.value         = true
+        _selectionScope.value          = SelectionScope.MESSAGES
+        // _selectionState already contains the long-pressed message
+    }
+
+    /** Stub — forward a message to another conversation. */
+    fun forwardMessage(messageId: Long) {
+        dismissReactionPicker()
+        // TODO: navigate to contact picker and send message copy
+    }
+
+    fun toggleReaction(messageId: Long, emoji: String) {
+        viewModelScope.launch {
+            val message = uiState.value.messages.find { it.id == messageId } ?: return@launch
+            val myReaction = message.reactions.find {
+                it.senderAddress == SELF_ADDRESS && it.emoji == emoji
+            }
+            if (myReaction != null) {
+                messageRepository.deleteReaction(messageId, SELF_ADDRESS, emoji)
+            } else {
+                messageRepository.insertReaction(
+                    Reaction(
+                        id = 0,
+                        messageId = messageId,
+                        senderAddress = SELF_ADDRESS,
+                        emoji = emoji,
+                        timestamp = System.currentTimeMillis(),
+                        rawText = ""
+                    )
+                )
+            }
+            dismissReactionPicker()
+        }
+    }
+
     // ── Timestamps ────────────────────────────────────────────────────────────
 
     fun toggleTimestamp(messageId: Long) {
@@ -218,4 +302,22 @@ class ThreadViewModel @Inject constructor(
 
     private fun isDefaultSmsApp(): Boolean =
         Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+
+    companion object {
+        val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "😢", "👎", "🔥", "🎉")
+
+        /**
+         * Merges [topUsed] (most-used first) with [defaults], deduplicating, and caps the result
+         * at [limit]. Extracted here so it can be tested without constructing the ViewModel.
+         */
+        internal fun buildQuickEmojiList(
+            topUsed: List<String>,
+            defaults: List<String> = DEFAULT_QUICK_EMOJIS,
+            limit: Int = 8
+        ): List<String> {
+            val merged = topUsed.toMutableList()
+            defaults.forEach { if (it !in merged) merged.add(it) }
+            return merged.take(limit)
+        }
+    }
 }

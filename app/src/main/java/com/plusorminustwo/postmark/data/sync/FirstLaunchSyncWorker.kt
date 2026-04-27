@@ -139,7 +139,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         }
 
         Log.d(TAG, "Computing thread stats …")
-        statsUpdater.computeForAllThreads(threads.keys)
+        statsUpdater.recomputeAll()
 
         return SyncResult(threads.size, messages.size)
     }

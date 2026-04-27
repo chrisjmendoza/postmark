@@ -61,4 +61,26 @@ interface MessageDao {
 
     @Query("DELETE FROM messages")
     suspend fun deleteAll()
+
+    @Query("SELECT DISTINCT threadId FROM messages")
+    suspend fun getAllThreadIds(): List<Long>
+
+    @Query("SELECT * FROM messages ORDER BY timestamp ASC")
+    suspend fun getAll(): List<MessageEntity>
+
+    /** Used for the 8-week activity heatmap (all threads). */
+    @Query("SELECT * FROM messages WHERE timestamp >= :startMs ORDER BY timestamp ASC")
+    fun observeMessagesFrom(startMs: Long): Flow<List<MessageEntity>>
+
+    /** Used for the 8-week activity heatmap (single thread). */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND timestamp >= :startMs ORDER BY timestamp ASC")
+    fun observeMessagesFromForThread(threadId: Long, startMs: Long): Flow<List<MessageEntity>>
+
+    /** Month-scoped heatmap (all threads). */
+    @Query("SELECT * FROM messages WHERE timestamp >= :startMs AND timestamp < :endMs ORDER BY timestamp ASC")
+    fun observeMessagesInRange(startMs: Long, endMs: Long): Flow<List<MessageEntity>>
+
+    /** Month-scoped heatmap (single thread). */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND timestamp >= :startMs AND timestamp < :endMs ORDER BY timestamp ASC")
+    fun observeMessagesInRangeForThread(threadId: Long, startMs: Long, endMs: Long): Flow<List<MessageEntity>>
 }

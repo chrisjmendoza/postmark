@@ -32,8 +32,8 @@ class ConversationsViewModel @Inject constructor(
     private val workManager = WorkManager.getInstance(context)
     private val prefs get() = context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
 
-    val threads: StateFlow<List<Thread>> = threadRepository.observeAll()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val threads: StateFlow<List<Thread>?> = threadRepository.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val isSyncing: StateFlow<Boolean> = workManager
         .getWorkInfosForUniqueWorkFlow(FirstLaunchSyncWorker.WORK_NAME)

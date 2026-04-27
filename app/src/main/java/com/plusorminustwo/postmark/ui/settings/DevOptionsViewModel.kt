@@ -9,6 +9,7 @@ import androidx.work.WorkManager
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.FirstLaunchSyncWorker
+import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
@@ -24,13 +25,31 @@ import javax.inject.Inject
 class DevOptionsViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
+    private val statsUpdater: StatsUpdater,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _feedback = MutableStateFlow<String?>(null)
     val feedback: StateFlow<String?> = _feedback.asStateFlow()
 
+    private val _isRecomputing = MutableStateFlow(false)
+    val isRecomputing: StateFlow<Boolean> = _isRecomputing.asStateFlow()
+
     fun clearFeedback() { _feedback.value = null }
+
+    // ── Stats ─────────────────────────────────────────────────────────────────
+
+    fun recomputeStats() {
+        viewModelScope.launch {
+            _isRecomputing.value = true
+            try {
+                statsUpdater.recomputeAll()
+                _feedback.value = "Stats recomputed"
+            } finally {
+                _isRecomputing.value = false
+            }
+        }
+    }
 
     // ── Sample data ───────────────────────────────────────────────────────────
 
