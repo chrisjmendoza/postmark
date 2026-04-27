@@ -28,6 +28,31 @@ fun SearchScreen(
     viewModel: SearchViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var showThreadSheet by remember { mutableStateOf(false) }
+
+    if (showThreadSheet) {
+        ModalBottomSheet(onDismissRequest = { showThreadSheet = false }) {
+            Text(
+                "Filter by thread",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            LazyColumn {
+                items(uiState.threads, key = { it.id }) { thread ->
+                    ListItem(
+                        headlineContent = { Text(thread.displayName) },
+                        supportingContent = { Text(thread.address) },
+                        modifier = Modifier.clickable {
+                            viewModel.setThreadFilter(thread)
+                            showThreadSheet = false
+                        }
+                    )
+                    HorizontalDivider()
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -63,7 +88,10 @@ fun SearchScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             FilterChips(
                 filters = uiState.filters,
-                onFiltersChange = viewModel::onFiltersChange
+                selectedThread = uiState.selectedThread,
+                onFiltersChange = viewModel::onFiltersChange,
+                onThreadChipClick = { showThreadSheet = true },
+                onClearThreadFilter = { viewModel.setThreadFilter(null) }
             )
 
             if (uiState.isLoading) {
@@ -87,7 +115,13 @@ fun SearchScreen(
 }
 
 @Composable
-private fun FilterChips(filters: SearchFilters, onFiltersChange: (SearchFilters) -> Unit) {
+private fun FilterChips(
+    filters: SearchFilters,
+    selectedThread: com.plusorminustwo.postmark.domain.model.Thread?,
+    onFiltersChange: (SearchFilters) -> Unit,
+    onThreadChipClick: () -> Unit,
+    onClearThreadFilter: () -> Unit
+) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -115,6 +149,20 @@ private fun FilterChips(filters: SearchFilters, onFiltersChange: (SearchFilters)
                 selected = filters.hasReaction,
                 onClick = { onFiltersChange(filters.copy(hasReaction = !filters.hasReaction)) },
                 label = { Text("Reactions") }
+            )
+        }
+        item {
+            FilterChip(
+                selected = selectedThread != null,
+                onClick = {
+                    if (selectedThread != null) onClearThreadFilter()
+                    else onThreadChipClick()
+                },
+                label = { Text(selectedThread?.displayName ?: "Thread") },
+                trailingIcon = if (selectedThread != null) {
+                    { Icon(Icons.Default.Clear, contentDescription = "Clear thread filter",
+                        modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+                } else null
             )
         }
     }
@@ -152,3 +200,4 @@ private fun highlightQuery(text: String, query: String) = buildAnnotatedString {
     }
     append(text.substring(last))
 }
+

@@ -25,8 +25,9 @@ import com.plusorminustwo.postmark.ui.thread.ThreadScreen
 
 sealed class Screen(val route: String) {
     data object Conversations : Screen("conversations")
-    data object Thread : Screen("thread/{threadId}") {
-        fun route(threadId: Long) = "thread/$threadId"
+    data object Thread : Screen("thread/{threadId}?scrollToMessageId={scrollToMessageId}") {
+        fun route(threadId: Long, scrollToMessageId: Long = -1L) =
+            "thread/$threadId?scrollToMessageId=$scrollToMessageId"
     }
     data object Search : Screen("search")
     data object Stats : Screen("stats")
@@ -66,19 +67,27 @@ fun AppNavigation() {
 
         composable(
             route = Screen.Thread.route,
-            arguments = listOf(navArgument("threadId") { type = NavType.LongType })
+            arguments = listOf(
+                navArgument("threadId") { type = NavType.LongType },
+                navArgument("scrollToMessageId") {
+                    type = NavType.LongType
+                    defaultValue = -1L
+                }
+            )
         ) { backStackEntry ->
             val threadId = backStackEntry.arguments!!.getLong("threadId")
+            val scrollToMessageId = backStackEntry.arguments!!.getLong("scrollToMessageId")
             ThreadScreen(
                 threadId = threadId,
+                scrollToMessageId = scrollToMessageId,
                 onBack = { navController.popBackStack() }
             )
         }
 
         composable(Screen.Search.route) {
             SearchScreen(
-                onMessageClick = { threadId, _ ->
-                    navController.navigate(Screen.Thread.route(threadId))
+                onMessageClick = { threadId, messageId ->
+                    navController.navigate(Screen.Thread.route(threadId, messageId))
                 },
                 onBack = { navController.popBackStack() }
             )

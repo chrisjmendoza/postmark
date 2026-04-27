@@ -3,7 +3,9 @@ package com.plusorminustwo.postmark.ui.search
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.repository.SearchRepository
+import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.Thread
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
@@ -22,24 +24,29 @@ data class SearchUiState(
     val query: String = "",
     val filters: SearchFilters = SearchFilters(),
     val results: List<Message> = emptyList(),
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    val threads: List<Thread> = emptyList(),
+    val selectedThread: Thread? = null
 )
 
 @OptIn(FlowPreview::class)
 @HiltViewModel
 class SearchViewModel @Inject constructor(
-    private val searchRepository: SearchRepository
+    private val searchRepository: SearchRepository,
+    private val threadRepository: ThreadRepository
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
     private val _filters = MutableStateFlow(SearchFilters())
     private val _results = MutableStateFlow<List<Message>>(emptyList())
     private val _isLoading = MutableStateFlow(false)
+    private val _selectedThread = MutableStateFlow<Thread?>(null)
 
     val uiState: StateFlow<SearchUiState> = combine(
-        _query, _filters, _results, _isLoading
-    ) { query, filters, results, loading ->
-        SearchUiState(query, filters, results, loading)
+        _query, _filters, _results, _isLoading,
+        combine(threadRepository.observeAll(), _selectedThread) { threads, selected -> threads to selected }
+    ) { query, filters, results, loading, (threads, selected) ->
+        SearchUiState(query, filters, results, loading, threads, selected)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SearchUiState())
 
     init {
@@ -52,6 +59,11 @@ class SearchViewModel @Inject constructor(
     fun onQueryChange(query: String) { _query.value = query }
 
     fun onFiltersChange(filters: SearchFilters) { _filters.value = filters }
+
+    fun setThreadFilter(thread: Thread?) {
+        _selectedThread.value = thread
+        _filters.update { it.copy(threadId = thread?.id) }
+    }
 
     private fun search(query: String, filters: SearchFilters) {
         if (query.isBlank()) {
@@ -71,3 +83,4 @@ class SearchViewModel @Inject constructor(
         }
     }
 }
+

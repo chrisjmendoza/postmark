@@ -39,10 +39,12 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
+import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.time.LocalDate
@@ -57,6 +59,7 @@ private val PILL_HIDE_DELAY_MS = 1_800L
 @Composable
 fun ThreadScreen(
     threadId: Long,
+    scrollToMessageId: Long = -1L,
     onBack: () -> Unit,
     viewModel: ThreadViewModel = hiltViewModel()
 ) {
@@ -69,6 +72,32 @@ fun ThreadScreen(
     val context = LocalContext.current
 
     var showCalendarPicker by remember { mutableStateOf(false) }
+    var showBackupPolicyDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+
+    // ── Scroll to message (search-jump) ───────────────────────────────────────
+
+    LaunchedEffect(scrollToMessageId) {
+        if (scrollToMessageId == -1L) return@LaunchedEffect
+        val messages = snapshotFlow { uiState.messages }
+            .first { it.any { msg -> msg.id == scrollToMessageId } }
+        val localGrouped = messages.groupByDay()
+        val localReversedByDate = localGrouped.mapValues { (_, msgs) -> msgs.reversed() }
+        var itemIndex = 0
+        var targetIndex = -1
+        localGrouped.entries.reversed().forEach { (dateLabel, dayMessages) ->
+            val msgs = localReversedByDate[dateLabel] ?: emptyList()
+            msgs.forEach { msg ->
+                if (msg.id == scrollToMessageId) targetIndex = itemIndex
+                itemIndex++
+            }
+            itemIndex++ // header item
+        }
+        if (targetIndex >= 0) {
+            listState.animateScrollToItem(targetIndex)
+            viewModel.highlightMessage(scrollToMessageId)
+        }
+    }
 
     // ── Floating date pill ────────────────────────────────────────────────────
 
@@ -167,6 +196,17 @@ fun ThreadScreen(
         )
     }
 
+    if (showBackupPolicyDialog) {
+        BackupPolicyDialog(
+            currentPolicy = uiState.thread?.backupPolicy ?: BackupPolicy.GLOBAL,
+            onPolicySelected = { policy ->
+                viewModel.updateBackupPolicy(policy)
+                showBackupPolicyDialog = false
+            },
+            onDismiss = { showBackupPolicyDialog = false }
+        )
+    }
+
     // ── Scaffold ──────────────────────────────────────────────────────────────
 
     Scaffold(
@@ -205,6 +245,21 @@ fun ThreadScreen(
                         TextButton(onClick = { viewModel.enterSelectionMode() }) {
                             Text("Select")
                         }
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More options")
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Backup settings") },
+                                onClick = {
+                                    showMenu = false
+                                    showBackupPolicyDialog = true
+                                }
+                            )
+                        }
                     }
                 )
             }
@@ -234,6 +289,7 @@ fun ThreadScreen(
                             clusterPosition = clusterPositions[message.id] ?: ClusterPosition.SINGLE,
                             isSelected = message.id in uiState.selectedMessageIds,
                             isSelectionMode = uiState.isSelectionMode,
+                            isHighlighted = message.id == uiState.highlightedMessageId,
                             onToggleSelect = { viewModel.toggleSelection(message.id) },
                             onLongClick = { viewModel.enterSelectionModeWithMessage(message.id) },
                             timestampPref = timestampPref,
@@ -354,6 +410,7 @@ private fun MessageBubble(
     clusterPosition: ClusterPosition,
     isSelected: Boolean,
     isSelectionMode: Boolean,
+    isHighlighted: Boolean,
     onToggleSelect: () -> Unit,
     onLongClick: () -> Unit,
     timestampPref: TimestampPreference,
@@ -397,6 +454,7 @@ private fun MessageBubble(
             )
             .then(
                 if (isSelected) Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
+                else if (isHighlighted) Modifier.background(MaterialTheme.colorScheme.tertiaryContainer)
                 else Modifier
             )
             .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
@@ -684,6 +742,53 @@ private fun ReplyBar(
             }
         }
     }
+}
+
+// ── BackupPolicyDialog ─────────────────────────────────────────────────────────
+
+@Composable
+private fun BackupPolicyDialog(
+    currentPolicy: BackupPolicy,
+    onPolicySelected: (BackupPolicy) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selected by remember { mutableStateOf(currentPolicy) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Backup settings") },
+        text = {
+            Column {
+                BackupPolicy.entries.forEach { policy ->
+                    val label = when (policy) {
+                        BackupPolicy.GLOBAL -> "Global policy"
+                        BackupPolicy.ALWAYS_INCLUDE -> "Always include"
+                        BackupPolicy.NEVER_INCLUDE -> "Never include"
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selected = policy }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selected == policy,
+                            onClick = { selected = policy }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onPolicySelected(selected) }) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
