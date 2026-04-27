@@ -9,6 +9,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
+import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
@@ -17,6 +18,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -31,7 +33,8 @@ data class ThreadUiState(
     val replyText: String = "",
     val isSending: Boolean = false,
     val showDefaultSmsDialog: Boolean = false,
-    val expandedTimestampIds: Set<Long> = emptySet()
+    val expandedTimestampIds: Set<Long> = emptySet(),
+    val highlightedMessageId: Long? = null
 )
 
 @HiltViewModel
@@ -53,6 +56,7 @@ class ThreadViewModel @Inject constructor(
     private val _isSending       = MutableStateFlow(false)
     private val _showDefaultSmsDialog  = MutableStateFlow(false)
     private val _expandedTimestampIds  = MutableStateFlow(emptySet<Long>())
+    private val _highlightedMessageId  = MutableStateFlow<Long?>(null)
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
@@ -73,7 +77,8 @@ class ThreadViewModel @Inject constructor(
         val isSending: Boolean,
         val showDefaultSmsDialog: Boolean,
         val expandedTimestampIds: Set<Long>,
-        val selectionScope: SelectionScope
+        val selectionScope: SelectionScope,
+        val highlightedMessageId: Long?
     )
 
     val uiState: StateFlow<ThreadUiState> = combine(
@@ -81,9 +86,10 @@ class ThreadViewModel @Inject constructor(
         messageRepository.observeByThread(threadId),
         _selectionState,
         _isSelectionMode,
-        combine(_replyText, _isSending, _showDefaultSmsDialog, _expandedTimestampIds, _selectionScope) {
-            text, sending, dialog, expandedIds, scope ->
-            InnerState(text, sending, dialog, expandedIds, scope)
+        combine(_replyText, _isSending, _showDefaultSmsDialog, _expandedTimestampIds,
+                combine(_selectionScope, _highlightedMessageId) { scope, hi -> scope to hi }
+        ) { text, sending, dialog, expandedIds, (scope, hi) ->
+            InnerState(text, sending, dialog, expandedIds, scope, hi)
         }
     ) { thread, messages, selected, selectionMode, inner ->
         ThreadUiState(
@@ -95,7 +101,8 @@ class ThreadViewModel @Inject constructor(
             replyText = inner.replyText,
             isSending = inner.isSending,
             showDefaultSmsDialog = inner.showDefaultSmsDialog,
-            expandedTimestampIds = inner.expandedTimestampIds
+            expandedTimestampIds = inner.expandedTimestampIds,
+            highlightedMessageId = inner.highlightedMessageId
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
@@ -218,4 +225,22 @@ class ThreadViewModel @Inject constructor(
 
     private fun isDefaultSmsApp(): Boolean =
         Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+
+    // ── Backup policy ─────────────────────────────────────────────────────────
+
+    fun updateBackupPolicy(policy: BackupPolicy) {
+        viewModelScope.launch {
+            threadRepository.updateBackupPolicy(threadId, policy)
+        }
+    }
+
+    // ── Highlight (scroll-jump target) ────────────────────────────────────────
+
+    fun highlightMessage(messageId: Long) {
+        _highlightedMessageId.value = messageId
+        viewModelScope.launch {
+            delay(2_000)
+            _highlightedMessageId.compareAndSet(messageId, null)
+        }
+    }
 }
