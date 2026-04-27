@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: April 26, 2026
+Last updated: April 27, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -9,7 +9,7 @@ Package: com.plusorminustwo.postmark
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 2
+- Room (database) — currently on schema version 4
 - Hilt (dependency injection)
 - WorkManager (scheduled backup)
 - Kotlin Coroutines + Flow
@@ -218,33 +218,24 @@ in a future session once core features are solid.
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
-1. THREAD VIEW (primary next focus)
-   Core thread UI is scaffolded. Next:
-   - LazyColumn with sealed ThreadItem
-     (DateHeader | Message), reverseLayout = true
-   - Floating date pill, fades in on scroll,
-     fades out after 1.8s idle
-   - Pill tappable → calendar date picker
-     Calendar highlights days with messages (blue dot)
-     Empty day tap finds nearest date, jumps + toast
-   - Selection mode: tap Select → checkboxes appear
-     "Select day" button on each date divider
-     Long-press + tap for range select
-   - Selection toolbar: Copy | Share
-     Copy → friendly plain text to clipboard
-     Share → rendered image (.png) via Canvas to
-     Bitmap, FileProvider + ACTION_SEND
-   NOTE: "Select messages" in the ⋮ menu calls
-   viewModel.enterSelectionMode() — that ViewModel
-   method needs to be implemented.
-
-2. THREAD ⋮ MENU STUBS TO WIRE UP
+1. THREAD ⋮ MENU STUBS TO WIRE UP
    - Search in thread (navigate to search scoped
      to threadId)
    - Mute / Unmute (toggle on ThreadEntity)
    - Block number (system intent or local block list)
 
-3. SMS ENGINE (deferred — see above)
+2. SEARCH — remaining items
+   - Date range filter chips
+   - Reaction filter (emoji picker; filter to messages
+     that received that specific reaction)
+   - Search within a single thread (entry point:
+     search icon in thread toolbar)
+
+3. EXPORT — rendered image
+   Draw conversation to Canvas, convert to Bitmap,
+   share via FileProvider + ACTION_SEND
+
+4. SMS ENGINE (deferred — see Samsung restriction above)
    When ready:
    - Request default SMS role via RoleManager
    - BroadcastReceiver for incoming SMS/MMS
@@ -253,28 +244,31 @@ IN PROGRESS / NEXT UP
    - Run AppleReactionParser on every incoming
      message and during initial sync
 
-4. EMOJI REACTIONS ON MESSAGES ✅ DONE (redesigned April 26)
-   Long-press a message bubble → floating pill picker + action bar.
-   - ReactionEntity / ReactionDao / MessageRepository join
-     were already in place
-   - SELF_ADDRESS = "self" sentinel in Reaction.kt domain model
-   - toggleReaction() in ThreadViewModel: adds if new, removes
-     if user already reacted with that emoji
-   - MessageActionTopBar: Cancel | Copy | Select | Forward | Delete
-     replaces TopAppBar on long-press; Cancel and Delete in error color
-   - EmojiReactionPopup: full-screen 45% scrim + floating pill card
-     (surfaceContainerHighest, 32dp corners, 8dp elevation)
-     anchored above bubble (falls below if within 80dp of top)
-     LazyRow — horizontally scrollable, 52dp emoji per item
-     Selected emoji highlighted with primaryContainer circle
-   - reactionPillTopPx() extracted as internal pure function (tested)
-   - Most-used-first ordering: observeTopEmojisBySender("self") in
-     ReactionDao drives buildQuickEmojiList() in ThreadViewModel companion
-   - ReactionPills row below bubble: SuggestionChip per unique
-     emoji, shows count when > 1; own reactions get primary-
-     coloured border + tinted background
-   - enterSelectionModeFromActionMode() promotes from single-message
-     action mode to full multi-select, preserving selected message
+5. BACKUP — remaining
+   - Backup restore (read JSON, apply to Room with
+     migration version check)
+✅ Per-thread backup policy dialog:
+   - ⋮ overflow menu in ThreadScreen → "Backup settings"
+   - AlertDialog with radio buttons: Global policy /
+     Always include / Never include
+   - Persisted via ThreadRepository.updateBackupPolicy()
+✅ Backup settings screen — fully wired:
+   - Backup history list (scan getExternalFilesDir("backups"),
+     sorted newest-first, per-file and delete-all with confirms)
+   - WorkManager status indicator above "Back up now" button:
+     spinner for Running; green/red/grey dot for
+     LastRun(success)/LastRun(failed)/Never/Idle
+   - BackupModule provides WorkManager as Hilt singleton
+✅ Search → jump to message:
+   - Tapping a search result navigates to the thread AND
+     scrolls to that exact message in the LazyColumn
+   - Target message highlighted with tertiaryContainer
+     background for 2 s, then auto-clears
+✅ Thread filter chip in search:
+   - "Thread" FilterChip in search filter row opens a
+     ModalBottomSheet listing all threads
+   - Selecting a thread scopes results; chip shows thread
+     name with a clear icon when active
 
 ═══════════════════════════════════════════════════════
 UPCOMING FEATURES (designed, not yet built)
@@ -295,28 +289,22 @@ DELIVERY TIMESTAMPS + READ RECEIPTS
   native mechanism. Document as RCS-future roadmap item.
 
 SEARCH
-- Global search + narrow to one thread
-- Filter chips: Reactions | Date range | Thread |
-  Sent only | Received only
-- Reaction filter opens emoji picker
-- FTS5 with ^ prefix anchor (word-start only,
-  "he" matches "hello" not "the")
+- Date range filter chips
+- Reaction filter — emoji picker; filter to messages
+  that received that specific reaction
+- Search within a single thread
+- FTS4 with ^ prefix anchor (word-start only)
 - \b word boundary highlight in results
 - All filters stackable
+✅ Thread filter chip — DONE (April 27)
+✅ Tapping result jumps to message in ThreadScreen — DONE (April 27)
 
 BACKUP (Settings → Backup)
-- WorkManager PeriodicWorkRequest
-- Frequencies: Daily / Weekly / Monthly
-- Time picker, day of week (weekly),
-  day of month (monthly)
-- Wi-Fi only + charging only toggles (default on)
-- Retention: 1-30 files, default 5, auto-rotate
-- Storage: getExternalFilesDir()/backups/
-- Filename: postmark_YYYY-MM-DD_HHmm.json
-- Per-thread backup policy on Thread entity:
-  GLOBAL / ALWAYS_INCLUDE / NEVER_INCLUDE
-  Accessed via thread ⋮ menu → Backup settings
-- Last backup status in Settings (green/amber/red dot)
+- Backup restore (read JSON, apply to Room with
+  migration version check)
+✅ Backup history list — DONE (April 27)
+✅ WorkManager status indicator — DONE (April 27)
+✅ Per-thread backup policy dialog — DONE (April 27)
 
 APPLE REACTION PARSER
 - Detects Apple SMS reaction fallback format
@@ -435,7 +423,7 @@ TESTING CONVENTIONS
   for helper factories: thread(id), msg(id, threadId, ts).
 - Gradle build + unit tests run after every implementation
   session.
-- Test files (203 passing as of 2026-04-26):
+- Test files (220 passing as of 2026-04-27):
     src/test/.../data/sync/StatsAlgorithmsTest.kt
     src/test/.../data/sync/StatsComputationTest.kt
     src/test/.../ui/stats/StatsViewModelHeatmapTest.kt
@@ -444,6 +432,10 @@ TESTING CONVENTIONS
     src/test/.../ui/thread/DateNavigationTest.kt
     src/test/.../ui/thread/ThreadViewModelReactionLogicTest.kt
     src/test/.../ui/thread/ReactionPillPositionTest.kt
+    src/test/.../ui/thread/BackupPolicyTest.kt
+    src/test/.../ui/search/SearchJumpTest.kt
+    src/test/.../ui/settings/BackupHistoryTest.kt
+    src/test/.../ui/settings/BackupStatusTest.kt
     src/test/.../data/repository/MessageRepositoryReactionTest.kt
     src/androidTest/.../data/db/PostmarkDatabaseTest.kt
     src/androidTest/.../data/sync/StatsUpdaterIntegrationTest.kt
