@@ -111,4 +111,52 @@ class DateNavigationTest {
         // Target is years away — still returns the one active date
         assertEquals(onlyDate, findNearestActiveDate(date(2020, 1, 1), setOf(onlyDate)))
     }
+
+    // ── scrollOffsetToAlignTop ─────────────────────────────────────────────────
+    //
+    // With reverseLayout=true, scrollToItem(index) aligns the item to the BOTTOM
+    // (leading edge).  scrollOffsetToAlignTop computes the positive pixel offset
+    // that shifts it upward until its top aligns with the viewport top.
+
+    @Test
+    fun `scrollOffsetToAlignTop returns viewport minus item height`() {
+        // A 96-px header in a 1800-px viewport → offset 1704 puts header at top.
+        assertEquals(1704, scrollOffsetToAlignTop(viewportHeight = 1800, itemHeightPx = 96))
+    }
+
+    @Test
+    fun `scrollOffsetToAlignTop with item taller than viewport clamps to zero`() {
+        // Pathological: item taller than viewport — offset must not go negative.
+        assertEquals(0, scrollOffsetToAlignTop(viewportHeight = 100, itemHeightPx = 200))
+    }
+
+    @Test
+    fun `scrollOffsetToAlignTop with zero viewport returns zero`() {
+        // Viewport not yet measured — safe fallback is 0 (item at bottom, same as before fix).
+        assertEquals(0, scrollOffsetToAlignTop(viewportHeight = 0, itemHeightPx = 96))
+    }
+
+    @Test
+    fun `scrollOffsetToAlignTop with item equal to viewport returns zero`() {
+        // Edge case: item fills the whole viewport; only valid position is 0.
+        assertEquals(0, scrollOffsetToAlignTop(viewportHeight = 96, itemHeightPx = 96))
+    }
+
+    @Test
+    fun `scrollOffsetToAlignTop with zero item height returns viewport height`() {
+        // Zero-height item (e.g. invisible placeholder): offset equals full viewport.
+        assertEquals(1800, scrollOffsetToAlignTop(viewportHeight = 1800, itemHeightPx = 0))
+    }
+
+    @Test
+    fun `scrollOffsetToAlignTop satisfies the top-alignment equation`() {
+        // Mathematical invariant: after applying the offset, the item's top should be
+        // at the viewport top edge (position 0).
+        // With reverseLayout, item bottom = viewport - offset, item top = bottom - itemHeight.
+        // For top = 0: viewport - offset - itemHeight = 0, i.e. offset = viewport - itemHeight.
+        val viewport = 1800
+        val itemH    = 96
+        val offset   = scrollOffsetToAlignTop(viewport, itemH)
+        assertEquals(0, viewport - offset - itemH)
+    }
 }

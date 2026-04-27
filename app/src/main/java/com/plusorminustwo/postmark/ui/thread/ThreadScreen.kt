@@ -69,6 +69,10 @@ import androidx.compose.ui.unit.IntOffset
 
 private val PILL_HIDE_DELAY_MS = 1_800L
 
+// Estimated height of a DateHeader (vertical 8 dp padding × 2 + labelSmall text ≈ 40 dp total).
+// Used to compute the scroll offset that places the header at the top of the viewport.
+private val DATE_HEADER_ESTIMATED_HEIGHT_DP = 40
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ThreadScreen(
@@ -88,6 +92,7 @@ fun ThreadScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val density = LocalDensity.current
 
     var showCalendarPicker by remember { mutableStateOf(false) }
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
@@ -189,7 +194,18 @@ fun ThreadScreen(
 
     fun scrollToDateLabel(label: String) {
         dateToHeaderIndex[label]?.let { idx ->
-            scope.launch { listState.animateScrollToItem(idx) }
+            scope.launch {
+                // With reverseLayout=true, scrollToItem(idx) aligns the item to the
+                // BOTTOM (leading edge). To place the date header at the TOP instead,
+                // we pass a positive scrollOffset that shifts the item upward by
+                // (viewportHeight - headerHeight) pixels.
+                val viewportPx   = listState.layoutInfo.viewportSize.height
+                val headerPx     = with(density) { DATE_HEADER_ESTIMATED_HEIGHT_DP.dp.roundToPx() }
+                listState.animateScrollToItem(
+                    index        = idx,
+                    scrollOffset = scrollOffsetToAlignTop(viewportPx, headerPx)
+                )
+            }
         }
     }
 
@@ -205,7 +221,17 @@ fun ThreadScreen(
             else                                -> null
         }
         if (targetIdx != null) {
-            listState.scrollToItem(targetIdx)
+            if (scrollToMessageId == -1L && initialScrollDateLabel.isNotEmpty()) {
+                // Date navigation: align the header to the top of the viewport.
+                val viewportPx = listState.layoutInfo.viewportSize.height
+                val headerPx   = with(density) { DATE_HEADER_ESTIMATED_HEIGHT_DP.dp.roundToPx() }
+                listState.scrollToItem(
+                    index        = targetIdx,
+                    scrollOffset = scrollOffsetToAlignTop(viewportPx, headerPx)
+                )
+            } else {
+                listState.scrollToItem(targetIdx)
+            }
             initialScrollDone = true
         }
     }
