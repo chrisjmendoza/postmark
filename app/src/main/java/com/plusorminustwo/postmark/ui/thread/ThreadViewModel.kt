@@ -9,6 +9,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
+import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
@@ -19,6 +20,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -35,7 +37,8 @@ data class ThreadUiState(
     val showDefaultSmsDialog: Boolean = false,
     val expandedTimestampIds: Set<Long> = emptySet(),
     val reactionPickerMessageId: Long? = null,
-    val reactionPickerBubbleY: Float = 0f
+    val reactionPickerBubbleY: Float = 0f,
+    val highlightedMessageId: Long? = null
 )
 
 @HiltViewModel
@@ -59,6 +62,7 @@ class ThreadViewModel @Inject constructor(
     private val _expandedTimestampIds     = MutableStateFlow(emptySet<Long>())
     private val _reactionPickerMessageId  = MutableStateFlow<Long?>(null)
     private val _reactionPickerBubbleY    = MutableStateFlow(0f)
+    private val _highlightedMessageId     = MutableStateFlow<Long?>(null)
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
@@ -86,7 +90,8 @@ class ThreadViewModel @Inject constructor(
         val expandedTimestampIds: Set<Long>,
         val selectionScope: SelectionScope,
         val reactionPickerMessageId: Long?,
-        val reactionPickerBubbleY: Float
+        val reactionPickerBubbleY: Float,
+        val highlightedMessageId: Long?
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -102,7 +107,8 @@ class ThreadViewModel @Inject constructor(
             _expandedTimestampIds,
             _selectionScope,
             _reactionPickerMessageId,
-            _reactionPickerBubbleY
+            _reactionPickerBubbleY,
+            _highlightedMessageId
         ) { arr ->
             InnerState(
                 replyText               = arr[0] as String,
@@ -111,7 +117,8 @@ class ThreadViewModel @Inject constructor(
                 expandedTimestampIds    = arr[3] as Set<Long>,
                 selectionScope          = arr[4] as SelectionScope,
                 reactionPickerMessageId = arr[5] as Long?,
-                reactionPickerBubbleY   = arr[6] as Float
+                reactionPickerBubbleY   = arr[6] as Float,
+                highlightedMessageId    = arr[7] as Long?
             )
         }
     ) { thread, messages, selected, selectionMode, inner ->
@@ -126,7 +133,8 @@ class ThreadViewModel @Inject constructor(
             showDefaultSmsDialog = inner.showDefaultSmsDialog,
             expandedTimestampIds = inner.expandedTimestampIds,
             reactionPickerMessageId = inner.reactionPickerMessageId,
-            reactionPickerBubbleY   = inner.reactionPickerBubbleY
+            reactionPickerBubbleY   = inner.reactionPickerBubbleY,
+            highlightedMessageId    = inner.highlightedMessageId
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
@@ -302,6 +310,24 @@ class ThreadViewModel @Inject constructor(
 
     private fun isDefaultSmsApp(): Boolean =
         Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+
+    // ── Backup policy ─────────────────────────────────────────────────────────
+
+    fun updateBackupPolicy(policy: BackupPolicy) {
+        viewModelScope.launch {
+            threadRepository.updateBackupPolicy(threadId, policy)
+        }
+    }
+
+    // ── Highlight (scroll-jump target) ────────────────────────────────────────
+
+    fun highlightMessage(messageId: Long) {
+        _highlightedMessageId.value = messageId
+        viewModelScope.launch {
+            delay(2_000)
+            _highlightedMessageId.compareAndSet(messageId, null)
+        }
+    }
 
     companion object {
         val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "😢", "👎", "🔥", "🎉")

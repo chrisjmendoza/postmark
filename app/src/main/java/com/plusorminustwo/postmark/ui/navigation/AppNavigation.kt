@@ -97,8 +97,8 @@ fun AppNavigation() {
 
         composable(Screen.Search.route) {
             SearchScreen(
-                onMessageClick = { threadId, _ ->
-                    navController.navigate(Screen.Thread.route(threadId))
+                onMessageClick = { threadId, messageId ->
+                    navController.navigate(Screen.Thread.route(threadId, messageId))
                 },
                 onBack = { navController.popBackStack() }
             )
