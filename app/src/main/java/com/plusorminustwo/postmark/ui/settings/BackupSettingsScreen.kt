@@ -48,7 +48,7 @@ fun BackupSettingsScreen(
         AlertDialog(
             onDismissRequest = { fileToDelete = null },
             title = { Text("Delete backup") },
-            text = { Text("Delete "$name"? This cannot be undone.") },
+            text = { Text("Delete \"$name\"? This cannot be undone.") },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.deleteBackupFile(name)
