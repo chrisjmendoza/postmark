@@ -39,6 +39,15 @@ class ExportFormatterTest {
     }
 
     @Test
+    fun `single-day selection shows date once`() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        val msgs = listOf(received(t1, "Hey"), sent(t2, "Hi back"))
+        val result = ExportFormatter.formatForCopy(msgs, displayName, ownAddress)
+        val count = result.split("April 14, 2024").size - 1
+        assertEquals("Single-day export should include the date exactly once", 1, count)
+    }
+
+    @Test
     fun `multi-day selection includes date divider`() {
         val msgs = listOf(received(t1, "Day one"), received(t3, "Day two"))
         val result = ExportFormatter.formatForCopy(msgs, displayName, ownAddress)
