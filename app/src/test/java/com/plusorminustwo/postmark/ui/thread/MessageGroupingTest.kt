@@ -238,4 +238,52 @@ class MessageGroupingTest {
         val oldestGroupMessages = reversed.last().value
         assertEquals("oldest day should be last after reversal", day0, oldestGroupMessages.first().timestamp)
     }
+
+    // ── buildDateToHeaderIndex ─────────────────────────────────────────────────
+    // The LazyColumn uses reverseLayout=true so index 0 is the visual bottom.
+    // Layout: [newest-day messages] [newest-day header] [older messages] [older header] …
+    // Header index = cumulative message count just before it.
+
+    @Test
+    fun `empty grouped produces empty header index`() {
+        assertTrue(buildDateToHeaderIndex(emptyMap()).isEmpty())
+    }
+
+    @Test
+    fun `single day header index equals its message count`() {
+        val grouped = mapOf("April 14, 2024" to listOf(msg(1, true, day0), msg(2, false, day0 + MIN), msg(3, true, day0 + 2 * MIN)))
+        val result = buildDateToHeaderIndex(grouped)
+        // 3 messages at indices 0-2, header at 3
+        assertEquals(3, result["April 14, 2024"])
+    }
+
+    @Test
+    fun `two-day header indices are contiguous after each day messages`() {
+        // grouped ascending: day0 (2 msgs), day1 (1 msg)
+        val grouped = linkedMapOf(
+            "April 14, 2024" to listOf(msg(1, true, day0), msg(2, false, day0 + MIN)),
+            "April 15, 2024" to listOf(msg(3, true, day1))
+        )
+        val result = buildDateToHeaderIndex(grouped)
+        // reversed: day1 first → 1 msg (idx 0), header at idx 1, idx→2
+        //           day0 next  → 2 msgs (idx 2-3), header at idx 4
+        assertEquals(1, result["April 15, 2024"])
+        assertEquals(4, result["April 14, 2024"])
+    }
+
+    @Test
+    fun `three days produce correct sequential header positions`() {
+        val grouped = linkedMapOf(
+            "April 13, 2024" to listOf(msg(1, true, day0)),
+            "April 14, 2024" to listOf(msg(2, true, day1), msg(3, true, day1 + MIN)),
+            "April 15, 2024" to listOf(msg(4, true, day2), msg(5, true, day2 + MIN), msg(6, true, day2 + 2 * MIN))
+        )
+        val result = buildDateToHeaderIndex(grouped)
+        // reversed: day2 first → 3 msgs (0-2), header@3, idx→4
+        //           day1 next  → 2 msgs (4-5), header@6, idx→7
+        //           day0 last  → 1 msg  (7),   header@8
+        assertEquals(3, result["April 15, 2024"])
+        assertEquals(6, result["April 14, 2024"])
+        assertEquals(8, result["April 13, 2024"])
+    }
 }

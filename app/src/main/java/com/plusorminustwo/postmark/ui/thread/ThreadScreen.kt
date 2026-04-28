@@ -57,6 +57,7 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.ui.graphics.Color
@@ -91,7 +92,6 @@ fun ThreadScreen(
 
     var showCalendarPicker by remember { mutableStateOf(false) }
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
-    var showMenu by remember { mutableStateOf(false) }
 
     // ── Scroll to message (search-jump) ───────────────────────────────────────
 
@@ -140,16 +140,7 @@ fun ThreadScreen(
         grouped.flatMap { (label, msgs) -> msgs.map { it.id to label } }.toMap()
     }
 
-    val dateToHeaderIndex = remember(grouped) {
-        var idx = 0
-        buildMap<String, Int> {
-            grouped.entries.reversed().forEach { (label, messages) ->
-                idx += messages.size
-                put(label, idx)
-                idx++
-            }
-        }
-    }
+    val dateToHeaderIndex = remember(grouped) { buildDateToHeaderIndex(grouped) }
 
     val messageIdToIndex = remember(grouped) {
         var idx = 0
@@ -188,8 +179,22 @@ fun ThreadScreen(
     if (visibleDate.isNotEmpty()) pillDateLabel = visibleDate
 
     fun scrollToDateLabel(label: String) {
-        dateToHeaderIndex[label]?.let { idx ->
-            scope.launch { listState.animateScrollToItem(idx) }
+        dateToHeaderIndex[label]?.let { headerIdx ->
+            scope.launch {
+                // Instant snap so the item is in view; scrollToItem is a suspend function
+                // that waits for layout to settle, so layoutInfo is accurate immediately after.
+                listState.scrollToItem(headerIdx)
+                val layout = listState.layoutInfo
+                val viewport = layout.viewportEndOffset - layout.viewportStartOffset
+                val header = layout.visibleItemsInfo.firstOrNull { it.index == headerIdx }
+                    ?: return@launch
+                // In reverseLayout, scrollOffset shifts the item upward from the bottom edge.
+                // (viewport - headerSize) places the header's top edge at the viewport top.
+                listState.animateScrollToItem(
+                    index = headerIdx,
+                    scrollOffset = (viewport - header.size).coerceAtLeast(0)
+                )
+            }
         }
     }
 
@@ -351,21 +356,7 @@ fun ThreadScreen(
                                 )
                             }
                         }
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More options")
-                        }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Backup settings") },
-                                onClick = {
-                                    showMenu = false
-                                    showBackupPolicyDialog = true
-                                }
-                            )
-                        }
+
                     }
                 )
             }
@@ -421,6 +412,15 @@ fun ThreadScreen(
                 visible = pillVisible,
                 onClick = { showCalendarPicker = true },
                 modifier = Modifier.align(Alignment.TopCenter)
+            )
+
+            val scrolledUp by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
+            ScrollToLatestButton(
+                visible = scrolledUp,
+                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 16.dp)
             )
         }
     }
@@ -487,6 +487,30 @@ private fun SelectionTopBar(
                 onClick  = { onScopeChange(SelectionScope.ALL) },
                 label    = { Text("All") }
             )
+        }
+    }
+}
+
+// ── ScrollToLatestButton ─────────────────────────────────────────────────────────
+
+@Composable
+private fun ScrollToLatestButton(
+    visible: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(animationSpec = tween(150)),
+        exit  = fadeOut(animationSpec = tween(300)),
+        modifier = modifier
+    ) {
+        SmallFloatingActionButton(
+            onClick = onClick,
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+        ) {
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Scroll to latest")
         }
     }
 }
@@ -594,6 +618,19 @@ private fun MessageBubble(
         ) {
             Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
         }
+        if (message.reactions.isNotEmpty()) {
+            ReactionPills(
+                reactions = message.reactions,
+                isSent = message.isSent,
+                onReactionClick = onReactionClick,
+                modifier = Modifier
+                    .padding(top = (-6).dp)
+                    .padding(
+                        start = if (!message.isSent) 8.dp else 0.dp,
+                        end   = if (message.isSent)  8.dp else 0.dp
+                    )
+            )
+        }
         if (showTimestamp) {
             Text(
                 text = timeFormatter.format(Date(message.timestamp)),
@@ -602,16 +639,9 @@ private fun MessageBubble(
                 modifier = Modifier.padding(
                     start  = if (!message.isSent) 4.dp else 0.dp,
                     end    = if (message.isSent)  4.dp else 0.dp,
-                    top    = 2.dp,
+                    top    = if (message.reactions.isNotEmpty()) 4.dp else 2.dp,
                     bottom = 2.dp
                 )
-            )
-        }
-        if (message.reactions.isNotEmpty()) {
-            ReactionPills(
-                reactions = message.reactions,
-                isSent = message.isSent,
-                onReactionClick = onReactionClick
             )
         }
         if (message.isSent) {
@@ -999,36 +1029,34 @@ private fun smsCounter(length: Int): String? {
 private fun ReactionPills(
     reactions: List<Reaction>,
     isSent: Boolean,
-    onReactionClick: (String) -> Unit
+    onReactionClick: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val grouped = reactions.groupBy { it.emoji }
+    val primaryColor = MaterialTheme.colorScheme.primary
     Row(
-        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+        modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         grouped.forEach { (emoji, reactors) ->
             val iMine = reactors.any { it.senderAddress == SELF_ADDRESS }
             val count = reactors.size
             val label = if (count > 1) "$emoji $count" else emoji
-            SuggestionChip(
+            Surface(
                 onClick = { onReactionClick(emoji) },
-                label = {
-                    Text(label, style = MaterialTheme.typography.labelMedium)
-                },
-                modifier = Modifier.height(28.dp),
-                border = SuggestionChipDefaults.suggestionChipBorder(
-                    enabled = true,
-                    borderColor = if (iMine) MaterialTheme.colorScheme.primary
-                                  else MaterialTheme.colorScheme.outline,
-                    borderWidth = if (iMine) 1.5.dp else 0.5.dp
-                ),
-                colors = SuggestionChipDefaults.suggestionChipColors(
-                    containerColor = if (iMine)
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                    else
-                        MaterialTheme.colorScheme.surfaceContainerHighest
+                shape = RoundedCornerShape(10.dp),
+                color = if (iMine) Color(0xFF1A3A5C) else Color(0xFF2C2C2E),
+                border = BorderStroke(
+                    width = if (iMine) 1.dp else 0.5.dp,
+                    color = if (iMine) primaryColor else Color(0xFF3A3A3C)
                 )
-            )
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
         }
     }
 }

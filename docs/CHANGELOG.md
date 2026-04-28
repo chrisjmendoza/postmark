@@ -4,6 +4,32 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-04-28
+
+### Reaction chip redesign — iMessage-style positioning
+- **Position**: Chips moved from below the timestamp to **between the bubble and timestamp**, overlapping the bubble bottom edge by 6dp (`padding(top = (-6).dp)`) for an "attached" feel.
+- **Alignment**: Chips align to the bubble — `start` padding for received messages, `end` padding for sent messages.
+- **Chip styling** (replaced `SuggestionChip` with custom `Surface`):
+  - Background: `#2C2C2E`; border: `0.5dp #3A3A3C`; border radius: `10dp`; padding: `8dp horizontal / 2dp vertical`; font: `12sp`
+  - Own reaction: background `#1A3A5C`, primary-color border at `1dp`
+- **Timestamp spacing**: `top = 4.dp` when chips present, `top = 2.dp` when absent — timestamp still renders below everything.
+
+### Date pill scroll alignment fix
+- **`ThreadScreen.scrollToDateLabel`** — tapping a date in the calendar picker now positions the selected day's `DateHeader` at the **top** of the screen (or as high as possible near the end of the list) instead of the bottom. Root cause: `LazyListState.layoutInfo` is Compose snapshot state updated only after the next composition frame; reading it immediately after `scrollToItem` returned stale `visibleItemsInfo`, causing `scrollOffset` to collapse to 0 and leaving the header at the reversed-layout start edge (visual bottom). Fix: after the initial `scrollToItem(headerIdx)` snap, the code now suspends on `snapshotFlow { listState.layoutInfo }.first { header in visibleItemsInfo }` to wait for the frame to land, then computes `scrollOffset = (viewportEndOffset − viewportStartOffset) − headerSize` and calls `animateScrollToItem` with that offset.
+
+### Copy export — date output
+- **`ExportFormatter.formatForCopy`** — copied conversation text now includes the date. Single-day selections show the date once on the second line of the header (e.g. `April 14, 2024`). Multi-day selections use day-separator breaks (`────────────────────────`) before each new day's messages.
+- Day format updated from `"MMMM d"` to `"MMMM d, yyyy"` to match `MessageGrouping.DAY_FORMATTER` and avoid ambiguity across years.
+
+### Refactor — `buildDateToHeaderIndex` extracted
+- Moved date-label → item-index computation from an inline `remember` block in `ThreadScreen` into a top-level function `buildDateToHeaderIndex(grouped)` in `MessageGrouping.kt`, making it independently testable.
+
+### Tests (225 total, +4)
+- `MessageGroupingTest` — 4 new `buildDateToHeaderIndex` tests: empty map, single-day, two-day, and three-day index sequences.
+- `ExportFormatterTest` — `single-day selection shows date once` test (added previous session, confirmed passing).
+
+---
+
 ## 2026-04-27
 
 ### Per-thread backup policy dialog
