@@ -255,12 +255,8 @@ private fun NumbersView(
                 StatCard("Conversations", stats.threadCount.toString())
             }
         }
-        if (stats.topEmojis.isNotEmpty()) {
-            item { EmojiCard("Top Emoji (Messages)", stats.topEmojis) }
-        }
-        if (stats.topReactionEmojis.isNotEmpty()) {
-            item { EmojiCard("Top Emoji (Reactions)", stats.topReactionEmojis) }
-        }
+        item { EmojiCard("Top Emoji (Messages)", stats.topEmojis) }
+        item { EmojiCard("Top Emoji (Reactions)", stats.topReactionEmojis) }
         item {
             ChartCard("Most Active Day") {
                 BarChart(
@@ -320,12 +316,8 @@ private fun ChartsView(stats: ParsedStats) {
                 )
             }
         }
-        if (stats.topEmojis.isNotEmpty()) {
-            item { EmojiCard("Top Emoji (Messages)", stats.topEmojis) }
-        }
-        if (stats.topReactionEmojis.isNotEmpty()) {
-            item { EmojiCard("Top Emoji (Reactions)", stats.topReactionEmojis) }
-        }
+        item { EmojiCard("Top Emoji (Messages)", stats.topEmojis) }
+        item { EmojiCard("Top Emoji (Reactions)", stats.topReactionEmojis) }
     }
 }
 
@@ -988,21 +980,29 @@ private fun EmojiCard(title: String, topEmojis: List<Pair<String, Int>>) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                topEmojis.forEach { (emoji, count) ->
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(emoji, style = MaterialTheme.typography.headlineSmall)
-                        Text(
-                            count.toString(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+            if (topEmojis.isEmpty()) {
+                Text(
+                    "None yet",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    topEmojis.forEach { (emoji, count) ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(emoji, style = MaterialTheme.typography.headlineSmall)
+                            Text(
+                                count.toString(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

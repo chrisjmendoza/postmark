@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: April 27, 2026
+Last updated: April 28, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -182,7 +182,7 @@ WHAT IS WORKING (tested on device)
    contact list) — controlled by directThreadNavigation
    StateFlow flag on StatsViewModel
 ✅ Emoji reactions on message bubbles:
-   REVISED UX (April 26):
+   REVISED UX (April 28):
    - Long-press → highlights message + replaces top
      bar with MessageActionTopBar (Cancel / Copy /
      Select / Forward / Delete)
@@ -194,13 +194,21 @@ WHAT IS WORKING (tested on device)
      outside pill to dismiss
    - Select button in action bar promotes to full
      multi-select mode (selected message carries over)
-   - ReactionPills chips below bubble (count when > 1)
+   - ReactionPills chip anchored to bubble bottom-right
+     corner using Box + Alignment.BottomEnd + offset(y=16.dp);
+     Spacer(16.dp) reserves overhang in layout
+   - Timestamp offset(-20.dp) when reactions present
+     so it stays close to bubble
    - Own reactions highlighted (primary border + tint)
    - Toggle: tap to add, tap own reaction to remove
    - Most-used emoji tracked via ReactionDao.observeTopEmojisBySender("self")
      — user's top picks surface first in pill (left→right
      most used → least); unused defaults fill remaining
      slots up to 8
+✅ Stats screen emoji cards always visible:
+   - Both "Top Emoji (Messages)" and "Top Emoji (Reactions)"
+     render unconditionally with "None yet" placeholder
+     when empty (previously hidden when empty)
 
 ═══════════════════════════════════════════════════════
 DEFERRED — SAMSUNG RESTRICTION

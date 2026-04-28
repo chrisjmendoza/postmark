@@ -610,45 +610,58 @@ private fun MessageBubble(
             .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
         horizontalAlignment = alignment
     ) {
-        Box(
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
-        }
-        if (message.reactions.isNotEmpty()) {
-            ReactionPills(
-                reactions = message.reactions,
-                isSent = message.isSent,
-                onReactionClick = onReactionClick,
+        Box(modifier = Modifier.widthIn(max = 280.dp)) {
+            Box(
                 modifier = Modifier
-                    .padding(top = (-6).dp)
-                    .padding(
-                        start = if (!message.isSent) 8.dp else 0.dp,
-                        end   = if (message.isSent)  8.dp else 0.dp
-                    )
-            )
-        }
-        if (showTimestamp) {
-            Text(
-                text = timeFormatter.format(Date(message.timestamp)),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(
-                    start  = if (!message.isSent) 4.dp else 0.dp,
-                    end    = if (message.isSent)  4.dp else 0.dp,
-                    top    = if (message.reactions.isNotEmpty()) 4.dp else 2.dp,
-                    bottom = 2.dp
+                    .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
+            }
+            if (message.reactions.isNotEmpty()) {
+                ReactionPills(
+                    reactions = message.reactions,
+                    isSent = message.isSent,
+                    onReactionClick = onReactionClick,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(y = 16.dp)
+                        .padding(end = 4.dp)
                 )
-            )
+            }
         }
-        if (message.isSent) {
-            DeliveryStatusIndicator(
-                status = message.deliveryStatus,
-                modifier = Modifier.padding(top = 2.dp, end = 4.dp)
-            )
+        // Reserve space for the chip that overhangs the bubble via offset,
+        // so the timestamp is always pushed below the chip — not behind it.
+        if (message.reactions.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+        }
+        if (showTimestamp || message.isSent) {
+            Row(
+                modifier = Modifier
+                    .offset(y = if (message.reactions.isNotEmpty()) (-20).dp else 0.dp)
+                    .padding(
+                        start  = if (!message.isSent) 4.dp else 0.dp,
+                        end    = if (message.isSent)  4.dp else 0.dp,
+                        top    = 2.dp,
+                        bottom = 2.dp
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (showTimestamp) {
+                    Text(
+                        text = timeFormatter.format(Date(message.timestamp)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (message.isSent) {
+                    DeliveryStatusIndicator(
+                        status = message.deliveryStatus,
+                        modifier = Modifier.padding(start = 2.dp)
+                    )
+                }
+            }
         }
     }
 }

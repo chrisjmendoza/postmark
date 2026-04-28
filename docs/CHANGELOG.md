@@ -6,13 +6,19 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-04-28
 
-### Reaction chip redesign — iMessage-style positioning
-- **Position**: Chips moved from below the timestamp to **between the bubble and timestamp**, overlapping the bubble bottom edge by 6dp (`padding(top = (-6).dp)`) for an "attached" feel.
-- **Alignment**: Chips align to the bubble — `start` padding for received messages, `end` padding for sent messages.
-- **Chip styling** (replaced `SuggestionChip` with custom `Surface`):
+### Reaction chip — final positioning (iMessage badge style)
+- **Crash fix**: `padding(top = (-6).dp)` → `offset(y = (-6).dp)` — Compose throws on negative padding values.
+- **Corner anchoring**: Bubble + chip wrapped in a `Box(widthIn(max=280.dp))`; chip uses `Alignment.BottomEnd` + `offset(y = 16.dp)` so it sits at the bubble's bottom-right corner regardless of message length or direction.
+- **Layout reservation**: `Spacer(height = 16.dp)` added when reactions present — reserves the chip's visual overhang so the next message never overlaps it.
+- **Timestamp offset**: timestamp row uses `offset(y = -20.dp)` when reactions present, pulling it back up to near its normal position below the bubble.
+- **Chip styling** (custom `Surface`):
   - Background: `#2C2C2E`; border: `0.5dp #3A3A3C`; border radius: `10dp`; padding: `8dp horizontal / 2dp vertical`; font: `12sp`
   - Own reaction: background `#1A3A5C`, primary-color border at `1dp`
-- **Timestamp spacing**: `top = 4.dp` when chips present, `top = 2.dp` when absent — timestamp still renders below everything.
+
+### Stats screen — emoji cards always visible
+- Both `EmojiCard` items (`Top Emoji (Messages)` and `Top Emoji (Reactions)`) now render unconditionally.
+- When empty, each card shows "None yet" placeholder text instead of disappearing.
+- Previously guarded by `isNotEmpty()` — cards vanished when no data, making it look like the feature was removed.
 
 ### Date pill scroll alignment fix
 - **`ThreadScreen.scrollToDateLabel`** — tapping a date in the calendar picker now positions the selected day's `DateHeader` at the **top** of the screen (or as high as possible near the end of the list) instead of the bottom. Root cause: `LazyListState.layoutInfo` is Compose snapshot state updated only after the next composition frame; reading it immediately after `scrollToItem` returned stale `visibleItemsInfo`, causing `scrollOffset` to collapse to 0 and leaving the header at the reversed-layout start edge (visual bottom). Fix: after the initial `scrollToItem(headerIdx)` snap, the code now suspends on `snapshotFlow { listState.layoutInfo }.first { header in visibleItemsInfo }` to wait for the frame to land, then computes `scrollOffset = (viewportEndOffset − viewportStartOffset) − headerSize` and calls `animateScrollToItem` with that offset.
