@@ -338,8 +338,8 @@ fun ThreadScreen(
                                     onClick = { menuExpanded = false }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Mute") },
-                                    onClick = { menuExpanded = false }
+                                    text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },
+                                    onClick = { menuExpanded = false; viewModel.toggleMute() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Backup settings") },

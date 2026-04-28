@@ -61,6 +61,7 @@ class BackupPolicyTest {
         override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
+        override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
         override suspend fun deleteAll() {}
     }
 }

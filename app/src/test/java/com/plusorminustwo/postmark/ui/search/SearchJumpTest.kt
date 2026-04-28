@@ -106,13 +106,18 @@ class SearchJumpTest {
     // ── Fakes ─────────────────────────────────────────────────────────────────
 
     private class FakeSearchDao(private val results: List<MessageEntity>) : SearchDao {
-        override suspend fun searchMessages(query: String, limit: Int, offset: Int) = results
-        override suspend fun searchMessagesInThread(query: String, threadId: Long, limit: Int, offset: Int) =
-            results.filter { it.threadId == threadId }
-        override suspend fun searchMessagesBySent(query: String, isSent: Boolean, limit: Int, offset: Int) =
-            results.filter { it.isSent == isSent }
-        override suspend fun searchMessagesInDateRange(query: String, startMs: Long, endMs: Long, limit: Int, offset: Int) =
-            results.filter { it.timestamp in startMs..endMs }
+        override suspend fun searchMessagesFiltered(
+            query: String, threadId: Long, isSentInt: Int, startMs: Long, limit: Int, offset: Int
+        ) = results.filter {
+            (threadId == -1L || it.threadId == threadId) &&
+            (isSentInt == -1 || it.isSent == (isSentInt == 1)) &&
+            (startMs == -1L || it.timestamp >= startMs)
+        }
+
+        override suspend fun searchMessagesFilteredWithReaction(
+            query: String, threadId: Long, isSentInt: Int, startMs: Long,
+            reactionEmoji: String, limit: Int, offset: Int
+        ) = emptyList<MessageEntity>()
     }
 
     private class FakeThreadDao(private val threads: List<ThreadEntity> = emptyList()) : ThreadDao {
@@ -128,6 +133,7 @@ class SearchJumpTest {
         override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
+        override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
         override suspend fun deleteAll() {}
     }
 }

@@ -19,6 +19,8 @@ data class GlobalStatsEntity(
     val avgResponseTimeMs: Long = 0L,
     /** JSONArray of {"emoji":"😀","count":5}, top 6, sorted descending. */
     val topEmojisJson: String = "[]",
+    /** JSONArray of {"emoji":"❤️","count":3}, top 6 reaction emoji, sorted descending. */
+    val topReactionEmojisJson: String = "[]",
     /** JSONObject {"0":5,"1":3,...} where 0 = Monday, 6 = Sunday. */
     val byDayOfWeekJson: String = "{}",
     /** JSONObject {"0":10,"2":5,...} where 0 = January, 11 = December. */

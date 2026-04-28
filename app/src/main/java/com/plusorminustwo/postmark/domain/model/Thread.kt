@@ -6,5 +6,6 @@ data class Thread(
     val address: String,
     val lastMessageAt: Long,
     val lastMessagePreview: String = "",
-    val backupPolicy: BackupPolicy = BackupPolicy.GLOBAL
+    val backupPolicy: BackupPolicy = BackupPolicy.GLOBAL,
+    val isMuted: Boolean = false
 )

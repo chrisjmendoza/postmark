@@ -44,6 +44,9 @@ interface ThreadDao {
     @Query("UPDATE threads SET lastMessagePreview = :preview WHERE id = :threadId")
     suspend fun updateLastMessagePreview(threadId: Long, preview: String)
 
+    @Query("UPDATE threads SET isMuted = :isMuted WHERE id = :threadId")
+    suspend fun updateMuted(threadId: Long, isMuted: Boolean)
+
     @Query("DELETE FROM threads")
     suspend fun deleteAll()
 }
