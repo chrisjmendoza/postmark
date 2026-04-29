@@ -75,6 +75,8 @@ Ordered by what blocks the most other things. Pick from the top.
 
 - [ ] **Stats heatmap** (`StatsScreen`) — GitHub-style activity grid. `Canvas`-based, iterate over past 52 weeks, color cells by message density.
 
+- [ ] **Audio focus during voice message playback** — when playing an audio/voice MMS, request `AudioFocus` so incoming notification sounds (e.g. a picture arriving mid-playback) cannot interrupt the audio. Investigate `AudioManager.requestAudioFocus()` with `AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE`; release focus when playback ends or the user navigates away. Depends on MMS/audio playback being implemented first.
+
 - [ ] **MMS support** — read `content://mms` during first sync, store attachments as file paths in a new `Attachment` entity.
 
 - [ ] **Inline media display in thread bubbles** — render image/video attachments directly in the message bubble. Images: `AsyncImage` (Coil) with `fillMaxWidth`, tap → full-screen viewer. Videos: thumbnail frame + play button overlay, tap → `ExoPlayer`/`VideoView` in a dialog or dedicated screen.
