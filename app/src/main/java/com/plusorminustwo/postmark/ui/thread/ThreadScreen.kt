@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.app.role.RoleManager
 import android.provider.Telephony
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -28,6 +29,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -46,6 +48,10 @@ import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.tooling.preview.Devices
+import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -60,6 +66,10 @@ import java.util.Locale
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as lazyGridItems
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -85,6 +95,67 @@ fun ThreadScreen(
     val timestampPref by viewModel.timestampPreference.collectAsState()
     val activeDates by viewModel.activeDates.collectAsState()
     val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
+
+    ThreadContent(
+        uiState = uiState,
+        timestampPref = timestampPref,
+        activeDates = activeDates,
+        quickReactionEmojis = quickReactionEmojis,
+        scrollToMessageId = scrollToMessageId,
+        scrollToDate = scrollToDate,
+        onBack = onBack,
+        onViewStats = onViewStats,
+        onBackupSettingsClick = onBackupSettingsClick,
+        onHighlightMessage = { viewModel.highlightMessage(it) },
+        onDismissDefaultSmsDialog = { viewModel.dismissDefaultSmsDialog() },
+        onUpdateBackupPolicy = { viewModel.updateBackupPolicy(it) },
+        onDismissReactionPicker = { viewModel.dismissReactionPicker() },
+        onEnterSelectionModeFromActionMode = { viewModel.enterSelectionModeFromActionMode() },
+        onForwardMessage = { viewModel.forwardMessage(it) },
+        onExitSelectionMode = { viewModel.exitSelectionMode() },
+        onSetSelectionScope = { viewModel.setSelectionScope(it) },
+        onToggleMute = { viewModel.toggleMute() },
+        onEnterSelectionMode = { viewModel.enterSelectionMode() },
+        onReplyTextChanged = { viewModel.onReplyTextChanged(it) },
+        onSendMessage = { viewModel.sendMessage() },
+        onToggleSelection = { viewModel.toggleSelection(it) },
+        onShowReactionPicker = { id, y -> viewModel.showReactionPicker(id, y) },
+        onToggleReaction = { id, emoji -> viewModel.toggleReaction(id, emoji) },
+        onToggleTimestamp = { viewModel.toggleTimestamp(it) },
+        onToggleMessageIds = { viewModel.toggleMessageIds(it) }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun ThreadContent(
+    uiState: ThreadUiState,
+    timestampPref: TimestampPreference,
+    activeDates: Set<LocalDate>,
+    quickReactionEmojis: List<String>,
+    scrollToMessageId: Long = -1L,
+    scrollToDate: String = "",
+    onBack: () -> Unit,
+    onViewStats: () -> Unit,
+    onBackupSettingsClick: () -> Unit,
+    onHighlightMessage: (Long) -> Unit,
+    onDismissDefaultSmsDialog: () -> Unit,
+    onUpdateBackupPolicy: (BackupPolicy) -> Unit,
+    onDismissReactionPicker: () -> Unit,
+    onEnterSelectionModeFromActionMode: () -> Unit,
+    onForwardMessage: (Long) -> Unit,
+    onExitSelectionMode: () -> Unit,
+    onSetSelectionScope: (SelectionScope) -> Unit,
+    onToggleMute: () -> Unit,
+    onEnterSelectionMode: () -> Unit,
+    onReplyTextChanged: (String) -> Unit,
+    onSendMessage: () -> Unit,
+    onToggleSelection: (Long) -> Unit,
+    onShowReactionPicker: (Long, Float) -> Unit,
+    onToggleReaction: (Long, String) -> Unit,
+    onToggleTimestamp: (Long) -> Unit,
+    onToggleMessageIds: (List<Long>) -> Unit,
+) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -113,7 +184,7 @@ fun ThreadScreen(
         }
         if (targetIndex >= 0) {
             listState.animateScrollToItem(targetIndex)
-            viewModel.highlightMessage(scrollToMessageId)
+            onHighlightMessage(scrollToMessageId)
         }
     }
 
@@ -236,17 +307,17 @@ fun ThreadScreen(
 
     if (uiState.showDefaultSmsDialog) {
         AlertDialog(
-            onDismissRequest = { viewModel.dismissDefaultSmsDialog() },
+            onDismissRequest = { onDismissDefaultSmsDialog() },
             title = { Text("Set Postmark as default SMS app") },
             text  = { Text("To send messages, Postmark needs to be your default SMS app.") },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.dismissDefaultSmsDialog()
+                    onDismissDefaultSmsDialog()
                     launchDefaultSmsRoleRequest(context)
                 }) { Text("Set as default") }
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.dismissDefaultSmsDialog() }) { Text("Not now") }
+                TextButton(onClick = { onDismissDefaultSmsDialog() }) { Text("Not now") }
             }
         )
     }
@@ -255,7 +326,7 @@ fun ThreadScreen(
         BackupPolicyDialog(
             currentPolicy = uiState.thread?.backupPolicy ?: BackupPolicy.GLOBAL,
             onPolicySelected = { policy ->
-                viewModel.updateBackupPolicy(policy)
+                onUpdateBackupPolicy(policy)
                 showBackupPolicyDialog = false
             },
             onDismiss = { showBackupPolicyDialog = false }
@@ -266,30 +337,31 @@ fun ThreadScreen(
 
     Box(Modifier.fillMaxSize()) {
     Scaffold(
+        modifier = Modifier.imePadding(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             when {
                 uiState.reactionPickerMessageId != null -> MessageActionTopBar(
-                    onCancel  = { viewModel.dismissReactionPicker() },
+                    onCancel  = { onDismissReactionPicker() },
                     onCopy    = {
                         val msg = uiState.messages.find { it.id == uiState.reactionPickerMessageId }
                         if (msg != null) {
                             val cb = context.getSystemService(ClipboardManager::class.java)
                             cb.setPrimaryClip(ClipData.newPlainText("message", msg.body))
-                            scope.launch { snackbarHostState.showSnackbar("Copied", duration = SnackbarDuration.Short) }
+                            Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
                         }
-                        viewModel.dismissReactionPicker()
+                        onDismissReactionPicker()
                     },
-                    onSelect  = { viewModel.enterSelectionModeFromActionMode() },
-                    onForward = { uiState.reactionPickerMessageId?.let { viewModel.forwardMessage(it) } },
-                    onDelete  = { viewModel.dismissReactionPicker() }
+                    onSelect  = { onEnterSelectionModeFromActionMode() },
+                    onForward = { uiState.reactionPickerMessageId?.let { onForwardMessage(it) } },
+                    onDelete  = { onDismissReactionPicker() }
                 )
                 uiState.isSelectionMode -> SelectionTopBar(
                     selectedCount = uiState.selectedMessageIds.size,
                     totalMessages = uiState.messages.size,
                     scope = uiState.selectionScope,
-                    onClose = { viewModel.exitSelectionMode() },
-                    onScopeChange = { viewModel.setSelectionScope(it) },
+                    onClose = { onExitSelectionMode() },
+                    onScopeChange = { onSetSelectionScope(it) },
                     onCopy = {
                         val text = ExportFormatter.formatForCopy(
                             uiState.messages.filter { it.id in uiState.selectedMessageIds },
@@ -301,7 +373,7 @@ fun ThreadScreen(
                         scope.launch {
                             snackbarHostState.showSnackbar("Copied", duration = SnackbarDuration.Short)
                         }
-                        viewModel.exitSelectionMode()
+                        onExitSelectionMode()
                     }
                 )
                 else -> TopAppBar(
@@ -336,7 +408,7 @@ fun ThreadScreen(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Select messages") },
-                                    onClick = { menuExpanded = false; viewModel.enterSelectionMode() }
+                                    onClick = { menuExpanded = false; onEnterSelectionMode() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Search in thread") },
@@ -344,7 +416,7 @@ fun ThreadScreen(
                                 )
                                 DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },
-                                    onClick = { menuExpanded = false; viewModel.toggleMute() }
+                                    onClick = { menuExpanded = false; onToggleMute() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Backup settings") },
@@ -362,11 +434,15 @@ fun ThreadScreen(
             }
         },
         bottomBar = {
-            if (!uiState.isSelectionMode && uiState.reactionPickerMessageId == null) {
+            // Keep ReplyBar in layout even when picker is open (alpha=0) so the
+            // Scaffold doesn't resize and shift message positions.
+            if (!uiState.isSelectionMode) {
                 ReplyBar(
                     text = uiState.replyText,
-                    onTextChange = { viewModel.onReplyTextChanged(it) },
-                    onSend = { viewModel.sendMessage() }
+                    onTextChange = { onReplyTextChanged(it) },
+                    onSend = { onSendMessage() },
+                    modifier = if (uiState.reactionPickerMessageId != null)
+                        Modifier.alpha(0f) else Modifier
                 )
             }
         }
@@ -387,12 +463,12 @@ fun ThreadScreen(
                             isSelected = message.id in uiState.selectedMessageIds,
                             isSelectionMode = uiState.isSelectionMode,
                             isHighlighted = message.id == uiState.highlightedMessageId,
-                            onToggleSelect = { viewModel.toggleSelection(message.id) },
-                            onLongClick = { y -> viewModel.showReactionPicker(message.id, y) },
-                            onReactionClick = { emoji -> viewModel.toggleReaction(message.id, emoji) },
+                            onToggleSelect = { onToggleSelection(message.id) },
+                            onLongClick = { y -> onShowReactionPicker(message.id, y) },
+                            onReactionClick = { emoji -> onToggleReaction(message.id, emoji) },
                             timestampPref = timestampPref,
                             isTimestampExpanded = message.id in uiState.expandedTimestampIds,
-                            onToggleTimestamp = { viewModel.toggleTimestamp(message.id) }
+                            onToggleTimestamp = { onToggleTimestamp(message.id) }
                         )
                     }
                     item(key = "header_$dateLabel") {
@@ -401,7 +477,7 @@ fun ThreadScreen(
                             isSelectionMode = uiState.isSelectionMode,
                             selectedCount = messages.count { it.id in uiState.selectedMessageIds },
                             totalCount = messages.size,
-                            onToggleDay = { viewModel.toggleMessageIds(messages.map { it.id }) }
+                            onToggleDay = { onToggleMessageIds(messages.map { it.id }) }
                         )
                     }
                 }
@@ -435,8 +511,8 @@ fun ThreadScreen(
                 message     = msg,
                 quickEmojis = quickReactionEmojis,
                 bubbleTopY  = uiState.reactionPickerBubbleY,
-                onReact     = { emoji -> viewModel.toggleReaction(msg.id, emoji) },
-                onDismiss   = { viewModel.dismissReactionPicker() }
+                onReact     = { emoji -> onToggleReaction(msg.id, emoji) },
+                onDismiss   = { onDismissReactionPicker() }
             )
         }
     } // end overlay Box
@@ -1076,6 +1152,7 @@ private fun ReactionPills(
 
 // ── EmojiReactionPopup ────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EmojiReactionPopup(
     message: Message,
@@ -1088,19 +1165,27 @@ private fun EmojiReactionPopup(
     val myReactionEmojis = remember(message.reactions) {
         message.reactions.filter { it.senderAddress == SELF_ADDRESS }.map { it.emoji }.toSet()
     }
+    var showMoreSheet by remember { mutableStateOf(false) }
 
-    // Pill geometry
-    val pillHeightPx = with(density) { 64.dp.toPx() }
+    // Pill geometry — 44dp button + 6dp × 2 vertical padding = 56dp
+    val pillHeightPx = with(density) { 56.dp.toPx() }
     val gapPx        = with(density) { 8.dp.toPx() }
     val minTopPx     = with(density) { 80.dp.toPx() }  // clears action bar + status bar
 
     val pillTopPx = reactionPillTopPx(bubbleTopY, pillHeightPx, gapPx, minTopPx)
 
+    val pillBg     = Color(0xFF2C2C2E)
+    val pillBorder = Color(0xFF3A3A3C)
+    val moreTint   = Color(0xFF8E8E93)
+
     Box(Modifier.fillMaxSize()) {
-        // Scrim — full screen, tap anywhere outside pill dismisses
+        // Scrim — covers only below the action bar so the action bar stays
+        // fully visible and tappable. Tap anywhere in the scrim to dismiss.
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
+                .padding(top = 56.dp)
                 .background(Color.Black.copy(alpha = 0.45f))
                 .clickable(
                     indication = null,
@@ -1108,29 +1193,27 @@ private fun EmojiReactionPopup(
                 ) { onDismiss() }
         )
 
-        // Emoji pill — horizontally scrollable, floats above (or below) the bubble
-        Card(
+        // Emoji pill — 5 emoji + more button, floats above (or below) the bubble
+        Surface(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp)
+                .align(Alignment.TopCenter)
                 .offset { IntOffset(0, pillTopPx.toInt()) },
-            shape = RoundedCornerShape(32.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
-            )
+            shape = RoundedCornerShape(24.dp),
+            color = pillBg,
+            border = BorderStroke(0.5.dp, pillBorder),
+            shadowElevation = 8.dp,
+            tonalElevation = 0.dp
         ) {
-            LazyRow(
-                modifier = Modifier.height(64.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(0.dp),
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                items(quickEmojis) { emoji ->
+                quickEmojis.forEach { emoji ->
                     val isSelected = emoji in myReactionEmojis
                     Box(
                         modifier = Modifier
-                            .size(52.dp)
+                            .size(44.dp)
                             .clip(CircleShape)
                             .background(
                                 if (isSelected) MaterialTheme.colorScheme.primaryContainer
@@ -1139,7 +1222,161 @@ private fun EmojiReactionPopup(
                             .clickable { onReact(emoji) },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(emoji, fontSize = 28.sp)
+                        Text(emoji, fontSize = 24.sp)
+                    }
+                }
+                // More button — opens extended picker
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .clickable { showMoreSheet = true },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "More emoji",
+                        tint = moreTint,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+    }
+
+    if (showMoreSheet) {
+        EmojiPickerBottomSheet(
+            onEmojiSelected = { emoji -> onReact(emoji) },
+            onDismiss = { showMoreSheet = false }
+        )
+    }
+}
+
+@Preview(showBackground = true, device = Devices.PIXEL_7, showSystemUi = true)
+@Preview(showBackground = true, device = Devices.PIXEL_7, showSystemUi = true, uiMode = android.content.res.Configuration.UI_MODE_NIGHT_YES, name = "Dark Mode")
+@Composable
+private fun ThreadScreenPreview() {
+    PostmarkTheme {
+        val now = System.currentTimeMillis()
+        val sampleThread = Thread(
+            id = 1,
+            displayName = "Sarah Johnson",
+            address = "+1234567890",
+            lastMessageAt = now
+        )
+        val sampleMessages = listOf(
+            Message(1, 1, "+1234567890", "We need to do that more often", now - 7200000, false, 1),
+            Message(2, 1, "self", "100%. Also sorry for keeping you out so late haha", now - 7000000, true, 1),
+            Message(3, 1, "+1234567890", "Are you kidding, best night I've had in months", now - 6800000, false, 1),
+            Message(4, 1, "+1234567890", "Heads up — I'm making a big batch of soup, want some?", now - 3600000, false, 1),
+            Message(5, 1, "self", "Wait seriously? Yes please 🙏", now - 3500000, true, 1,
+                reactions = listOf(Reaction(1, 5, "+1234567890", "❤️", now - 3400000, "Loved 'Wait seriously? Yes please 🙏'"))),
+            Message(6, 1, "+1234567890", "I'll drop some off around 6 if that works", now - 3000000, false, 1),
+            Message(7, 1, "self", "Perfect, I'll be home. You're an angel", now - 2800000, true, 1),
+            Message(8, 1, "+1234567890", "Hey, are you coming to the tonight?", now - 1000000, false, 1)
+        )
+        ThreadContent(
+            uiState = ThreadUiState(
+                thread = sampleThread,
+                messages = sampleMessages
+            ),
+            timestampPref = TimestampPreference.ALWAYS,
+            activeDates = setOf(LocalDate.now(), LocalDate.now().minusDays(1)),
+            quickReactionEmojis = listOf("❤️", "😂", "😮", "😢", "🙏", "👍"),
+            onBack = {},
+            onViewStats = {},
+            onBackupSettingsClick = {},
+            onHighlightMessage = {},
+            onDismissDefaultSmsDialog = {},
+            onUpdateBackupPolicy = {},
+            onDismissReactionPicker = {},
+            onEnterSelectionModeFromActionMode = {},
+            onForwardMessage = {},
+            onExitSelectionMode = {},
+            onSetSelectionScope = {},
+            onToggleMute = {},
+            onEnterSelectionMode = {},
+            onReplyTextChanged = {},
+            onSendMessage = {},
+            onToggleSelection = {},
+            onShowReactionPicker = { _, _ -> },
+            onToggleReaction = { _, _ -> },
+            onToggleTimestamp = {},
+            onToggleMessageIds = {}
+        )
+    }
+}
+
+// ── EmojiPickerBottomSheet ────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EmojiPickerBottomSheet(
+    onEmojiSelected: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    var query by remember { mutableStateOf("") }
+
+    val filteredSections = remember(query) {
+        if (query.isEmpty()) {
+            ALL_EMOJI_SECTIONS
+        } else {
+            val q = query.trim().lowercase()
+            ALL_EMOJI_SECTIONS.mapNotNull { section ->
+                val filtered = section.emojis.filter { (_, keywords) -> keywords.contains(q) }
+                if (filtered.isNotEmpty()) section.copy(emojis = filtered) else null
+            }
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            TextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search emoji...") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                singleLine = true,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    focusedIndicatorColor   = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor  = Color.Transparent,
+                ),
+                shape = RoundedCornerShape(12.dp)
+            )
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(8),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 300.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+            ) {
+                filteredSections.forEach { section ->
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            text = section.name.uppercase(Locale.getDefault()),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = Color(0xFF8E8E93),
+                            modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 12.dp, bottom = 4.dp)
+                        )
+                    }
+                    lazyGridItems(section.emojis) { (emoji, _) ->
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clickable { onEmojiSelected(emoji) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(emoji, fontSize = 22.sp)
+                        }
                     }
                 }
             }
@@ -1185,7 +1422,7 @@ private fun ActionItem(
     onClick: () -> Unit,
     tint: Color = Color.Unspecified
 ) {
-    val effectiveTint = if (tint.isUnspecified) LocalContentColor.current else tint
+    val effectiveTint = if (tint.isUnspecified) MaterialTheme.colorScheme.onSurface else tint
     Column(
         modifier = Modifier
             .clickable { onClick() }
