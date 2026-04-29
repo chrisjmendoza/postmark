@@ -38,6 +38,12 @@ Ordered by what blocks the most other things. Pick from the top.
   - Timestamps suppressed for TOP/MIDDLE positions (shown once at cluster tail)
   - `computeClusterPositions()` in `MessageGrouping.kt`, 11 unit tests in `MessageGroupingTest`
 
+- [ ] **Bulk delete by time frame** — Settings screen (or `ConversationsScreen` overflow menu) allows the user to permanently delete all messages older than a chosen threshold: 1 month, 3 months, 6 months, 1 year, or a custom date they pick via `DatePickerDialog`. Show a confirmation dialog listing how many messages and threads will be affected before executing. Locked messages (see below) are excluded from bulk deletion.
+
+- [ ] **Lock message** — Long-press context menu in `ThreadScreen` includes a "Lock" toggle. Locked messages display a 🔒 badge on the bubble and are excluded from bulk-delete operations. Attempting to delete a locked message individually requires a second confirmation dialog ("This message is locked. Delete anyway?"). Store a `isLocked: Boolean` column in `MessageEntity` (Room migration required).
+
+- [ ] **Favorite messages** — Long-press context menu in `ThreadScreen` includes a "Favorite" toggle (⭐). Favorited messages are queryable from a dedicated "Favorites" screen accessible from the bottom nav or drawer. Store a `isFavorite: Boolean` column in `MessageEntity` (Room migration required). `FavoritesScreen` lists starred messages grouped by thread with a jump-to-thread action.
+
 - [ ] **Custom date range selection** (`ThreadScreen`)
   - Add a "Date range" option in selection mode that lets the user input start/end dates instead of tapping day-by-day
   - Design TBD — likely a two-field date picker bottom sheet; selecting the range auto-selects all messages within it
