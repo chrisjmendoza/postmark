@@ -206,16 +206,24 @@ WHAT IS WORKING (tested on device)
    - Select button in action bar promotes to full
      multi-select mode (selected message carries over)
    - ReactionPills chip anchored to bubble bottom-right
-     corner using Box + Alignment.BottomEnd + offset(y=16.dp);
-     Spacer(16.dp) reserves overhang in layout
-   - Timestamp offset(-20.dp) when reactions present
+     corner (received) or bottom-left (sent) using
+     Box + Alignment; Spacer(12.dp) reserves overhang
+     only at cluster tail (SINGLE or BOTTOM)
+   - Timestamp offset(-12.dp) when reactions present
      so it stays close to bubble
-   - Own reactions highlighted (primary border + tint)
+   - Own reactions highlighted (primaryContainer background,
+     primary border)
    - Toggle: tap to add, tap own reaction to remove
    - Most-used emoji tracked via ReactionDao.observeTopEmojisBySender("self")
      — user's top picks surface first in pill (left→right
      most used → least); unused defaults fill remaining
      slots up to 8
+✅ Thread screen UX improvements:
+   - Scroll-to-latest button moved to bottom-center,
+     using VerticalAlignBottom icon and tertiaryContainer
+     color for high visibility.
+   - Cluster-aware spacing for message bubbles ensures
+     tight grouping while providing clearance for reactions.
 ✅ Stats screen emoji cards:
    - "Top Emoji (Messages)" and "Top Emoji (Reactions)"
      only render when non-empty (guards added April 29)

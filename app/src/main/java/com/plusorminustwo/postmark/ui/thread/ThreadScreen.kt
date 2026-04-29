@@ -419,8 +419,8 @@ fun ThreadScreen(
                 visible = scrolledUp,
                 onClick = { scope.launch { listState.animateScrollToItem(0) } },
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 16.dp)
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp)
             )
         }
     }
@@ -507,10 +507,10 @@ private fun ScrollToLatestButton(
     ) {
         SmallFloatingActionButton(
             onClick = onClick,
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
         ) {
-            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Scroll to latest")
+            Icon(Icons.Default.VerticalAlignBottom, contentDescription = "Scroll to latest")
         }
     }
 }
@@ -624,21 +624,19 @@ private fun MessageBubble(
                     isSent = message.isSent,
                     onReactionClick = onReactionClick,
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
+                        .align(if (message.isSent) Alignment.BottomStart else Alignment.BottomEnd)
                         .offset(y = 16.dp)
-                        .padding(end = 4.dp)
+                        .padding(
+                            start = if (message.isSent) 4.dp else 0.dp,
+                            end = if (message.isSent) 0.dp else 4.dp
+                        )
                 )
             }
-        }
-        // Reserve space for the chip that overhangs the bubble via offset,
-        // so the timestamp is always pushed below the chip — not behind it.
-        if (message.reactions.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
         }
         if (showTimestamp || message.isSent) {
             Row(
                 modifier = Modifier
-                    .offset(y = if (message.reactions.isNotEmpty()) (-20).dp else 0.dp)
+                    .offset(y = if (message.reactions.isNotEmpty()) (-12).dp else 0.dp)
                     .padding(
                         start  = if (!message.isSent) 4.dp else 0.dp,
                         end    = if (message.isSent)  4.dp else 0.dp,
@@ -662,6 +660,9 @@ private fun MessageBubble(
                     )
                 }
             }
+        }
+        if (message.reactions.isNotEmpty() && (clusterPosition == ClusterPosition.BOTTOM || clusterPosition == ClusterPosition.SINGLE)) {
+            Spacer(Modifier.height(12.dp))
         }
     }
 }
@@ -1046,7 +1047,6 @@ private fun ReactionPills(
     modifier: Modifier = Modifier
 ) {
     val grouped = reactions.groupBy { it.emoji }
-    val primaryColor = MaterialTheme.colorScheme.primary
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1058,10 +1058,10 @@ private fun ReactionPills(
             Surface(
                 onClick = { onReactionClick(emoji) },
                 shape = RoundedCornerShape(10.dp),
-                color = if (iMine) Color(0xFF1A3A5C) else Color(0xFF2C2C2E),
+                color = if (iMine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(
                     width = if (iMine) 1.dp else 0.5.dp,
-                    color = if (iMine) primaryColor else Color(0xFF3A3A3C)
+                    color = if (iMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
                 )
             ) {
                 Text(
