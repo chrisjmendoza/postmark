@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: April 28, 2026
+Last updated: April 29, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -9,7 +9,7 @@ Package: com.plusorminustwo.postmark
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 4
+- Room (database) — currently on schema version 5
 - Hilt (dependency injection)
 - WorkManager (scheduled backup)
 - Kotlin Coroutines + Flow
@@ -47,12 +47,13 @@ com.plusorminustwo.postmark
     └── parser              ← AppleReactionParser (scaffolded)
 
 ═══════════════════════════════════════════════════════
-DATABASE — ROOM SCHEMA v4
+DATABASE — ROOM SCHEMA v5
 ═══════════════════════════════════════════════════════
 Thread
 - id, displayName, address, lastMessageAt,
   lastMessagePreview (added v2),
-  backupPolicy (GLOBAL/ALWAYS_INCLUDE/NEVER_INCLUDE)
+  backupPolicy (GLOBAL/ALWAYS_INCLUDE/NEVER_INCLUDE),
+  isMuted BOOLEAN DEFAULT false (added v5)
 
 Message
 - id, threadId, address, body, timestamp,
@@ -66,13 +67,14 @@ ThreadStats (pre-aggregated)
 - threadId, totalMessages, sentCount, receivedCount,
   firstMessageAt, lastMessageAt, activeDayCount,
   longestStreakDays, avgResponseTimeMs,
-  topEmojisJson, topReactionEmojisJson,
+  topEmojisJson, topReactionEmojisJson (added v5),
   byDayOfWeekJson, byMonthJson,
   lastUpdatedAt
 
 GlobalStats
 - same fields as ThreadStats aggregated across
-  all threads, plus threadCount
+  all threads, plus threadCount;
+  topReactionEmojisJson added v5
 
 FTS5 virtual table (messages_fts)
 - mirrors message body, sync triggers in place
@@ -86,6 +88,12 @@ lastMessagePreview TEXT NOT NULL DEFAULT ''
 Migration 2→3: ALTER TABLE messages ADD COLUMN
 deliveryStatus INTEGER NOT NULL DEFAULT 0
 Migration 3→4: CREATE TABLE global_stats
+Migration 4→5: ALTER TABLE threads ADD COLUMN
+isMuted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE thread_stats ADD COLUMN
+topReactionEmojisJson TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE global_stats ADD COLUMN
+topReactionEmojisJson TEXT NOT NULL DEFAULT '[]'
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -170,8 +178,11 @@ WHAT IS WORKING (tested on device)
      that thread pre-selected (skips contact list)
    - Select messages → enters selection mode
    - Search in thread (stub)
-   - Mute (stub)
-   - Backup settings → navigates to BackupSettings
+   - Mute / Unmute — toggles isMuted on ThreadEntity
+     via ThreadRepository.updateMuted(). DB flag is
+     stored; notification enforcement is a follow-up.
+   - Backup settings → opens per-thread
+     BackupPolicyDialog (Global / Always / Never)
    - Block number (stub)
 ✅ Stats screen accepts optional threadId nav arg:
    route "stats?threadId={threadId}" — ViewModel
@@ -205,10 +216,13 @@ WHAT IS WORKING (tested on device)
      — user's top picks surface first in pill (left→right
      most used → least); unused defaults fill remaining
      slots up to 8
-✅ Stats screen emoji cards always visible:
-   - Both "Top Emoji (Messages)" and "Top Emoji (Reactions)"
-     render unconditionally with "None yet" placeholder
-     when empty (previously hidden when empty)
+✅ Stats screen emoji cards:
+   - "Top Emoji (Messages)" and "Top Emoji (Reactions)"
+     only render when non-empty (guards added April 29)
+   - topReactionEmojisJson persisted to DB via
+     StatsUpdater (previously only computed live)
+   - heatmapTierForCount() extracted to shared domain
+     layer (was private in StatsScreen)
 
 ═══════════════════════════════════════════════════════
 DEFERRED — SAMSUNG RESTRICTION
@@ -229,15 +243,17 @@ IN PROGRESS / NEXT UP
 1. THREAD ⋮ MENU STUBS TO WIRE UP
    - Search in thread (navigate to search scoped
      to threadId)
-   - Mute / Unmute (toggle on ThreadEntity)
+   - Enforce mute in SmsReceiver (isMuted stored;
+     notification suppression not yet wired)
    - Block number (system intent or local block list)
+   - Muted thread visual indicator in conversation list
 
-2. SEARCH — remaining items
-   - Date range filter chips
-   - Reaction filter (emoji picker; filter to messages
-     that received that specific reaction)
+2. SEARCH — remaining item
    - Search within a single thread (entry point:
      search icon in thread toolbar)
+   - Reaction emoji list data-driven (currently
+     hardcoded in SearchScreen; should query
+     distinct emojis from reactions table)
 
 3. EXPORT — rendered image
    Draw conversation to Canvas, convert to Bitmap,
@@ -255,6 +271,26 @@ IN PROGRESS / NEXT UP
 5. BACKUP — remaining
    - Backup restore (read JSON, apply to Room with
      migration version check)
+✅ Search date range filter — DONE (April 29)
+   Preset chips (Today / 7 days / 30 days) via
+   SearchDateRange enum + toBoundsMs().
+   Single searchMessagesFiltered() DAO query handles
+   all filter combos via sentinel -1 values.
+✅ Search reaction emoji filter — DONE (April 29)
+   Emoji picker bottom sheet; searchMessagesFilteredWithReaction()
+   subquery on reactions table.
+✅ Mute / Unmute thread — DONE (April 29)
+   isMuted column (DB v5), DAO query, repo method,
+   ThreadViewModel.toggleMute(). Overflow menu shows
+   "Mute"/"Unmute" dynamically. Notification enforcement
+   is a follow-up.
+✅ heatmapTierForCount() extracted — DONE (April 29)
+   Moved from private StatsScreen to package-level
+   function in data.sync, imported where needed.
+✅ topReactionEmojisJson persisted — DONE (April 29)
+   StatsUpdater now injects ReactionDao and stores
+   reaction emoji stats in both ThreadStats and
+   GlobalStats entities (Room migration 4→5).
 ✅ Per-thread backup policy dialog:
    - ⋮ overflow menu in ThreadScreen → "Backup settings"
    - AlertDialog with radio buttons: Global policy /
@@ -297,15 +333,14 @@ DELIVERY TIMESTAMPS + READ RECEIPTS
   native mechanism. Document as RCS-future roadmap item.
 
 SEARCH
-- Date range filter chips
-- Reaction filter — emoji picker; filter to messages
-  that received that specific reaction
 - Search within a single thread
 - FTS4 with ^ prefix anchor (word-start only)
 - \b word boundary highlight in results
 - All filters stackable
 ✅ Thread filter chip — DONE (April 27)
 ✅ Tapping result jumps to message in ThreadScreen — DONE (April 27)
+✅ Date range filter chips — DONE (April 29)
+✅ Reaction filter (emoji picker bottom sheet) — DONE (April 29)
 
 BACKUP (Settings → Backup)
 - Backup restore (read JSON, apply to Room with

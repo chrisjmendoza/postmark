@@ -36,6 +36,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Incoming SMS notification** — heads-up notification from
       `SmsReceiver` showing sender name + message preview.
       Requires `POST_NOTIFICATIONS` permission on API 33+.
+- [ ] **Enforce mute in SmsReceiver** — `isMuted` flag is stored in DB
+      but `SmsReceiver` doesn't check it yet; muted threads still
+      trigger notifications. Check `ThreadRepository.isMuted(address)`
+      before posting notification.
 - [ ] **Direct reply action** — `RemoteInput` in notification so user
       can reply without opening the app. Android 7+ standard expectation.
 - [ ] **Mark as read action** — second notification action button.
@@ -116,11 +120,15 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ### Search — remaining items
 - [x] **Thread filter chip** — done.
 - [x] **Jump to message from result** — done.
-- [ ] **Date range filter** — two `DatePickerDialog`-triggered chips
-      (From / To). Pass `startMs`/`endMs` to `SearchViewModel`.
-- [ ] **Reaction filter** — chip opens emoji picker bottom sheet.
-      Add `SearchDao.searchMessagesWithReaction()` joining
-      `reactions` table.
+- [x] **Date range filter** — preset chips (Today / 7 days / 30 days)
+      via `SearchDateRange` enum + `toBoundsMs()`. Single
+      `searchMessagesFiltered()` DAO query handles all combos.
+- [x] **Reaction filter** — emoji picker bottom sheet; filters via
+      `searchMessagesFilteredWithReaction()` subquery on `reactions`.
+- [ ] **Reaction emoji list data-driven** — `SearchScreen` currently
+      has a hardcoded `REACTION_EMOJIS` list. Replace with a DAO
+      query for distinct emojis from the `reactions` table so
+      app-specific and Apple-forwarded reactions appear automatically.
 - [ ] **Search within thread** — entry point: search icon in thread
       toolbar. Scopes results to current `threadId`.
 
@@ -161,15 +169,17 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Charts style** — monthly bar chart, sent/received doughnut,
       emoji bar chart. Use `Vico` charting library (Compose-native,
       actively maintained). Add to `build.gradle`.
-- [ ] **Persist topReactionEmojis** — `StatsUpdater.recomputeAll()`
-      should persist `topReactionEmojisJson` into `ThreadStatsEntity`.
-      Currently computed live from Flows — only needed for
-      widget/offline scenarios but worth doing for consistency.
+- [x] **Persist topReactionEmojis** — `topReactionEmojisJson` now
+      persisted in both `ThreadStatsEntity` and `GlobalStatsEntity`
+      via `StatsUpdater` (Room migration 4→5).
 - [ ] **"Gone quiet" detection** — surface threads that have dropped
       significantly below their usual frequency for 7+ days.
       Show in global stats as "You haven't talked to Jake in a while."
 
 ### Thread view — deeper polish
+- [ ] **Muted thread visual indicator** — no UI cue that a thread
+      is muted. Add a muted icon (🔕) to the thread row in
+      `ConversationsScreen` and optionally in the thread toolbar.
 - [ ] **Bubble tap for link/phone detection** — auto-linkify URLs,
       phone numbers, addresses in message body. Tap URL → browser,
       tap phone → dial dialog, tap address → Maps.
@@ -249,8 +259,12 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] Stats threadId nav arg + smart back behavior
 - [x] Thread ⋮ overflow menu
 - [x] Search with thread filter chip + jump to message
+- [x] Search date range filter (preset chips) + reaction emoji filter
+- [x] Mute/unmute thread (DB flag, DAO, repo, ViewModel, overflow menu)
+- [x] Heatmap tier function extracted to shared domain layer
+- [x] Reaction emoji stats persisted to DB (thread + global)
 - [x] Backup settings — history, WorkManager status, per-thread policy
-- [x] Room schema migrations 1→2→3→4 (non-destructive)
+- [x] Room schema migrations 1→2→3→4→5 (non-destructive)
 - [x] SMS send with optimistic insert + delivery tracking
 - [x] Selection → Export (Copy via ExportBottomSheet)
 - [x] Runtime permissions + first-launch sync scaffold

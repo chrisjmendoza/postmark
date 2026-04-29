@@ -348,7 +348,7 @@ fun ThreadScreen(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Backup settings") },
-                                    onClick = { menuExpanded = false; onBackupSettingsClick() }
+                                    onClick = { menuExpanded = false; showBackupPolicyDialog = true }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Block number") },
