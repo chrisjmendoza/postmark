@@ -10,6 +10,9 @@ interface ReactionDao {
     @Query("SELECT * FROM reactions")
     fun observeAll(): Flow<List<ReactionEntity>>
 
+    @Query("SELECT * FROM reactions")
+    suspend fun getAll(): List<ReactionEntity>
+
     @Query("SELECT * FROM reactions WHERE messageId = :messageId")
     fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>>
 
@@ -49,6 +52,12 @@ interface ReactionDao {
         WHERE messageId IN (SELECT id FROM messages WHERE threadId = :threadId)
     """)
     fun observeByThread(threadId: Long): Flow<List<ReactionEntity>>
+
+    @Query("""
+        SELECT * FROM reactions
+        WHERE messageId IN (SELECT id FROM messages WHERE threadId = :threadId)
+    """)
+    suspend fun getByThread(threadId: Long): List<ReactionEntity>
 
     @Query("DELETE FROM reactions")
     suspend fun deleteAll()

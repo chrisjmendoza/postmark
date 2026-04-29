@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
+import com.plusorminustwo.postmark.data.sync.heatmapTierForCount
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.ui.components.avatarColor
 import java.time.Instant
@@ -1204,16 +1205,6 @@ private fun BarChart(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-private fun heatmapTierForCount(count: Int): Int = when {
-    count <= 0  -> 0
-    count <= 2  -> 1
-    count <= 4  -> 2
-    count <= 6  -> 3
-    count <= 9  -> 4
-    count <= 14 -> 5
-    else        -> 6
-}
 
 private fun formatDuration(ms: Long): String = when {
     ms <= 0          -> "—"

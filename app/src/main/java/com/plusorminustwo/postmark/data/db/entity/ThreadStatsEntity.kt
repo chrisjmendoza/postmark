@@ -26,6 +26,7 @@ data class ThreadStatsEntity(
     val longestStreakDays: Int = 0,
     val avgResponseTimeMs: Long = 0L,
     val topEmojisJson: String = "[]",
+    val topReactionEmojisJson: String = "[]",
     val byDayOfWeekJson: String = "{}",
     val byMonthJson: String = "{}",
     val lastUpdatedAt: Long = 0L

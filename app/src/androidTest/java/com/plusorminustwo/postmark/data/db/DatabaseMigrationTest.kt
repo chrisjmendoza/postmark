@@ -164,4 +164,66 @@ class DatabaseMigrationTest {
         }
         db2.close()
     }
+
+    // ── MIGRATION 4 → 5 ───────────────────────────────────────────────────
+    // Adds isMuted to threads and topReactionEmojisJson to thread_stats + global_stats.
+    // Uses direct SQL approach (same pattern as 2→3) since 5.json is not yet generated.
+
+    @Test
+    fun migration4To5_addsMutedColumnWithDefaultFalse() {
+        val db4 = helper.createDatabase("test_m45a", 4)
+        db4.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+        )
+
+        PostmarkDatabase.MIGRATION_4_5.migrate(db4)
+
+        db4.query("SELECT isMuted FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+        }
+        db4.close()
+    }
+
+    @Test
+    fun migration4To5_preservesExistingThreadData() {
+        val db4 = helper.createDatabase("test_m45b", 4)
+        db4.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
+            " VALUES (99, 'Bob', '+2', 2000000, 'hi', 'ALWAYS_INCLUDE')"
+        )
+
+        PostmarkDatabase.MIGRATION_4_5.migrate(db4)
+
+        db4.query("SELECT displayName, address, backupPolicy FROM threads WHERE id = 99").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Bob", c.getString(0))
+            assertEquals("+2", c.getString(1))
+            assertEquals("ALWAYS_INCLUDE", c.getString(2))
+        }
+        db4.close()
+    }
+
+    @Test
+    fun migration4To5_addsTopReactionEmojisJsonToThreadStats() {
+        val db4 = helper.createDatabase("test_m45c", 4)
+        db4.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
+            " VALUES (1, 'Test', '+1', 1000000, '', 'GLOBAL')"
+        )
+        db4.execSQL(
+            "INSERT INTO thread_stats (threadId, totalMessages, sentCount, receivedCount, firstMessageAt, " +
+            "lastMessageAt, activeDayCount, longestStreakDays, avgResponseTimeMs, topEmojisJson, " +
+            "byDayOfWeekJson, byMonthJson, lastUpdatedAt) VALUES (1, 5, 2, 3, 0, 1000000, 1, 1, 0, '[]', '{}', '{}', 0)"
+        )
+
+        PostmarkDatabase.MIGRATION_4_5.migrate(db4)
+
+        db4.query("SELECT topReactionEmojisJson FROM thread_stats WHERE threadId = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("[]", c.getString(0))
+        }
+        db4.close()
+    }
 }

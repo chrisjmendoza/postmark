@@ -2,6 +2,7 @@ package com.plusorminustwo.postmark.data.sync
 
 import com.plusorminustwo.postmark.data.db.dao.GlobalStatsDao
 import com.plusorminustwo.postmark.data.db.dao.MessageDao
+import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadStatsDao
 import com.plusorminustwo.postmark.data.db.entity.GlobalStatsEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadStatsEntity
@@ -14,7 +15,8 @@ import javax.inject.Singleton
 class StatsUpdater @Inject constructor(
     private val messageDao: MessageDao,
     private val threadStatsDao: ThreadStatsDao,
-    private val globalStatsDao: GlobalStatsDao
+    private val globalStatsDao: GlobalStatsDao,
+    private val reactionDao: ReactionDao
 ) {
     /**
      * Full recompute: recalculates stats for every thread in the database, then
@@ -26,7 +28,9 @@ class StatsUpdater @Inject constructor(
         threadIds.forEach { threadId ->
             val messages = messageDao.getByThread(threadId)
             if (messages.isNotEmpty()) {
-                val data = buildThreadStatsData(messages)
+                val threadReactions = reactionDao.getByThread(threadId)
+                val reactionEmojis = threadReactions.map { it.emoji }
+                val data = buildThreadStatsData(messages, reactionEmojis)
                 threadStatsDao.upsert(data.toEntity(threadId))
             }
         }
@@ -35,43 +39,46 @@ class StatsUpdater @Inject constructor(
 
     private suspend fun computeAndPersistGlobal(threadCount: Int) {
         val allMessages = messageDao.getAll()
-        val data = buildGlobalStatsData(allMessages, threadCount)
+        val allReactionEmojis = reactionDao.getAll().map { it.emoji }
+        val data = buildGlobalStatsData(allMessages, threadCount, allReactionEmojis)
         globalStatsDao.upsert(data.toEntity())
     }
 
     // ── ThreadStatsData → ThreadStatsEntity ──────────────────────────────────
 
     private fun ThreadStatsData.toEntity(threadId: Long) = ThreadStatsEntity(
-        threadId          = threadId,
-        totalMessages     = totalMessages,
-        sentCount         = sentCount,
-        receivedCount     = receivedCount,
-        firstMessageAt    = firstMessageAt,
-        lastMessageAt     = lastMessageAt,
-        activeDayCount    = activeDayCount,
-        longestStreakDays  = longestStreakDays,
-        avgResponseTimeMs = avgResponseTimeMs,
-        topEmojisJson     = emojiMapToJson(topEmojis),
-        byDayOfWeekJson   = intArrayToJson(byDayOfWeek),
-        byMonthJson       = intArrayToJson(byMonth),
-        lastUpdatedAt     = System.currentTimeMillis()
+        threadId               = threadId,
+        totalMessages          = totalMessages,
+        sentCount              = sentCount,
+        receivedCount          = receivedCount,
+        firstMessageAt         = firstMessageAt,
+        lastMessageAt          = lastMessageAt,
+        activeDayCount         = activeDayCount,
+        longestStreakDays       = longestStreakDays,
+        avgResponseTimeMs      = avgResponseTimeMs,
+        topEmojisJson          = emojiMapToJson(topEmojis),
+        topReactionEmojisJson  = emojiMapToJson(topReactionEmojis),
+        byDayOfWeekJson        = intArrayToJson(byDayOfWeek),
+        byMonthJson            = intArrayToJson(byMonth),
+        lastUpdatedAt          = System.currentTimeMillis()
     )
 
     // ── GlobalStatsData → GlobalStatsEntity ──────────────────────────────────
 
     private fun GlobalStatsData.toEntity() = GlobalStatsEntity(
-        id                = 1,
-        totalMessages     = totalMessages,
-        sentCount         = sentCount,
-        receivedCount     = receivedCount,
-        threadCount       = threadCount,
-        activeDayCount    = activeDayCount,
-        longestStreakDays  = longestStreakDays,
-        avgResponseTimeMs = avgResponseTimeMs,
-        topEmojisJson     = emojiMapToJson(topEmojis),
-        byDayOfWeekJson   = intArrayToJson(byDayOfWeek),
-        byMonthJson       = intArrayToJson(byMonth),
-        lastUpdatedAt     = System.currentTimeMillis()
+        id                     = 1,
+        totalMessages          = totalMessages,
+        sentCount              = sentCount,
+        receivedCount          = receivedCount,
+        threadCount            = threadCount,
+        activeDayCount         = activeDayCount,
+        longestStreakDays       = longestStreakDays,
+        avgResponseTimeMs      = avgResponseTimeMs,
+        topEmojisJson          = emojiMapToJson(topEmojis),
+        topReactionEmojisJson  = emojiMapToJson(topReactionEmojis),
+        byDayOfWeekJson        = intArrayToJson(byDayOfWeek),
+        byMonthJson            = intArrayToJson(byMonth),
+        lastUpdatedAt          = System.currentTimeMillis()
     )
 
     // ── JSON helpers ─────────────────────────────────────────────────────────

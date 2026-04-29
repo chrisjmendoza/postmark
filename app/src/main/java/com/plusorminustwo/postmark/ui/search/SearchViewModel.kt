@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.repository.SearchRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.SearchDateRange
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.model.toBoundsMs
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
@@ -15,9 +17,8 @@ import javax.inject.Inject
 data class SearchFilters(
     val threadId: Long? = null,
     val isSentOnly: Boolean? = null,
-    val hasReaction: Boolean = false,
-    val startMs: Long? = null,
-    val endMs: Long? = null
+    val reactionEmoji: String? = null,
+    val dateRange: SearchDateRange = SearchDateRange.ALL_TIME
 )
 
 data class SearchUiState(
@@ -65,6 +66,14 @@ class SearchViewModel @Inject constructor(
         _filters.update { it.copy(threadId = thread?.id) }
     }
 
+    fun setDateRangeFilter(range: SearchDateRange) {
+        _filters.update { it.copy(dateRange = range) }
+    }
+
+    fun setReactionFilter(emoji: String?) {
+        _filters.update { it.copy(reactionEmoji = emoji) }
+    }
+
     private fun search(query: String, filters: SearchFilters) {
         if (query.isBlank()) {
             _results.value = emptyList()
@@ -72,12 +81,13 @@ class SearchViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _isLoading.value = true
+            val (startMs, _) = filters.dateRange.toBoundsMs()
             _results.value = searchRepository.search(
                 rawQuery = query,
                 threadId = filters.threadId,
                 isSent = filters.isSentOnly,
-                startMs = filters.startMs,
-                endMs = filters.endMs
+                startMs = startMs,
+                reactionEmoji = filters.reactionEmoji
             )
             _isLoading.value = false
         }

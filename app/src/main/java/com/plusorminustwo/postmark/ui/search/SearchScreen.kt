@@ -17,8 +17,13 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.SearchDateRange
+
+/** Common reaction emojis shown in the reaction filter picker. */
+private val REACTION_EMOJIS = listOf("❤️", "😂", "👍", "👎", "‼️", "❓", "😮", "😢")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,6 +34,7 @@ fun SearchScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showThreadSheet by remember { mutableStateOf(false) }
+    var showReactionSheet by remember { mutableStateOf(false) }
 
     if (showThreadSheet) {
         ModalBottomSheet(onDismissRequest = { showThreadSheet = false }) {
@@ -48,6 +54,33 @@ fun SearchScreen(
                         }
                     )
                     HorizontalDivider()
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+
+    if (showReactionSheet) {
+        ModalBottomSheet(onDismissRequest = { showReactionSheet = false }) {
+            Text(
+                "Filter by reaction",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(REACTION_EMOJIS) { emoji ->
+                    val selected = uiState.filters.reactionEmoji == emoji
+                    FilterChip(
+                        selected = selected,
+                        onClick = {
+                            viewModel.setReactionFilter(if (selected) null else emoji)
+                            showReactionSheet = false
+                        },
+                        label = { Text(emoji, fontSize = 22.sp) }
+                    )
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -90,8 +123,11 @@ fun SearchScreen(
                 filters = uiState.filters,
                 selectedThread = uiState.selectedThread,
                 onFiltersChange = viewModel::onFiltersChange,
+                onDateRangeChange = viewModel::setDateRangeFilter,
                 onThreadChipClick = { showThreadSheet = true },
-                onClearThreadFilter = { viewModel.setThreadFilter(null) }
+                onClearThreadFilter = { viewModel.setThreadFilter(null) },
+                onReactionChipClick = { showReactionSheet = true },
+                onClearReactionFilter = { viewModel.setReactionFilter(null) }
             )
 
             if (uiState.isLoading) {
@@ -119,8 +155,11 @@ private fun FilterChips(
     filters: SearchFilters,
     selectedThread: com.plusorminustwo.postmark.domain.model.Thread?,
     onFiltersChange: (SearchFilters) -> Unit,
+    onDateRangeChange: (SearchDateRange) -> Unit,
     onThreadChipClick: () -> Unit,
-    onClearThreadFilter: () -> Unit
+    onClearThreadFilter: () -> Unit,
+    onReactionChipClick: () -> Unit,
+    onClearReactionFilter: () -> Unit
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -145,10 +184,41 @@ private fun FilterChips(
             )
         }
         item {
+            val rangeSelected = filters.dateRange == SearchDateRange.TODAY
             FilterChip(
-                selected = filters.hasReaction,
-                onClick = { onFiltersChange(filters.copy(hasReaction = !filters.hasReaction)) },
-                label = { Text("Reactions") }
+                selected = rangeSelected,
+                onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.TODAY) },
+                label = { Text("Today") }
+            )
+        }
+        item {
+            val rangeSelected = filters.dateRange == SearchDateRange.LAST_7_DAYS
+            FilterChip(
+                selected = rangeSelected,
+                onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.LAST_7_DAYS) },
+                label = { Text("7 days") }
+            )
+        }
+        item {
+            val rangeSelected = filters.dateRange == SearchDateRange.LAST_30_DAYS
+            FilterChip(
+                selected = rangeSelected,
+                onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.LAST_30_DAYS) },
+                label = { Text("30 days") }
+            )
+        }
+        item {
+            val reactionActive = filters.reactionEmoji != null
+            FilterChip(
+                selected = reactionActive,
+                onClick = {
+                    if (reactionActive) onClearReactionFilter() else onReactionChipClick()
+                },
+                label = { Text(filters.reactionEmoji ?: "Reaction") },
+                trailingIcon = if (reactionActive) {
+                    { Icon(Icons.Default.Clear, contentDescription = "Clear reaction filter",
+                        modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+                } else null
             )
         }
         item {
@@ -167,6 +237,8 @@ private fun FilterChips(
         }
     }
 }
+
+
 
 @Composable
 private fun SearchResultRow(message: Message, query: String, onClick: () -> Unit) {
