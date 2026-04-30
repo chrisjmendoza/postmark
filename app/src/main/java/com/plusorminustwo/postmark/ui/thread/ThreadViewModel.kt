@@ -319,6 +319,22 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    // ── Mute / Pin ────────────────────────────────────────────────────────────
+
+    fun toggleMute() {
+        val current = uiState.value.thread?.isMuted ?: return
+        viewModelScope.launch {
+            threadRepository.updateMuted(threadId, !current)
+        }
+    }
+
+    fun togglePin() {
+        val current = uiState.value.thread?.isPinned ?: return
+        viewModelScope.launch {
+            threadRepository.updatePinned(threadId, !current)
+        }
+    }
+
     // ── Highlight (scroll-jump target) ────────────────────────────────────────
 
     fun highlightMessage(messageId: Long) {

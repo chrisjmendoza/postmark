@@ -287,6 +287,8 @@ private class FakeThreadDao : ThreadDao {
     override suspend fun update(thread: ThreadEntity) = Unit
     override suspend fun delete(thread: ThreadEntity) = Unit
     override suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy) = Unit
+    override suspend fun updateMuted(threadId: Long, isMuted: Boolean) = Unit
+    override suspend fun updatePinned(threadId: Long, isPinned: Boolean) = Unit
     override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
     override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) = Unit
@@ -321,4 +323,5 @@ private class FakeReactionDao : ReactionDao {
     override fun observeTopEmojisBySender(senderAddress: String): Flow<List<com.plusorminustwo.postmark.data.db.dao.EmojiCount>> = flowOf(emptyList())
     override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
     override suspend fun deleteAll() = Unit
+    override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
 }

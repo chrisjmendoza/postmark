@@ -33,6 +33,12 @@ class ThreadRepository @Inject constructor(
     suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy) =
         dao.updateBackupPolicy(threadId, policy)
 
+    suspend fun updateMuted(threadId: Long, isMuted: Boolean) =
+        dao.updateMuted(threadId, isMuted)
+
+    suspend fun updatePinned(threadId: Long, isPinned: Boolean) =
+        dao.updatePinned(threadId, isPinned)
+
     suspend fun getThreadsForBackup(): List<Thread> =
         dao.getThreadsForBackup().map { it.toDomain() }
 

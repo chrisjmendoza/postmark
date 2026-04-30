@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.Message
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -29,6 +30,39 @@ fun SearchScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showThreadSheet by remember { mutableStateOf(false) }
+    var showEmojiSheet by remember { mutableStateOf(false) }
+
+    if (showEmojiSheet) {
+        ModalBottomSheet(onDismissRequest = { showEmojiSheet = false }) {
+            Text(
+                "Filter by reaction",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            if (uiState.reactionEmojis.isEmpty()) {
+                Text(
+                    "No reactions yet",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            } else {
+                LazyColumn {
+                    items(uiState.reactionEmojis) { emoji ->
+                        ListItem(
+                            headlineContent = { Text(emoji) },
+                            modifier = Modifier.clickable {
+                                viewModel.onFiltersChange(uiState.filters.copy(hasReaction = true))
+                                showEmojiSheet = false
+                            }
+                        )
+                        HorizontalDivider()
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
 
     if (showThreadSheet) {
         ModalBottomSheet(onDismissRequest = { showThreadSheet = false }) {
@@ -41,7 +75,7 @@ fun SearchScreen(
                 items(uiState.threads, key = { it.id }) { thread ->
                     ListItem(
                         headlineContent = { Text(thread.displayName) },
-                        supportingContent = { Text(thread.address) },
+                        supportingContent = { Text(formatPhoneNumber(thread.address)) },
                         modifier = Modifier.clickable {
                             viewModel.setThreadFilter(thread)
                             showThreadSheet = false
@@ -91,7 +125,8 @@ fun SearchScreen(
                 selectedThread = uiState.selectedThread,
                 onFiltersChange = viewModel::onFiltersChange,
                 onThreadChipClick = { showThreadSheet = true },
-                onClearThreadFilter = { viewModel.setThreadFilter(null) }
+                onClearThreadFilter = { viewModel.setThreadFilter(null) },
+                onReactionChipClick = { showEmojiSheet = true }
             )
 
             if (uiState.isLoading) {
@@ -120,7 +155,8 @@ private fun FilterChips(
     selectedThread: com.plusorminustwo.postmark.domain.model.Thread?,
     onFiltersChange: (SearchFilters) -> Unit,
     onThreadChipClick: () -> Unit,
-    onClearThreadFilter: () -> Unit
+    onClearThreadFilter: () -> Unit,
+    onReactionChipClick: () -> Unit
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -147,8 +183,15 @@ private fun FilterChips(
         item {
             FilterChip(
                 selected = filters.hasReaction,
-                onClick = { onFiltersChange(filters.copy(hasReaction = !filters.hasReaction)) },
-                label = { Text("Reactions") }
+                onClick = {
+                    if (filters.hasReaction) onFiltersChange(filters.copy(hasReaction = false))
+                    else onReactionChipClick()
+                },
+                label = { Text("Reactions") },
+                trailingIcon = if (filters.hasReaction) {
+                    { Icon(Icons.Default.Clear, contentDescription = "Clear reaction filter",
+                        modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+                } else null
             )
         }
         item {
