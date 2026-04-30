@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: April 29, 2026
+Last updated: April 30, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -9,7 +9,7 @@ Package: com.plusorminustwo.postmark
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 5
+- Room (database) — currently on schema version 5 (6 pending merge)
 - Hilt (dependency injection)
 - WorkManager (scheduled backup)
 - Kotlin Coroutines + Flow
@@ -248,20 +248,32 @@ in a future session once core features are solid.
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
-1. THREAD ⋮ MENU STUBS TO WIRE UP
+1. MERGE copilot/featfix-avatar-color-seed → feat/ui-improvements
+   Agent did all 5 tasks from our queue but branched from master.
+   Cherry-pick was attempted but hit conflicts (master was missing
+   isMuted + topReactionEmojisJson). Conflicts are mechanical and
+   understood — all have known resolutions. Do this next session.
+   New work in that branch:
+   - LetterAvatar colorSeed param; call sites pass thread.address
+   - isPinned on Thread/ThreadEntity + MIGRATION_5_6 (schema v6)
+   - togglePin() in ThreadViewModel; Pin/Unpin in ⋮ menu
+   - 📌 and 🔕 icons in ConversationsScreen thread row
+   - PhoneNumberFormatter (NANP E.164 → (xxx) xxx-xxxx) + 14 tests
+   - observeDistinctEmojis() DAO → SearchRepository → SearchViewModel
+   - PinnedThreadTest (6 sort-order + repo delegation tests)
+
+2. THREAD ⋮ MENU STUBS TO WIRE UP
    - Search in thread (navigate to search scoped
      to threadId)
    - Enforce mute in SmsReceiver (isMuted stored;
      notification suppression not yet wired)
    - Block number (system intent or local block list)
-   - Muted thread visual indicator in conversation list
 
-2. SEARCH — remaining item
+3. SEARCH — remaining item
    - Search within a single thread (entry point:
      search icon in thread toolbar)
-   - Reaction emoji list data-driven (currently
-     hardcoded in SearchScreen; should query
-     distinct emojis from reactions table)
+   - Reaction emoji list already data-driven in
+     agent branch (pending merge above)
 
 3. EXPORT — rendered image
    Draw conversation to Canvas, convert to Bitmap,
@@ -279,6 +291,17 @@ IN PROGRESS / NEXT UP
 5. BACKUP — remaining
    - Backup restore (read JSON, apply to Room with
      migration version check)
+✅ Scroll-to-date fix — DONE (April 30)
+   scrollOffsetToAlignTop() in DateNavigation.kt.
+   reverseLayout=true offset math so date header lands
+   at TOP of viewport. 6 unit tests.
+✅ TODO.md expanded — DONE (April 30)
+   Added: starred/pinned messages, flag for later,
+   message retention & auto-cleanup (3 scope modes),
+   locked messages sections.
+✅ Two stale PRs closed — DONE (April 30)
+   PR #2 (scroll-to-date) and PR #3 (Tasks 1-5)
+   both superseded by direct commits on feat/ui-improvements.
 ✅ Search date range filter — DONE (April 29)
    Preset chips (Today / 7 days / 30 days) via
    SearchDateRange enum + toBoundsMs().
