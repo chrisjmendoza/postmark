@@ -13,8 +13,8 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Custom date range selection** — "Date range" option in selection
       mode; two-field date picker bottom sheet; auto-selects all messages
       within range. Useful for exporting a full month at once.
-- [ ] **Scroll-to-date fix** — first message of selected date should
-      appear near top of screen, not bottom. (In progress.)
+- [x] **Scroll-to-date fix** — first message of selected date should
+      appear near top of screen, not bottom.
 
 ### Default SMS role + real sync (Samsung S24 Ultra blocker)
 - [ ] **Onboarding screen** — explain why default SMS role is needed
@@ -316,3 +316,5 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] Selection → Export (Copy via ExportBottomSheet)
 - [x] Runtime permissions + first-launch sync scaffold
 - [x] 220 passing tests
+- [x] Scroll-to-date fix — date header aligns to top of viewport
+      (`scrollOffsetToAlignTop` in DateNavigation.kt, 6 unit tests)
