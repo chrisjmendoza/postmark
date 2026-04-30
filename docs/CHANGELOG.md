@@ -6,7 +6,7 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-04-29
 
-### Emoji reaction picker — iMessage-style pill + expanded sheet
+### Emoji reaction picker — compact pill + expanded sheet
 - **Quick reaction tray**: Reduced from 7+ items to 5 defaults (❤️ 👍 😂 😮 🔥) + ➕ "more" button. `DEFAULT_QUICK_EMOJIS` and `buildQuickEmojiList` limit updated to 5.
 - **Pill styling**: 44dp touch targets, 24sp emoji font. `Surface` with `#2C2C2E` bg, `0.5dp #3A3A3C` border, 24dp corner radius, 8dp elevation shadow.
 - **More button**: 44dp, 20dp `Add` icon tinted `#8E8E93` — opens `EmojiPickerBottomSheet`.
@@ -28,7 +28,7 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-04-28
 
-### Reaction chip — final positioning (iMessage badge style)
+### Reaction chip — final positioning (badge style, anchored to bubble)
 - **Crash fix**: `padding(top = (-6).dp)` → `offset(y = (-6).dp)` — Compose throws on negative padding values.
 - **Corner anchoring**: Bubble + chip wrapped in a `Box(widthIn(max=280.dp))`; chip uses `Alignment.BottomEnd` + `offset(y = 16.dp)` so it sits at the bubble's bottom-right corner regardless of message length or direction.
 - **Layout reservation**: `Spacer(height = 16.dp)` added when reactions present — reserves the chip's visual overhang so the next message never overlaps it.
@@ -303,7 +303,7 @@ The stats screen was wired up but showed zeros because `StatsUpdater` was only c
 ### Export
 - `ExportFormatter.formatForCopy()` — clean labeled transcript.
 - `ExportBottomSheet` — Copy + Share buttons; wired to selection in `ThreadScreen`.
-- Apple Reaction copy format improved.
+- Reaction copy format improved.
 
 ### Developer Tools
 - Developer Options screen in Settings — sample data seeding, sync trigger, database inspection tools.

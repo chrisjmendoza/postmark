@@ -197,6 +197,53 @@ Ordered by priority tier. Work top-to-bottom within each tier.
         Name (10:03 AM)
         Message text
         ❤️ reacted by Name
+- [ ] **Flag message for later** — long-press → "Remind me to reply";
+      user picks a time; schedules a notification with a jump-to-message
+      deep-link action. Flagged bubble gets a small 🔖 indicator.
+      Flagged messages list accessible from thread ⋮ menu or global
+      Settings.
+
+### Starred & pinned messages
+- [ ] **Star / pin a message** — long-press → "Pin" (Discord-style).
+      `isPinned` boolean on `MessageEntity`. Room migration required.
+      Wording TBD (pin / star / favorite — same underlying feature).
+- [ ] **Pinned messages panel** — accessible from thread toolbar icon
+      or ⋮ menu. Scrollable list of pinned messages in this thread;
+      tap jumps to that message in context.
+- [ ] **Pinned indicator on bubble** — small inline 📌 label or icon
+      on pinned bubbles so they are identifiable while scrolling.
+- [ ] **Pinned messages exempt from auto-cleanup** — coordinate with
+      message retention settings below; pinned messages are never
+      swept by automatic or bulk delete operations.
+
+### Message retention & auto-cleanup
+- [ ] **Auto-cleanup setting** — new section in Settings alongside
+      Backup. Configurable threshold: 1 month / 3 months / 6 months /
+      1 year / custom / never (default). WorkManager periodic job
+      executes cleanup on schedule.
+- [ ] **Scope modes** — three options selectable in Settings:
+        Global — apply one threshold to all threads.
+        Per-thread override — individual threads can carry their own
+          threshold, set via the thread ⋮ menu.
+        Exclusionary — global threshold applies to every thread
+          *except* those added to an explicit exclusion list in
+          Settings; useful for protecting key conversations while
+          letting everything else age out.
+- [ ] **Preview before delete** — before each cleanup run, surface
+      a summary ("X messages across Y threads will be deleted") with
+      an option to review the affected threads or cancel. Suppressible
+      with a "Don't ask again" toggle.
+- [ ] **Locked messages** — `isLocked` boolean on `MessageEntity`.
+      Long-press → "Lock" action. Locked messages are skipped by
+      auto-cleanup, global bulk-delete, and all non-explicit delete
+      operations. Require a deliberate single-message delete to
+      remove. Show a 🔒 indicator on the bubble.
+- [ ] **Pinned + locked exemption enforced in cleanup job** —
+      cleanup query must filter out rows where `isPinned = 1` OR
+      `isLocked = 1` before deleting.
+- [ ] **Cleanup log** — record last run time, threads affected, and
+      message count deleted. Surface in the Backup status area in
+      Settings.
 
 ### Settings — completeness
 - [ ] **Notification settings screen** — per-conversation sound,
