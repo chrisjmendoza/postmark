@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: April 29, 2026
+Last updated: May 2, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -7,9 +7,9 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🔴 TIER 1 — Core Loop (app unusable as daily driver without these)
 
 ### Thread view — finish the experience
-- [ ] **Reaction chip position** — move chips to between bubble and
-      timestamp, overlapping bubble bottom by ~6dp. Sent: align END.
-      Received: align START. See rendering reference in project chat.
+- [x] **Reaction chip position** — chips sit at bubble bottom using
+      Box + Alignment (BottomStart for sent, BottomEnd for received),
+      offset(y=16.dp) overhang, Spacer only at cluster tail.
 - [ ] **Custom date range selection** — "Date range" option in selection
       mode; two-field date picker bottom sheet; auto-selects all messages
       within range. Useful for exporting a full month at once.
@@ -17,9 +17,9 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       appear near top of screen, not bottom.
 
 ### Default SMS role + real sync (Samsung S24 Ultra blocker)
-- [ ] **Onboarding screen** — explain why default SMS role is needed
-      before firing the system dialog cold. Show what features are
-      available in read-only mode vs full mode. One-time, dismissable.
+- [x] **Onboarding screen** — implemented in OnboardingScreen.kt;
+      RoleManager (API 29+) / ACTION_CHANGE_DEFAULT fallback;
+      onboarding_completed pref gates it to first launch only.
 - [ ] **Samsung READ_SMS fix** — `content://sms` returns null cursor
       despite permissions. Investigate Samsung-specific ContentProvider
       URI variants (`content://sms/inbox`, `content://sms/sent`).
@@ -30,12 +30,11 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       Don't re-prompt on every launch.
 
 ### Notifications — required for default SMS role
-- [ ] **Notification channel setup** — create channels on first launch:
-      Messages (high priority), Backup status (low priority).
-      Required for Android 8+.
-- [ ] **Incoming SMS notification** — heads-up notification from
-      `SmsReceiver` showing sender name + message preview.
-      Requires `POST_NOTIFICATIONS` permission on API 33+.
+- [x] **Notification channel setup** — incoming_sms (IMPORTANCE_HIGH)
+      and sync_service (IMPORTANCE_LOW) created in PostmarkApplication.
+- [x] **Incoming SMS notification** — SmsReceiver posts heads-up with
+      sender + body; multi-part bodies reassembled; POST_NOTIFICATIONS
+      declared and requested on API 33+.
 - [ ] **Enforce mute in SmsReceiver** — `isMuted` flag is stored in DB
       but `SmsReceiver` doesn't check it yet; muted threads still
       trigger notifications. Check `ThreadRepository.isMuted(address)`
@@ -184,17 +183,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Muted thread visual indicator** — no UI cue that a thread
       is muted. Add a muted icon (🔕) to the thread row in
       `ConversationsScreen` and optionally in the thread toolbar.
-- [ ] **Reaction chip cluster-aware spacing** — current code adds a
-      `Spacer(12.dp)` to every message that has a reaction, which
-      breaks tight cluster grouping. Only add extra clearance when the
-      message is at the BOTTOM of a cluster or is a standalone single
-      message; TOP/MIDDLE messages in a cluster should rely on the
-      natural inter-bubble gap instead of a forced spacer.
-- [ ] **Reaction chip theming** — reaction pill backgrounds are
-      hardcoded hex values (e.g. `0xFF1A3A5C`). Replace with
-      `MaterialTheme.colorScheme.primaryContainer` (with adjusted
-      alpha) or `surfaceContainer` so pills adapt correctly to future
-      light mode and system accent color changes.
+      (Pending merge of `copilot/featfix-avatar-color-seed` which
+      already implements this.)
+- [x] **Reaction chip cluster-aware spacing** — Spacer(12.dp) only
+      added at BOTTOM/SINGLE cluster positions; TOP/MIDDLE use natural
+      inter-bubble gap.
+- [x] **Reaction chip theming** — ReactionPills uses
+      MaterialTheme.colorScheme.primaryContainer / surfaceContainer /
+      primary / outlineVariant; no hardcoded hex values.
 - [ ] **Reaction chip overflow handling** — short messages (e.g. "Yes")
       with 3+ reactions can produce a pill row wider than the bubble.
       For sent messages use a negative horizontal offset from
