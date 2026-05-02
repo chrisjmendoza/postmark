@@ -984,10 +984,13 @@ private fun CalendarDayCell(
 
 @Composable
 private fun DeliveryStatusIndicator(status: Int, modifier: Modifier = Modifier) {
+    // Colored ticks: yellow = sent to carrier, green = delivered to device, red = failed.
+    val sentColor      = Color(0xFFFFCC00)   // amber-yellow
+    val deliveredColor = Color(0xFF4CAF50)   // material green
     val (icon, tint) = when (status) {
         DELIVERY_STATUS_PENDING   -> Icons.Default.Schedule to MaterialTheme.colorScheme.onSurfaceVariant
-        DELIVERY_STATUS_SENT      -> Icons.Default.Done to MaterialTheme.colorScheme.onSurfaceVariant
-        DELIVERY_STATUS_DELIVERED -> Icons.Default.DoneAll to MaterialTheme.colorScheme.primary
+        DELIVERY_STATUS_SENT      -> Icons.Default.Done to sentColor
+        DELIVERY_STATUS_DELIVERED -> Icons.Default.DoneAll to deliveredColor
         DELIVERY_STATUS_FAILED    -> Icons.Default.Error to MaterialTheme.colorScheme.error
         else -> return
     }
