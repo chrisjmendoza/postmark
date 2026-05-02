@@ -83,6 +83,20 @@ import androidx.compose.ui.unit.IntOffset
 
 private val PILL_HIDE_DELAY_MS = 1_800L
 
+/**
+ * Entry-point composable for a single conversation thread.
+ *
+ * Thin shell: collects state from [ThreadViewModel] and forwards it to [ThreadContent].
+ * Navigation supplies [threadId] via SavedStateHandle. Optional [scrollToMessageId] and
+ * [scrollToDate] params are used when arriving from search results or the calendar picker.
+ *
+ * @param threadId          Room primary key of the thread to display.
+ * @param scrollToMessageId If >= 0, the list will scroll to and highlight this message on load.
+ * @param scrollToDate      ISO-8601 date string ("yyyy-MM-dd"); if non-empty, scrolls to that day.
+ * @param onBack            Called when the user presses the back/up button.
+ * @param onViewStats       Navigates to the Stats screen scoped to this thread.
+ * @param onBackupSettingsClick Navigates to the Backup Settings screen.
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ThreadScreen(
@@ -130,6 +144,19 @@ fun ThreadScreen(
     )
 }
 
+/**
+ * Stateless composable that renders the full thread UI.
+ *
+ * Separated from [ThreadScreen] so it can be previewed and tested in isolation — all
+ * state is passed in and all events are forwarded out via lambdas.
+ *
+ * Layout overview:
+ *  - Scaffold with a context-sensitive top bar (normal / selection mode / action mode)
+ *  - [LazyColumn] with `reverseLayout = true` — newest messages at the bottom
+ *  - Floating date pill overlay at the top of the list
+ *  - Scroll-to-latest FAB when scrolled up
+ *  - Full-screen [EmojiReactionPopup] overlay when a bubble is long-pressed
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ThreadContent(
@@ -634,6 +661,29 @@ private fun FloatingDatePill(
 
 // ── MessageBubble ──────────────────────────────────────────────────────────────
 
+/**
+ * Renders a single message bubble with optional reaction pills below it.
+ *
+ * Tap behaviour depends on the current mode:
+ *  - Normal mode + ON_TAP timestamp pref  → toggles the timestamp
+ *  - Selection mode                        → toggles this message's selected state
+ *  - Long press (normal mode only)         → opens the emoji reaction popup
+ *
+ * Cluster-aware: [clusterPosition] controls which corners are rounded/flat so that
+ * consecutive same-sender messages appear visually joined.
+ *
+ * @param message              The message to render.
+ * @param clusterPosition      Position within a run of same-sender messages.
+ * @param isSelected           Whether this bubble is part of the current selection.
+ * @param isSelectionMode      Whether the screen is in multi-select mode.
+ * @param isHighlighted        True when arriving from a search result (tertiaryContainer tint).
+ * @param onToggleSelect       Called when the bubble is tapped in selection mode.
+ * @param onLongClick          Called with the bubble's root-Y (pixels) on long press.
+ * @param onReactionClick      Called with the emoji string when a reaction pill is tapped.
+ * @param timestampPref        Global user preference for when timestamps are shown.
+ * @param isTimestampExpanded  Whether the timestamp is currently revealed (ON_TAP mode).
+ * @param onToggleTimestamp    Called when a tap should toggle the timestamp.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
@@ -1130,6 +1180,20 @@ private fun smsCounter(length: Int): String? {
 
 // ── ReactionPills ─────────────────────────────────────────────────────────────
 
+/**
+ * Displays the emoji reaction chips for a single message.
+ *
+ * Reactions are grouped by emoji; each group shows the emoji + a count when > 1 reactor.
+ * Chips the local user has added (senderAddress == [SELF_ADDRESS]) use a highlighted style.
+ *
+ * Uses [FlowRow] so that chips wrap to a second line instead of overflowing the bubble width.
+ * The caller constrains [modifier] with `widthIn(max = bubbleWidth)` to enforce the boundary.
+ *
+ * @param reactions      Full list of [Reaction] objects on the message.
+ * @param isSent         Affects alignment — sent bubbles pin chips to the start edge, received to end.
+ * @param onReactionClick  Called with the emoji string when a chip is tapped (toggles the reaction).
+ * @param modifier       Receives the `widthIn` + alignment constraints from [MessageBubble].
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReactionPills(

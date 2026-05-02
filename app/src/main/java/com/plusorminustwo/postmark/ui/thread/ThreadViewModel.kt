@@ -26,6 +26,22 @@ import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
 
+/**
+ * All UI state for the thread screen, collected by [ThreadScreen] and rendered by [ThreadContent].
+ *
+ * @property thread                  The current [Thread] metadata (display name, muted, pinned, etc.).
+ * @property messages                All messages in this thread, newest last (LazyColumn renders reversed).
+ * @property selectedMessageIds      IDs of messages currently checked in multi-select mode.
+ * @property isSelectionMode         True when the screen is in multi-select mode.
+ * @property selectionScope          Scope of the current selection (MESSAGES or ALL).
+ * @property replyText               Current text in the reply bar input field.
+ * @property isSending               True while an outgoing message is being handed to telephony.
+ * @property showDefaultSmsDialog    True when the "Set as default SMS app" dialog should be shown.
+ * @property expandedTimestampIds    IDs of bubbles whose timestamps are currently revealed (ON_TAP mode).
+ * @property reactionPickerMessageId ID of the message whose action bar / emoji picker is open, or null.
+ * @property reactionPickerBubbleY   Root-Y of the long-pressed bubble, used to position the emoji popup.
+ * @property highlightedMessageId    ID of the message highlighted after a search-jump; clears after 2 s.
+ */
 data class ThreadUiState(
     val thread: Thread? = null,
     val messages: List<Message> = emptyList(),
@@ -41,6 +57,16 @@ data class ThreadUiState(
     val highlightedMessageId: Long? = null
 )
 
+/**
+ * ViewModel for the thread (conversation) screen.
+ *
+ * Owns all mutable state for message selection, the reply bar, the emoji reaction picker,
+ * and the timestamp display preference. Delegates persistence to [ThreadRepository] and
+ * [MessageRepository], and SMS sending to [SmsManagerWrapper].
+ *
+ * The public [uiState] StateFlow is a flat [ThreadUiState] snapshot assembled by combining
+ * several internal flows so that [ThreadContent] can be a fully stateless composable.
+ */
 @HiltViewModel
 class ThreadViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,

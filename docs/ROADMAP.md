@@ -38,7 +38,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **Message grouping** — consecutive same-sender messages within 3 min cluster; sender-side corners narrow (TOP/MIDDLE); timestamp shown at cluster tail only
 - [x] **Emoji reaction picker** — long-press bubble → iMessage-style pill (5 usage-ranked quick reactions + ➕ more); `EmojiPickerBottomSheet` with 8-col grid, 4 sections, search; `EmojiData.kt` houses section data
 - [x] **Message action top bar** — long-press → Copy (toast) / Select / Forward; `ActionItem` tints corrected; scrim restricted to content area below action bar
-- [ ] Per-thread backup policy UI — `⋮` overflow menu → 3-option radio dialog
+- [x] Per-thread backup policy UI — `⋮` overflow menu → 3-option radio dialog
 
 ---
 
@@ -51,8 +51,8 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Last backup status in SharedPrefs
 - [x] `BackupSettingsScreen` scaffold
 - [x] Wire "Back up now" button to `BackupScheduler.runNow()` via injected instance
-- [ ] Show backup history list (scan `getExternalFilesDir("backups")`)
-- [ ] `WorkManager` status observer — show live "Backup running…" indicator
+- [x] Show backup history list (scan `getExternalFilesDir("backups")`)
+- [x] `WorkManager` status observer — show live "Backup running…" indicator
 - [ ] Backup restore (read JSON, apply to Room with migration version check)
 
 ---
@@ -88,10 +88,10 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] `SearchScreen` with debounced query input
 - [x] Filter chips: Sent / Received / Reactions
 - [x] Query highlighting in results (`buildAnnotatedString`)
-- [ ] **Date range filter** — date picker chips for start/end
-- [ ] **Thread filter chip** — opens thread picker bottom sheet
-- [ ] **Reaction filter** — emoji picker; tapping emoji filters to messages that received that reaction
-- [ ] Tapping result navigates to that exact message in `ThreadScreen` (scroll-to + highlight)
+- [x] **Date range filter** — date picker chips for start/end
+- [x] **Thread filter chip** — opens thread picker bottom sheet
+- [x] **Reaction filter** — emoji picker; tapping emoji filters to messages that received that reaction
+- [x] Tapping result navigates to that exact message in `ThreadScreen` (scroll-to + highlight)
 - [ ] Search within a single thread (entry point: search icon in thread toolbar)
 
 ---
@@ -142,7 +142,7 @@ Philosophy: core app is free forever. A single one-time "Postmark Pro" purchase 
 
 - MMS full sync (image/video attachments stored as file references)
 - Notification for incoming SMS
-- Pinned conversations
+- [x] Pinned conversations
 - Search result count / pagination
 - iCloud backup import (parse Apple `.db` export)
 - Widget showing latest conversation

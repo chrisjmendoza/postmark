@@ -4,6 +4,28 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-05-02
+
+### Reaction pill overflow fix
+- **`ReactionPills` composable** — replaced `Row` with `FlowRow` so that when a message has many
+  reactions, the pills wrap to a second line instead of overflowing outside the bubble boundary.
+- **Bubble width tracking** — the inner bubble `Box` now reports its measured pixel width via
+  `onSizeChanged`; the resulting `widthIn(max = …)` constraint on `ReactionPills` ensures pills
+  never stretch wider than the bubble they belong to.
+- **`@OptIn(ExperimentalLayoutApi::class)`** added to `ReactionPills` to opt into the stable
+  `FlowRow` API from Compose Foundation 1.7 (included via Compose BOM `2025.01.00`).
+
+### Code documentation pass
+- KDoc added to all domain model classes (`Thread`, `Message`, `Reaction`, `BackupPolicy`,
+  `ThreadStats`, `EmojiCount`) and all Room entity classes (`ThreadEntity`, `MessageEntity`,
+  `ReactionEntity`, `ThreadStatsEntity`).
+- KDoc added to `ThreadScreen`, `ThreadContent`, `MessageBubble`, `ReactionPills`,
+  `ThreadUiState`, and `ThreadViewModel` for first-time-reader clarity.
+
+### Tests (276 total, unchanged — overflow fix is pure Compose layout with no new pure logic)
+
+---
+
 ## 2026-04-30
 
 ### 1. Avatar color seed fix

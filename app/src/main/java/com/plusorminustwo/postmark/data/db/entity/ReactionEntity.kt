@@ -6,6 +6,16 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.plusorminustwo.postmark.domain.model.Reaction
 
+/**
+ * Room entity for a single emoji reaction on a message.
+ *
+ * Reactions are parsed from Apple iMessage reaction phrases during sync, or created
+ * directly when the local user taps a reaction pill. Foreign-keyed to [MessageEntity]
+ * with CASCADE delete. Indexed on `messageId` (for per-message lookups) and `emoji`
+ * (for stats and search filtering).
+ *
+ * Maps 1-to-1 with [com.plusorminustwo.postmark.domain.model.Reaction].
+ */
 @Entity(
     tableName = "reactions",
     foreignKeys = [

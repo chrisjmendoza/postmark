@@ -4,6 +4,19 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.PrimaryKey
 
+/**
+ * Room entity holding pre-computed statistics for a single conversation thread.
+ *
+ * One row per thread, keyed by [threadId]. Cascade-deleted when the parent thread is removed.
+ * JSON columns store complex data structures (maps, lists) as serialised strings and are
+ * deserialised by the stats view model before display.
+ *
+ * @property topEmojisJson         JSON array of `{"emoji":"...","count":N}` objects — top emoji
+ *                                  by frequency in message bodies.
+ * @property topReactionEmojisJson  Same format as above but for emoji reactions (not body text).
+ * @property byDayOfWeekJson        JSON object `{"1":N,"2":N,...,"7":N}` (1=Mon, 7=Sun).
+ * @property byMonthJson            JSON object `{"YYYY-MM":N,...}`.
+ */
 @Entity(
     tableName = "thread_stats",
     foreignKeys = [

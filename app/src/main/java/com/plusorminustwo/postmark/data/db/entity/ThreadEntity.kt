@@ -5,6 +5,12 @@ import androidx.room.PrimaryKey
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Thread
 
+/**
+ * Room entity for a conversation thread.
+ *
+ * Maps 1-to-1 with [com.plusorminustwo.postmark.domain.model.Thread]. Use [toDomain] to convert
+ * for use in the UI layer, and [toEntity] to persist a domain object back to Room.
+ */
 @Entity(tableName = "threads")
 data class ThreadEntity(
     @PrimaryKey val id: Long,
@@ -17,6 +23,10 @@ data class ThreadEntity(
     val isPinned: Boolean = false
 )
 
+/**
+ * Converts a [ThreadEntity] (database row) to a [Thread] domain model.
+ * Called by repository layer before returning data to ViewModels.
+ */
 fun ThreadEntity.toDomain() = Thread(
     id = id,
     displayName = displayName,
@@ -28,6 +38,10 @@ fun ThreadEntity.toDomain() = Thread(
     isPinned = isPinned
 )
 
+/**
+ * Converts a [Thread] domain model to a [ThreadEntity] ready for Room insertion.
+ * Called by repository layer when persisting updates.
+ */
 fun Thread.toEntity() = ThreadEntity(
     id = id,
     displayName = displayName,
