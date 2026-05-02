@@ -68,10 +68,16 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
     suspend fun getAll(): List<MessageEntity>
 
-    // Returns the highest SMS provider _id stored in Room, used by SmsSyncHandler
-    // to bound incremental queries to only rows we haven\'t seen yet.
-    @Query("SELECT MAX(id) FROM messages")
+    // Returns the highest SMS provider _id stored in Room (SMS rows only, excluding
+    // MMS rows whose IDs are offset by MMS_ID_OFFSET). Used by SmsSyncHandler to
+    // bound incremental SMS queries to only rows we haven't seen yet.
+    @Query("SELECT MAX(id) FROM messages WHERE isMms = 0")
     suspend fun getMaxId(): Long?
+
+    // Returns the highest stored MMS row id (already offset). Used by SmsSyncHandler
+    // to bound incremental MMS queries — subtract MMS_ID_OFFSET to get raw MMS _id.
+    @Query("SELECT MAX(id) FROM messages WHERE isMms = 1")
+    suspend fun getMaxMmsId(): Long?
 
     /** Used for the 8-week activity heatmap (all threads). */
     @Query("SELECT * FROM messages WHERE timestamp >= :startMs ORDER BY timestamp ASC")

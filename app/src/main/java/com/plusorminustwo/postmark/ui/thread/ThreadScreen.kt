@@ -8,6 +8,7 @@ import android.app.role.RoleManager
 import android.provider.Telephony
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -233,7 +234,19 @@ private fun ThreadContent(
             itemIndex++ // header item
         }
         if (targetIndex >= 0) {
-            listState.animateScrollToItem(targetIndex)
+            // Snap to item first so layoutInfo is populated for the target.
+            listState.scrollToItem(targetIndex)
+            // Wait for the frame that includes the target item in visibleItemsInfo.
+            snapshotFlow { listState.layoutInfo }
+                .first { info -> info.visibleItemsInfo.any { it.index == targetIndex } }
+            // Compute the offset that centers the item in the viewport.
+            val info = listState.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.index == targetIndex }
+            if (item != null) {
+                val viewportHeight = info.viewportEndOffset - info.viewportStartOffset
+                val centeredOffset = (viewportHeight / 2) - (item.size / 2)
+                listState.animateScrollToItem(targetIndex, scrollOffset = -centeredOffset)
+            }
             onHighlightMessage(scrollToMessageId)
         }
     }
@@ -833,7 +846,6 @@ private fun MessageBubble(
             )
             .then(
                 if (isSelected) Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
-                else if (isHighlighted) Modifier.background(MaterialTheme.colorScheme.tertiaryContainer)
                 else Modifier
             )
             .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),

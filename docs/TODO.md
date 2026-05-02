@@ -197,6 +197,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       default search query. Opt-in toggle could expose them if needed.
 - [ ] **Search within thread** — entry point: search icon in thread
       toolbar. Scopes results to current `threadId`.
+- [ ] **Contact/thread search** — global search currently only searches
+      message bodies; add a second result section (or a tab) that matches
+      `Thread.displayName` / `Thread.address` so users can find a contact
+      by name without scrolling through the full conversations list.
 
 ### Export — image rendering
 - [ ] **Image export** — render selected messages to `Canvas`,

@@ -16,6 +16,8 @@ import androidx.compose.runtime.Immutable
  *                        in [com.plusorminustwo.postmark.data.db.entity.MessageEntity].
  * @param reactions       Apple-style emoji reactions attached to this message, parsed from
  *                        reaction phrases like "Liked \"hello\"" during sync.
+ * @param isMms           True when this message came from `content://mms`; false for SMS.
+ *                        IDs for MMS rows are offset by [MMS_ID_OFFSET] to avoid collisions.
  */
 @Immutable
 data class Message(
@@ -27,5 +29,10 @@ data class Message(
     val isSent: Boolean,
     val type: Int,
     val deliveryStatus: Int = 0,
-    val reactions: List<Reaction> = emptyList()
+    val reactions: List<Reaction> = emptyList(),
+    val isMms: Boolean = false
 )
+
+/** Offset added to raw MMS `_id` values before storing in Room, preventing
+ *  collision with SMS IDs (which top out around 100M on real devices). */
+const val MMS_ID_OFFSET = 10_000_000_000L

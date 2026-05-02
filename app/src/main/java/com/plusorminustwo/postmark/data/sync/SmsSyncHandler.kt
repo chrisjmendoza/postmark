@@ -10,6 +10,7 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.search.parser.AppleReactionParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +32,10 @@ class SmsSyncHandler @Inject constructor(
 
     fun onSmsContentChanged(uri: Uri) {
         scope.launch { syncLatestSms(uri) }
+    }
+
+    fun onMmsContentChanged(uri: Uri) {
+        scope.launch { syncLatestMms(uri) }
     }
 
     // ── Incremental sync ─────────────────────────────────────────────────────
@@ -120,6 +125,104 @@ class SmsSyncHandler @Inject constructor(
                 val reaction = reactionParser.processIncomingMessage(message, threadMessages, message.address)
                 if (reaction != null) messageRepository.insertReaction(reaction)
             }
+        }
+    }
+
+    // ── Incremental MMS sync ──────────────────────────────────────────────────
+    // Mirrors syncLatestSms() but for content://mms. Bound is derived from the
+    // highest stored MMS id (which is offset by MMS_ID_OFFSET) minus the offset,
+    // giving the raw MMS _id to use in the WHERE clause.
+    private suspend fun syncLatestMms(@Suppress("UNUSED_PARAMETER") uri: Uri) {
+        val maxStoredId = messageRepository.getMaxMmsId() ?: 0L
+        // If nothing in DB yet, full sync hasn't run — bail out.
+        if (maxStoredId <= 0L) return
+        val maxRawId = maxStoredId - MMS_ID_OFFSET
+
+        val cursor = context.contentResolver.query(
+            Uri.parse("content://mms"),
+            arrayOf("_id", "thread_id", "date", "msg_box"),
+            "_id > ?", arrayOf(maxRawId.toString()),
+            "_id ASC"
+        ) ?: return
+
+        val newMessages       = mutableListOf<Message>()
+        val ensuredThreadIds  = mutableSetOf<Long>()
+
+        cursor.use {
+            val idIdx     = it.getColumnIndexOrThrow("_id")
+            val threadIdx = it.getColumnIndexOrThrow("thread_id")
+            val dateIdx   = it.getColumnIndexOrThrow("date")
+            val boxIdx    = it.getColumnIndexOrThrow("msg_box")
+
+            while (it.moveToNext()) {
+                val rawId     = it.getLong(idIdx)
+                val threadId  = it.getLong(threadIdx)
+                val dateSec   = it.getLong(dateIdx)
+                val msgBox    = it.getInt(boxIdx)
+                val id        = MMS_ID_OFFSET + rawId
+                val isSent    = msgBox == android.provider.Telephony.Mms.MESSAGE_BOX_SENT
+                val timestamp = dateSec * 1000L
+                val body      = getMmsBodyIncremental(rawId)
+                val address   = getMmsAddressIncremental(rawId, isSent)
+
+                if (threadId !in ensuredThreadIds) {
+                    ensureThread(threadId, address, timestamp)
+                    ensuredThreadIds += threadId
+                }
+
+                newMessages += Message(
+                    id = id,
+                    threadId = threadId,
+                    address = address,
+                    body = body,
+                    timestamp = timestamp,
+                    isSent = isSent,
+                    type = msgBox,
+                    isMms = true
+                )
+            }
+        }
+
+        if (newMessages.isEmpty()) return
+
+        messageRepository.insertAll(newMessages)
+
+        newMessages.groupBy { it.threadId }.forEach { (threadId, msgs) ->
+            val latest = msgs.last()
+            messageRepository.deleteOptimisticMessages(threadId)
+            threadRepository.updateLastMessageAt(threadId, latest.timestamp)
+            threadRepository.updateLastMessagePreview(threadId, latest.body)
+        }
+
+        statsUpdater.recomputeAll()
+    }
+
+    private fun getMmsBodyIncremental(mmsId: Long): String {
+        val cursor = context.contentResolver.query(
+            Uri.parse("content://mms/$mmsId/part"),
+            arrayOf("ct", "text"), null, null, null
+        ) ?: return "[MMS]"
+        val sb = StringBuilder()
+        cursor.use {
+            val ctIdx   = it.getColumnIndexOrThrow("ct")
+            val textIdx = it.getColumnIndexOrThrow("text")
+            while (it.moveToNext()) {
+                if (it.getString(ctIdx) == "text/plain") sb.append(it.getString(textIdx) ?: "")
+            }
+        }
+        return if (sb.isNotEmpty()) sb.toString().trim() else "[MMS]"
+    }
+
+    private fun getMmsAddressIncremental(mmsId: Long, isSent: Boolean): String {
+        val addrType = if (isSent) 151 else 137
+        val cursor = context.contentResolver.query(
+            Uri.parse("content://mms/$mmsId/addr"),
+            arrayOf("address", "type"),
+            "type = ?", arrayOf(addrType.toString()), null
+        ) ?: return "Unknown"
+        return cursor.use {
+            if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow("address")) ?: "Unknown"
+            else "Unknown"
         }
     }
 

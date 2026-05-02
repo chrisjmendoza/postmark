@@ -525,6 +525,7 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun deleteOptimisticMessages(threadId: Long) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun getMaxId(): Long? = null
+    override suspend fun getMaxMmsId(): Long? = null
 }
 
 private class ActionsThreadDao : ThreadDao {

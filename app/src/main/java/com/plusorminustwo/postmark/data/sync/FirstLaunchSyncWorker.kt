@@ -14,6 +14,7 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.search.parser.AppleReactionParser
 import dagger.assisted.Assisted
@@ -35,15 +36,16 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         debugLog("doWork() started — attempt ${runAttemptCount + 1}")
         return try {
-            val result = syncAllSms()
-            if (result.threadCount < 0) {
+            val smsResult = syncAllSms()
+            if (smsResult.threadCount < 0) {
                 val msg = "SMS cursor was null — provider unavailable or permission denied"
                 Log.w(TAG, msg)
                 writeStatus("Failed: $msg")
                 return if (runAttemptCount < 3) Result.retry()
                 else Result.failure(workDataOf(KEY_ERROR to msg))
             }
-            val status = "OK: ${result.threadCount} threads, ${result.messageCount} messages"
+            val mmsCount = syncAllMms()
+            val status = "OK: ${smsResult.threadCount} threads, ${smsResult.messageCount} SMS + $mmsCount MMS"
             Log.i(TAG, "Sync complete — $status")
             writeStatus(status)
             applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -197,6 +199,131 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             }
         } catch (_: SecurityException) {
             null
+        }
+    }
+
+    // ── MMS historical sync ───────────────────────────────────────────────────
+    // Queries content://mms for all stored MMS messages. Runs after syncAllSms()
+    // so that any SMS-originated threads are already in Room; MMS-only threads
+    // are inserted here, and existing threads are updated if MMS has a newer
+    // last message. Returns the count of MMS messages persisted.
+    private suspend fun syncAllMms(): Int {
+        debugLog("Querying content://mms …")
+        val mmsCursor = applicationContext.contentResolver.query(
+            Uri.parse("content://mms"),
+            arrayOf("_id", "thread_id", "date", "msg_box"),
+            null, null, "date ASC"
+        ) ?: run {
+            Log.w(TAG, "MMS cursor was null — skipping MMS sync")
+            return 0
+        }
+
+        val threads  = mutableMapOf<Long, Thread>()
+        val messages = mutableListOf<Message>()
+
+        mmsCursor.use { cursor ->
+            val idIdx     = cursor.getColumnIndexOrThrow("_id")
+            val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
+            val dateIdx   = cursor.getColumnIndexOrThrow("date")
+            val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+
+            while (cursor.moveToNext()) {
+                val rawId     = cursor.getLong(idIdx)
+                val threadId  = cursor.getLong(threadIdx)
+                val dateSec   = cursor.getLong(dateIdx)
+                val msgBox    = cursor.getInt(boxIdx)
+                val id        = MMS_ID_OFFSET + rawId
+                val isSent    = msgBox == Telephony.Mms.MESSAGE_BOX_SENT
+                val timestamp = dateSec * 1000L          // seconds → millis
+                val body      = getMmsBody(rawId)
+                val address   = getMmsAddress(rawId, isSent)
+
+                val existing = threads[threadId]
+                if (existing == null || timestamp > existing.lastMessageAt) {
+                    val displayName = lookupContactName(address) ?: address
+                    threads[threadId] = Thread(
+                        id = threadId,
+                        displayName = displayName,
+                        address = address,
+                        lastMessageAt = timestamp,
+                        lastMessagePreview = body,
+                        backupPolicy = BackupPolicy.GLOBAL
+                    )
+                }
+
+                messages += Message(
+                    id = id,
+                    threadId = threadId,
+                    address = address,
+                    body = body,
+                    timestamp = timestamp,
+                    isSent = isSent,
+                    type = msgBox,
+                    isMms = true
+                )
+            }
+        }
+
+        if (messages.isEmpty()) {
+            debugLog("No MMS messages found")
+            return 0
+        }
+
+        Log.i(TAG, "MMS collected ${threads.size} threads, ${messages.size} messages — persisting …")
+
+        // For each MMS thread: insert if new, or update lastMessageAt/Preview if newer.
+        threads.forEach { (threadId, mmsThread) ->
+            val inRoom = threadRepository.getById(threadId)
+            if (inRoom == null) {
+                threadRepository.upsert(mmsThread)
+            } else if (mmsThread.lastMessageAt > inRoom.lastMessageAt) {
+                threadRepository.updateLastMessageAt(threadId, mmsThread.lastMessageAt)
+                threadRepository.updateLastMessagePreview(threadId, mmsThread.lastMessagePreview)
+            }
+        }
+
+        messages.chunked(500).forEach { chunk -> messageRepository.insertAll(chunk) }
+        Log.i(TAG, "MMS persist complete")
+
+        return messages.size
+    }
+
+    // Reads the text body of an MMS message by querying its part table.
+    // Returns "[MMS]" for media-only messages (photos, audio, etc.) that
+    // have no text/plain part.
+    private fun getMmsBody(mmsId: Long): String {
+        val cursor = applicationContext.contentResolver.query(
+            Uri.parse("content://mms/$mmsId/part"),
+            arrayOf("ct", "text"), null, null, null
+        ) ?: return "[MMS]"
+        val sb = StringBuilder()
+        cursor.use {
+            val ctIdx   = it.getColumnIndexOrThrow("ct")
+            val textIdx = it.getColumnIndexOrThrow("text")
+            while (it.moveToNext()) {
+                if (it.getString(ctIdx) == "text/plain") {
+                    sb.append(it.getString(textIdx) ?: "")
+                }
+            }
+        }
+        return if (sb.isNotEmpty()) sb.toString().trim() else "[MMS]"
+    }
+
+    // Returns the relevant address for an MMS message.
+    // Received messages use PDU type 137 (FROM); sent messages use type 151 (TO).
+    // Falls back to "Unknown" if the address table has no matching row.
+    private fun getMmsAddress(mmsId: Long, isSent: Boolean): String {
+        // 137 = PduHeaders.FROM (sender of received MMS)
+        // 151 = PduHeaders.TO   (recipient of sent MMS)
+        val addrType = if (isSent) 151 else 137
+        val cursor = applicationContext.contentResolver.query(
+            Uri.parse("content://mms/$mmsId/addr"),
+            arrayOf("address", "type"),
+            "type = ?", arrayOf(addrType.toString()), null
+        ) ?: return "Unknown"
+        return cursor.use {
+            if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow("address")) ?: "Unknown"
+            else "Unknown"
         }
     }
 

@@ -43,7 +43,10 @@ data class MessageEntity(
     val timestamp: Long,
     val isSent: Boolean,
     val type: Int = 1,
-    val deliveryStatus: Int = DELIVERY_STATUS_NONE
+    val deliveryStatus: Int = DELIVERY_STATUS_NONE,
+    // True when this row was sourced from content://mms rather than content://sms.
+    // IDs for MMS rows are offset by MMS_ID_OFFSET to prevent primary-key collisions.
+    val isMms: Boolean = false
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -54,7 +57,8 @@ fun MessageEntity.toDomain() = Message(
     timestamp = timestamp,
     isSent = isSent,
     type = type,
-    deliveryStatus = deliveryStatus
+    deliveryStatus = deliveryStatus,
+    isMms = isMms
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -65,5 +69,6 @@ fun Message.toEntity() = MessageEntity(
     timestamp = timestamp,
     isSent = isSent,
     type = type,
-    deliveryStatus = deliveryStatus
+    deliveryStatus = deliveryStatus,
+    isMms = isMms
 )
