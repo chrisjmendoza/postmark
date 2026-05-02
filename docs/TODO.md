@@ -1,5 +1,8 @@
 # Postmark — Active TODOs
 Last updated: May 2, 2026
+> **Known issue (investigate):** SMS sync is incomplete — some conversation
+> threads are missing entirely and some existing threads have gaps in their
+> message history. Needs investigation once Tier 1 UI items are done.
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -46,8 +49,17 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Mark as read action** — second notification action button.
 - [x] **Notification grouping** — bundle multiple messages from same
       thread; summary notification across threads.
-- [ ] **Privacy mode** — option to show "New message" without preview.
-      Per-conversation or global setting.
+- [x] **Privacy mode** — global toggle in Settings → Notifications;
+      when enabled SmsReceiver shows "New message" with no sender/body
+      and omits reply + mark-read actions.
+- [ ] **Pinned / Favorite conversations** — `isPinned` is stored on
+      `ThreadEntity` and threads already sort pinned-first, but the
+      Pin/Unpin option in the thread ⋮ menu is not yet wired to the
+      `updatePinned` DAO call in the UI layer. Wire the menu action
+      so tapping Pin visually pins the thread to the top of the
+      conversation list. Add a ⭐ or 📌 visual treatment to the row
+      so pinned threads are clearly distinct. Should also be accessible
+      via long-press on a conversation row.
 - [ ] **Per-number notification filtering** — let user exclude specific
       numbers/threads from triggering notifications entirely (distinct
       from mute, which suppresses sound but still posts). UI entry point:
@@ -86,8 +98,12 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       per bubble within group thread.
 
 ### Contact integration
-- [ ] **Contact photo in avatar** — `ContactsContract` lookup for
-      photo URI; fall back to deterministic color initial if none.
+- [ ] **Contact photo / profile picture in avatar** — currently all
+      avatars show a colored letter initial. `ContactsContract` lookup
+      for the contact's photo URI should replace it when one exists;
+      fall back to letter initial if no photo. Requires
+      `READ_CONTACTS` (already granted). Use Coil `AsyncImage` with
+      `loadThumbnail` or the photo URI directly.
 - [x] **Phone number formatting** — `formatPhoneNumber()` in
       `PhoneNumberFormatter.kt`; E.164 NANP → `(xxx) xxx-xxxx`;
       wired in Conversations, Thread, and Search screens.
@@ -126,11 +142,19 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ### Blocking and spam (required for Play Store messaging category)
 - [ ] **Block number** — wire up existing stub in ⋮ menu.
       Use Android `BlockedNumberContract` API for system-level
-      blocking. Blocked numbers go to "Blocked" folder, not deleted.
+      blocking. Blocked numbers go to a "Blocked" folder, not deleted.
+      Blocked threads must not generate notifications.
 - [ ] **Blocked conversations screen** — accessible from Settings.
       Shows blocked threads with option to unblock.
-- [ ] **Spam folder** — "Report spam" option moves thread to spam.
-      Separate from blocked. Required for Play Store review.
+- [ ] **Spam detection + Spam folder** — "Report as spam" option in
+      thread ⋮ menu (and inline on notifications from unknown numbers).
+      Moves thread to a separate Spam folder visible in the nav drawer
+      or Settings. Add a `isSpam BOOLEAN DEFAULT 0` flag to
+      `ThreadEntity` (Room migration required); filter spam threads
+      out of the main conversation list. Consider basic heuristics
+      (unknown sender, contains URL + short body) to auto-flag obvious
+      spam with a dismissable banner. Required for Play Store messaging
+      category approval.
 
 ### Search — remaining items
 - [x] **Thread filter chip** — done.
@@ -298,6 +322,11 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       link to GitHub.
 - [ ] **Real app icon** — replace the placeholder envelope with
       proper branded artwork.
+- [ ] **Custom font selection** — Settings → Appearance; let user
+      choose a font family for message bubbles (e.g. Default / Serif /
+      Monospace / a curated set of Google Fonts). Persisted to
+      SharedPreferences and applied via a custom `FontFamily`
+      CompositionLocal so all bubble text updates without restart.
 
 ---
 

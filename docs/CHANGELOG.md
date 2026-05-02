@@ -6,6 +6,44 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-02
 
+### WorkManager / Hilt init fix — NoSuchMethodException resolved
+- **Root cause**: AndroidX Startup's `WorkManagerInitializer` ContentProvider ran before
+  Hilt injected `HiltWorkerFactory`, so WorkManager fell back to its reflection-based
+  factory which cannot resolve `@AssistedInject` constructors — crashing with
+  `NoSuchMethodException: FirstLaunchSyncWorker.<init> [Context, WorkerParameters]`.
+- **`AndroidManifest`** — disabled `WorkManagerInitializer` via `tools:node="remove"` inside
+  a `tools:node="merge"` wrapper on `InitializationProvider`. Added `xmlns:tools` to root.
+- **`app/build.gradle.kts`** — added `buildConfig = true` to `buildFeatures {}` block
+  (AGP 8+ disables `BuildConfig` generation by default; required for `BuildConfig.DEBUG`).
+- **`FirstLaunchSyncWorker`** — all verbose log calls moved behind `private fun debugLog(msg)`
+  helper gated on `BuildConfig.DEBUG`; Samsung fallback now also triggers when
+  `primaryRowCount <= 0` (catches OneUI firmware returning non-null but empty cursor).
+- **`ConversationsViewModel`** — recovery guard on `init`: if `first_sync_completed=true`
+  but the threads table is empty, clears the pref and re-enqueues `FirstLaunchSyncWorker`.
+- **`ThreadDao`** — added `@Query("SELECT COUNT(*) FROM threads") suspend fun count(): Int`.
+- **`ThreadRepository`** — added `suspend fun isEmpty(): Boolean = dao.count() == 0`.
+- **Confirmed on device**: 620 threads + 51 069 messages synced successfully after fix.
+
+### Privacy mode notifications
+- **`PrivacyModeRepository`** (new `data/preferences/`) — `@Singleton`; persists the global
+  privacy-mode toggle to `postmark_prefs`; exposes `enabled: StateFlow<Boolean>` and
+  synchronous `isEnabled()` for use from `SmsReceiver`.
+- **`SmsReceiver`** — injects `PrivacyModeRepository` via `@AndroidEntryPoint`; when privacy
+  mode is enabled the notification title is the `privacy_mode_notification_title` string
+  ("New message") and body is omitted; reply + mark-read actions are also omitted so the
+  notification reveals nothing about the sender or content from the lock screen.
+- **`SettingsViewModel`** — injects `PrivacyModeRepository`; exposes
+  `privacyModeEnabled: StateFlow<Boolean>` and `setPrivacyMode(Boolean)`.
+- **`SettingsScreen`** — new "Notifications" section containing a `ToggleSettingRow` for
+  privacy mode; wired to `SettingsViewModel`.
+- **`strings.xml`** — `privacy_mode_notification_title` string ("New message") added.
+
+### Dev options — Clear sample data
+- **`DevOptionsViewModel.clearSampleData()`** — deletes thread IDs 9 001–9 005 and their
+  messages from Room exactly, leaving real synced data untouched.
+- **`DevOptionsScreen`** — "Clear sample data" `DevButton` added between the existing
+  "Load sample data" and "Clear all data" buttons.
+
 ### Samsung READ_SMS fix + role denial banner
 - **`FirstLaunchSyncWorker`** — when `content://sms` returns a null cursor (affects some Samsung
   OneUI firmware even with `READ_SMS` granted and the default SMS role held), the sync now

@@ -118,5 +118,6 @@ class MuteThreadTest {
         override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
         override suspend fun isMutedByAddress(address: String): Boolean? = muteState
         override suspend fun deleteAll() {}
+        override suspend fun count(): Int = 0
     }
 }

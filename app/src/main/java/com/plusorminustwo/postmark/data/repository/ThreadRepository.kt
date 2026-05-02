@@ -52,6 +52,9 @@ class ThreadRepository @Inject constructor(
 
     suspend fun deleteAll() = dao.deleteAll()
 
+    /** Returns true if the threads table has no rows. */
+    suspend fun isEmpty(): Boolean = dao.count() == 0
+
     /** Returns true if the thread with [address] has notifications muted, false otherwise. */
     suspend fun isMutedByAddress(address: String): Boolean =
         dao.isMutedByAddress(address) ?: false

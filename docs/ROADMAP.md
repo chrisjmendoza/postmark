@@ -14,11 +14,12 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] `SmsManagerWrapper` for sending
 - [x] `SmsContentObserver` watching `content://sms`
 - [x] `SmsSyncHandler` — incremental sync from content provider to Room
-- [x] `FirstLaunchSyncWorker` — full historical sync with retry; Logcat tag `PostmarkSync`; last-sync status written to SharedPrefs
+- [x] `FirstLaunchSyncWorker` — full historical sync with retry; Logcat tag `PostmarkSync`; last-sync status written to SharedPrefs; WorkManager Hilt init fixed (disabled `WorkManagerInitializer` in AndroidManifest)
 - [x] `AppleReactionParser` — 6 emoji × 5 languages, loaded from JSON asset
-- [x] Room schema: Thread, Message, Reaction, ThreadStats; migrations 1→2 (lastMessagePreview), 2→3 (deliveryStatus)
+- [x] Room schema: Thread, Message, Reaction, ThreadStats; migrations 1→2 (lastMessagePreview), 2→3 (deliveryStatus), 4→5 (isMuted, topReactionEmojisJson), 5→6 (isPinned)
 - [x] FTS4 virtual table with INSERT/UPDATE/DELETE sync triggers
 - [x] Hilt DI wired end-to-end
+- [x] **Privacy mode** — global toggle in Settings; `SmsReceiver` shows "New message" without sender/body when enabled; reply + mark-read actions omitted
 
 ---
 

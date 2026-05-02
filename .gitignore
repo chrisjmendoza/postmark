@@ -14,11 +14,6 @@ app/build/
 .claude/
 
 .vscode/
-# temp build/test log files
-*_build.txt
-*_test.txt
-*_err*.txt
-*_run*.txt
-*_compile*.txt
-build_output.txt
+# temp build/test log files — block ALL .txt in the project root
+/*.txt
 .kotlin/

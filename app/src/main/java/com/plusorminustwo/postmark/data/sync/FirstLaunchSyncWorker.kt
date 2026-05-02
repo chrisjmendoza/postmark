@@ -9,6 +9,7 @@ import android.provider.Telephony
 import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
+import com.plusorminustwo.postmark.BuildConfig
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -28,8 +29,11 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     private val statsUpdater: StatsUpdater
 ) : CoroutineWorker(context, params) {
 
+    // Verbose debug logs only appear in debug builds; warnings and errors always fire.
+    private fun debugLog(msg: String) { if (BuildConfig.DEBUG) Log.d(TAG, msg) }
+
     override suspend fun doWork(): Result {
-        Log.d(TAG, "doWork() started — attempt ${runAttemptCount + 1}")
+        debugLog("doWork() started — attempt ${runAttemptCount + 1}")
         return try {
             val result = syncAllSms()
             if (result.threadCount < 0) {
@@ -55,8 +59,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     }
 
     private suspend fun syncAllSms(): SyncResult {
-        Log.d(TAG, "Device: ${Build.MANUFACTURER} ${Build.MODEL} API ${Build.VERSION.SDK_INT}")
-        Log.d(TAG, "Querying content://sms …")
+        debugLog("Device: ${Build.MANUFACTURER} ${Build.MODEL} API ${Build.VERSION.SDK_INT}")
+        debugLog("Querying content://sms …")
 
         val threads = mutableMapOf<Long, Thread>()
         val messages = mutableListOf<Message>()
@@ -65,16 +69,24 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         val primaryCursor = applicationContext.contentResolver.query(
             Telephony.Sms.CONTENT_URI, SMS_PROJECTION, null, null, "${Telephony.Sms.DATE} ASC"
         )
+        val primaryRowCount = primaryCursor?.count ?: -1
+        debugLog("Primary cursor result: ${if (primaryCursor == null) "NULL" else "$primaryRowCount rows"}")
 
-        if (primaryCursor != null) {
-            Log.d(TAG, "Primary cursor: ${primaryCursor.count} rows")
-            primaryCursor.use { processSmsCursor(it, threads, messages) }
+        if (primaryRowCount > 0) {
+            // Happy path: primary URI returned rows — use them directly.
+            debugLog("Using primary cursor ($primaryRowCount rows)")
+            primaryCursor!!.use { processSmsCursor(it, threads, messages) }
         } else {
-            // ── Samsung fallback ──────────────────────────────────────────────
-            // Some Samsung (OneUI) firmware returns null for content://sms even
-            // with READ_SMS granted and the default SMS role held. Querying the
-            // inbox / sent / draft sub-URIs works as an equivalent alternative.
-            Log.w(TAG, "content://sms null — trying Samsung fallback URIs")
+            // ── Samsung / OEM fallback ────────────────────────────────────────
+            // Two known failure modes:
+            //   1. primaryCursor == null  → READ_SMS not fully effective on this ROM
+            //   2. primaryCursor.count == 0 → Samsung OneUI silently returns an
+            //      empty cursor for content://sms even with READ_SMS granted.
+            // In both cases the per-mailbox sub-URIs are readable and return the
+            // actual messages, so we always fall through to them here.
+            primaryCursor?.close()
+            Log.w(TAG, "Primary cursor returned $primaryRowCount rows — trying mailbox fallback URIs")
+
             val fallbackUris = listOf(
                 Uri.parse("content://sms/inbox"),
                 Uri.parse("content://sms/sent"),
@@ -85,7 +97,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 val c = applicationContext.contentResolver.query(
                     uri, SMS_PROJECTION, null, null, "${Telephony.Sms.DATE} ASC"
                 )
-                Log.d(TAG, "Fallback $uri → ${c?.count ?: "null"} rows")
+                debugLog("Fallback $uri → ${c?.count ?: "null"} rows")
                 if (c != null) {
                     anyNonNull = true
                     c.use { processSmsCursor(it, threads, messages) }
@@ -97,11 +109,15 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             }
         }
 
-        Log.d(TAG, "Persisting ${threads.size} threads, ${messages.size} messages …")
+        Log.i(TAG, "Sync collected ${threads.size} threads, ${messages.size} messages — persisting …")
+        if (threads.isEmpty()) {
+            Log.w(TAG, "0 threads collected — DB will remain empty. Check READ_SMS permission and default SMS role.")
+        }
         threadRepository.upsertAll(threads.values.toList())
         messages.chunked(500).forEach { chunk -> messageRepository.insertAll(chunk) }
+        Log.i(TAG, "Persist complete")
 
-        Log.d(TAG, "Running reaction parser …")
+        debugLog("Running reaction parser …")
         threads.keys.forEach { threadId ->
             val threadMsgs = messageRepository.getByThread(threadId)
             threadMsgs.forEach { msg ->
@@ -113,7 +129,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             }
         }
 
-        Log.d(TAG, "Computing thread stats …")
+        debugLog("Computing thread stats …")
         statsUpdater.recomputeAll()
 
         return SyncResult(threads.size, messages.size)

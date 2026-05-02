@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: April 30, 2026
+Last updated: May 2, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -9,7 +9,7 @@ Package: com.plusorminustwo.postmark
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 5 (6 pending merge)
+- Room (database) — currently on schema version 6
 - Hilt (dependency injection)
 - WorkManager (scheduled backup)
 - Kotlin Coroutines + Flow
@@ -53,7 +53,10 @@ Thread
 - id, displayName, address, lastMessageAt,
   lastMessagePreview (added v2),
   backupPolicy (GLOBAL/ALWAYS_INCLUDE/NEVER_INCLUDE),
-  isMuted BOOLEAN DEFAULT false (added v5)
+  isMuted BOOLEAN DEFAULT false (added v5),
+  isPinned BOOLEAN DEFAULT false (added v6)
+
+  Threads sort pinned-first (isPinned DESC, lastMessageAt DESC)
 
 Message
 - id, threadId, address, body, timestamp,
@@ -94,6 +97,8 @@ ALTER TABLE thread_stats ADD COLUMN
 topReactionEmojisJson TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE global_stats ADD COLUMN
 topReactionEmojisJson TEXT NOT NULL DEFAULT '[]'
+Migration 5→6: ALTER TABLE threads ADD COLUMN
+isPinned INTEGER NOT NULL DEFAULT 0
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -185,9 +190,11 @@ WHAT IS WORKING (tested on device)
      proportional bar, chevron
 ✅ StatsUpdater computing real stats from Room data
 ✅ GlobalStats aggregated across all threads
-✅ Room schema v2 migration (non-destructive)
-✅ FirstLaunchSyncWorker (reads from Room,
-   SMS sync deferred — see below)
+✅ Room schema v6 — all migrations non-destructive
+✅ FirstLaunchSyncWorker — full SMS sync confirmed on device
+   (620 threads, 51 069 messages synced on Samsung S24 Ultra)
+✅ Privacy mode — Settings → Notifications toggle; SmsReceiver
+   shows "New message" with no sender/body when enabled
 ✅ ThemePreference persisted in SharedPreferences
 ✅ Thread screen ⋮ overflow menu (DropdownMenu):
    - View stats → navigates to StatsScreen with
@@ -249,68 +256,72 @@ WHAT IS WORKING (tested on device)
      layer (was private in StatsScreen)
 
 ═══════════════════════════════════════════════════════
-DEFERRED — SAMSUNG RESTRICTION
-═══════════════════════════════════════════════════════
-Samsung devices block READ_SMS unless the app is
-set as the default SMS handler. This means:
-- SMS sync from system content provider is deferred
-- Send/receive is deferred
-- All current data comes from manual test data
-  seeded into Room during development
+SAMSUNG SYNC — RESOLVED (May 2, 2026)
+╔═══════════════════════════════════════════════════════
+Two bugs compounded:
+1. WorkManager init: AndroidX Startup ran WorkManagerInitializer
+   before Hilt injected HiltWorkerFactory, causing
+   NoSuchMethodException on FirstLaunchSyncWorker. Fixed by
+   disabling WorkManagerInitializer in AndroidManifest via
+   tools:node="remove".
+2. Samsung READ_SMS: content://sms returns null cursor despite
+   permissions. Fixed by falling back to content://sms/inbox +
+   /sent + /draft when primaryRowCount <= 0.
+✔️ Confirmed working: 620 threads, 51 069 messages synced on
+   Samsung S24 Ultra (OneUI).
 
-Will tackle default SMS role request + full sync
-in a future session once core features are solid.
+⚠️ KNOWN ISSUE: Sync appears incomplete. Some threads are missing
+   entirely and some existing threads have message gaps.
+   Needs investigation — deferred until Tier 1 UI items done.
 
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
-1. MERGE copilot/featfix-avatar-color-seed → feat/ui-improvements
-   Agent did all 5 tasks from our queue but branched from master.
-   Cherry-pick was attempted but hit conflicts (master was missing
-   isMuted + topReactionEmojisJson). Conflicts are mechanical and
-   understood — all have known resolutions. Do this next session.
-   New work in that branch:
-   - LetterAvatar colorSeed param; call sites pass thread.address
-   - isPinned on Thread/ThreadEntity + MIGRATION_5_6 (schema v6)
-   - togglePin() in ThreadViewModel; Pin/Unpin in ⋮ menu
-   - 📌 and 🔕 icons in ConversationsScreen thread row
-   - PhoneNumberFormatter (NANP E.164 → (xxx) xxx-xxxx) + 14 tests
-   - observeDistinctEmojis() DAO → SearchRepository → SearchViewModel
-   - PinnedThreadTest (6 sort-order + repo delegation tests)
+ACTIVE BRANCH: feat/ui-improvements
 
-2. THREAD ⋮ MENU STUBS TO WIRE UP
-   - Search in thread (navigate to search scoped
-     to threadId)
-   - Enforce mute in SmsReceiver (isMuted stored;
-     notification suppression not yet wired)
-   - Block number (system intent or local block list)
+TIER 1 — REMAINING (in priority order)
+1. PINNED CONVERSATIONS — implementing now
+   isPinned on ThreadEntity (schema v6, merged), sort order
+   is pinned-first, pin/unpin icons show in ConversationsScreen,
+   togglePin() exists in ThreadViewModel. ONLY MISSING:
+   - Wire Pin/Unpin ⋮ menu item in ConversationsScreen to
+     viewModel.togglePin(threadId)
+   - Long-press on conversation row as alternate entry point
 
-3. SEARCH — remaining item
-   - Search within a single thread (entry point:
-     search icon in thread toolbar)
-   - Reaction emoji list already data-driven in
-     agent branch (pending merge above)
+2. PER-NUMBER NOTIFICATION FILTERING
+   Let user exclude specific threads from notifying.
+   DB: notificationsEnabled BOOLEAN DEFAULT true on ThreadEntity
+   (Room migration 6→7 required). SmsReceiver checks flag.
 
-3. EXPORT — rendered image
-   Draw conversation to Canvas, convert to Bitmap,
-   share via FileProvider + ACTION_SEND
+3. MULTIPART MESSAGE HANDLING
+   Verify all parts arrive before marking delivered;
+   handle out-of-order part delivery.
 
-4. SMS ENGINE — onboarding + notifications done (May 2026)
-   ✅ Onboarding screen with RoleManager role request
-   ✅ Notification channels (incoming_sms, sync_service)
-   ✅ POST_NOTIFICATIONS permission request
-   ✅ SmsReceiver posts heads-up notification on incoming SMS
-   Remaining:
-   - Samsung content://sms variant fix (try
-     content://sms/inbox + content://sms/sent if null cursor)
-   - Add sync status banner for Samsung devices
-   - SmsManager for sending
-   - Run AppleReactionParser on every incoming message
-     (already runs via SmsSyncHandler; verify on device)
+4. SEND QUEUE
+   Queue outgoing when offline; send on reconnect;
+   show "Queued" bubble state.
 
-5. BACKUP — remaining
-   - Backup restore (read JSON, apply to Room with
-     migration version check)
+5. SYNC COMPLETENESS INVESTIGATION
+   Some threads + messages missing from sync.
+   Likely causes: address normalization, cursor pagination,
+   or type filtering in SmsSyncHandler / FirstLaunchSyncWorker.
+
+COMPLETED THIS SPRINT (May 2, 2026)
+✅ WorkManager / Hilt init fix — NoSuchMethodException resolved
+✅ Privacy mode — global toggle; SmsReceiver obeys
+✅ Dev options: Clear sample data button
+✅ Direct reply notification action
+✅ Mark as read notification action
+✅ Notification grouping
+✅ Samsung READ_SMS fix (fallback cursor URIs)
+✅ Role denial banner
+✅ HeadlessSmsSendService + SENDTO manifest filter
+✅ isPinned (schema v6), muted/pin badge UI, avatar color seed,
+   PhoneNumberFormatter, data-driven reaction tray, PinnedThreadTest
+✅ Delivery status colored ticks + tap-to-retry
+✅ Failed send state (red ⚠ indicator)
+
+
 ✅ Scroll-to-date fix — DONE (April 30)
    scrollOffsetToAlignTop() in DateNavigation.kt.
    reverseLayout=true offset math so date header lands

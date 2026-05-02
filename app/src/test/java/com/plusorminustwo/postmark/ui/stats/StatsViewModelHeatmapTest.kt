@@ -295,6 +295,7 @@ private class FakeThreadDao : ThreadDao {
     override suspend fun updateLastMessagePreview(threadId: Long, preview: String) = Unit
     override suspend fun isMutedByAddress(address: String): Boolean? = null
     override suspend fun deleteAll() = Unit
+    override suspend fun count(): Int = 0
 }
 
 private class FakeThreadStatsDao : ThreadStatsDao {

@@ -154,6 +154,21 @@ class DevOptionsViewModel @Inject constructor(
         }
     }
 
+    // ── Sample data helpers ──────────────────────────────────────────────────
+
+    // Sample thread IDs are fixed at 9001–9005 by loadSampleData().
+    private val SAMPLE_THREAD_IDS = listOf(9_001L, 9_002L, 9_003L, 9_004L, 9_005L)
+
+    fun clearSampleData() {
+        viewModelScope.launch {
+            SAMPLE_THREAD_IDS.forEach { id ->
+                messageRepository.deleteByThread(id)
+                threadRepository.getById(id)?.let { threadRepository.delete(it) }
+            }
+            _feedback.value = "Sample data removed"
+        }
+    }
+
     // ── Clear all data ────────────────────────────────────────────────────────
 
     fun clearAllData() {

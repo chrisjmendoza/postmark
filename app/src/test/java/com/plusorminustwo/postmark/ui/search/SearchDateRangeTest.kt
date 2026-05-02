@@ -209,6 +209,7 @@ class SearchDateRangeTest {
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
         override suspend fun isMutedByAddress(address: String): Boolean? = null
         override suspend fun deleteAll() {}
+        override suspend fun count(): Int = 0
         override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
         override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
     }

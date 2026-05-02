@@ -55,4 +55,7 @@ interface ThreadDao {
 
     @Query("DELETE FROM threads")
     suspend fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM threads")
+    suspend fun count(): Int
 }

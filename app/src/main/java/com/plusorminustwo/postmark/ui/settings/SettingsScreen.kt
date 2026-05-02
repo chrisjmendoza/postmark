@@ -8,6 +8,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -30,6 +32,7 @@ fun SettingsScreen(
 ) {
     val themePreference by viewModel.themePreference.collectAsState()
     val timestampPreference by viewModel.timestampPreference.collectAsState()
+    val privacyModeEnabled by viewModel.privacyModeEnabled.collectAsState()
 
     Scaffold(
         topBar = {
@@ -82,6 +85,16 @@ fun SettingsScreen(
                 ),
                 current = timestampPreference,
                 onSelect = viewModel::setTimestamp
+            )
+            HorizontalDivider()
+
+            SettingsSectionHeader(title = "Notifications")
+            ToggleSettingRow(
+                icon = { Icon(Icons.Default.Lock, null) },
+                title = "Privacy mode",
+                subtitle = "Show \"New message\" without sender or preview",
+                checked = privacyModeEnabled,
+                onCheckedChange = viewModel::setPrivacyMode
             )
             HorizontalDivider()
         }
@@ -229,5 +242,34 @@ private fun <T> RadioSettingRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ToggleSettingRow(
+    icon: @Composable () -> Unit,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        icon()
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

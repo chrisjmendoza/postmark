@@ -66,5 +66,6 @@ class BackupPolicyTest {
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
         override suspend fun isMutedByAddress(address: String): Boolean? = null
         override suspend fun deleteAll() {}
+        override suspend fun count(): Int = 0
     }
 }

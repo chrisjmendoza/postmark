@@ -40,6 +40,24 @@ class ConversationsViewModel @Inject constructor(
         // If the app currently holds the default SMS role, clear any stale dismissal
         // so the banner can reappear if the role is lost in a future launch.
         if (checkIsDefaultSmsApp()) prefs.edit().remove("role_banner_dismissed").apply()
+
+        // Recovery: if a previous sync ran but imported 0 messages (e.g. Samsung
+        // OneUI returned an empty primary cursor and the old fallback didn't fire),
+        // clear the completion flag so the fixed sync runs on this launch.
+        viewModelScope.launch {
+            val syncDone  = prefs.getBoolean("first_sync_completed", false)
+            val dbEmpty   = threadRepository.isEmpty()
+            android.util.Log.d("PostmarkSync", "ViewModel init — first_sync_completed=$syncDone, db_empty=$dbEmpty")
+            if (syncDone && dbEmpty) {
+                android.util.Log.w("PostmarkSync", "Recovery: sync was marked complete but DB is empty — re-triggering")
+                prefs.edit().remove("first_sync_completed").apply()
+                workManager.enqueueUniqueWork(
+                    FirstLaunchSyncWorker.WORK_NAME,
+                    ExistingWorkPolicy.REPLACE,
+                    FirstLaunchSyncWorker.buildRequest()
+                )
+            }
+        }
     }
 
     val threads: StateFlow<List<Thread>?> = threadRepository.observeAll()

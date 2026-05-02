@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import com.plusorminustwo.postmark.PostmarkApplication
 import com.plusorminustwo.postmark.R
+import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.ui.MainActivity
@@ -28,6 +29,9 @@ class SmsReceiver : BroadcastReceiver() {
 
     @Inject
     lateinit var threadRepository: ThreadRepository
+
+    @Inject
+    lateinit var privacyModeRepository: PrivacyModeRepository
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -49,7 +53,10 @@ class SmsReceiver : BroadcastReceiver() {
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         if (!threadRepository.isMutedByAddress(sender)) {
-                            postIncomingNotification(context, sender, body)
+                            postIncomingNotification(
+                                context, sender, body,
+                                privacyMode = privacyModeRepository.isEnabled()
+                            )
                         }
                     } finally {
                         pendingResult.finish()
@@ -59,9 +66,13 @@ class SmsReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun postIncomingNotification(context: Context, sender: String, body: String) {
+    private fun postIncomingNotification(context: Context, sender: String, body: String, privacyMode: Boolean) {
         val notifId = sender.hashCode()
         val nm = context.getSystemService(NotificationManager::class.java)
+
+        // ── Privacy mode: redact sender and body so bystanders can't read the screen ──
+        val displayTitle = if (privacyMode) context.getString(R.string.privacy_mode_notification_title) else sender
+        val displayBody  = if (privacyMode) "" else body
 
         // ── Content intent — opens the conversation list ──────────────────────────
         val openIntent = PendingIntent.getActivity(
@@ -120,20 +131,23 @@ class SmsReceiver : BroadcastReceiver() {
         // ── Individual per-thread notification ────────────────────────────────────
         // setGroup() registers this notification with the shared SMS bundle so
         // Android can collapse multiple thread notifications in the shade.
-        val notification = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
+        // When privacy mode is on, actions are omitted so the reply RemoteInput
+        // can't be used to discover who the sender was.
+        val builder = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(sender)
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentTitle(displayTitle)
+            .setContentText(displayBody)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openIntent)
             .setAutoCancel(true)
             .setGroup(PostmarkApplication.GROUP_KEY_SMS)
-            .addAction(replyAction)
-            .addAction(markReadAction)
-            .build()
 
-        nm.notify(notifId, notification)
+        if (!privacyMode) {
+            builder.addAction(replyAction).addAction(markReadAction)
+        }
+
+        nm.notify(notifId, builder.build())
 
         // ── Summary notification ──────────────────────────────────────────────────
         // Must be posted (or refreshed) after every individual notification so

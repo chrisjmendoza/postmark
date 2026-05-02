@@ -76,6 +76,9 @@ fun DevOptionsScreen(
             DevButton("Load sample data", "Insert 5 threads + ~70 messages") {
                 viewModel.loadSampleData()
             }
+            DevButton("Clear sample data", "Remove only the 5 seeded sample threads") {
+                viewModel.clearSampleData()
+            }
             DevButton("Clear all data", "Delete all threads, messages, and reactions") {
                 viewModel.clearAllData()
             }

@@ -14,6 +14,7 @@
     <string name="default_sms_prompt">Set Postmark as default SMS app to send and receive messages</string>
     <string name="reply">Reply</string>
     <string name="mark_as_read">Mark as read</string>
+    <string name="privacy_mode_notification_title">New message</string>
 
     <!-- Notification group summary: "1 new message" / "3 new messages" -->
     <plurals name="notification_summary_new_messages">
