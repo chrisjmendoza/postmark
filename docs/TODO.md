@@ -162,6 +162,39 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `searchMessagesFilteredWithReaction()` subquery on `reactions`.
 - [x] **Reaction emoji list data-driven** — `ReactionDao.observeDistinctEmojis()`
       wired into `SearchScreen` via `SearchViewModel`; hardcoded list removed.
+- [ ] **Sort order toggle** — default is most-recent first; add a toggle
+      (sort icon button in top bar or a chip) to switch between:
+      - **Most recent** — `ORDER BY timestamp DESC` (default, already natural for FTS)
+      - **By contact** — group results by thread (display name), sorted
+        A–Z, with a sticky section header per thread showing the contact
+        name + avatar. Within each group messages sort newest-first.
+      `SearchViewModel` adds a `SortOrder` enum (`MOST_RECENT`, `BY_CONTACT`);
+      the grouped path can be a pure in-memory transform on `results` (no
+      new DAO query needed — just `groupBy { it.threadId }` + sort by
+      `displayName`). `SearchUiState` needs `sortOrder` and a derived
+      `groupedResults: Map<Thread, List<Message>>` for the `BY_CONTACT` view.
+- [ ] **Reactions shown on search result rows** — when a message has
+      reactions (already stored as `Message.reactions`), render the
+      reaction pills below the body text inside `SearchResultRow` — the
+      same `ReactionPills` composable used in the thread view. Currently
+      `SearchResultRow` only shows the body text; it ignores `message.reactions`
+      entirely. The search query already joins reactions (via
+      `MessageRepository.observeByThread`) but the DAO query used by
+      `SearchRepository.search()` should also populate `reactions` on each
+      result. Check whether `searchRepository.search()` populates
+      `Message.reactions` or returns empty lists; if the latter, update
+      `SearchRepository` to join with `ReactionDao` (same pattern as
+      `MessageRepository.observeByThread`).
+- [ ] **"Reacted to" filter-message exclusion in results** — Apple reaction
+      fallback phrases ("Liked \"...\""  etc.) are stored as both a
+      `ReactionEntity` *and* left as a raw message in the `messages` table.
+      These raw reaction-phrase messages currently appear as search results.
+      Add a flag or filter to suppress them from the default result set
+      (they are already parsed into reactions; showing the raw phrase is
+      noise). Simplest approach: mark messages whose body matches the
+      reaction-phrase pattern with a `isReactionMessage BOOLEAN DEFAULT 0`
+      flag set during sync, then add `AND isReactionMessage = 0` to the
+      default search query. Opt-in toggle could expose them if needed.
 - [ ] **Search within thread** — entry point: search icon in thread
       toolbar. Scopes results to current `threadId`.
 
