@@ -1,6 +1,8 @@
 package com.plusorminustwo.postmark.ui.conversations
 
+import android.app.role.RoleManager
 import android.content.Context
+import android.os.Build
 import android.provider.Telephony
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,8 +17,10 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -31,6 +35,12 @@ class ConversationsViewModel @Inject constructor(
 
     private val workManager = WorkManager.getInstance(context)
     private val prefs get() = context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
+
+    init {
+        // If the app currently holds the default SMS role, clear any stale dismissal
+        // so the banner can reappear if the role is lost in a future launch.
+        if (checkIsDefaultSmsApp()) prefs.edit().remove("role_banner_dismissed").apply()
+    }
 
     val threads: StateFlow<List<Thread>?> = threadRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -58,6 +68,29 @@ class ConversationsViewModel @Inject constructor(
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null))
+
+    // ── Default SMS role ──────────────────────────────────────────────────────
+    // Checked once at ViewModel creation — sufficient because the user must go to
+    // Settings and relaunch to change the default app.
+    val isDefaultSmsApp: StateFlow<Boolean> = MutableStateFlow(checkIsDefaultSmsApp())
+
+    private fun checkIsDefaultSmsApp(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            context.getSystemService(RoleManager::class.java)
+                ?.isRoleHeld(RoleManager.ROLE_SMS) == true
+        } else {
+            Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+        }
+
+    private val _roleBannerDismissed = MutableStateFlow(
+        prefs.getBoolean("role_banner_dismissed", false)
+    )
+    val roleBannerDismissed: StateFlow<Boolean> = _roleBannerDismissed.asStateFlow()
+
+    fun dismissRoleBanner() {
+        prefs.edit().putBoolean("role_banner_dismissed", true).apply()
+        _roleBannerDismissed.value = true
+    }
 
     fun triggerSync() {
         prefs.edit().remove("first_sync_completed").apply()

@@ -1,7 +1,9 @@
 package com.plusorminustwo.postmark.data.sync
 
 import android.content.Context
+import android.database.Cursor
 import android.net.Uri
+import android.os.Build
 import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
@@ -53,72 +55,45 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     }
 
     private suspend fun syncAllSms(): SyncResult {
+        Log.d(TAG, "Device: ${Build.MANUFACTURER} ${Build.MODEL} API ${Build.VERSION.SDK_INT}")
         Log.d(TAG, "Querying content://sms …")
-        val cursor = applicationContext.contentResolver.query(
-            Telephony.Sms.CONTENT_URI,
-            arrayOf(
-                Telephony.Sms._ID,
-                Telephony.Sms.THREAD_ID,
-                Telephony.Sms.ADDRESS,
-                Telephony.Sms.BODY,
-                Telephony.Sms.DATE,
-                Telephony.Sms.TYPE
-            ),
-            null, null,
-            "${Telephony.Sms.DATE} ASC"
-        )
 
-        if (cursor == null) {
-            Log.w(TAG, "content://sms query returned null cursor")
-            return SyncResult(-1, -1)
-        }
-
-        Log.d(TAG, "Cursor opened — ${cursor.count} rows")
         val threads = mutableMapOf<Long, Thread>()
         val messages = mutableListOf<Message>()
 
-        cursor.use {
-            val idIdx = it.getColumnIndexOrThrow(Telephony.Sms._ID)
-            val threadIdx = it.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
-            val addressIdx = it.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
-            val bodyIdx = it.getColumnIndexOrThrow(Telephony.Sms.BODY)
-            val dateIdx = it.getColumnIndexOrThrow(Telephony.Sms.DATE)
-            val typeIdx = it.getColumnIndexOrThrow(Telephony.Sms.TYPE)
-            val total = it.count
-            var processed = 0
+        // ── Primary query ─────────────────────────────────────────────────────
+        val primaryCursor = applicationContext.contentResolver.query(
+            Telephony.Sms.CONTENT_URI, SMS_PROJECTION, null, null, "${Telephony.Sms.DATE} ASC"
+        )
 
-            while (it.moveToNext()) {
-                val id = it.getLong(idIdx)
-                val threadId = it.getLong(threadIdx)
-                val address = it.getString(addressIdx) ?: continue
-                val body = it.getString(bodyIdx) ?: ""
-                val date = it.getLong(dateIdx)
-                val type = it.getInt(typeIdx)
-                val isSent = type == Telephony.Sms.MESSAGE_TYPE_SENT
-
-                if (!threads.containsKey(threadId)) {
-                    val displayName = lookupContactName(address) ?: address
-                    threads[threadId] = Thread(
-                        id = threadId,
-                        displayName = displayName,
-                        address = address,
-                        lastMessageAt = date,
-                        lastMessagePreview = body,
-                        backupPolicy = BackupPolicy.GLOBAL
-                    )
-                } else {
-                    val existing = threads[threadId]!!
-                    if (date > existing.lastMessageAt) {
-                        threads[threadId] = existing.copy(
-                            lastMessageAt = date,
-                            lastMessagePreview = body
-                        )
-                    }
+        if (primaryCursor != null) {
+            Log.d(TAG, "Primary cursor: ${primaryCursor.count} rows")
+            primaryCursor.use { processSmsCursor(it, threads, messages) }
+        } else {
+            // ── Samsung fallback ──────────────────────────────────────────────
+            // Some Samsung (OneUI) firmware returns null for content://sms even
+            // with READ_SMS granted and the default SMS role held. Querying the
+            // inbox / sent / draft sub-URIs works as an equivalent alternative.
+            Log.w(TAG, "content://sms null — trying Samsung fallback URIs")
+            val fallbackUris = listOf(
+                Uri.parse("content://sms/inbox"),
+                Uri.parse("content://sms/sent"),
+                Uri.parse("content://sms/draft"),
+            )
+            var anyNonNull = false
+            fallbackUris.forEach { uri ->
+                val c = applicationContext.contentResolver.query(
+                    uri, SMS_PROJECTION, null, null, "${Telephony.Sms.DATE} ASC"
+                )
+                Log.d(TAG, "Fallback $uri → ${c?.count ?: "null"} rows")
+                if (c != null) {
+                    anyNonNull = true
+                    c.use { processSmsCursor(it, threads, messages) }
                 }
-
-                messages.add(Message(id, threadId, address, body, date, isSent, type))
-                processed++
-                if (total > 0) setProgress(workDataOf("progress" to (processed * 100 / total)))
+            }
+            if (!anyNonNull) {
+                Log.e(TAG, "All SMS URIs returned null — permission denied or provider unavailable")
+                return SyncResult(-1, -1)
             }
         }
 
@@ -142,6 +117,51 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         statsUpdater.recomputeAll()
 
         return SyncResult(threads.size, messages.size)
+    }
+
+    // ── Cursor row extractor ──────────────────────────────────────────────────
+    // Called once for the primary URI or once per fallback URI (inbox/sent/draft).
+    // Merges rows into the shared threads map and messages list.
+    private fun processSmsCursor(
+        cursor: Cursor,
+        threads: MutableMap<Long, Thread>,
+        messages: MutableList<Message>
+    ) {
+        val idIdx      = cursor.getColumnIndexOrThrow(Telephony.Sms._ID)
+        val threadIdx  = cursor.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
+        val addressIdx = cursor.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
+        val bodyIdx    = cursor.getColumnIndexOrThrow(Telephony.Sms.BODY)
+        val dateIdx    = cursor.getColumnIndexOrThrow(Telephony.Sms.DATE)
+        val typeIdx    = cursor.getColumnIndexOrThrow(Telephony.Sms.TYPE)
+
+        while (cursor.moveToNext()) {
+            val id       = cursor.getLong(idIdx)
+            val threadId = cursor.getLong(threadIdx)
+            val address  = cursor.getString(addressIdx) ?: continue
+            val body     = cursor.getString(bodyIdx) ?: ""
+            val date     = cursor.getLong(dateIdx)
+            val type     = cursor.getInt(typeIdx)
+            val isSent   = type == Telephony.Sms.MESSAGE_TYPE_SENT
+
+            if (!threads.containsKey(threadId)) {
+                val displayName = lookupContactName(address) ?: address
+                threads[threadId] = Thread(
+                    id = threadId,
+                    displayName = displayName,
+                    address = address,
+                    lastMessageAt = date,
+                    lastMessagePreview = body,
+                    backupPolicy = BackupPolicy.GLOBAL
+                )
+            } else {
+                val existing = threads[threadId]!!
+                if (date > existing.lastMessageAt) {
+                    threads[threadId] = existing.copy(lastMessageAt = date, lastMessagePreview = body)
+                }
+            }
+
+            messages.add(Message(id, threadId, address, body, date, isSent, type))
+        }
     }
 
     private fun lookupContactName(address: String): String? {
@@ -177,6 +197,16 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         const val KEY_ERROR  = "last_sync_error"
         private const val TAG   = "PostmarkSync"
         private const val PREFS = "postmark_prefs"
+
+        // Shared projection used for both the primary URI and Samsung fallback URIs.
+        internal val SMS_PROJECTION = arrayOf(
+            Telephony.Sms._ID,
+            Telephony.Sms.THREAD_ID,
+            Telephony.Sms.ADDRESS,
+            Telephony.Sms.BODY,
+            Telephony.Sms.DATE,
+            Telephony.Sms.TYPE,
+        )
 
         fun buildRequest(): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<FirstLaunchSyncWorker>()

@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
@@ -39,6 +40,8 @@ fun ConversationsScreen(
     val threads by viewModel.threads.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncStatus by viewModel.syncStatus.collectAsState()
+    val isDefaultSmsApp by viewModel.isDefaultSmsApp.collectAsState()
+    val roleBannerDismissed by viewModel.roleBannerDismissed.collectAsState()
     val threadList = threads  // local val so Kotlin can smart-cast the nullable
 
     Scaffold(
@@ -59,41 +62,46 @@ fun ConversationsScreen(
             )
         }
     ) { padding ->
-        when {
-            threadList == null -> {
-                // Room hasn't emitted yet — show nothing to avoid empty-state flash.
-                Box(Modifier.fillMaxSize().padding(padding))
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Role denial banner — shown when the app is not the default SMS app
+            // and the user hasn't dismissed it this install.
+            if (!isDefaultSmsApp && !roleBannerDismissed) {
+                RoleDenialBanner(onDismiss = viewModel::dismissRoleBanner)
             }
-            threadList.isEmpty() -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    if (isSyncing) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            CircularProgressIndicator()
-                            Text("Syncing messages…", style = MaterialTheme.typography.bodyLarge)
-                        }
-                    } else {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Text("No conversations yet", style = MaterialTheme.typography.bodyLarge)
-                            Button(onClick = { viewModel.triggerSync() }) {
-                                Text("Sync messages")
+            when {
+                threadList == null -> {
+                    // Room hasn't emitted yet — show nothing to avoid empty-state flash.
+                    Box(Modifier.fillMaxSize())
+                }
+                threadList.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        if (isSyncing) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                CircularProgressIndicator()
+                                Text("Syncing messages…", style = MaterialTheme.typography.bodyLarge)
                             }
-                            OutlinedButton(onClick = { viewModel.loadSampleData() }) {
-                                Text("Load sample data")
-                            }
-                            syncStatus?.let {
-                                Text(
-                                    text = "Last sync: $it",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 32.dp)
-                                )
+                        } else {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Text("No conversations yet", style = MaterialTheme.typography.bodyLarge)
+                                Button(onClick = { viewModel.triggerSync() }) {
+                                    Text("Sync messages")
+                                }
+                                OutlinedButton(onClick = { viewModel.loadSampleData() }) {
+                                    Text("Load sample data")
+                                }
+                                syncStatus?.let {
+                                    Text(
+                                        text = "Last sync: $it",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 32.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
-            else -> {
-                Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+                else -> {
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         items(threadList, key = { it.id }) { thread ->
                             ThreadRow(thread = thread, onClick = { onThreadClick(thread.id) })
@@ -111,6 +119,37 @@ fun ConversationsScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── Role denial banner ────────────────────────────────────────────────────────
+/** Persistent amber banner explaining read-only limitations when the app is not
+ *  the default SMS app. Dismissed via the × button; state persists across launches. */
+@Composable
+private fun RoleDenialBanner(onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Postmark isn’t your default SMS app — some messages may be missing.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Dismiss",
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
     }
