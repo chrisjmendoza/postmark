@@ -6,6 +6,26 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-02
 
+### Merged branch — avatar color seed, isPinned, phone formatter, muted/pin UI, data-driven reactions
+_(Merged `copilot/featfix-avatar-color-seed` → `master` → `feat/ui-improvements`)_
+
+- **Avatar color seed** — `LetterAvatar` now seeds its color from `thread.address` instead of
+  `thread.displayName`, giving each contact a stable color that doesn't change when the name changes.
+- **`isPinned` field** — `ThreadEntity` gains `isPinned: Boolean = false` (Room migration v4→v5).
+  `Thread` domain model, `ThreadDao`, and `ThreadRepository` updated accordingly.
+  `ConversationsScreen` shows a pin icon badge on pinned threads.
+- **`togglePin()`** in `ThreadViewModel` — flips `isPinned` via `ThreadRepository.updatePinned()`.
+  Pin/unpin accessible from the thread overflow menu in `ThreadScreen`.
+- **Muted indicator** — `ConversationsScreen` thread list shows a mute badge icon when `isMuted = true`.
+  `toggleMute()` added to `ThreadViewModel` alongside the existing mute-enforcement plumbing.
+- **`PhoneNumberFormatter`** (new file `domain/formatter/PhoneNumberFormatter.kt`) — formats raw
+  address strings into human-readable phone numbers (e.g. `+15551234567` → `(555) 123-4567`).
+  Used in search results and thread headers.
+- **Data-driven reaction emojis** — `ReactionDao.observeTopEmojisBySender()` query now drives the
+  quick-reaction tray order; most-used emojis float to the front automatically.
+- **Tests (+19)**: `PinnedThreadTest` (toggle, persistence, UI badge) and
+  `PhoneNumberFormatterTest` (formatting, edge cases, international numbers).
+
 ### Reaction pill overflow fix
 - **`ReactionPills` composable** — replaced `Row` with `FlowRow` so that when a message has many
   reactions, the pills wrap to a second line instead of overflowing outside the bubble boundary.
@@ -22,7 +42,31 @@ Newest entries on top. Each day is a journal of work completed.
 - KDoc added to `ThreadScreen`, `ThreadContent`, `MessageBubble`, `ReactionPills`,
   `ThreadUiState`, and `ThreadViewModel` for first-time-reader clarity.
 
-### Tests (276 total, unchanged — overflow fix is pure Compose layout with no new pure logic)
+### Mute enforcement in SmsReceiver
+- **`SmsReceiver`** now checks `ThreadRepository.isMutedByAddress(sender)` before posting an
+  incoming notification. Muted threads are silently synced but produce no notification.
+- **`ThreadDao.isMutedByAddress(address)`** — new `@Query` for direct DB lookup without loading
+  the full thread.
+- **`ThreadRepository.isMutedByAddress(address)`** — suspending wrapper used from the receiver's
+  `goAsync()` coroutine scope.
+
+### Delivery status indicators — colored ticks (Option B)
+- **`DeliveryStatusIndicator`** redesigned: icon shapes retained, colors now convey meaning.
+  - `⏱` grey (`onSurfaceVariant`) — pending in telephony queue
+  - `✓` amber-yellow (`#FFCC00`) — sent to carrier
+  - `✓✓` green (`#4CAF50`) — delivered to recipient's device
+  - `⚠` red (`colorScheme.error`) — send failed (tappable — see below)
+
+### Failed send tap-to-retry
+- **`DeliveryStatusIndicator`** — accepts `onRetry: (() -> Unit)?`; the red `⚠` icon is made
+  `clickable` when `onRetry` is provided.
+- **`MessageBubble`** — new `onRetry: () -> Unit` parameter forwarded to the indicator.
+- **`ThreadContent`** — new `onRetry: (Long) -> Unit` parameter wired down to each bubble.
+- **`ThreadViewModel.retrySend(messageId)`** — looks up the failed message from `uiState`,
+  resets `deliveryStatus` to `PENDING` in Room, then re-invokes `smsManagerWrapper.sendTextMessage()`.
+  Guard: no-ops if message is not in `DELIVERY_STATUS_FAILED` state.
+
+### Tests (276 total, unchanged — new features are UI-only; mute plumbing covered by existing FakeDao stubs)
 
 ---
 
