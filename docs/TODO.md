@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: April 27, 2026
+Last updated: April 29, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -47,8 +47,12 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       thread; summary notification across threads.
 - [ ] **Privacy mode** — option to show "New message" without preview.
       Per-conversation or global setting.
-
-### SMS send/receive hardening
+- [ ] **Per-number notification filtering** — let user exclude specific
+      numbers/threads from triggering notifications entirely (distinct
+      from mute, which suppresses sound but still posts). UI entry point:
+      thread ⋮ menu or Notification settings screen. Store as a flag on
+      `ThreadEntity` (e.g. `notificationsEnabled BOOLEAN DEFAULT true`);
+      check in `SmsReceiver` before posting.
 - [x] **SMS send** — basic send wired up with optimistic insert.
 - [ ] **Failed send state** — bubble shows a red ✕ or "!" indicator
       with a tap-to-retry affordance when FAILED status received.
@@ -180,6 +184,26 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Muted thread visual indicator** — no UI cue that a thread
       is muted. Add a muted icon (🔕) to the thread row in
       `ConversationsScreen` and optionally in the thread toolbar.
+- [ ] **Reaction chip cluster-aware spacing** — current code adds a
+      `Spacer(12.dp)` to every message that has a reaction, which
+      breaks tight cluster grouping. Only add extra clearance when the
+      message is at the BOTTOM of a cluster or is a standalone single
+      message; TOP/MIDDLE messages in a cluster should rely on the
+      natural inter-bubble gap instead of a forced spacer.
+- [ ] **Reaction chip theming** — reaction pill backgrounds are
+      hardcoded hex values (e.g. `0xFF1A3A5C`). Replace with
+      `MaterialTheme.colorScheme.primaryContainer` (with adjusted
+      alpha) or `surfaceContainer` so pills adapt correctly to future
+      light mode and system accent color changes.
+- [ ] **Reaction chip overflow handling** — short messages (e.g. "Yes")
+      with 3+ reactions can produce a pill row wider than the bubble.
+      For sent messages use a negative horizontal offset from
+      `Alignment.BottomStart` so pills extend leftward past the bubble
+      edge rather than overflowing right.
+- [ ] **Haptic feedback on reaction toggle** — fire
+      `HapticFeedbackType.LongPress` when a reaction pill is tapped
+      to add tactile confirmation and make the interaction feel
+      premium.
 - [ ] **Bubble tap for link/phone detection** — auto-linkify URLs,
       phone numbers, addresses in message body. Tap URL → browser,
       tap phone → dial dialog, tap address → Maps.
@@ -197,6 +221,15 @@ Ordered by priority tier. Work top-to-bottom within each tier.
         Name (10:03 AM)
         Message text
         ❤️ reacted by Name
+- [ ] **Pinch to zoom text** (ThreadScreen)
+      Pinch gesture in thread view scales message
+      bubble text size up or down. Persisted to
+      SharedPreferences as a float multiplier
+      (range 0.8–1.6, default 1.0). Applied via
+      LocalTextStyle or a custom CompositionLocal
+      so all bubble text scales together. Reset
+      option in Settings → Appearance. Respects
+      system font size as baseline.
 - [ ] **Flag message for later** — long-press → "Remind me to reply";
       user picks a time; schedules a notification with a jump-to-message
       deep-link action. Flagged bubble gets a small 🔖 indicator.
