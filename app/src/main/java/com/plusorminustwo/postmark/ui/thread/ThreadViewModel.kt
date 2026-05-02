@@ -297,6 +297,16 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    // ── Date range selection ──────────────────────────────────────────────────
+
+    fun selectByDateRange(start: LocalDate, end: LocalDate) {
+        viewModelScope.launch {
+            val (startMs, endMs) = epochMsForDayBoundaries(start, end)
+            val messages = messageRepository.getByThreadAndDateRange(threadId, startMs, endMs)
+            _selectionState.update { cur -> cur + messages.map { it.id } }
+        }
+    }
+
     // ── Reply / Send ──────────────────────────────────────────────────────────
 
     fun onReplyTextChanged(text: String) { _replyText.value = text }
@@ -397,6 +407,20 @@ class ThreadViewModel @Inject constructor(
             val merged = topUsed.toMutableList()
             defaults.forEach { if (it !in merged) merged.add(it) }
             return merged.take(limit)
+        }
+
+        /**
+         * Converts a [LocalDate] range into an inclusive epoch-millisecond range.
+         * Start is midnight of [start] in the system timezone; end is one millisecond
+         * before midnight of the day after [end].
+         *
+         * Extracted to the companion object so it can be tested without constructing
+         * the full ViewModel.
+         */
+        internal fun epochMsForDayBoundaries(start: LocalDate, end: LocalDate): Pair<Long, Long> {
+            val startMs = start.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val endMs   = end.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1
+            return startMs to endMs
         }
     }
 }

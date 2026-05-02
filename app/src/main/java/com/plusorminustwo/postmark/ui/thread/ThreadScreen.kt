@@ -60,8 +60,10 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
@@ -141,7 +143,8 @@ fun ThreadScreen(
         onToggleReaction = { id, emoji -> viewModel.toggleReaction(id, emoji) },
         onToggleTimestamp = { viewModel.toggleTimestamp(it) },
         onToggleMessageIds = { viewModel.toggleMessageIds(it) },
-        onRetry = { viewModel.retrySend(it) }
+        onRetry = { viewModel.retrySend(it) },
+        onSelectByDateRange = { start, end -> viewModel.selectByDateRange(start, end) }
     )
 }
 
@@ -189,6 +192,7 @@ private fun ThreadContent(
     onToggleTimestamp: (Long) -> Unit,
     onToggleMessageIds: (List<Long>) -> Unit,
     onRetry: (Long) -> Unit = {},
+    onSelectByDateRange: (LocalDate, LocalDate) -> Unit = { _, _ -> },
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -197,6 +201,7 @@ private fun ThreadContent(
 
     var showCalendarPicker by remember { mutableStateOf(false) }
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
+    var showDateRangePicker by remember { mutableStateOf(false) }
 
     // ── Scroll to message (search-jump) ───────────────────────────────────────
 
@@ -367,6 +372,16 @@ private fun ThreadContent(
         )
     }
 
+    if (showDateRangePicker) {
+        DateRangeBottomSheet(
+            onSelect = { start, end ->
+                onSelectByDateRange(start, end)
+                showDateRangePicker = false
+            },
+            onDismiss = { showDateRangePicker = false }
+        )
+    }
+
     // ── Scaffold + overlay ────────────────────────────────────────────────────
 
     Box(Modifier.fillMaxSize()) {
@@ -396,6 +411,7 @@ private fun ThreadContent(
                     scope = uiState.selectionScope,
                     onClose = { onExitSelectionMode() },
                     onScopeChange = { onSetSelectionScope(it) },
+                    onShowDateRange = { showDateRangePicker = true },
                     onCopy = {
                         val text = ExportFormatter.formatForCopy(
                             uiState.messages.filter { it.id in uiState.selectedMessageIds },
@@ -566,6 +582,7 @@ private fun SelectionTopBar(
     scope: SelectionScope,
     onClose: () -> Unit,
     onScopeChange: (SelectionScope) -> Unit,
+    onShowDateRange: () -> Unit,
     onCopy: () -> Unit
 ) {
     // "All" chip doubles as a deselect-all affordance: when every message is
@@ -601,6 +618,55 @@ private fun SelectionTopBar(
                 onClick  = { onScopeChange(SelectionScope.ALL) },
                 label    = { Text("All") }
             )
+            FilterChip(
+                selected = false,
+                onClick  = { onShowDateRange() },
+                label    = { Text("Date range") }
+            )
+        }
+    }
+}
+
+// ── DateRangeBottomSheet ──────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DateRangeBottomSheet(
+    onSelect: (LocalDate, LocalDate) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val pickerState = rememberDateRangePickerState()
+    val sheetState  = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        DateRangePicker(
+            state    = pickerState,
+            headline = null,
+            showModeToggle = false,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(480.dp)
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+        ) {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+            Button(
+                onClick = {
+                    val startMs = pickerState.selectedStartDateMillis ?: return@Button
+                    val endMs   = pickerState.selectedEndDateMillis   ?: return@Button
+                    val start = Instant.ofEpochMilli(startMs).atZone(ZoneOffset.UTC).toLocalDate()
+                    val end   = Instant.ofEpochMilli(endMs).atZone(ZoneOffset.UTC).toLocalDate()
+                    onSelect(start, end)
+                },
+                enabled = pickerState.selectedStartDateMillis != null &&
+                          pickerState.selectedEndDateMillis   != null
+            ) { Text("Select") }
         }
     }
 }
