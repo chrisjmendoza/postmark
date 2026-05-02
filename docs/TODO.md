@@ -13,7 +13,7 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Reaction pill overflow** — FlowRow replaces Row in `ReactionPills`;
       bubble width captured via `onSizeChanged` constrains pills so they
       wrap to a second line instead of overflowing on short messages.
-- [ ] **Custom date range selection** — "Date range" option in selection
+- [x] **Custom date range selection** — "Date range" option in selection
       mode; two-field date picker bottom sheet; auto-selects all messages
       within range. Useful for exporting a full month at once.
 - [x] **Scroll-to-date fix** — first message of selected date should
