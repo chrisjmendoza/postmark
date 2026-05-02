@@ -43,9 +43,19 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Required for default SMS role -->
+            <!-- Required for default SMS role: VIEW existing conversations -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+            <!-- Required for default SMS role: compose/send -->
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="sms" />
                 <data android:scheme="smsto" />
@@ -53,6 +63,22 @@
                 <data android:scheme="mmsto" />
             </intent-filter>
         </activity>
+
+        <!-- Required for default SMS role: handles send requests without UI
+             (lock-screen reply, accessibility services, etc.) -->
+        <service
+            android:name=".service.sms.HeadlessSmsSendService"
+            android:exported="true"
+            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </service>
 
         <!-- SMS broadcast receiver -->
         <receiver
