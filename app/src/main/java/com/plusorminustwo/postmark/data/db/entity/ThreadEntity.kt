@@ -12,7 +12,9 @@ data class ThreadEntity(
     val address: String,
     val lastMessageAt: Long,
     val lastMessagePreview: String = "",
-    val backupPolicy: BackupPolicy = BackupPolicy.GLOBAL
+    val backupPolicy: BackupPolicy = BackupPolicy.GLOBAL,
+    val isMuted: Boolean = false,
+    val isPinned: Boolean = false
 )
 
 fun ThreadEntity.toDomain() = Thread(
@@ -21,7 +23,9 @@ fun ThreadEntity.toDomain() = Thread(
     address = address,
     lastMessageAt = lastMessageAt,
     lastMessagePreview = lastMessagePreview,
-    backupPolicy = backupPolicy
+    backupPolicy = backupPolicy,
+    isMuted = isMuted,
+    isPinned = isPinned
 )
 
 fun Thread.toEntity() = ThreadEntity(
@@ -30,5 +34,7 @@ fun Thread.toEntity() = ThreadEntity(
     address = address,
     lastMessageAt = lastMessageAt,
     lastMessagePreview = lastMessagePreview,
-    backupPolicy = backupPolicy
+    backupPolicy = backupPolicy,
+    isMuted = isMuted,
+    isPinned = isPinned
 )

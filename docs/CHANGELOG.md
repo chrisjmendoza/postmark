@@ -4,6 +4,49 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-04-30
+
+### 1. Avatar color seed fix
+- **`LetterAvatar`** — added `colorSeed: String = name` parameter. `avatarColor()` now seeds from `colorSeed` instead of the display name, so avatar colors stay stable when a contact's name changes in the address book.
+- **`ConversationsScreen`** — passes `colorSeed = thread.address` to `LetterAvatar`.
+- **`ThreadScreen`** — passes `colorSeed = uiState.thread?.address` to `LetterAvatar` in the `TopAppBar`.
+
+### 2. Reaction emoji list data-driven in SearchScreen
+- **`ReactionDao`** — added `fun observeDistinctEmojis(): Flow<List<String>>` returning all distinct emoji values from the `reactions` table ordered alphabetically.
+- **`SearchRepository`** — now injects `ReactionDao` and exposes `observeDistinctEmojis(): Flow<List<String>>`.
+- **`SearchUiState`** — added `reactionEmojis: List<String>` field.
+- **`SearchViewModel`** — wires `searchRepository.observeDistinctEmojis()` into `uiState` via `StateFlow`.
+- **`SearchScreen`** — "Reactions" filter chip now opens a `ModalBottomSheet` listing distinct emojis from the DB. Tapping an emoji sets `hasReaction = true` and closes the sheet. The chip shows a clear icon when active.
+
+### 3. Muted thread visual indicator
+- **`Thread` / `ThreadEntity`** — added `isMuted: Boolean = false` field.
+- **Room migration 4→5** — `ALTER TABLE threads ADD COLUMN isMuted INTEGER NOT NULL DEFAULT 0`.
+- **`ThreadDao`** — added `updateMuted(threadId, isMuted)` query.
+- **`ThreadRepository`** — added `updateMuted()` delegation method.
+- **`ThreadViewModel`** — added `toggleMute()` (reads current `isMuted` from state, inverts and persists).
+- **`ThreadScreen`** — "Mute" overflow menu item now calls `toggleMute()` and dynamically shows "Mute" / "Unmute" based on current state.
+- **`ConversationsScreen`** — thread rows show a `NotificationsOff` icon (14 dp) next to the timestamp when `isMuted = true`.
+
+### 4. Pinned conversations
+- **`Thread` / `ThreadEntity`** — added `isPinned: Boolean = false` field.
+- **Room migration 5→6** — `ALTER TABLE threads ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0`.
+- **`PostmarkDatabase`** — version bumped to 6; both new migrations registered in `DatabaseModule`.
+- **`ThreadDao`** — `observeAll()` sort order changed to `ORDER BY isPinned DESC, lastMessageAt DESC`; added `updatePinned(threadId, isPinned)` query.
+- **`ThreadRepository`** — added `updatePinned()` delegation method.
+- **`ThreadViewModel`** — added `togglePin()` following the same pattern as `toggleMute()`.
+- **`ThreadScreen`** — overflow menu has "Pin" / "Unpin" item (dynamic label) that calls `togglePin()`.
+- **`ConversationsScreen`** — thread rows show a `PushPin` icon (14 dp, primary color) next to the timestamp when `isPinned = true`.
+- **Tests** — `PinnedThreadTest` covers sort-order logic (pinned first, then by recency) and `ThreadRepository.updatePinned()` delegation.
+
+### 5. Phone number formatting
+- **`domain/formatter/PhoneNumberFormatter.kt`** — pure Kotlin function `fun formatPhoneNumber(raw: String, locale: Locale): String`. Converts E.164 NANP numbers (`+12065551234` → `(206) 555-1234`), handles plain 10-digit NANP, and passes through international numbers, short codes (≤6 digits), and non-numeric strings unchanged.
+- **`ConversationsScreen`** — thread display name formatted via `formatPhoneNumber` (no-op for real contact names; formats raw numbers for unknown contacts).
+- **`ThreadScreen`** — thread display name in `TopAppBar` formatted via `formatPhoneNumber`.
+- **`SearchScreen`** — thread address in the thread-filter bottom sheet formatted via `formatPhoneNumber`.
+- **Tests** — `PhoneNumberFormatterTest` covers US E.164, Canadian NANP, plain 10-digit, UK international, German international, 5-digit short code, 6-digit short code, empty string, blank string, non-numeric, and locale parameter.
+
+---
+
 ## 2026-04-27
 
 ### Per-thread backup policy dialog

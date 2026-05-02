@@ -47,6 +47,7 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -91,7 +92,6 @@ fun ThreadScreen(
 
     var showCalendarPicker by remember { mutableStateOf(false) }
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
-    var showMenu by remember { mutableStateOf(false) }
 
     // ── Scroll to message (search-jump) ───────────────────────────────────────
 
@@ -301,12 +301,12 @@ fun ThreadScreen(
                 )
                 else -> TopAppBar(
                     title = {
-                        val name = uiState.thread?.displayName ?: ""
+                        val name = formatPhoneNumber(uiState.thread?.displayName ?: "")
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            LetterAvatar(name = name, size = 36.dp)
+                            LetterAvatar(name = name, colorSeed = uiState.thread?.address ?: name, size = 36.dp)
                             Text(name)
                         }
                     },
@@ -338,33 +338,22 @@ fun ThreadScreen(
                                     onClick = { menuExpanded = false }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Mute") },
-                                    onClick = { menuExpanded = false }
+                                    text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },
+                                    onClick = { menuExpanded = false; viewModel.toggleMute() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (uiState.thread?.isPinned == true) "Unpin" else "Pin") },
+                                    onClick = { menuExpanded = false; viewModel.togglePin() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Backup settings") },
-                                    onClick = { menuExpanded = false; onBackupSettingsClick() }
+                                    onClick = { menuExpanded = false; showBackupPolicyDialog = true }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Block number") },
                                     onClick = { menuExpanded = false }
                                 )
                             }
-                        }
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More options")
-                        }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Backup settings") },
-                                onClick = {
-                                    showMenu = false
-                                    showBackupPolicyDialog = true
-                                }
-                            )
                         }
                     }
                 )

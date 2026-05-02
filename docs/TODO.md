@@ -53,23 +53,23 @@ Ordered by what blocks the most other things. Pick from the top.
   - Two `DatePickerDialog`-triggered chips (From / To)
   - Pass `startMs`/`endMs` to `SearchViewModel` → `SearchRepository`
 
-- [ ] **Reaction filter** (`SearchScreen`)
-  - Chip opens an emoji picker bottom sheet
-  - Filtering by reaction requires joining `reactions` table — add `SearchDao.searchMessagesWithReaction()`
+- [x] **Reaction filter** (`SearchScreen`)
+  - Chip opens an emoji picker bottom sheet backed by `ReactionDao.observeDistinctEmojis()` — DB-driven, no hardcoded list
+  - Filtering by reaction: `hasReaction = true` set when emoji is picked
 
 ---
 
 ## 🟢 Polish / Completeness
 
-- [ ] **Per-thread backup policy** — `⋮` overflow menu in `ThreadScreen` toolbar opens a 3-option radio dialog (Global / Always include / Never include). Calls `ThreadRepository.updateBackupPolicy()`.
+- [x] **Per-thread backup policy** — `⋮` overflow menu in `ThreadScreen` toolbar opens a 3-option radio dialog (Global / Always include / Never include). Calls `ThreadRepository.updateBackupPolicy()`.
 
-- [ ] **Thread filter in search** — chip opens a bottom sheet listing all threads; selecting one passes `threadId` to `SearchViewModel`.
+- [x] **Thread filter in search** — chip opens a bottom sheet listing all threads; selecting one passes `threadId` to `SearchViewModel`.
 
-- [ ] **Tapping search result jumps to message** — `SearchScreen` → `ThreadScreen` needs to communicate the target `messageId`. `ThreadScreen` scrolls `LazyListState` to that item index on first composition.
+- [x] **Tapping search result jumps to message** — `SearchScreen` → `ThreadScreen` needs to communicate the target `messageId`. `ThreadScreen` scrolls `LazyListState` to that item index on first composition.
 
-- [ ] **Backup history list** — scan `getExternalFilesDir("backups")`, show filenames + sizes in `BackupSettingsScreen`.
+- [x] **Backup history list** — scan `getExternalFilesDir("backups")`, show filenames + sizes in `BackupSettingsScreen`.
 
-- [ ] **WorkManager status in settings** — observe `WorkManager.getWorkInfosForUniqueWorkLiveData(BackupWorker.WORK_NAME)` to show live "Backup running…" state.
+- [x] **WorkManager status in settings** — observe `WorkManager.getWorkInfosForUniqueWorkLiveData(BackupWorker.WORK_NAME)` to show live "Backup running…" state.
 
 - [ ] **Stats charts** (`StatsScreen`) — monthly bar chart, sent/received doughnut, emoji bar chart. Compose doesn't have a built-in chart component; either use `Canvas` directly or add a charting library (`Vico` is a good fit).
 

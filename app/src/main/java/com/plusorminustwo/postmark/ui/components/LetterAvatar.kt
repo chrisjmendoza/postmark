@@ -31,9 +31,9 @@ fun avatarColor(seed: String): Color {
 }
 
 @Composable
-fun LetterAvatar(name: String, size: Dp = 44.dp) {
+fun LetterAvatar(name: String, colorSeed: String = name, size: Dp = 44.dp) {
     val letter = name.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
-    val bg = avatarColor(name)
+    val bg = avatarColor(colorSeed)
     Box(
         modifier = Modifier
             .size(size)
