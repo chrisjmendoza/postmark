@@ -7,6 +7,7 @@ Build order follows the spec. Each phase depends on the previous.
 ## Phase 1 — SMS Engine ✅ Done
 
 - [x] Default SMS role via `RoleManager` — gated on send (not at startup; startup prompts READ_SMS/READ_CONTACTS only)
+- [x] `HeadlessSmsSendService` + `SENDTO` intent filter — required for app to appear in default SMS settings
 - [x] `SmsReceiver` + `MmsReceiver` broadcast receivers
 - [x] `SmsManagerWrapper` for sending
 - [x] `SmsContentObserver` watching `content://sms`

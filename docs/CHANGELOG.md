@@ -6,6 +6,33 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-02
 
+### Default SMS role — manifest fixes (HeadlessSmsSendService + SENDTO filter)
+- **`HeadlessSmsSendService`** (new) — `Service` required by Android for an app to appear in
+  Settings → Apps → Default SMS app. Handles headless send requests (lock-screen quick-reply,
+  accessibility services) by extracting the destination URI and message body from the intent
+  and routing through `SmsManagerWrapper` — same delivery-tracking path as in-app sends.
+- **`AndroidManifest`** — added `SENDTO` intent filter to `MainActivity` (Android requires this
+  action alongside `VIEW` to qualify for default SMS role). Registered `HeadlessSmsSendService`
+  with `RESPOND_VIA_MESSAGE` filter and `SEND_RESPOND_VIA_MESSAGE` permission guard.
+
+### Emoji reaction popup — placed below message
+- **Popup positioning**: pill now appears just below the long-pressed bubble instead of above it,
+  matching WhatsApp / Signal behavior. `onGloballyPositioned` now tracks the bubble's **bottom**
+  edge (`positionInRoot().y + size.height`) rather than the top edge.
+- **`reactionPillTopPx`**: simplified to `minOf(bubbleBottomY + gapPx, maxPillTopPx)` — places
+  below always, clamps so the pill never goes off-screen when the bubble is near the bottom.
+- **`ReactionPillPositionTest`**: fully rewritten to match new "below with clamp" contract.
+
+### Notification grouping
+- **`PostmarkApplication`** — added `GROUP_KEY_SMS` and `NOTIF_ID_SMS_SUMMARY` constants.
+- **`SmsReceiver`** — each individual notification now carries `.setGroup(GROUP_KEY_SMS)`;
+  `updateSummaryNotification()` posts/refreshes an `InboxStyle` summary notification after
+  every incoming message so Android bundles them in the shade.
+- **`MarkAsReadReceiver`** — after cancelling an individual notification, cancels
+  `NOTIF_ID_SMS_SUMMARY` if no group members remain.
+- **`DirectReplyReceiver`** — same group summary cleanup logic as `MarkAsReadReceiver`.
+- **`strings.xml`** — adds `notification_summary_new_messages` plurals resource.
+
 ### Mark as read notification action
 - **`MarkAsReadReceiver`** (new) — `BroadcastReceiver` that handles the "Mark as read" action
   on incoming SMS notifications. Calls `ContentResolver.update()` on `content://sms` to set

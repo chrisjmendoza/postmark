@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: May 2, 2026
+Last updated: May 2, 2026 (evening)
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -45,7 +45,7 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Direct reply action** — `RemoteInput` in notification so user
       can reply without opening the app. Android 7+ standard expectation.
 - [x] **Mark as read action** — second notification action button.
-- [ ] **Notification grouping** — bundle multiple messages from same
+- [x] **Notification grouping** — bundle multiple messages from same
       thread; summary notification across threads.
 - [ ] **Privacy mode** — option to show "New message" without preview.
       Per-conversation or global setting.
@@ -111,8 +111,11 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ### Conversation list polish
 - [ ] **Unread count badge** — unread message count pill on each
       thread row. Requires `isRead` flag on `MessageEntity`.
-- [ ] **Swipe actions** — swipe left: delete/archive with undo
+- [ ] **Swipe actions on conversation list** — swipe left: delete/archive with undo
       snackbar. Swipe right: mark as read. Standard Android expectation.
+- [ ] **Swipe actions on message bubbles** — swipe right to reply (quote the
+      message inline in the reply bar); swipe left to delete single message
+      with undo snackbar. Standard iMessage/WhatsApp expectation.
 - [ ] **Long-press multi-select** — select multiple threads for
       bulk delete/archive/mute.
 - [x] **Pinned conversations** — `isPinned` on `ThreadEntity`; pins float
