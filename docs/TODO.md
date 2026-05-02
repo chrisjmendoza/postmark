@@ -100,6 +100,13 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       Contacts, update `Thread.displayName` on next sync.
 - [x] **avatarColor seed fix** — `colorSeed = thread.address` passed
       to `LetterAvatar`; colors stable across contact name changes.
+- [ ] **Tap contact name / avatar → contact viewer** — tapping the
+      contact name or profile picture in the thread toolbar opens the
+      system Contacts detail screen (`ContactsContract.QuickContact`
+      or `ACTION_VIEW` with the contact URI) so the user can see
+      all info for that number. Include an Edit button / overflow
+      action that launches `ACTION_EDIT` to take the user directly
+      to the phone's contact editor.
 
 ### Conversation list polish
 - [ ] **Unread count badge** — unread message count pill on each
@@ -198,6 +205,12 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `HapticFeedbackType.LongPress` when a reaction pill is tapped
       to add tactile confirmation and make the interaction feel
       premium.
+- [ ] **Full emoji picker for reactions** — the current emoji popup
+      shows only ~7 quick-pick reactions. Add a "＋" button that
+      opens a full bottom-sheet emoji picker (all categories, search
+      bar, recents row) matching the experience in Google Messages.
+      Use `androidx.emoji2` or a Compose emoji-picker library.
+      Users expect access to the full emoji set for reactions.
 - [ ] **Bubble tap for link/phone detection** — auto-linkify URLs,
       phone numbers, addresses in message body. Tap URL → browser,
       tap phone → dial dialog, tap address → Maps.
