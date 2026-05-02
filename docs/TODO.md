@@ -56,7 +56,7 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `ThreadEntity` (e.g. `notificationsEnabled BOOLEAN DEFAULT true`);
       check in `SmsReceiver` before posting.
 - [x] **SMS send** — basic send wired up with optimistic insert.
-- [ ] **Failed send state** — bubble shows a red ✕ or "!" indicator
+- [x] **Failed send state** — bubble shows a red ✕ or "!" indicator
       with a tap-to-retry affordance when FAILED status received.
 - [ ] **Multipart message handling** — verify all parts arrive before
       marking delivered; handle out-of-order part delivery.
