@@ -14,5 +14,11 @@ app/build/
 .claude/
 
 .vscode/
+# temp build/test log files
+*_build.txt
+*_test.txt
+*_err*.txt
+*_run*.txt
+*_compile*.txt
 build_output.txt
 .kotlin/
