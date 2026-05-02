@@ -114,6 +114,9 @@ class MuteThreadTest {
         override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
         override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
-        override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}        override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}        override suspend fun deleteAll() {}
+        override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
+        override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
+        override suspend fun isMutedByAddress(address: String): Boolean? = muteState
+        override suspend fun deleteAll() {}
     }
 }

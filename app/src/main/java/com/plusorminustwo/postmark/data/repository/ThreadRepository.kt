@@ -51,4 +51,8 @@ class ThreadRepository @Inject constructor(
         dao.updateLastMessagePreview(threadId, preview)
 
     suspend fun deleteAll() = dao.deleteAll()
+
+    /** Returns true if the thread with [address] has notifications muted, false otherwise. */
+    suspend fun isMutedByAddress(address: String): Boolean =
+        dao.isMutedByAddress(address) ?: false
 }

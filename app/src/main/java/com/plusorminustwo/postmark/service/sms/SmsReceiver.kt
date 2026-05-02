@@ -9,9 +9,13 @@ import android.provider.Telephony
 import androidx.core.app.NotificationCompat
 import com.plusorminustwo.postmark.PostmarkApplication
 import com.plusorminustwo.postmark.R
+import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.ui.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -19,6 +23,9 @@ class SmsReceiver : BroadcastReceiver() {
 
     @Inject
     lateinit var syncHandler: SmsSyncHandler
+
+    @Inject
+    lateinit var threadRepository: ThreadRepository
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -34,7 +41,18 @@ class SmsReceiver : BroadcastReceiver() {
                 val sender = messages[0].originatingAddress ?: "Unknown"
                 val body = messages.joinToString("") { it.messageBody ?: "" }
 
-                postIncomingNotification(context, sender, body)
+                // Check mute asynchronously before posting. goAsync() keeps the receiver
+                // alive until finish() is called so the OS does not reclaim the process.
+                val pendingResult = goAsync()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        if (!threadRepository.isMutedByAddress(sender)) {
+                            postIncomingNotification(context, sender, body)
+                        }
+                    } finally {
+                        pendingResult.finish()
+                    }
+                }
             }
         }
     }

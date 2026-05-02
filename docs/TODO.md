@@ -38,7 +38,7 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Incoming SMS notification** — SmsReceiver posts heads-up with
       sender + body; multi-part bodies reassembled; POST_NOTIFICATIONS
       declared and requested on API 33+.
-- [ ] **Enforce mute in SmsReceiver** — `isMuted` flag is stored in DB
+- [x] **Enforce mute in SmsReceiver** — `isMuted` flag is stored in DB
       but `SmsReceiver` doesn't check it yet; muted threads still
       trigger notifications. Check `ThreadRepository.isMuted(address)`
       before posting notification.

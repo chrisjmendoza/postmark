@@ -541,6 +541,7 @@ private class ActionsThreadDao : ThreadDao {
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
     override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) = Unit
     override suspend fun updateLastMessagePreview(threadId: Long, preview: String) = Unit
+    override suspend fun isMutedByAddress(address: String): Boolean? = null
     override suspend fun deleteAll() = Unit
 }
 
