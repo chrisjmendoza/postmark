@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
 import androidx.core.app.NotificationCompat
+import androidx.core.app.RemoteInput
 import com.plusorminustwo.postmark.PostmarkApplication
 import com.plusorminustwo.postmark.R
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -58,6 +59,8 @@ class SmsReceiver : BroadcastReceiver() {
     }
 
     private fun postIncomingNotification(context: Context, sender: String, body: String) {
+        val notifId = sender.hashCode()
+
         val openIntent = PendingIntent.getActivity(
             context,
             0,
@@ -67,6 +70,29 @@ class SmsReceiver : BroadcastReceiver() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // RemoteInput lets the user type a reply directly in the notification shade.
+        // FLAG_MUTABLE is required so the system can inject the typed text into the
+        // PendingIntent extras before delivering it to DirectReplyReceiver.
+        val remoteInput = RemoteInput.Builder(DirectReplyReceiver.KEY_TEXT_REPLY)
+            .setLabel(context.getString(R.string.reply))
+            .build()
+
+        val replyPendingIntent = PendingIntent.getBroadcast(
+            context,
+            notifId xor 0x0100_0000,
+            Intent(context, DirectReplyReceiver::class.java).apply {
+                putExtra(DirectReplyReceiver.EXTRA_ADDRESS, sender)
+                putExtra(DirectReplyReceiver.EXTRA_NOTIF_ID, notifId)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+
+        val replyAction = NotificationCompat.Action.Builder(
+            R.drawable.ic_notification,
+            context.getString(R.string.reply),
+            replyPendingIntent
+        ).addRemoteInput(remoteInput).build()
+
         val notification = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(sender)
@@ -75,9 +101,10 @@ class SmsReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openIntent)
             .setAutoCancel(true)
+            .addAction(replyAction)
             .build()
 
         context.getSystemService(NotificationManager::class.java)
-            .notify(sender.hashCode(), notification)
+            .notify(notifId, notification)
     }
 }

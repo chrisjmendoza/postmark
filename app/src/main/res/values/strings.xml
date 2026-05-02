@@ -12,4 +12,5 @@
     <string name="last_backup">Last backup</string>
     <string name="never">Never</string>
     <string name="default_sms_prompt">Set Postmark as default SMS app to send and receive messages</string>
+    <string name="reply">Reply</string>
 </resources>

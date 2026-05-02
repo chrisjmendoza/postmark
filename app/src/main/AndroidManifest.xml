@@ -86,6 +86,11 @@
             </intent-filter>
         </receiver>
 
+        <!-- Handles the inline Reply action on incoming SMS notifications -->
+        <receiver
+            android:name=".service.sms.DirectReplyReceiver"
+            android:exported="false" />
+
         <!-- FileProvider for sharing exported images -->
         <provider
             android:name="androidx.core.content.FileProvider"
