@@ -287,6 +287,8 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       cache.
 - [ ] **About screen** — app version, build number, licenses,
       link to GitHub.
+- [ ] **Real app icon** — replace the placeholder envelope with
+      proper branded artwork.
 
 ---
 

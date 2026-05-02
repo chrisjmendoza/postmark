@@ -11,6 +11,9 @@
     <!-- Contact lookup for display names -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- Required on API 33+ to post SMS notifications -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Storage for backups (no permission needed for app-specific external storage on API 26+) -->
 
     <!-- Network state for backup constraints -->

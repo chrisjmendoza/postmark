@@ -2,6 +2,7 @@ package com.plusorminustwo.postmark.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -30,18 +31,27 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestPermissionsIfNeeded()
+        val prefs = getSharedPreferences("postmark_prefs", MODE_PRIVATE)
+        val showOnboarding = !prefs.getBoolean("onboarding_completed", false)
         setContent {
             val themePreference by themeViewModel.themePreference.collectAsState()
             PostmarkTheme(themePreference = themePreference) {
-                AppNavigation()
+                AppNavigation(showOnboarding = showOnboarding)
             }
         }
     }
 
     private fun requestPermissionsIfNeeded() {
-        val needed = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.READ_CONTACTS)
-            .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-            .toTypedArray()
+        val needed = buildList {
+            if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED)
+                add(Manifest.permission.READ_SMS)
+            if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED)
+                add(Manifest.permission.READ_CONTACTS)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                add(Manifest.permission.POST_NOTIFICATIONS)
+        }.toTypedArray()
+
         if (needed.isEmpty()) {
             triggerFirstLaunchSyncIfPermitted()
         } else {
