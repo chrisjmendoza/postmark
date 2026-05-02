@@ -1,6 +1,9 @@
 package com.plusorminustwo.postmark.ui.search
 
 import com.plusorminustwo.postmark.data.db.dao.SearchDao
+import com.plusorminustwo.postmark.data.db.dao.EmojiCount
+import com.plusorminustwo.postmark.data.db.dao.ReactionDao
+import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
@@ -99,7 +102,7 @@ class SearchJumpTest {
         messages: List<MessageEntity> = emptyList(),
         threads: List<ThreadEntity> = emptyList()
     ): SearchViewModel = SearchViewModel(
-        searchRepository = SearchRepository(FakeSearchDao(messages)),
+        searchRepository = SearchRepository(FakeSearchDao(messages), FakeReactionDao()),
         threadRepository = ThreadRepository(FakeThreadDao(threads))
     )
 
@@ -129,11 +132,29 @@ class SearchJumpTest {
         override suspend fun update(thread: ThreadEntity) {}
         override suspend fun delete(thread: ThreadEntity) {}
         override suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy) {}
+        override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
+        override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
         override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
         override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
-        override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
+        override suspend fun deleteAll() {}
+    }
+
+    private class FakeReactionDao : ReactionDao {
+        override fun observeAll(): Flow<List<ReactionEntity>> = flowOf(emptyList())
+        override fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
+        override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
+        override fun observeTopEmojisBySender(senderAddress: String): Flow<List<EmojiCount>> = flowOf(emptyList())
+        override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
+        override suspend fun getAll(): List<ReactionEntity> = emptyList()
+        override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
+        override suspend fun getByThread(threadId: Long): List<ReactionEntity> = emptyList()
+        override suspend fun insert(reaction: ReactionEntity): Long = 0L
+        override suspend fun delete(reaction: ReactionEntity) {}
+        override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) {}
+        override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+        override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
         override suspend fun deleteAll() {}
     }
 }

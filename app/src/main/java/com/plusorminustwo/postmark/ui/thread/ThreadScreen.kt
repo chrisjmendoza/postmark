@@ -53,6 +53,7 @@ import androidx.compose.ui.tooling.preview.Devices
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -115,6 +116,7 @@ fun ThreadScreen(
         onExitSelectionMode = { viewModel.exitSelectionMode() },
         onSetSelectionScope = { viewModel.setSelectionScope(it) },
         onToggleMute = { viewModel.toggleMute() },
+        onTogglePin = { viewModel.togglePin() },
         onEnterSelectionMode = { viewModel.enterSelectionMode() },
         onReplyTextChanged = { viewModel.onReplyTextChanged(it) },
         onSendMessage = { viewModel.sendMessage() },
@@ -147,6 +149,7 @@ private fun ThreadContent(
     onExitSelectionMode: () -> Unit,
     onSetSelectionScope: (SelectionScope) -> Unit,
     onToggleMute: () -> Unit,
+    onTogglePin: () -> Unit,
     onEnterSelectionMode: () -> Unit,
     onReplyTextChanged: (String) -> Unit,
     onSendMessage: () -> Unit,
@@ -378,12 +381,12 @@ private fun ThreadContent(
                 )
                 else -> TopAppBar(
                     title = {
-                        val name = uiState.thread?.displayName ?: ""
+                        val name = formatPhoneNumber(uiState.thread?.displayName ?: "")
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            LetterAvatar(name = name, size = 36.dp)
+                            LetterAvatar(name = name, colorSeed = uiState.thread?.address ?: name, size = 36.dp)
                             Text(name)
                         }
                     },
@@ -419,6 +422,10 @@ private fun ThreadContent(
                                     onClick = { menuExpanded = false; onToggleMute() }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text(if (uiState.thread?.isPinned == true) "Unpin" else "Pin") },
+                                    onClick = { menuExpanded = false; onTogglePin() }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Backup settings") },
                                     onClick = { menuExpanded = false; showBackupPolicyDialog = true }
                                 )
@@ -428,7 +435,6 @@ private fun ThreadContent(
                                 )
                             }
                         }
-
                     }
                 )
             }
@@ -1295,6 +1301,7 @@ private fun ThreadScreenPreview() {
             onExitSelectionMode = {},
             onSetSelectionScope = {},
             onToggleMute = {},
+            onTogglePin = {},
             onEnterSelectionMode = {},
             onReplyTextChanged = {},
             onSendMessage = {},

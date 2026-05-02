@@ -86,17 +86,17 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ### Contact integration
 - [ ] **Contact photo in avatar** — `ContactsContract` lookup for
       photo URI; fall back to deterministic color initial if none.
-- [ ] **Phone number formatting** — display `+12065551234` as
-      `(206) 555-1234` based on device locale.
+- [x] **Phone number formatting** — `formatPhoneNumber()` in
+      `PhoneNumberFormatter.kt`; E.164 NANP → `(xxx) xxx-xxxx`;
+      wired in Conversations, Thread, and Search screens.
 - [ ] **Multiple numbers per contact** — handle correctly during
       sync and display.
 - [ ] **Save number prompt** — when receiving from unknown number,
       show "Add to contacts" banner above conversation.
 - [ ] **Contact name refresh** — if contact name changes in system
       Contacts, update `Thread.displayName` on next sync.
-- [ ] **avatarColor seed fix** — swap seed from `displayName` to
-      `thread.address` for color stability when contact name changes.
-      One-line change in `avatarColor()`.
+- [x] **avatarColor seed fix** — `colorSeed = thread.address` passed
+      to `LetterAvatar`; colors stable across contact name changes.
 
 ### Conversation list polish
 - [ ] **Unread count badge** — unread message count pill on each
@@ -105,8 +105,8 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       snackbar. Swipe right: mark as read. Standard Android expectation.
 - [ ] **Long-press multi-select** — select multiple threads for
       bulk delete/archive/mute.
-- [ ] **Pinned conversations** — `isPinned` boolean on `ThreadEntity`,
-      pinned threads float to top of list. Long-press → pin/unpin.
+- [x] **Pinned conversations** — `isPinned` on `ThreadEntity`; pins float
+      to top; Pin/Unpin in thread ⋮ menu; `PushPin` icon in conversation row.
 - [ ] **Friendly timestamps** — "just now", "2m", "9:41 AM", "Mon",
       "Apr 25" based on recency. Reuse `toFriendlyLabel()` logic
       already in the codebase.
@@ -128,10 +128,8 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `searchMessagesFiltered()` DAO query handles all combos.
 - [x] **Reaction filter** — emoji picker bottom sheet; filters via
       `searchMessagesFilteredWithReaction()` subquery on `reactions`.
-- [ ] **Reaction emoji list data-driven** — `SearchScreen` currently
-      has a hardcoded `REACTION_EMOJIS` list. Replace with a DAO
-      query for distinct emojis from the `reactions` table so
-      app-specific and Apple-forwarded reactions appear automatically.
+- [x] **Reaction emoji list data-driven** — `ReactionDao.observeDistinctEmojis()`
+      wired into `SearchScreen` via `SearchViewModel`; hardcoded list removed.
 - [ ] **Search within thread** — entry point: search icon in thread
       toolbar. Scopes results to current `threadId`.
 
@@ -180,11 +178,8 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       Show in global stats as "You haven't talked to Jake in a while."
 
 ### Thread view — deeper polish
-- [ ] **Muted thread visual indicator** — no UI cue that a thread
-      is muted. Add a muted icon (🔕) to the thread row in
-      `ConversationsScreen` and optionally in the thread toolbar.
-      (Pending merge of `copilot/featfix-avatar-color-seed` which
-      already implements this.)
+- [x] **Muted thread visual indicator** — `NotificationsOff` icon (14 dp)
+      shown in `ConversationsScreen` thread rows when `isMuted = true`.
 - [x] **Reaction chip cluster-aware spacing** — Spacer(12.dp) only
       added at BOTTOM/SINGLE cluster positions; TOP/MIDDLE use natural
       inter-bubble gap.

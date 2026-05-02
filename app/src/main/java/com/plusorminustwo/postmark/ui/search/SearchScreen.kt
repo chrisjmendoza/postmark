@@ -19,11 +19,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.SearchDateRange
 
-/** Common reaction emojis shown in the reaction filter picker. */
-private val REACTION_EMOJIS = listOf("❤️", "😂", "👍", "👎", "‼️", "❓", "😮", "😢")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,7 +33,39 @@ fun SearchScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showThreadSheet by remember { mutableStateOf(false) }
-    var showReactionSheet by remember { mutableStateOf(false) }
+    var showEmojiSheet by remember { mutableStateOf(false) }
+
+    if (showEmojiSheet) {
+        ModalBottomSheet(onDismissRequest = { showEmojiSheet = false }) {
+            Text(
+                "Filter by reaction",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            if (uiState.reactionEmojis.isEmpty()) {
+                Text(
+                    "No reactions yet",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            } else {
+                LazyColumn {
+                    items(uiState.reactionEmojis) { emoji ->
+                        ListItem(
+                            headlineContent = { Text(emoji) },
+                            modifier = Modifier.clickable {
+                                viewModel.setReactionFilter(emoji)
+                                showEmojiSheet = false
+                            }
+                        )
+                        HorizontalDivider()
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
 
     if (showThreadSheet) {
         ModalBottomSheet(onDismissRequest = { showThreadSheet = false }) {
@@ -47,40 +78,13 @@ fun SearchScreen(
                 items(uiState.threads, key = { it.id }) { thread ->
                     ListItem(
                         headlineContent = { Text(thread.displayName) },
-                        supportingContent = { Text(thread.address) },
+                        supportingContent = { Text(formatPhoneNumber(thread.address)) },
                         modifier = Modifier.clickable {
                             viewModel.setThreadFilter(thread)
                             showThreadSheet = false
                         }
                     )
                     HorizontalDivider()
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-        }
-    }
-
-    if (showReactionSheet) {
-        ModalBottomSheet(onDismissRequest = { showReactionSheet = false }) {
-            Text(
-                "Filter by reaction",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(REACTION_EMOJIS) { emoji ->
-                    val selected = uiState.filters.reactionEmoji == emoji
-                    FilterChip(
-                        selected = selected,
-                        onClick = {
-                            viewModel.setReactionFilter(if (selected) null else emoji)
-                            showReactionSheet = false
-                        },
-                        label = { Text(emoji, fontSize = 22.sp) }
-                    )
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -126,7 +130,7 @@ fun SearchScreen(
                 onDateRangeChange = viewModel::setDateRangeFilter,
                 onThreadChipClick = { showThreadSheet = true },
                 onClearThreadFilter = { viewModel.setThreadFilter(null) },
-                onReactionChipClick = { showReactionSheet = true },
+                onReactionChipClick = { showEmojiSheet = true },
                 onClearReactionFilter = { viewModel.setReactionFilter(null) }
             )
 

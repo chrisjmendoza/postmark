@@ -1,8 +1,11 @@
 package com.plusorminustwo.postmark.ui.search
 
+import com.plusorminustwo.postmark.data.db.dao.EmojiCount
+import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.SearchDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
+import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.data.repository.SearchRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -136,7 +139,7 @@ class SearchReactionFilterTest {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun buildViewModel(dao: SearchDao) = SearchViewModel(
-        searchRepository = SearchRepository(dao),
+        searchRepository = SearchRepository(dao, FakeReactionDao()),
         threadRepository = ThreadRepository(FakeThreadDao())
     )
 
@@ -184,5 +187,23 @@ class SearchReactionFilterTest {
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
         override suspend fun deleteAll() {}
         override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
+        override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
+    }
+
+    private class FakeReactionDao : ReactionDao {
+        override fun observeAll(): Flow<List<ReactionEntity>> = flowOf(emptyList())
+        override suspend fun getAll(): List<ReactionEntity> = emptyList()
+        override fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
+        override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
+        override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
+        override suspend fun getByThread(threadId: Long): List<ReactionEntity> = emptyList()
+        override fun observeTopEmojisBySender(senderAddress: String): Flow<List<EmojiCount>> = flowOf(emptyList())
+        override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
+        override suspend fun insert(reaction: ReactionEntity): Long = 0L
+        override suspend fun delete(reaction: ReactionEntity) {}
+        override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) {}
+        override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+        override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
+        override suspend fun deleteAll() {}
     }
 }

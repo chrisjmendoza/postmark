@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ThreadDao {
 
-    @Query("SELECT * FROM threads ORDER BY lastMessageAt DESC")
+    @Query("SELECT * FROM threads ORDER BY isPinned DESC, lastMessageAt DESC")
     fun observeAll(): Flow<List<ThreadEntity>>
 
     @Query("SELECT * FROM threads WHERE id = :threadId")
@@ -32,6 +32,12 @@ interface ThreadDao {
     @Query("UPDATE threads SET backupPolicy = :policy WHERE id = :threadId")
     suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy)
 
+    @Query("UPDATE threads SET isMuted = :isMuted WHERE id = :threadId")
+    suspend fun updateMuted(threadId: Long, isMuted: Boolean)
+
+    @Query("UPDATE threads SET isPinned = :isPinned WHERE id = :threadId")
+    suspend fun updatePinned(threadId: Long, isPinned: Boolean)
+
     @Query("SELECT * FROM threads WHERE backupPolicy != 'NEVER_INCLUDE'")
     suspend fun getThreadsForBackup(): List<ThreadEntity>
 
@@ -43,9 +49,6 @@ interface ThreadDao {
 
     @Query("UPDATE threads SET lastMessagePreview = :preview WHERE id = :threadId")
     suspend fun updateLastMessagePreview(threadId: Long, preview: String)
-
-    @Query("UPDATE threads SET isMuted = :isMuted WHERE id = :threadId")
-    suspend fun updateMuted(threadId: Long, isMuted: Boolean)
 
     @Query("DELETE FROM threads")
     suspend fun deleteAll()

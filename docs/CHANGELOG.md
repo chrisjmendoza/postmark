@@ -4,9 +4,9 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
-## 2026-04-29
+## 2026-04-30
 
-### Emoji reaction picker — compact pill + expanded sheet
+### 1. Avatar color seed fix
 - **Quick reaction tray**: Reduced from 7+ items to 5 defaults (❤️ 👍 😂 😮 🔥) + ➕ "more" button. `DEFAULT_QUICK_EMOJIS` and `buildQuickEmojiList` limit updated to 5.
 - **Pill styling**: 44dp touch targets, 24sp emoji font. `Surface` with `#2C2C2E` bg, `0.5dp #3A3A3C` border, 24dp corner radius, 8dp elevation shadow.
 - **More button**: 44dp, 20dp `Add` icon tinted `#8E8E93` — opens `EmojiPickerBottomSheet`.

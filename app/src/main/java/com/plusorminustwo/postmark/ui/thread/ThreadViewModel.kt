@@ -319,12 +319,20 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
-    // ── Mute ──────────────────────────────────────────────────────────────────
+    // ── Mute / Pin ────────────────────────────────────────────────────────────
 
     fun toggleMute() {
+        val current = uiState.value.thread?.isMuted ?: return
         viewModelScope.launch {
-            val current = uiState.value.thread?.isMuted ?: false
             threadRepository.updateMuted(threadId, !current)
+        }
+    }
+
+
+    fun togglePin() {
+        val current = uiState.value.thread?.isPinned ?: return
+        viewModelScope.launch {
+            threadRepository.updatePinned(threadId, !current)
         }
     }
 

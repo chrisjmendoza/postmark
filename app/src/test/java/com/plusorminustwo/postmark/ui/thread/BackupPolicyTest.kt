@@ -50,6 +50,9 @@ class BackupPolicyTest {
             lastPolicyUpdate = threadId to policy
         }
 
+        override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
+        override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
+
         override fun observeAll(): Flow<List<ThreadEntity>> = emptyFlow()
         override suspend fun getById(threadId: Long): ThreadEntity? = null
         override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(null)
@@ -61,7 +64,6 @@ class BackupPolicyTest {
         override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
-        override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
         override suspend fun deleteAll() {}
     }
 }

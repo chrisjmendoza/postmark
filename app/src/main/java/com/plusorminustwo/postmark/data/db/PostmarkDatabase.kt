@@ -17,7 +17,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -72,16 +72,22 @@ abstract class PostmarkDatabase : RoomDatabase() {
 
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // Task 3: Add mute support to threads
                 db.execSQL(
                     "ALTER TABLE threads ADD COLUMN isMuted INTEGER NOT NULL DEFAULT 0"
                 )
-                // Task 5: Add reaction emoji stats to thread_stats and global_stats
                 db.execSQL(
                     "ALTER TABLE thread_stats ADD COLUMN topReactionEmojisJson TEXT NOT NULL DEFAULT '[]'"
                 )
                 db.execSQL(
                     "ALTER TABLE global_stats ADD COLUMN topReactionEmojisJson TEXT NOT NULL DEFAULT '[]'"
+                )
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE threads ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0"
                 )
             }
         }

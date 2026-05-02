@@ -1,16 +1,21 @@
 package com.plusorminustwo.postmark.data.repository
 
+import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.SearchDao
 import com.plusorminustwo.postmark.data.db.entity.toDomain
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.search.parser.FtsQueryBuilder
+import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class SearchRepository @Inject constructor(
-    private val searchDao: SearchDao
+    private val searchDao: SearchDao,
+    private val reactionDao: ReactionDao
 ) {
+    fun observeDistinctEmojis(): Flow<List<String>> = reactionDao.observeDistinctEmojis()
+
     suspend fun search(
         rawQuery: String,
         threadId: Long? = null,

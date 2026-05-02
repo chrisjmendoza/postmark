@@ -115,6 +115,7 @@ private class FixedTopEmojiFakeReactionDao(
     override suspend fun getAll(): List<ReactionEntity> = emptyList()
     override fun observeTopEmojisBySender(senderAddress: String): Flow<List<EmojiCount>> =
         flowOf(topEmojis)
+    override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
 
     override fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
     override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
@@ -138,6 +139,7 @@ private class LiveTopEmojiFakeReactionDao(
     override fun observeAll(): Flow<List<ReactionEntity>> = flowOf(emptyList())
     override suspend fun getAll(): List<ReactionEntity> = emptyList()
     override fun observeTopEmojisBySender(senderAddress: String): Flow<List<EmojiCount>> = flow
+    override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
 
     override fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
     override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())

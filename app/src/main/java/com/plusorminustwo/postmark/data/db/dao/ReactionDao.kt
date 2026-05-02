@@ -59,6 +59,9 @@ interface ReactionDao {
     """)
     suspend fun getByThread(threadId: Long): List<ReactionEntity>
 
+    @Query("SELECT DISTINCT emoji FROM reactions ORDER BY emoji")
+    fun observeDistinctEmojis(): Flow<List<String>>
+
     @Query("DELETE FROM reactions")
     suspend fun deleteAll()
 }
