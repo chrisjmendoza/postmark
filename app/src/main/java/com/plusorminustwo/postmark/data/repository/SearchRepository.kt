@@ -21,34 +21,21 @@ class SearchRepository @Inject constructor(
         threadId: Long? = null,
         isSent: Boolean? = null,
         startMs: Long? = null,
-        endMs: Long? = null,
+        reactionEmoji: String? = null,
         limit: Int = 50,
         offset: Int = 0
     ): List<Message> {
         val ftsQuery = FtsQueryBuilder.build(rawQuery)
         if (ftsQuery.isBlank()) return emptyList()
 
-        return when {
-            threadId != null && startMs != null && endMs != null ->
-                searchDao.searchMessagesInDateRange(ftsQuery, startMs, endMs, limit, offset)
-                    .filter { it.threadId == threadId }
-                    .map { it.toDomain() }
+        val tid = threadId ?: -1L
+        val isSentInt = when (isSent) { true -> 1; false -> 0; null -> -1 }
+        val sMs = startMs ?: -1L
 
-            threadId != null ->
-                searchDao.searchMessagesInThread(ftsQuery, threadId, limit, offset)
-                    .map { it.toDomain() }
-
-            isSent != null ->
-                searchDao.searchMessagesBySent(ftsQuery, isSent, limit, offset)
-                    .map { it.toDomain() }
-
-            startMs != null && endMs != null ->
-                searchDao.searchMessagesInDateRange(ftsQuery, startMs, endMs, limit, offset)
-                    .map { it.toDomain() }
-
-            else ->
-                searchDao.searchMessages(ftsQuery, limit, offset)
-                    .map { it.toDomain() }
-        }
+        return if (reactionEmoji != null) {
+            searchDao.searchMessagesFilteredWithReaction(ftsQuery, tid, isSentInt, sMs, reactionEmoji, limit, offset)
+        } else {
+            searchDao.searchMessagesFiltered(ftsQuery, tid, isSentInt, sMs, limit, offset)
+        }.map { it.toDomain() }
     }
 }

@@ -75,6 +75,12 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE threads ADD COLUMN isMuted INTEGER NOT NULL DEFAULT 0"
                 )
+                db.execSQL(
+                    "ALTER TABLE thread_stats ADD COLUMN topReactionEmojisJson TEXT NOT NULL DEFAULT '[]'"
+                )
+                db.execSQL(
+                    "ALTER TABLE global_stats ADD COLUMN topReactionEmojisJson TEXT NOT NULL DEFAULT '[]'"
+                )
             }
         }
 

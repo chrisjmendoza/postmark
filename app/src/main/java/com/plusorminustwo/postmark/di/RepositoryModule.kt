@@ -30,5 +30,5 @@ object RepositoryModule {
 
     @Provides
     @Singleton
-    fun provideSearchRepository(dao: SearchDao): SearchRepository = SearchRepository(dao)
+    fun provideSearchRepository(dao: SearchDao, reactionDao: ReactionDao): SearchRepository = SearchRepository(dao, reactionDao)
 }

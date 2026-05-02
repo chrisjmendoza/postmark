@@ -29,6 +29,26 @@ private val CLUSTER_GAP_MS = 3 * 60 * 1_000L  // 3 minutes
  * adjacent pair is no more than [CLUSTER_GAP_MS] apart. Position is determined
  * purely by chronological adjacency — day boundaries are ignored.
  */
+/**
+ * Maps each day label to the flat item index of its [DateHeader] in the reversed LazyColumn.
+ *
+ * Layout order (index 0 = visual bottom of screen):
+ *   [newest-day messages…] [newest-day header] [next-day messages…] [next-day header] …
+ *
+ * For each day (newest-first), messages occupy the lower indices and the header follows
+ * immediately after, so `headerIndex = runningMessageCount`.
+ */
+fun buildDateToHeaderIndex(grouped: Map<String, List<Message>>): Map<String, Int> {
+    var idx = 0
+    return buildMap {
+        grouped.entries.reversed().forEach { (label, messages) ->
+            idx += messages.size
+            put(label, idx)
+            idx++
+        }
+    }
+}
+
 fun computeClusterPositions(messages: List<Message>): Map<Long, ClusterPosition> {
     if (messages.isEmpty()) return emptyMap()
     val result = HashMap<Long, ClusterPosition>(messages.size)

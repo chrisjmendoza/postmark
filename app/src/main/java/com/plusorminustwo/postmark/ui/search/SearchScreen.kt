@@ -17,9 +17,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.SearchDateRange
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,7 +55,7 @@ fun SearchScreen(
                         ListItem(
                             headlineContent = { Text(emoji) },
                             modifier = Modifier.clickable {
-                                viewModel.onFiltersChange(uiState.filters.copy(hasReaction = true))
+                                viewModel.setReactionFilter(emoji)
                                 showEmojiSheet = false
                             }
                         )
@@ -124,9 +127,11 @@ fun SearchScreen(
                 filters = uiState.filters,
                 selectedThread = uiState.selectedThread,
                 onFiltersChange = viewModel::onFiltersChange,
+                onDateRangeChange = viewModel::setDateRangeFilter,
                 onThreadChipClick = { showThreadSheet = true },
                 onClearThreadFilter = { viewModel.setThreadFilter(null) },
-                onReactionChipClick = { showEmojiSheet = true }
+                onReactionChipClick = { showEmojiSheet = true },
+                onClearReactionFilter = { viewModel.setReactionFilter(null) }
             )
 
             if (uiState.isLoading) {
@@ -154,9 +159,11 @@ private fun FilterChips(
     filters: SearchFilters,
     selectedThread: com.plusorminustwo.postmark.domain.model.Thread?,
     onFiltersChange: (SearchFilters) -> Unit,
+    onDateRangeChange: (SearchDateRange) -> Unit,
     onThreadChipClick: () -> Unit,
     onClearThreadFilter: () -> Unit,
-    onReactionChipClick: () -> Unit
+    onReactionChipClick: () -> Unit,
+    onClearReactionFilter: () -> Unit
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -181,14 +188,38 @@ private fun FilterChips(
             )
         }
         item {
+            val rangeSelected = filters.dateRange == SearchDateRange.TODAY
             FilterChip(
-                selected = filters.hasReaction,
+                selected = rangeSelected,
+                onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.TODAY) },
+                label = { Text("Today") }
+            )
+        }
+        item {
+            val rangeSelected = filters.dateRange == SearchDateRange.LAST_7_DAYS
+            FilterChip(
+                selected = rangeSelected,
+                onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.LAST_7_DAYS) },
+                label = { Text("7 days") }
+            )
+        }
+        item {
+            val rangeSelected = filters.dateRange == SearchDateRange.LAST_30_DAYS
+            FilterChip(
+                selected = rangeSelected,
+                onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.LAST_30_DAYS) },
+                label = { Text("30 days") }
+            )
+        }
+        item {
+            val reactionActive = filters.reactionEmoji != null
+            FilterChip(
+                selected = reactionActive,
                 onClick = {
-                    if (filters.hasReaction) onFiltersChange(filters.copy(hasReaction = false))
-                    else onReactionChipClick()
+                    if (reactionActive) onClearReactionFilter() else onReactionChipClick()
                 },
-                label = { Text("Reactions") },
-                trailingIcon = if (filters.hasReaction) {
+                label = { Text(filters.reactionEmoji ?: "Reaction") },
+                trailingIcon = if (reactionActive) {
                     { Icon(Icons.Default.Clear, contentDescription = "Clear reaction filter",
                         modifier = Modifier.size(FilterChipDefaults.IconSize)) }
                 } else null
@@ -210,6 +241,8 @@ private fun FilterChips(
         }
     }
 }
+
+
 
 @Composable
 private fun SearchResultRow(message: Message, query: String, onClick: () -> Unit) {

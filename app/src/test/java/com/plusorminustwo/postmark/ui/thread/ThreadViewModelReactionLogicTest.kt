@@ -122,13 +122,13 @@ class ThreadViewModelReactionLogicTest {
         val realDefaults = ThreadViewModel.DEFAULT_QUICK_EMOJIS
         // User has reacted with ❤️ 12×, 🎉 8×, 😂 4×  (all already in defaults)
         val topUsed = listOf("❤️", "🎉", "😂")
-        val result = ThreadViewModel.buildQuickEmojiList(topUsed, realDefaults, 8)
+        val result = ThreadViewModel.buildQuickEmojiList(topUsed, realDefaults, 5)
         assertEquals("❤️", result[0])
         assertEquals("🎉", result[1])
         assertEquals("😂", result[2])
-        // remaining 5 slots filled by defaults not yet in list
-        assertEquals(8, result.size)
-        assertEquals(8, result.distinct().size)
+        // remaining 2 slots filled by defaults not yet in list
+        assertEquals(5, result.size)
+        assertEquals(5, result.distinct().size)
     }
 
     @Test
@@ -136,11 +136,11 @@ class ThreadViewModelReactionLogicTest {
         val realDefaults = ThreadViewModel.DEFAULT_QUICK_EMOJIS
         // User used 🦄 (not in defaults) the most
         val topUsed = listOf("🦄")
-        val result = ThreadViewModel.buildQuickEmojiList(topUsed, realDefaults, 8)
+        val result = ThreadViewModel.buildQuickEmojiList(topUsed, realDefaults, 5)
         assertEquals("🦄", result[0])
-        assertEquals(8, result.size)
-        // All 8 defaults should fill positions 1–8 in their original order
-        val expectedTail = realDefaults.take(7)
+        assertEquals(5, result.size)
+        // First 4 defaults should fill positions 1–5 in their original order
+        val expectedTail = realDefaults.take(4)
         assertEquals(expectedTail, result.drop(1))
     }
 }

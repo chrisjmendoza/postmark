@@ -56,7 +56,7 @@ class StatsViewModelHeatmapTest {
     ): StatsViewModel {
         val messageDao = FakeMessageDao()
         val threadDao  = FakeThreadDao()
-        val statsUpdater = StatsUpdater(messageDao, FakeThreadStatsDao(), FakeGlobalStatsDao())
+        val statsUpdater = StatsUpdater(messageDao, FakeThreadStatsDao(), FakeGlobalStatsDao(), FakeReactionDao())
         return StatsViewModel(threadDao, messageDao, FakeReactionDao(), statsUpdater, savedStateHandle)
     }
 
@@ -313,6 +313,7 @@ private class FakeGlobalStatsDao : GlobalStatsDao {
 
 private class FakeReactionDao : ReactionDao {
     override fun observeAll(): Flow<List<ReactionEntity>> = flowOf(emptyList())
+    override suspend fun getAll(): List<ReactionEntity> = emptyList()
     override fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
     override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
     override suspend fun insert(reaction: ReactionEntity): Long = 0L
@@ -322,6 +323,7 @@ private class FakeReactionDao : ReactionDao {
     override suspend fun getTopEmojis(limit: Int): List<com.plusorminustwo.postmark.data.db.dao.EmojiCount> = emptyList()
     override fun observeTopEmojisBySender(senderAddress: String): Flow<List<com.plusorminustwo.postmark.data.db.dao.EmojiCount>> = flowOf(emptyList())
     override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
+    override suspend fun getByThread(threadId: Long): List<ReactionEntity> = emptyList()
     override suspend fun deleteAll() = Unit
     override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
 }

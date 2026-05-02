@@ -1,4 +1,4 @@
-package com.plusorminustwo.postmark.ui.thread
+﻿package com.plusorminustwo.postmark.ui.thread
 
 import android.content.Context
 import android.provider.Telephony
@@ -328,6 +328,7 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+
     fun togglePin() {
         val current = uiState.value.thread?.isPinned ?: return
         viewModelScope.launch {
@@ -346,7 +347,7 @@ class ThreadViewModel @Inject constructor(
     }
 
     companion object {
-        val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "😢", "👎", "🔥", "🎉")
+        val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "🔥")
 
         /**
          * Merges [topUsed] (most-used first) with [defaults], deduplicating, and caps the result
@@ -355,7 +356,7 @@ class ThreadViewModel @Inject constructor(
         internal fun buildQuickEmojiList(
             topUsed: List<String>,
             defaults: List<String> = DEFAULT_QUICK_EMOJIS,
-            limit: Int = 8
+            limit: Int = 5
         ): List<String> {
             val merged = topUsed.toMutableList()
             defaults.forEach { if (it !in merged) merged.add(it) }

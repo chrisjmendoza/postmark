@@ -7,43 +7,54 @@ Newest entries on top. Each day is a journal of work completed.
 ## 2026-04-30
 
 ### 1. Avatar color seed fix
-- **`LetterAvatar`** — added `colorSeed: String = name` parameter. `avatarColor()` now seeds from `colorSeed` instead of the display name, so avatar colors stay stable when a contact's name changes in the address book.
-- **`ConversationsScreen`** — passes `colorSeed = thread.address` to `LetterAvatar`.
-- **`ThreadScreen`** — passes `colorSeed = uiState.thread?.address` to `LetterAvatar` in the `TopAppBar`.
+- **Quick reaction tray**: Reduced from 7+ items to 5 defaults (❤️ 👍 😂 😮 🔥) + ➕ "more" button. `DEFAULT_QUICK_EMOJIS` and `buildQuickEmojiList` limit updated to 5.
+- **Pill styling**: 44dp touch targets, 24sp emoji font. `Surface` with `#2C2C2E` bg, `0.5dp #3A3A3C` border, 24dp corner radius, 8dp elevation shadow.
+- **More button**: 44dp, 20dp `Add` icon tinted `#8E8E93` — opens `EmojiPickerBottomSheet`.
+- **`EmojiPickerBottomSheet`**: `ModalBottomSheet` with search `TextField`, `LazyVerticalGrid(GridCells.Fixed(8))`, 4 sections (Smileys / Hands / Objects / Animals & Nature).
+- **`EmojiData.kt`** (new file): `internal data class EmojiSection` + `internal val ALL_EMOJI_SECTIONS` extracted out of `ThreadScreen.kt`.
 
-### 2. Reaction emoji list data-driven in SearchScreen
-- **`ReactionDao`** — added `fun observeDistinctEmojis(): Flow<List<String>>` returning all distinct emoji values from the `reactions` table ordered alphabetically.
-- **`SearchRepository`** — now injects `ReactionDao` and exposes `observeDistinctEmojis(): Flow<List<String>>`.
-- **`SearchUiState`** — added `reactionEmojis: List<String>` field.
-- **`SearchViewModel`** — wires `searchRepository.observeDistinctEmojis()` into `uiState` via `StateFlow`.
-- **`SearchScreen`** — "Reactions" filter chip now opens a `ModalBottomSheet` listing distinct emojis from the DB. Tapping an emoji sets `hasReaction = true` and closes the sheet. The chip shows a clear icon when active.
+### Emoji reaction picker — device bug fixes
+- **Popup position off by several bubbles**: Root cause — opening the picker removed `ReplyBar` from the Scaffold `bottomBar`, causing the content area to expand and messages to shift down after `bubbleTopY` was already captured. Fix: `ReplyBar` now stays in layout at all times; `Modifier.alpha(0f)` hides it when picker is open. The scrim above prevents accidental taps.
+- **Action bar dimmed by scrim**: Full-screen `Box` scrim was covering `MessageActionTopBar`. Fix: scrim `Box` starts at `statusBarsPadding() + padding(top = 56.dp)` — visual darkening and click-dismiss merged into a single composable.
+- **🔥 rendered as ❓ on device**: `DEFAULT_QUICK_EMOJIS` entry for 🔥 was corrupted to Unicode replacement character U+FFFD during a prior file edit. Fixed via byte-level PowerShell UTF-8 replacement. `❓` also removed from the Objects section in `EmojiData.kt`.
 
-### 3. Muted thread visual indicator
-- **`Thread` / `ThreadEntity`** — added `isMuted: Boolean = false` field.
-- **Room migration 4→5** — `ALTER TABLE threads ADD COLUMN isMuted INTEGER NOT NULL DEFAULT 0`.
-- **`ThreadDao`** — added `updateMuted(threadId, isMuted)` query.
-- **`ThreadRepository`** — added `updateMuted()` delegation method.
-- **`ThreadViewModel`** — added `toggleMute()` (reads current `isMuted` from state, inverts and persists).
-- **`ThreadScreen`** — "Mute" overflow menu item now calls `toggleMute()` and dynamically shows "Mute" / "Unmute" based on current state.
-- **`ConversationsScreen`** — thread rows show a `NotificationsOff` icon (14 dp) next to the timestamp when `isMuted = true`.
+### Message action top bar — ActionItem tint + copy toast
+- `Copy`, `Select`, and `Forward` actions were rendering dimmed/inactive. Root cause: `ActionItem` was inheriting a dim tint from `LocalContentColor.current` in the bar's context. Fixed: tint now explicitly uses `MaterialTheme.colorScheme.onSurface`; Cancel/Delete retain error (red) color.
+- **Toast on copy**: `"Message copied"` shown via `Toast.makeText` when the Copy action is tapped.
 
-### 4. Pinned conversations
-- **`Thread` / `ThreadEntity`** — added `isPinned: Boolean = false` field.
-- **Room migration 5→6** — `ALTER TABLE threads ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0`.
-- **`PostmarkDatabase`** — version bumped to 6; both new migrations registered in `DatabaseModule`.
-- **`ThreadDao`** — `observeAll()` sort order changed to `ORDER BY isPinned DESC, lastMessageAt DESC`; added `updatePinned(threadId, isPinned)` query.
-- **`ThreadRepository`** — added `updatePinned()` delegation method.
-- **`ThreadViewModel`** — added `togglePin()` following the same pattern as `toggleMute()`.
-- **`ThreadScreen`** — overflow menu has "Pin" / "Unpin" item (dynamic label) that calls `togglePin()`.
-- **`ConversationsScreen`** — thread rows show a `PushPin` icon (14 dp, primary color) next to the timestamp when `isPinned = true`.
-- **Tests** — `PinnedThreadTest` covers sort-order logic (pinned first, then by recency) and `ThreadRepository.updatePinned()` delegation.
+### Tests (257 total, unchanged — all changes are bug fixes)
 
-### 5. Phone number formatting
-- **`domain/formatter/PhoneNumberFormatter.kt`** — pure Kotlin function `fun formatPhoneNumber(raw: String, locale: Locale): String`. Converts E.164 NANP numbers (`+12065551234` → `(206) 555-1234`), handles plain 10-digit NANP, and passes through international numbers, short codes (≤6 digits), and non-numeric strings unchanged.
-- **`ConversationsScreen`** — thread display name formatted via `formatPhoneNumber` (no-op for real contact names; formats raw numbers for unknown contacts).
-- **`ThreadScreen`** — thread display name in `TopAppBar` formatted via `formatPhoneNumber`.
-- **`SearchScreen`** — thread address in the thread-filter bottom sheet formatted via `formatPhoneNumber`.
-- **Tests** — `PhoneNumberFormatterTest` covers US E.164, Canadian NANP, plain 10-digit, UK international, German international, 5-digit short code, 6-digit short code, empty string, blank string, non-numeric, and locale parameter.
+---
+
+## 2026-04-28
+
+### Reaction chip — final positioning (badge style, anchored to bubble)
+- **Crash fix**: `padding(top = (-6).dp)` → `offset(y = (-6).dp)` — Compose throws on negative padding values.
+- **Corner anchoring**: Bubble + chip wrapped in a `Box(widthIn(max=280.dp))`; chip uses `Alignment.BottomEnd` + `offset(y = 16.dp)` so it sits at the bubble's bottom-right corner regardless of message length or direction.
+- **Layout reservation**: `Spacer(height = 16.dp)` added when reactions present — reserves the chip's visual overhang so the next message never overlaps it.
+- **Timestamp offset**: timestamp row uses `offset(y = -20.dp)` when reactions present, pulling it back up to near its normal position below the bubble.
+- **Chip styling** (custom `Surface`):
+  - Background: `#2C2C2E`; border: `0.5dp #3A3A3C`; border radius: `10dp`; padding: `8dp horizontal / 2dp vertical`; font: `12sp`
+  - Own reaction: background `#1A3A5C`, primary-color border at `1dp`
+
+### Stats screen — emoji cards always visible
+- Both `EmojiCard` items (`Top Emoji (Messages)` and `Top Emoji (Reactions)`) now render unconditionally.
+- When empty, each card shows "None yet" placeholder text instead of disappearing.
+- Previously guarded by `isNotEmpty()` — cards vanished when no data, making it look like the feature was removed.
+
+### Date pill scroll alignment fix
+- **`ThreadScreen.scrollToDateLabel`** — tapping a date in the calendar picker now positions the selected day's `DateHeader` at the **top** of the screen (or as high as possible near the end of the list) instead of the bottom. Root cause: `LazyListState.layoutInfo` is Compose snapshot state updated only after the next composition frame; reading it immediately after `scrollToItem` returned stale `visibleItemsInfo`, causing `scrollOffset` to collapse to 0 and leaving the header at the reversed-layout start edge (visual bottom). Fix: after the initial `scrollToItem(headerIdx)` snap, the code now suspends on `snapshotFlow { listState.layoutInfo }.first { header in visibleItemsInfo }` to wait for the frame to land, then computes `scrollOffset = (viewportEndOffset − viewportStartOffset) − headerSize` and calls `animateScrollToItem` with that offset.
+
+### Copy export — date output
+- **`ExportFormatter.formatForCopy`** — copied conversation text now includes the date. Single-day selections show the date once on the second line of the header (e.g. `April 14, 2024`). Multi-day selections use day-separator breaks (`────────────────────────`) before each new day's messages.
+- Day format updated from `"MMMM d"` to `"MMMM d, yyyy"` to match `MessageGrouping.DAY_FORMATTER` and avoid ambiguity across years.
+
+### Refactor — `buildDateToHeaderIndex` extracted
+- Moved date-label → item-index computation from an inline `remember` block in `ThreadScreen` into a top-level function `buildDateToHeaderIndex(grouped)` in `MessageGrouping.kt`, making it independently testable.
+
+### Tests (225 total, +4)
+- `MessageGroupingTest` — 4 new `buildDateToHeaderIndex` tests: empty map, single-day, two-day, and three-day index sequences.
+- `ExportFormatterTest` — `single-day selection shows date once` test (added previous session, confirmed passing).
 
 ---
 
@@ -292,7 +303,7 @@ The stats screen was wired up but showed zeros because `StatsUpdater` was only c
 ### Export
 - `ExportFormatter.formatForCopy()` — clean labeled transcript.
 - `ExportBottomSheet` — Copy + Share buttons; wired to selection in `ThreadScreen`.
-- Apple Reaction copy format improved.
+- Reaction copy format improved.
 
 ### Developer Tools
 - Developer Options screen in Settings — sample data seeding, sync trigger, database inspection tools.

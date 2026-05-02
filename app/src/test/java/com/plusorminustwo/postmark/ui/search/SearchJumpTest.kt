@@ -109,13 +109,18 @@ class SearchJumpTest {
     // ── Fakes ─────────────────────────────────────────────────────────────────
 
     private class FakeSearchDao(private val results: List<MessageEntity>) : SearchDao {
-        override suspend fun searchMessages(query: String, limit: Int, offset: Int) = results
-        override suspend fun searchMessagesInThread(query: String, threadId: Long, limit: Int, offset: Int) =
-            results.filter { it.threadId == threadId }
-        override suspend fun searchMessagesBySent(query: String, isSent: Boolean, limit: Int, offset: Int) =
-            results.filter { it.isSent == isSent }
-        override suspend fun searchMessagesInDateRange(query: String, startMs: Long, endMs: Long, limit: Int, offset: Int) =
-            results.filter { it.timestamp in startMs..endMs }
+        override suspend fun searchMessagesFiltered(
+            query: String, threadId: Long, isSentInt: Int, startMs: Long, limit: Int, offset: Int
+        ) = results.filter {
+            (threadId == -1L || it.threadId == threadId) &&
+            (isSentInt == -1 || it.isSent == (isSentInt == 1)) &&
+            (startMs == -1L || it.timestamp >= startMs)
+        }
+
+        override suspend fun searchMessagesFilteredWithReaction(
+            query: String, threadId: Long, isSentInt: Int, startMs: Long,
+            reactionEmoji: String, limit: Int, offset: Int
+        ) = emptyList<MessageEntity>()
     }
 
     private class FakeThreadDao(private val threads: List<ThreadEntity> = emptyList()) : ThreadDao {
@@ -142,7 +147,9 @@ class SearchJumpTest {
         override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
         override fun observeTopEmojisBySender(senderAddress: String): Flow<List<EmojiCount>> = flowOf(emptyList())
         override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
+        override suspend fun getAll(): List<ReactionEntity> = emptyList()
         override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
+        override suspend fun getByThread(threadId: Long): List<ReactionEntity> = emptyList()
         override suspend fun insert(reaction: ReactionEntity): Long = 0L
         override suspend fun delete(reaction: ReactionEntity) {}
         override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) {}

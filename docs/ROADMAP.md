@@ -36,6 +36,8 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **Calendar picker** — month grid dialog; active days (blue dot), empty days grayed; tap empty → snap to nearest + `Snackbar`; `findNearestActiveDate()` with 11 unit tests
 - [ ] **Range select** — long-press first message, tap last to select range
 - [x] **Message grouping** — consecutive same-sender messages within 3 min cluster; sender-side corners narrow (TOP/MIDDLE); timestamp shown at cluster tail only
+- [x] **Emoji reaction picker** — long-press bubble → iMessage-style pill (5 usage-ranked quick reactions + ➕ more); `EmojiPickerBottomSheet` with 8-col grid, 4 sections, search; `EmojiData.kt` houses section data
+- [x] **Message action top bar** — long-press → Copy (toast) / Select / Forward; `ActionItem` tints corrected; scrim restricted to content area below action bar
 - [ ] Per-thread backup policy UI — `⋮` overflow menu → 3-option radio dialog
 
 ---

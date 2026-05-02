@@ -29,12 +29,14 @@ fun formatPhoneNumber(raw: String, locale: Locale = Locale.getDefault()): String
         return "($area) $exchange-$subscriber"
     }
 
-    // Plain 10-digit NANP number (no country code)
-    val nanpPlain = Regex("""^(\d{3})(\d{3})(\d{4})$""")
-    val plainMatch = nanpPlain.matchEntire(digitsOnly)
-    if (plainMatch != null) {
-        val (area, exchange, subscriber) = plainMatch.destructured
-        return "($area) $exchange-$subscriber"
+    // Plain 10-digit NANP number (no country code, no + prefix)
+    if (!raw.startsWith("+")) {
+        val nanpPlain = Regex("""^(\d{3})(\d{3})(\d{4})$""")
+        val plainMatch = nanpPlain.matchEntire(digitsOnly)
+        if (plainMatch != null) {
+            val (area, exchange, subscriber) = plainMatch.destructured
+            return "($area) $exchange-$subscriber"
+        }
     }
 
     // All other formats (international, unrecognized) pass through unchanged.

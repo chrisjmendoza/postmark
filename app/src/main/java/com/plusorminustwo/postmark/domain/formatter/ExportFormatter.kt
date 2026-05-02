@@ -7,7 +7,7 @@ import java.util.Locale
 
 object ExportFormatter {
 
-    private val dayFormatter = SimpleDateFormat("MMMM d", Locale.getDefault())
+    private val dayFormatter = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault())
     private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault())
 
     fun formatForCopy(
@@ -22,6 +22,10 @@ object ExportFormatter {
 
         val spansMultipleDays = spansMultipleDays(messages)
         var lastDayLabel: String? = null
+
+        if (!spansMultipleDays) {
+            sb.append("${dayFormatter.format(Date(messages.first().timestamp))}\n")
+        }
 
         messages.forEach { msg ->
             val dayLabel = dayFormatter.format(Date(msg.timestamp))
