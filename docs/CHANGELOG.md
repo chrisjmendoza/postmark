@@ -6,6 +6,18 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-02
 
+### Pinned conversations — long-press context menu
+- **`ConversationsViewModel`** — `togglePin(threadId, currentlyPinned)` and `toggleMute(threadId,
+  currentlyMuted)` added; thin coroutine wrappers over `threadRepository.updatePinned` /
+  `updateMuted`, mirroring the pattern already in `ThreadViewModel`.
+- **`ConversationsScreen` — `ThreadRow`** refactored: `clickable` replaced with
+  `combinedClickable`; tap still opens the thread; long-press sets local `menuExpanded = true`.
+  Row wrapped in `Box` to anchor the `DropdownMenu`. Menu items: **Pin / Unpin** and
+  **Mute / Unmute** (labels flip dynamically based on current thread state).
+- Pin badge (📌) and mute badge (🔕) already rendered in the row from the previous sprint;
+  no visual change — this commit wires the actions.
+- Completes Tier 1 item: *Pinned / Favorite conversations*.
+
 ### WorkManager / Hilt init fix — NoSuchMethodException resolved
 - **Root cause**: AndroidX Startup's `WorkManagerInitializer` ContentProvider ran before
   Hilt injected `HiltWorkerFactory`, so WorkManager fell back to its reflection-based
