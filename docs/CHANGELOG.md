@@ -6,7 +6,19 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-02
 
-### Merged branch — avatar color seed, isPinned, phone formatter, muted/pin UI, data-driven reactions
+### Mark as read notification action
+- **`MarkAsReadReceiver`** (new) — `BroadcastReceiver` that handles the "Mark as read" action
+  on incoming SMS notifications. Calls `ContentResolver.update()` on `content://sms` to set
+  `read = 1` for all unread messages from the sender address, then cancels the notification.
+  Uses `goAsync()` + `Dispatchers.IO` to keep the I/O update off the main thread.
+  No Room interaction needed — `SmsContentObserver` picks up the provider change via the normal
+  incremental sync path. Registered as unexported in `AndroidManifest`.
+- **`SmsReceiver.postIncomingNotification`** — adds `markReadAction` as a second notification
+  action alongside the existing reply action. Uses a distinct PendingIntent request code
+  (`notifId xor 0x0200_0000`) to avoid collisions with the reply slot (`0x0100_0000`).
+- **`strings.xml`** — adds `mark_as_read` string ("Mark as read").
+
+
 _(Merged `copilot/featfix-avatar-color-seed` → `master` → `feat/ui-improvements`)_
 
 - **Avatar color seed** — `LetterAvatar` now seeds its color from `thread.address` instead of

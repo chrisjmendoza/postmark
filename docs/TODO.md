@@ -44,7 +44,7 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       before posting notification.
 - [x] **Direct reply action** — `RemoteInput` in notification so user
       can reply without opening the app. Android 7+ standard expectation.
-- [ ] **Mark as read action** — second notification action button.
+- [x] **Mark as read action** — second notification action button.
 - [ ] **Notification grouping** — bundle multiple messages from same
       thread; summary notification across threads.
 - [ ] **Privacy mode** — option to show "New message" without preview.
