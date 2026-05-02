@@ -42,7 +42,7 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       but `SmsReceiver` doesn't check it yet; muted threads still
       trigger notifications. Check `ThreadRepository.isMuted(address)`
       before posting notification.
-- [ ] **Direct reply action** — `RemoteInput` in notification so user
+- [x] **Direct reply action** — `RemoteInput` in notification so user
       can reply without opening the app. Android 7+ standard expectation.
 - [ ] **Mark as read action** — second notification action button.
 - [ ] **Notification grouping** — bundle multiple messages from same
