@@ -52,14 +52,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Privacy mode** — global toggle in Settings → Notifications;
       when enabled SmsReceiver shows "New message" with no sender/body
       and omits reply + mark-read actions.
-- [ ] **Pinned / Favorite conversations** — `isPinned` is stored on
-      `ThreadEntity` and threads already sort pinned-first, but the
-      Pin/Unpin option in the thread ⋮ menu is not yet wired to the
-      `updatePinned` DAO call in the UI layer. Wire the menu action
-      so tapping Pin visually pins the thread to the top of the
-      conversation list. Add a ⭐ or 📌 visual treatment to the row
-      so pinned threads are clearly distinct. Should also be accessible
-      via long-press on a conversation row.
+- [x] **Pinned / Favorite conversations** — `isPinned` on `ThreadEntity`
+      (schema v6); threads sort pinned-first; 📌 badge on row; long-press
+      any conversation row → context menu with Pin/Unpin and Mute/Unmute;
+      also accessible from the ⋮ menu inside the thread view.
 - [ ] **Per-number notification filtering** — let user exclude specific
       numbers/threads from triggering notifications entirely (distinct
       from mute, which suppresses sound but still posts). UI entry point:

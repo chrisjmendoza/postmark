@@ -1,6 +1,7 @@
 package com.plusorminustwo.postmark.ui.conversations
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,6 +16,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -104,7 +108,12 @@ fun ConversationsScreen(
                 else -> {
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         items(threadList, key = { it.id }) { thread ->
-                            ThreadRow(thread = thread, onClick = { onThreadClick(thread.id) })
+                            ThreadRow(
+                                thread = thread,
+                                onClick = { onThreadClick(thread.id) },
+                                onTogglePin = { viewModel.togglePin(thread.id, thread.isPinned) },
+                                onToggleMute = { viewModel.toggleMute(thread.id, thread.isMuted) }
+                            )
                             HorizontalDivider()
                         }
                     }
@@ -155,16 +164,30 @@ private fun RoleDenialBanner(onDismiss: () -> Unit) {
     }
 }
 
+/** A single conversation row. Long-press opens a context menu with Pin/Unpin and Mute/Unmute. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ThreadRow(thread: Thread, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+private fun ThreadRow(
+    thread: Thread,
+    onClick: () -> Unit,
+    onTogglePin: () -> Unit,
+    onToggleMute: () -> Unit,
+) {
+    // Controls visibility of the long-press dropdown menu.
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { menuExpanded = true }
+                )
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         LetterAvatar(name = thread.displayName, colorSeed = thread.address)
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -205,7 +228,24 @@ private fun ThreadRow(thread: Thread, onClick: () -> Unit) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-    }
+        } // end Row
+
+        // ── Context menu (long-press) ───────────────────────────────────────
+        // Anchored to the Row so it appears near the long-pressed item.
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(if (thread.isPinned) "Unpin" else "Pin") },
+                onClick = { menuExpanded = false; onTogglePin() }
+            )
+            DropdownMenuItem(
+                text = { Text(if (thread.isMuted) "Unmute" else "Mute") },
+                onClick = { menuExpanded = false; onToggleMute() }
+            )
+        }
+    } // end Box
 }
 
 private fun formatDate(timestamp: Long): String {

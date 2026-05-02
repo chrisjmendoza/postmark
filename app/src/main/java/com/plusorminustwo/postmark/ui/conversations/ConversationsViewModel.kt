@@ -237,6 +237,24 @@ class ConversationsViewModel @Inject constructor(
         }
     }
 
+    // ── Thread quick actions ─────────────────────────────────────────────────
+
+    /** Flips the [isPinned] flag for [threadId]. Called from the conversation-list
+     *  long-press context menu so the user can pin/unpin without opening the thread. */
+    fun togglePin(threadId: Long, currentlyPinned: Boolean) {
+        viewModelScope.launch {
+            threadRepository.updatePinned(threadId, !currentlyPinned)
+        }
+    }
+
+    /** Flips the [isMuted] flag for [threadId]. Called from the conversation-list
+     *  long-press context menu so the user can mute/unmute without opening the thread. */
+    fun toggleMute(threadId: Long, currentlyMuted: Boolean) {
+        viewModelScope.launch {
+            threadRepository.updateMuted(threadId, !currentlyMuted)
+        }
+    }
+
     private fun msg(id: Long, threadId: Long, address: String, body: String, ts: Long, isSent: Boolean, type: Int) =
         Message(id, threadId, address, body, ts, isSent, type)
 }
