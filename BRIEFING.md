@@ -115,6 +115,22 @@ Always dark / Always light.
 WHAT IS WORKING (tested on device)
 ═══════════════════════════════════════════════════════
 ✅ App installs and launches on physical Android device
+✅ Onboarding screen on first launch:
+   - Explains default SMS role requirement
+   - Launches RoleManager intent (API 29+) or
+     ACTION_CHANGE_DEFAULT (API 26–28)
+   - "Skip for now" option; onboarding_completed flag
+     persists decision so it only shows once
+✅ Notification channels registered at app startup:
+   - incoming_sms: IMPORTANCE_HIGH for heads-up SMS alerts
+   - sync_service: IMPORTANCE_LOW for background sync
+   (Required for Android 8+ / API 26+)
+✅ POST_NOTIFICATIONS permission declared (API 33+),
+   requested alongside READ_SMS and READ_CONTACTS
+✅ SmsReceiver posts heads-up notification on incoming SMS:
+   - Multi-part SMS body reassembled before display
+   - Sync triggered once (not once-per-part)
+   - Tap opens MainActivity (Conversations list)
 ✅ Dark theme applied correctly
 ✅ Navigation between screens
 ✅ App icon: postmark logo (no background) over
@@ -235,14 +251,18 @@ IN PROGRESS / NEXT UP
    Draw conversation to Canvas, convert to Bitmap,
    share via FileProvider + ACTION_SEND
 
-4. SMS ENGINE (deferred — see Samsung restriction above)
-   When ready:
-   - Request default SMS role via RoleManager
-   - BroadcastReceiver for incoming SMS/MMS
+4. SMS ENGINE — onboarding + notifications done (May 2026)
+   ✅ Onboarding screen with RoleManager role request
+   ✅ Notification channels (incoming_sms, sync_service)
+   ✅ POST_NOTIFICATIONS permission request
+   ✅ SmsReceiver posts heads-up notification on incoming SMS
+   Remaining:
+   - Samsung content://sms variant fix (try
+     content://sms/inbox + content://sms/sent if null cursor)
+   - Add sync status banner for Samsung devices
    - SmsManager for sending
-   - ContentObserver sync from content://sms
-   - Run AppleReactionParser on every incoming
-     message and during initial sync
+   - Run AppleReactionParser on every incoming message
+     (already runs via SmsSyncHandler; verify on device)
 
 5. BACKUP — remaining
    - Backup restore (read JSON, apply to Room with
