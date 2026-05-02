@@ -68,6 +68,11 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
     suspend fun getAll(): List<MessageEntity>
 
+    // Returns the highest SMS provider _id stored in Room, used by SmsSyncHandler
+    // to bound incremental queries to only rows we haven\'t seen yet.
+    @Query("SELECT MAX(id) FROM messages")
+    suspend fun getMaxId(): Long?
+
     /** Used for the 8-week activity heatmap (all threads). */
     @Query("SELECT * FROM messages WHERE timestamp >= :startMs ORDER BY timestamp ASC")
     fun observeMessagesFrom(startMs: Long): Flow<List<MessageEntity>>

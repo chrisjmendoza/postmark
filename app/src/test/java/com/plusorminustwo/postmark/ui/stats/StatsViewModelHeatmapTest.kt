@@ -276,6 +276,7 @@ private class FakeMessageDao : MessageDao {
     override suspend fun deleteAll() = Unit
     override suspend fun getAllThreadIds(): List<Long> = emptyList()
     override suspend fun getAll(): List<MessageEntity> = emptyList()
+    override suspend fun getMaxId(): Long? = null
 }
 
 private class FakeThreadDao : ThreadDao {

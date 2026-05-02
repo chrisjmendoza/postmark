@@ -65,6 +65,9 @@ class MessageRepository @Inject constructor(
     suspend fun deleteOptimisticMessages(threadId: Long) =
         messageDao.deleteOptimisticMessages(threadId)
 
+    /** Returns the highest SMS provider _id stored locally, or null if the table is empty. */
+    suspend fun getMaxId(): Long? = messageDao.getMaxId()
+
     suspend fun deleteAll() {
         reactionDao.deleteAll()
         messageDao.deleteAll()
