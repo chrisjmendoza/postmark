@@ -93,6 +93,26 @@ class SmsReceiver : BroadcastReceiver() {
             replyPendingIntent
         ).addRemoteInput(remoteInput).build()
 
+        // ── "Mark as read" action ─────────────────────────────────────────────────
+        // A distinct request code (xor 0x0200_0000) avoids colliding with the reply
+        // PendingIntent that uses 0x0100_0000. FLAG_IMMUTABLE is safe here because
+        // no dynamic data needs to be injected into this intent by the system.
+        val markReadPendingIntent = PendingIntent.getBroadcast(
+            context,
+            notifId xor 0x0200_0000,
+            Intent(context, MarkAsReadReceiver::class.java).apply {
+                putExtra(MarkAsReadReceiver.EXTRA_ADDRESS, sender)
+                putExtra(MarkAsReadReceiver.EXTRA_NOTIF_ID, notifId)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val markReadAction = NotificationCompat.Action.Builder(
+            R.drawable.ic_notification,
+            context.getString(R.string.mark_as_read),
+            markReadPendingIntent
+        ).build()
+
         val notification = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(sender)
@@ -102,6 +122,7 @@ class SmsReceiver : BroadcastReceiver() {
             .setContentIntent(openIntent)
             .setAutoCancel(true)
             .addAction(replyAction)
+            .addAction(markReadAction)
             .build()
 
         context.getSystemService(NotificationManager::class.java)

@@ -91,6 +91,11 @@
             android:name=".service.sms.DirectReplyReceiver"
             android:exported="false" />
 
+        <!-- Handles the "Mark as read" action on incoming SMS notifications -->
+        <receiver
+            android:name=".service.sms.MarkAsReadReceiver"
+            android:exported="false" />
+
         <!-- FileProvider for sharing exported images -->
         <provider
             android:name="androidx.core.content.FileProvider"
