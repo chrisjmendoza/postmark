@@ -140,7 +140,8 @@ fun ThreadScreen(
         onShowReactionPicker = { id, y -> viewModel.showReactionPicker(id, y) },
         onToggleReaction = { id, emoji -> viewModel.toggleReaction(id, emoji) },
         onToggleTimestamp = { viewModel.toggleTimestamp(it) },
-        onToggleMessageIds = { viewModel.toggleMessageIds(it) }
+        onToggleMessageIds = { viewModel.toggleMessageIds(it) },
+        onRetry = { viewModel.retrySend(it) }
     )
 }
 
@@ -187,6 +188,7 @@ private fun ThreadContent(
     onToggleReaction: (Long, String) -> Unit,
     onToggleTimestamp: (Long) -> Unit,
     onToggleMessageIds: (List<Long>) -> Unit,
+    onRetry: (Long) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -503,7 +505,8 @@ private fun ThreadContent(
                             onReactionClick = { emoji -> onToggleReaction(message.id, emoji) },
                             timestampPref = timestampPref,
                             isTimestampExpanded = message.id in uiState.expandedTimestampIds,
-                            onToggleTimestamp = { onToggleTimestamp(message.id) }
+                            onToggleTimestamp = { onToggleTimestamp(message.id) },
+                            onRetry = { onRetry(message.id) }
                         )
                     }
                     item(key = "header_$dateLabel") {
@@ -683,6 +686,7 @@ private fun FloatingDatePill(
  * @param timestampPref        Global user preference for when timestamps are shown.
  * @param isTimestampExpanded  Whether the timestamp is currently revealed (ON_TAP mode).
  * @param onToggleTimestamp    Called when a tap should toggle the timestamp.
+ * @param onRetry              Called when the user taps the failed-send indicator to retry.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -697,7 +701,8 @@ private fun MessageBubble(
     onReactionClick: (String) -> Unit,
     timestampPref: TimestampPreference,
     isTimestampExpanded: Boolean,
-    onToggleTimestamp: () -> Unit
+    onToggleTimestamp: () -> Unit,
+    onRetry: () -> Unit = {}
 ) {
     val bubbleColor = if (message.isSent)
         MaterialTheme.colorScheme.primaryContainer
@@ -797,6 +802,7 @@ private fun MessageBubble(
                 if (message.isSent) {
                     DeliveryStatusIndicator(
                         status = message.deliveryStatus,
+                        onRetry = onRetry,
                         modifier = Modifier.padding(start = 2.dp)
                     )
                 }
@@ -983,7 +989,11 @@ private fun CalendarDayCell(
 // ── DeliveryStatusIndicator ────────────────────────────────────────────────────
 
 @Composable
-private fun DeliveryStatusIndicator(status: Int, modifier: Modifier = Modifier) {
+private fun DeliveryStatusIndicator(
+    status: Int,
+    onRetry: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
     // Colored ticks: yellow = sent to carrier, green = delivered to device, red = failed.
     val sentColor      = Color(0xFFFFCC00)   // amber-yellow
     val deliveredColor = Color(0xFF4CAF50)   // material green
@@ -994,7 +1004,11 @@ private fun DeliveryStatusIndicator(status: Int, modifier: Modifier = Modifier) 
         DELIVERY_STATUS_FAILED    -> Icons.Default.Error to MaterialTheme.colorScheme.error
         else -> return
     }
-    Icon(imageVector = icon, contentDescription = null, modifier = modifier.size(12.dp), tint = tint)
+    val clickableModifier = if (status == DELIVERY_STATUS_FAILED && onRetry != null)
+        modifier.size(12.dp).clickable(onClick = onRetry)
+    else
+        modifier.size(12.dp)
+    Icon(imageVector = icon, contentDescription = null, modifier = clickableModifier, tint = tint)
 }
 
 // ── ReplyBar ───────────────────────────────────────────────────────────────────
@@ -1387,7 +1401,8 @@ private fun ThreadScreenPreview() {
             onShowReactionPicker = { _, _ -> },
             onToggleReaction = { _, _ -> },
             onToggleTimestamp = {},
-            onToggleMessageIds = {}
+            onToggleMessageIds = {},
+            onRetry = {}
         )
     }
 }

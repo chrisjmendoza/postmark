@@ -5,6 +5,7 @@ import android.provider.Telephony
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
@@ -331,6 +332,15 @@ class ThreadViewModel @Inject constructor(
             messageRepository.insert(optimistic)
             smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
             _isSending.value = false
+        }
+    }
+
+    fun retrySend(messageId: Long) {
+        val message = uiState.value.messages.find { it.id == messageId } ?: return
+        if (message.deliveryStatus != DELIVERY_STATUS_FAILED) return
+        viewModelScope.launch {
+            messageRepository.updateDeliveryStatus(messageId, DELIVERY_STATUS_PENDING)
+            smsManagerWrapper.sendTextMessage(message.address, message.body, messageId)
         }
     }
 
