@@ -80,6 +80,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 
@@ -202,6 +203,16 @@ private fun ThreadContent(
     var showCalendarPicker by remember { mutableStateOf(false) }
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
     var showDateRangePicker by remember { mutableStateOf(false) }
+
+    // Live Y of the bubble currently selected for reaction.
+    // Initialised from the ViewModel's snapshot Y (captured at long-press time),
+    // then updated every layout pass by the selected bubble's onGloballyPositioned.
+    // This means the popup always uses the bubble's *current* screen position, so
+    // layout changes that happen right after the long-press (top-bar swap, IME
+    // dismiss, etc.) are automatically corrected within a single frame.
+    var liveBubbleY by remember(uiState.reactionPickerMessageId) {
+        mutableFloatStateOf(uiState.reactionPickerBubbleY)
+    }
 
     // ── Scroll to message (search-jump) ───────────────────────────────────────
 
@@ -493,9 +504,7 @@ private fun ThreadContent(
                 ReplyBar(
                     text = uiState.replyText,
                     onTextChange = { onReplyTextChanged(it) },
-                    onSend = { onSendMessage() },
-                    modifier = if (uiState.reactionPickerMessageId != null)
-                        Modifier.alpha(0f) else Modifier
+                    onSend = { onSendMessage() }
                 )
             }
         }
@@ -518,6 +527,8 @@ private fun ThreadContent(
                             isHighlighted = message.id == uiState.highlightedMessageId,
                             onToggleSelect = { onToggleSelection(message.id) },
                             onLongClick = { y -> onShowReactionPicker(message.id, y) },
+                            onReactionTargetYChanged = if (message.id == uiState.reactionPickerMessageId)
+                                { y -> liveBubbleY = y } else null,
                             onReactionClick = { emoji -> onToggleReaction(message.id, emoji) },
                             timestampPref = timestampPref,
                             isTimestampExpanded = message.id in uiState.expandedTimestampIds,
@@ -562,9 +573,9 @@ private fun ThreadContent(
         }
         reactionPickerMessage?.let { msg ->
             EmojiReactionPopup(
-                message     = msg,
-                quickEmojis = quickReactionEmojis,
-                bubbleTopY  = uiState.reactionPickerBubbleY,
+                message        = msg,
+                quickEmojis    = quickReactionEmojis,
+                bubbleBottomY  = liveBubbleY,
                 onReact     = { emoji -> onToggleReaction(msg.id, emoji) },
                 onDismiss   = { onDismissReactionPicker() }
             )
@@ -764,6 +775,10 @@ private fun MessageBubble(
     isHighlighted: Boolean,
     onToggleSelect: () -> Unit,
     onLongClick: (bubbleTopY: Float) -> Unit,
+    // When non-null, fires on every layout pass with the bubble's current positionInRoot().y.
+    // Used by ThreadContent to keep liveBubbleY in sync so EmojiReactionPopup tracks the
+    // bubble even after top-bar swaps or IME dismissals change the layout.
+    onReactionTargetYChanged: ((Float) -> Unit)? = null,
     onReactionClick: (String) -> Unit,
     timestampPref: TimestampPreference,
     isTimestampExpanded: Boolean,
@@ -797,7 +812,14 @@ private fun MessageBubble(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .onGloballyPositioned { coords -> bubbleRootY[0] = coords.positionInRoot().y }
+            .onGloballyPositioned { coords ->
+                // Track the bottom edge of the bubble — popup is placed just below it.
+                val y = coords.positionInRoot().y + coords.size.height.toFloat()
+                bubbleRootY[0] = y
+                // If this bubble is the current reaction target, notify ThreadContent
+                // so liveBubbleY stays in sync with the bubble's real screen position.
+                onReactionTargetYChanged?.invoke(y)
+            }
             .combinedClickable(
                 onClick = {
                     when {
@@ -1239,19 +1261,19 @@ private fun bubbleShape(isSent: Boolean, position: ClusterPosition): RoundedCorn
 
 /**
  * Calculates the top-Y offset (in pixels) for the emoji reaction pill.
- * Places the pill above the bubble when there is enough room; falls back to below.
+ * Places the pill just below the bubble; clamps so it never goes off the bottom of the screen.
+ *
+ * [bubbleBottomY] is the Y coordinate of the bubble's bottom edge in root coordinates.
+ * [maxPillTopPx]  is the largest allowed top-Y for the pill (screen height − pill height − padding).
  *
  * Extracted as a pure function so it can be unit-tested without Compose.
  */
 internal fun reactionPillTopPx(
-    bubbleTopY: Float,
+    bubbleBottomY: Float,
     pillHeightPx: Float,
     gapPx: Float,
-    minTopPx: Float
-): Float = if (bubbleTopY > minTopPx + pillHeightPx + gapPx)
-    bubbleTopY - pillHeightPx - gapPx
-else
-    bubbleTopY + gapPx
+    maxPillTopPx: Float
+): Float = minOf(bubbleBottomY + gapPx, maxPillTopPx)
 
 private fun smsCounter(length: Int): String? {
     if (length <= 120) return null
@@ -1321,7 +1343,7 @@ private fun ReactionPills(
 private fun EmojiReactionPopup(
     message: Message,
     quickEmojis: List<String>,
-    bubbleTopY: Float,
+    bubbleBottomY: Float,
     onReact: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1332,11 +1354,16 @@ private fun EmojiReactionPopup(
     var showMoreSheet by remember { mutableStateOf(false) }
 
     // Pill geometry — 44dp button + 6dp × 2 vertical padding = 56dp
-    val pillHeightPx = with(density) { 56.dp.toPx() }
-    val gapPx        = with(density) { 8.dp.toPx() }
-    val minTopPx     = with(density) { 80.dp.toPx() }  // clears action bar + status bar
+    val pillHeightPx   = with(density) { 56.dp.toPx() }
+    val gapPx          = with(density) { 8.dp.toPx() }
+    // Maximum Y for the pill top: screen height minus pill size and a small bottom margin.
+    val screenHeightPx = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    val maxPillTopPx   = screenHeightPx - pillHeightPx - gapPx - with(density) { 16.dp.toPx() }
 
-    val pillTopPx = reactionPillTopPx(bubbleTopY, pillHeightPx, gapPx, minTopPx)
+    // bubbleBottomY is the live position fed from MessageBubble's onGloballyPositioned
+    // (via liveBubbleY in ThreadContent), so it is always up to date — no manual
+    // IME or top-bar offset compensation is needed here.
+    val pillTopPx = reactionPillTopPx(bubbleBottomY, pillHeightPx, gapPx, maxPillTopPx)
 
     val pillBg     = Color(0xFF2C2C2E)
     val pillBorder = Color(0xFF3A3A3C)

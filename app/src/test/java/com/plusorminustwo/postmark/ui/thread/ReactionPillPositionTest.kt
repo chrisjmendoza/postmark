@@ -6,104 +6,86 @@ import org.junit.Test
 /**
  * Unit tests for [reactionPillTopPx].
  *
- * The function chooses between two placements:
- *  - **Above** the bubble: `bubbleTopY - pillHeightPx - gapPx`
- *    when there is enough space above (i.e. bubbleTopY > minTopPx + pillHeightPx + gapPx)
- *  - **Below** the bubble: `bubbleTopY + gapPx` as a fallback
+ * The function places the emoji pill just below the bubble and clamps it so it never
+ * goes off the bottom of the screen:
+ *  - **Normal**: `bubbleBottomY + gapPx`
+ *  - **Clamped** (bubble near screen bottom): `maxPillTopPx`
  *
  * Uses concrete pixel values (dp-to-px conversion is Compose-specific; tests work in raw px).
- * Default reference values: pillHeightPx=64f, gapPx=8f, minTopPx=80f.
+ * Default reference values: pillHeightPx=64f, gapPx=8f, maxPillTopPx=900f.
  */
 class ReactionPillPositionTest {
 
-    // Default geometry matching the composable's dp values at a nominal 1:1 density
+    // Default geometry
     private val pill = 64f
     private val gap  = 8f
-    private val min  = 80f   // action bar + status bar clearance
+    private val max  = 900f  // maxPillTopPx — screen height minus pill and margin
 
-    // The threshold above which "place above" fires: min + pill + gap = 152f
-    private val threshold = min + pill + gap  // 152f
+    private fun pos(bubbleBottomY: Float) = reactionPillTopPx(bubbleBottomY, pill, gap, max)
 
-    private fun pos(bubbleY: Float) = reactionPillTopPx(bubbleY, pill, gap, min)
-
-    // ── above-bubble placement ───────────────────────────────────────────────
+    // ── normal below-bubble placement ────────────────────────────────────────
 
     @Test
-    fun `bubble well below top places pill above bubble`() {
-        val bubbleY = 400f   // clearly > 152
-        assertEquals(bubbleY - pill - gap, pos(bubbleY), 0.001f)
+    fun `bubble in middle of screen places pill just below it`() {
+        val bottomY = 400f
+        assertEquals(bottomY + gap, pos(bottomY), 0.001f)
     }
 
     @Test
-    fun `bubble at exactly threshold plus 1 places pill above`() {
-        val bubbleY = threshold + 1f
-        assertEquals(bubbleY - pill - gap, pos(bubbleY), 0.001f)
-    }
-
-    @Test
-    fun `above placement yields correct numeric value`() {
-        // bubbleY=300: expected = 300 - 64 - 8 = 228
-        assertEquals(228f, pos(300f), 0.001f)
-    }
-
-    // ── below-bubble placement (fallback) ────────────────────────────────────
-
-    @Test
-    fun `bubble at exactly threshold places pill below`() {
-        // bubbleTopY > threshold is required; equality falls to below
-        val bubbleY = threshold
-        assertEquals(bubbleY + gap, pos(bubbleY), 0.001f)
-    }
-
-    @Test
-    fun `bubble near top of screen places pill below`() {
-        val bubbleY = 0f
-        assertEquals(bubbleY + gap, pos(bubbleY), 0.001f)
-    }
-
-    @Test
-    fun `bubble just under threshold places pill below`() {
-        val bubbleY = threshold - 1f
-        assertEquals(bubbleY + gap, pos(bubbleY), 0.001f)
+    fun `bubble near top of screen places pill just below it`() {
+        val bottomY = 100f
+        assertEquals(bottomY + gap, pos(bottomY), 0.001f)
     }
 
     @Test
     fun `below placement yields correct numeric value`() {
-        // bubbleY=100: expected = 100 + 8 = 108
-        assertEquals(108f, pos(100f), 0.001f)
+        // bottomY=300: expected = 300 + 8 = 308
+        assertEquals(308f, pos(300f), 0.001f)
     }
 
-    // ── boundary precision ────────────────────────────────────────────────────
+    // ── clamped placement (bubble near bottom of screen) ─────────────────────
 
     @Test
-    fun `above and below placements never overlap for any bubbleY`() {
-        // above result is always lower on screen (larger y) than below result for same bubble
-        // Actually: above = bubbleY - pill - gap; below = bubbleY + gap
-        // This test just verifies the correct branch is taken across a range
-        for (y in 0..600 step 10) {
+    fun `bubble near screen bottom clamps pill to maxPillTopPx`() {
+        // bubbleBottomY + gap = 920 > max=900, so result is clamped to 900
+        val bottomY = 912f
+        assertEquals(max, pos(bottomY), 0.001f)
+    }
+
+    @Test
+    fun `pill exactly at max boundary is not clamped`() {
+        // bubbleBottomY + gap = 900 → exactly max, minOf returns max
+        val bottomY = max - gap
+        assertEquals(max, pos(bottomY), 0.001f)
+    }
+
+    @Test
+    fun `pill one pixel above max is not clamped`() {
+        val bottomY = max - gap - 1f
+        assertEquals(bottomY + gap, pos(bottomY), 0.001f)
+    }
+
+    // ── boundary precision across range ──────────────────────────────────────
+
+    @Test
+    fun `result is always less than or equal to maxPillTopPx`() {
+        for (y in 0..1000 step 20) {
             val result = pos(y.toFloat())
-            val expectedAbove = y - pill - gap
-            val expectedBelow = y + gap
-            val shouldBeAbove = y > threshold
-            if (shouldBeAbove) {
-                assertEquals("y=$y should be above", expectedAbove, result, 0.001f)
-            } else {
-                assertEquals("y=$y should be below", expectedBelow, result, 0.001f)
-            }
+            assert(result <= max) { "y=$y: result=$result exceeded max=$max" }
         }
     }
 
     // ── custom geometry ───────────────────────────────────────────────────────
 
     @Test
-    fun `custom pill height is respected`() {
-        // pill=100, gap=10, min=50 → threshold=160; bubble=200 → above: 200-100-10=90
-        assertEquals(90f, reactionPillTopPx(200f, 100f, 10f, 50f), 0.001f)
+    fun `custom gap is respected`() {
+        // bottomY=300, gap=20, max=900 → 300+20=320
+        assertEquals(320f, reactionPillTopPx(300f, 64f, 20f, 900f), 0.001f)
     }
 
     @Test
-    fun `custom gap is respected in below placement`() {
-        // pill=64, gap=20, min=80 → threshold=164; bubble=100 → below: 100+20=120
-        assertEquals(120f, reactionPillTopPx(100f, 64f, 20f, 80f), 0.001f)
+    fun `custom maxPillTopPx clamps correctly`() {
+        // bottomY=200, gap=10, max=100 → desired=210 > max=100, clamped to 100
+        assertEquals(100f, reactionPillTopPx(200f, 64f, 10f, 100f), 0.001f)
     }
 }
