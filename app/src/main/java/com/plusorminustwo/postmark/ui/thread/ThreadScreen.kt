@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -75,6 +76,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -669,6 +671,8 @@ private fun MessageBubble(
                             clusterPosition == ClusterPosition.MIDDLE) 1.dp else 2.dp
 
     val bubbleRootY = remember { FloatArray(1) }
+    val density = LocalDensity.current
+    var bubbleWidthPx by remember { mutableIntStateOf(0) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -697,6 +701,7 @@ private fun MessageBubble(
                 modifier = Modifier
                     .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
                     .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .onSizeChanged { bubbleWidthPx = it.width }
             ) {
                 Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
             }
@@ -711,6 +716,10 @@ private fun MessageBubble(
                         .padding(
                             start = if (message.isSent) 4.dp else 0.dp,
                             end = if (message.isSent) 0.dp else 4.dp
+                        )
+                        .then(
+                            if (bubbleWidthPx > 0) Modifier.widthIn(max = with(density) { bubbleWidthPx.toDp() })
+                            else Modifier
                         )
                 )
             }
@@ -1121,6 +1130,7 @@ private fun smsCounter(length: Int): String? {
 
 // ── ReactionPills ─────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReactionPills(
     reactions: List<Reaction>,
@@ -1129,9 +1139,10 @@ private fun ReactionPills(
     modifier: Modifier = Modifier
 ) {
     val grouped = reactions.groupBy { it.emoji }
-    Row(
+    FlowRow(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         grouped.forEach { (emoji, reactors) ->
             val iMine = reactors.any { it.senderAddress == SELF_ADDRESS }
