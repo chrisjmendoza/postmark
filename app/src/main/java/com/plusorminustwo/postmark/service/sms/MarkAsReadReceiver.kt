@@ -6,6 +6,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
+import com.plusorminustwo.postmark.PostmarkApplication
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -16,7 +17,8 @@ import kotlinx.coroutines.launch
  * Tapping the action button triggers this receiver, which:
  *  1. Updates [Telephony.Sms.CONTENT_URI] to set `read = 1` for all unread messages
  *     from the sender's [EXTRA_ADDRESS].
- *  2. Cancels the notification so it disappears from the shade.
+ *  2. Cancels the individual notification so it disappears from the shade.
+ *  3. Cancels the group summary notification if no other SMS notifications remain.
  *
  * No Room interaction is needed — [com.plusorminustwo.postmark.data.sync.SmsContentObserver]
  * will pick up the provider change and update the local database via the normal sync path.
@@ -45,10 +47,23 @@ class MarkAsReadReceiver : BroadcastReceiver() {
                     arrayOf(address)
                 )
             } finally {
-                // ── Dismiss the notification ──────────────────────────────────────
-                // Cancel regardless of whether the provider update succeeded so the
-                // notification never lingers after the user taps the action.
-                context.getSystemService(NotificationManager::class.java).cancel(notifId)
+                val nm = context.getSystemService(NotificationManager::class.java)
+
+                // ── Dismiss the individual thread notification ────────────────────
+                nm.cancel(notifId)
+
+                // ── Dismiss the group summary if no members remain ────────────────
+                // After cancelling the individual notification, check whether any
+                // other SMS notifications are still active. If none are, the summary
+                // row would be an empty group, so cancel it too.
+                val remaining = nm.activeNotifications.filter { sbn ->
+                    sbn.notification.group == PostmarkApplication.GROUP_KEY_SMS &&
+                        sbn.id != PostmarkApplication.NOTIF_ID_SMS_SUMMARY
+                }
+                if (remaining.isEmpty()) {
+                    nm.cancel(PostmarkApplication.NOTIF_ID_SMS_SUMMARY)
+                }
+
                 pendingResult.finish()
             }
         }

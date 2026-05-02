@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.service.sms
 
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -60,7 +61,9 @@ class SmsReceiver : BroadcastReceiver() {
 
     private fun postIncomingNotification(context: Context, sender: String, body: String) {
         val notifId = sender.hashCode()
+        val nm = context.getSystemService(NotificationManager::class.java)
 
+        // ── Content intent — opens the conversation list ──────────────────────────
         val openIntent = PendingIntent.getActivity(
             context,
             0,
@@ -70,6 +73,7 @@ class SmsReceiver : BroadcastReceiver() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // ── Reply action ──────────────────────────────────────────────────────────
         // RemoteInput lets the user type a reply directly in the notification shade.
         // FLAG_MUTABLE is required so the system can inject the typed text into the
         // PendingIntent extras before delivering it to DirectReplyReceiver.
@@ -93,7 +97,7 @@ class SmsReceiver : BroadcastReceiver() {
             replyPendingIntent
         ).addRemoteInput(remoteInput).build()
 
-        // ── "Mark as read" action ─────────────────────────────────────────────────
+        // ── Mark as read action ───────────────────────────────────────────────────
         // A distinct request code (xor 0x0200_0000) avoids colliding with the reply
         // PendingIntent that uses 0x0100_0000. FLAG_IMMUTABLE is safe here because
         // no dynamic data needs to be injected into this intent by the system.
@@ -113,6 +117,9 @@ class SmsReceiver : BroadcastReceiver() {
             markReadPendingIntent
         ).build()
 
+        // ── Individual per-thread notification ────────────────────────────────────
+        // setGroup() registers this notification with the shared SMS bundle so
+        // Android can collapse multiple thread notifications in the shade.
         val notification = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(sender)
@@ -121,11 +128,75 @@ class SmsReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openIntent)
             .setAutoCancel(true)
+            .setGroup(PostmarkApplication.GROUP_KEY_SMS)
             .addAction(replyAction)
             .addAction(markReadAction)
             .build()
 
-        context.getSystemService(NotificationManager::class.java)
-            .notify(notifId, notification)
+        nm.notify(notifId, notification)
+
+        // ── Summary notification ──────────────────────────────────────────────────
+        // Must be posted (or refreshed) after every individual notification so
+        // Android can display the collapsed group row on API 24+ devices.
+        updateSummaryNotification(context, nm)
+    }
+
+    /**
+     * Posts or refreshes the InboxStyle summary notification that heads the SMS group.
+     *
+     * Reads the currently active notifications in the [PostmarkApplication.GROUP_KEY_SMS]
+     * group (excluding the summary itself), builds one line per thread, and posts a
+     * summary with [NotificationCompat.InboxStyle].
+     *
+     * If no group members remain (e.g. all were dismissed), the summary is cancelled.
+     */
+    private fun updateSummaryNotification(context: Context, nm: NotificationManager) {
+        // ── Count active group members ────────────────────────────────────────────
+        // activeNotifications is available from API 23; minSdk = 26 so always safe.
+        val groupNotifs = nm.activeNotifications.filter { sbn ->
+            sbn.notification.group == PostmarkApplication.GROUP_KEY_SMS &&
+                sbn.id != PostmarkApplication.NOTIF_ID_SMS_SUMMARY
+        }
+
+        if (groupNotifs.isEmpty()) {
+            nm.cancel(PostmarkApplication.NOTIF_ID_SMS_SUMMARY)
+            return
+        }
+
+        val count = groupNotifs.size
+        val summaryText = context.resources.getQuantityString(
+            R.plurals.notification_summary_new_messages, count, count
+        )
+
+        // ── Build InboxStyle lines: "Sender  preview" per thread ─────────────────
+        val inboxStyle = NotificationCompat.InboxStyle()
+            .setSummaryText(context.getString(R.string.app_name))
+        groupNotifs.forEach { sbn ->
+            val title = sbn.notification.extras.getString(Notification.EXTRA_TITLE) ?: ""
+            val text  = sbn.notification.extras.getCharSequence(Notification.EXTRA_TEXT) ?: ""
+            inboxStyle.addLine(if (title.isNotEmpty()) "$title  $text" else "$text")
+        }
+
+        val openIntent = PendingIntent.getActivity(
+            context,
+            0,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val summary = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(summaryText)
+            .setContentText(summaryText)
+            .setStyle(inboxStyle)
+            .setGroup(PostmarkApplication.GROUP_KEY_SMS)
+            .setGroupSummary(true)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent)
+            .build()
+
+        nm.notify(PostmarkApplication.NOTIF_ID_SMS_SUMMARY, summary)
     }
 }

@@ -58,6 +58,15 @@ class PostmarkApplication : Application(), Configuration.Provider {
 
     companion object {
         const val CHANNEL_INCOMING_SMS = "incoming_sms"
-        const val CHANNEL_SYNC = "sync_service"
+        const val CHANNEL_SYNC         = "sync_service"
+
+        // ── Notification grouping ─────────────────────────────────────────────────
+        // GROUP_KEY_SMS is the Android notification group key that bundles all
+        // per-thread SMS notifications together in the shade.
+        // NOTIF_ID_SMS_SUMMARY is the fixed ID used for the InboxStyle summary
+        // notification that sits above the group. Int.MIN_VALUE is chosen because
+        // it is extremely unlikely to collide with any sender's hashCode().
+        const val GROUP_KEY_SMS        = "com.plusorminustwo.postmark.SMS_GROUP"
+        const val NOTIF_ID_SMS_SUMMARY = Int.MIN_VALUE
     }
 }
