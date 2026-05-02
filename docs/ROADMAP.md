@@ -8,6 +8,8 @@ Build order follows the spec. Each phase depends on the previous.
 
 - [x] Default SMS role via `RoleManager` — gated on send (not at startup; startup prompts READ_SMS/READ_CONTACTS only)
 - [x] `HeadlessSmsSendService` + `SENDTO` intent filter — required for app to appear in default SMS settings
+- [x] Samsung READ_SMS fix — fallback to `content://sms/inbox` + `/sent` + `/draft` when primary URI returns null; device logging under `PostmarkSync` tag
+- [x] Handle role denial gracefully — persistent dismissable banner in conversation list when app is not default SMS app
 - [x] `SmsReceiver` + `MmsReceiver` broadcast receivers
 - [x] `SmsManagerWrapper` for sending
 - [x] `SmsContentObserver` watching `content://sms`

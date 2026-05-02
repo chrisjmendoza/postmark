@@ -6,6 +6,23 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-02
 
+### Samsung READ_SMS fix + role denial banner
+- **`FirstLaunchSyncWorker`** — when `content://sms` returns a null cursor (affects some Samsung
+  OneUI firmware even with `READ_SMS` granted and the default SMS role held), the sync now
+  falls back to `content://sms/inbox`, `content://sms/sent`, and `content://sms/draft` and
+  merges the results. All three URIs are tried and results merged into the shared thread/message
+  maps. Detailed logging added under tag `PostmarkSync` including device make/model/API level.
+  `processSmsCursor()` extracted as a private helper; `SMS_PROJECTION` made a companion constant.
+- **`ConversationsViewModel`** — adds `isDefaultSmsApp: StateFlow<Boolean>` (checked once at
+  ViewModel creation via `RoleManager` on API 29+ or `Telephony.Sms.getDefaultSmsPackage` on
+  older). Adds `roleBannerDismissed: StateFlow<Boolean>` backed by SharedPrefs.
+  `dismissRoleBanner()` persists the dismissal. On init, if the app currently holds the SMS role,
+  any stale `role_banner_dismissed` pref is cleared so the banner can reappear if the role is
+  later lost.
+- **`ConversationsScreen`** — adds `RoleDenialBanner` composable: amber (`secondaryContainer`)
+  banner with dismiss × button shown when `!isDefaultSmsApp && !roleBannerDismissed`. Appears
+  below the `TopAppBar`, above all content states (list / empty / syncing).
+
 ### Default SMS role — manifest fixes (HeadlessSmsSendService + SENDTO filter)
 - **`HeadlessSmsSendService`** (new) — `Service` required by Android for an app to appear in
   Settings → Apps → Default SMS app. Handles headless send requests (lock-screen quick-reply,

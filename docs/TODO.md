@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: May 2, 2026 (evening)
+Last updated: May 2, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -23,12 +23,11 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Onboarding screen** — implemented in OnboardingScreen.kt;
       RoleManager (API 29+) / ACTION_CHANGE_DEFAULT fallback;
       onboarding_completed pref gates it to first launch only.
-- [ ] **Samsung READ_SMS fix** — `content://sms` returns null cursor
-      despite permissions. Investigate Samsung-specific ContentProvider
-      URI variants (`content://sms/inbox`, `content://sms/sent`).
-      Add detailed logging under tag `PostmarkSync`. Add in-app
-      sync status banner (synced N messages / last sync time / error).
-- [ ] **Handle role denial gracefully** — persistent but dismissable
+- [x] **Samsung READ_SMS fix** — `content://sms` returns null cursor
+      despite permissions. Fallback queries `content://sms/inbox`,
+      `content://sms/sent`, `content://sms/draft` and merges results.
+      Detailed logging under tag `PostmarkSync` incl. device info.
+- [x] **Handle role denial gracefully** — persistent but dismissable
       banner in conversation list explaining read-only limitations.
       Don't re-prompt on every launch.
 
