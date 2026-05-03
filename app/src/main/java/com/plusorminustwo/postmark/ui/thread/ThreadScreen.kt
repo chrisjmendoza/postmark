@@ -86,7 +86,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.ContentScale
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
 
 private val PILL_HIDE_DELAY_MS = 1_800L
 
@@ -957,10 +958,36 @@ private fun MmsAttachment(uri: String, mimeType: String?) {
     when {
         // ── Image ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("image/") == true -> {
-            AsyncImage(
-                model = Uri.parse(uri),
+            // Use ImageRequest.Builder with explicit context so Coil's
+            // ContentUriFetcher can call contentResolver.openInputStream()
+            // on the content://mms/part/ URI (requires default SMS role).
+            val ctx = LocalContext.current
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(ctx)
+                    .data(Uri.parse(uri))
+                    .crossfade(true)
+                    .build(),
                 contentDescription = "Photo",
                 contentScale = ContentScale.Crop,
+                error = {
+                    // Visible fallback so load failures don't silently disappear.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                RoundedCornerShape(8.dp)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "📷 Photo",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 240.dp)
