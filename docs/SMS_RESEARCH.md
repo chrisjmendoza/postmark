@@ -1,6 +1,12 @@
 # Android SmsManager Deep Research
+> **Merged into [SMS_ANDROID_API_REFERENCE.md](SMS_ANDROID_API_REFERENCE.md) on May 3, 2026.**
+> This file is kept as a redirect stub only. All content below is superseded by the reference doc.
+> See §4 (SmsManager — Sending), §5 (Result Codes), and §11 (Gap Analysis) in particular.
+
+---
+
 > Sourced from: https://developer.android.com/reference/kotlin/android/telephony/SmsManager
-> Researched: 2025-05-02
+> Originally researched: 2025-05-02
 
 ---
 
