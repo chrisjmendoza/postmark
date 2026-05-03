@@ -75,23 +75,25 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🟡 TIER 2 — Feature Complete (needed before Play Store submission)
 
 ### MMS support
-- [ ] **Sync MMS from content://mms** — read during first sync and
-      incremental sync. Store attachments as file paths in new
-      `Attachment` entity (Room migration required).
-- [ ] **Inline image display** — `AsyncImage` (Coil) in bubble,
-      `fillMaxWidth`, tap → full-screen viewer.
-- [ ] **Inline video display** — thumbnail + play overlay, tap →
-      player dialog.
-- [ ] **Audio message playback** — waveform or simple play/pause
-      control inline in bubble.
-- [ ] **MMS media in conversation list** — when last message is
-      MMS-only, show "📷 Photo" or "🎥 Video" as snippet.
-- [ ] **Rich media in reply bar** — attachment button left of text
-      field. Image picker (`PickVisualMedia`), camera capture.
-      Requires `READ_MEDIA_IMAGES` / `CAMERA` permissions.
-- [ ] **Group MMS** — multiple recipient addresses → single thread
-      with comma-joined display name. Show sender name/avatar
-      per bubble within group thread.
+- [x] **Sync MMS from content://mms** — `getMmsBody()` / `getMmsBodyIncremental()` in
+      both sync handlers return `MmsParts(body, attachmentUri, mimeType)`. Queries
+      `_id`, `ct`, `text`; builds stable `content://mms/part/{id}` URI for media parts;
+      skips SMIL. Room schema v9 adds `attachmentUri` + `mimeType` columns.
+- [x] **Inline image display** — `AsyncImage` (Coil 2.7.0) in `MmsAttachment` composable,
+      `fillMaxWidth`, `ContentScale.Crop`, max 240 dp height, rounded 8 dp corners.
+- [x] **Inline video display** — `Box` with `PlayArrow` icon overlay, 120 dp height,
+      `surfaceVariant` background, rounded corners. Tap-to-play not yet wired.
+- [x] **Audio message chip** — `Surface` chip with `MusicNote` icon and "Audio message"
+      label in `secondaryContainer` color. Tap-to-play not yet wired.
+- [x] **MMS media in conversation list** — `previewText` extension returns "📷 Photo" /
+      "🎥 Video" / "🎵 Audio message" when body is empty; used by both sync handlers.
+- [ ] **Tap image → full-screen viewer** — `Dialog` or separate screen, pinch-to-zoom.
+- [ ] **Tap video → player dialog** — `ExoPlayer` / `VideoView` in a `Dialog`.
+- [ ] **Audio playback controls** — `MediaPlayer` or `ExoPlayer` play/pause on audio chip.
+- [ ] **Rich media in reply bar** — attachment button left of text field. Image picker
+      (`PickVisualMedia`), camera capture. Requires `READ_MEDIA_IMAGES` / `CAMERA`.
+- [ ] **Group MMS** — multiple recipient addresses → single thread with comma-joined
+      display name. Show sender name/avatar per bubble within group thread.
 
 ### Contact integration
 - [ ] **Contact photo / profile picture in avatar** — currently all

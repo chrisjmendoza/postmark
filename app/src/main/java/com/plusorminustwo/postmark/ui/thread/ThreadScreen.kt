@@ -3,6 +3,7 @@ package com.plusorminustwo.postmark.ui.thread
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.app.role.RoleManager
 import android.provider.Telephony
@@ -84,6 +85,8 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 
 private val PILL_HIDE_DELAY_MS = 1_800L
 
@@ -861,10 +864,34 @@ private fun MessageBubble(
             Box(
                 modifier = Modifier
                     .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .then(
+                        // Tighter padding when an attachment fills the bubble edges.
+                        if (message.attachmentUri != null)
+                            Modifier.padding(4.dp)
+                        else
+                            Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
                     .onSizeChanged { bubbleWidthPx = it.width }
             ) {
-                Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
+                if (message.attachmentUri != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        // Render the media attachment (image, video, or audio).
+                        MmsAttachment(
+                            uri = message.attachmentUri,
+                            mimeType = message.mimeType
+                        )
+                        // Show caption text below the attachment if present.
+                        if (message.body.isNotEmpty()) {
+                            Text(
+                                text = message.body,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                } else {
+                    Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
+                }
             }
             if (message.reactions.isNotEmpty()) {
                 ReactionPills(
@@ -916,6 +943,75 @@ private fun MessageBubble(
         }
         if (message.reactions.isNotEmpty() && (clusterPosition == ClusterPosition.BOTTOM || clusterPosition == ClusterPosition.SINGLE)) {
             Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+// ── MmsAttachment ─────────────────────────────────────────────────────────────
+// Renders the media content of an MMS message inside the bubble. Images use
+// Coil AsyncImage (content://mms/part/ URIs are readable by the default SMS app).
+// Video shows a play-icon placeholder. Audio shows a labelled chip.
+
+@Composable
+private fun MmsAttachment(uri: String, mimeType: String?) {
+    when {
+        // ── Image ──────────────────────────────────────────────────────────────
+        mimeType?.startsWith("image/") == true -> {
+            AsyncImage(
+                model = Uri.parse(uri),
+                contentDescription = "Photo",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 240.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
+        }
+
+        // ── Video ──────────────────────────────────────────────────────────────
+        mimeType?.startsWith("video/") == true -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Video",
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // ── Audio ──────────────────────────────────────────────────────────────
+        mimeType?.startsWith("audio/") == true -> {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Text("Audio message", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        // ── Unknown attachment ─────────────────────────────────────────────────
+        else -> {
+            Text(
+                text = "[Attachment]",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

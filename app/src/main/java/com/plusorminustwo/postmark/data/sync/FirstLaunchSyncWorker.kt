@@ -235,7 +235,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 val id        = MMS_ID_OFFSET + rawId
                 val isSent    = msgBox == Telephony.Mms.MESSAGE_BOX_SENT
                 val timestamp = dateSec * 1000L          // seconds → millis
-                val body      = getMmsBody(rawId)
+                val parts     = getMmsBody(rawId)
                 val address   = getMmsAddress(rawId, isSent)
 
                 val existing = threads[threadId]
@@ -246,7 +246,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                         displayName = displayName,
                         address = address,
                         lastMessageAt = timestamp,
-                        lastMessagePreview = body,
+                        // Use emoji label for media-only messages in the preview.
+                        lastMessagePreview = parts.previewText(),
                         backupPolicy = BackupPolicy.GLOBAL
                     )
                 }
@@ -255,11 +256,13 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                     id = id,
                     threadId = threadId,
                     address = address,
-                    body = body,
+                    body = parts.body,
                     timestamp = timestamp,
                     isSent = isSent,
                     type = msgBox,
-                    isMms = true
+                    isMms = true,
+                    attachmentUri = parts.attachmentUri,
+                    mimeType = parts.mimeType
                 )
             }
         }
@@ -288,25 +291,48 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         return messages.size
     }
 
-    // Reads the text body of an MMS message by querying its part table.
-    // Returns "[MMS]" for media-only messages (photos, audio, etc.) that
-    // have no text/plain part.
-    private fun getMmsBody(mmsId: Long): String {
+    // Reads all parts of an MMS message and returns the text body plus the content URI
+    // of the first media attachment (image, video, or audio). The URI points to
+    // content://mms/part/{partId} which is stable and readable by the default SMS app.
+    // Returns MmsParts("[MMS]", null, null) when the cursor is unavailable.
+    private fun getMmsBody(mmsId: Long): MmsParts {
         val cursor = applicationContext.contentResolver.query(
             Uri.parse("content://mms/$mmsId/part"),
-            arrayOf("ct", "text"), null, null, null
-        ) ?: return "[MMS]"
+            arrayOf("_id", "ct", "text"), null, null, null
+        ) ?: return MmsParts("[MMS]", null, null)
         val sb = StringBuilder()
+        var attachmentUri: String? = null
+        var mimeType: String? = null
         cursor.use {
+            val idIdx   = it.getColumnIndexOrThrow("_id")
             val ctIdx   = it.getColumnIndexOrThrow("ct")
             val textIdx = it.getColumnIndexOrThrow("text")
             while (it.moveToNext()) {
-                if (it.getString(ctIdx) == "text/plain") {
-                    sb.append(it.getString(textIdx) ?: "")
+                val ct     = it.getString(ctIdx) ?: continue
+                val partId = it.getLong(idIdx)
+                when {
+                    // Accumulate text body from all text/plain parts.
+                    ct == "text/plain" ->
+                        sb.append(it.getString(textIdx) ?: "")
+                    // Skip SMIL layout descriptor — not user-visible content.
+                    ct == "application/smil" -> Unit
+                    // Store the first image/video/audio part URI.
+                    ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/") -> {
+                        if (attachmentUri == null) {
+                            attachmentUri = "content://mms/part/$partId"
+                            mimeType = ct
+                        }
+                    }
                 }
             }
         }
-        return if (sb.isNotEmpty()) sb.toString().trim() else "[MMS]"
+        // If there’s no text and no recognised media, fall back to the [MMS] placeholder.
+        val body = sb.toString().trim()
+        return MmsParts(
+            body = body,
+            attachmentUri = attachmentUri,
+            mimeType = mimeType
+        )
     }
 
     // Returns the relevant address for an MMS message.
@@ -333,6 +359,22 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     }
 
     private data class SyncResult(val threadCount: Int, val messageCount: Int)
+
+    // Carries the extracted text body and optional media attachment info for one MMS PDU.
+    private data class MmsParts(
+        val body: String,
+        val attachmentUri: String?,
+        val mimeType: String?
+    ) {
+        // Human-readable thread preview: emoji label for media-only messages.
+        fun previewText(): String = when {
+            body.isNotEmpty()                      -> body
+            mimeType?.startsWith("image/") == true -> "📷 Photo"
+            mimeType?.startsWith("video/") == true -> "🎥 Video"
+            mimeType?.startsWith("audio/") == true -> "🎵 Audio message"
+            else                                   -> "[MMS]"
+        }
+    }
 
     companion object {
         const val WORK_NAME = "first_launch_sms_sync"

@@ -11,6 +11,7 @@ import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
+import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.search.parser.AppleReactionParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -111,7 +112,7 @@ class SmsSyncHandler @Inject constructor(
             // Clean up any optimistic (negative-id) sent messages for this thread.
             messageRepository.deleteOptimisticMessages(threadId)
             threadRepository.updateLastMessageAt(threadId, latest.timestamp)
-            threadRepository.updateLastMessagePreview(threadId, latest.body)
+            threadRepository.updateLastMessagePreview(threadId, latest.previewText)
         }
 
         // One stats recompute covers all affected threads.
@@ -162,7 +163,7 @@ class SmsSyncHandler @Inject constructor(
                 val id        = MMS_ID_OFFSET + rawId
                 val isSent    = msgBox == android.provider.Telephony.Mms.MESSAGE_BOX_SENT
                 val timestamp = dateSec * 1000L
-                val body      = getMmsBodyIncremental(rawId)
+                val parts     = getMmsBodyIncremental(rawId)
                 val address   = getMmsAddressIncremental(rawId, isSent)
 
                 if (threadId !in ensuredThreadIds) {
@@ -174,11 +175,13 @@ class SmsSyncHandler @Inject constructor(
                     id = id,
                     threadId = threadId,
                     address = address,
-                    body = body,
+                    body = parts.body,
                     timestamp = timestamp,
                     isSent = isSent,
                     type = msgBox,
-                    isMms = true
+                    isMms = true,
+                    attachmentUri = parts.attachmentUri,
+                    mimeType = parts.mimeType
                 )
             }
         }
@@ -191,26 +194,45 @@ class SmsSyncHandler @Inject constructor(
             val latest = msgs.last()
             messageRepository.deleteOptimisticMessages(threadId)
             threadRepository.updateLastMessageAt(threadId, latest.timestamp)
-            threadRepository.updateLastMessagePreview(threadId, latest.body)
+            // Use emoji label for media-only MMS in the thread preview.
+            val preview = latest.previewText
+            threadRepository.updateLastMessagePreview(threadId, preview)
         }
 
         statsUpdater.recomputeAll()
     }
 
-    private fun getMmsBodyIncremental(mmsId: Long): String {
+    // Reads text body and first media attachment from the given MMS part table.
+    // Returns MmsParts with a stable content://mms/part/{id} URI for image/video/audio.
+    private fun getMmsBodyIncremental(mmsId: Long): MmsParts {
         val cursor = context.contentResolver.query(
             Uri.parse("content://mms/$mmsId/part"),
-            arrayOf("ct", "text"), null, null, null
-        ) ?: return "[MMS]"
+            arrayOf("_id", "ct", "text"), null, null, null
+        ) ?: return MmsParts("[MMS]", null, null)
         val sb = StringBuilder()
+        var attachmentUri: String? = null
+        var mimeType: String? = null
         cursor.use {
+            val idIdx   = it.getColumnIndexOrThrow("_id")
             val ctIdx   = it.getColumnIndexOrThrow("ct")
             val textIdx = it.getColumnIndexOrThrow("text")
             while (it.moveToNext()) {
-                if (it.getString(ctIdx) == "text/plain") sb.append(it.getString(textIdx) ?: "")
+                val ct     = it.getString(ctIdx) ?: continue
+                val partId = it.getLong(idIdx)
+                when {
+                    ct == "text/plain" ->
+                        sb.append(it.getString(textIdx) ?: "")
+                    ct == "application/smil" -> Unit
+                    ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/") -> {
+                        if (attachmentUri == null) {
+                            attachmentUri = "content://mms/part/$partId"
+                            mimeType = ct
+                        }
+                    }
+                }
             }
         }
-        return if (sb.isNotEmpty()) sb.toString().trim() else "[MMS]"
+        return MmsParts(sb.toString().trim(), attachmentUri, mimeType)
     }
 
     private fun getMmsAddressIncremental(mmsId: Long, isSent: Boolean): String {
@@ -259,4 +281,11 @@ class SmsSyncHandler @Inject constructor(
             null
         }
     }
+
+    // Carries the text body and optional media attachment info for one MMS PDU.
+    private data class MmsParts(
+        val body: String,
+        val attachmentUri: String?,
+        val mimeType: String?
+    )
 }

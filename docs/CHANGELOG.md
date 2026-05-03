@@ -6,7 +6,32 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-02
 
-### Pinned conversations — long-press context menu
+### MMS media attachments — images, video, audio in message bubbles
+- **Room schema v9** — `MIGRATION_8_9` adds two nullable columns to the `messages` table:
+  `attachmentUri TEXT` (stable `content://mms/part/{id}` URI) and `mimeType TEXT`.
+  Both are `NULL` for plain SMS rows; non-destructive migration.
+- **Coil 2.7.0** — `io.coil-kt:coil-compose` added for async image loading in bubbles.
+- **`Message` domain model** — `attachmentUri: String?` and `mimeType: String?` added.
+  New `previewText` extension returns body when non-empty, otherwise "📷 Photo" /
+  "🎥 Video" / "🎵 Audio message" / "[MMS]" based on mime type.
+- **`MessageEntity`** — both new fields wired through `toDomain()` / `toEntity()`.
+- **`FirstLaunchSyncWorker`** — `getMmsBody()` rewritten to return `MmsParts(body,
+  attachmentUri, mimeType)`. Queries `_id`, `ct`, `text` from `content://mms/{id}/part`;
+  accumulates `text/plain` into body; captures first `image/*`, `video/*`, or `audio/*`
+  part as `content://mms/part/{partId}`; skips `application/smil`. Thread preview uses
+  `parts.previewText()`.
+- **`SmsSyncHandler`** — `getMmsBodyIncremental()` receives same `MmsParts` treatment.
+  SMS incremental path uses `latest.previewText` extension for thread preview.
+- **`ThreadScreen` — `MmsAttachment` composable** — new private composable. Renders:
+  `AsyncImage` (Coil, `ContentScale.Crop`, max 240 dp) for images; `Box` with `PlayArrow`
+  icon for video; `Surface` chip with `MusicNote` icon for audio; fallback text otherwise.
+- **`MessageBubble`** — switches between attachment-mode padding (`4.dp`, renders
+  `MmsAttachment` + optional caption) and text-mode padding (`12/8.dp`, body text only).
+- **`DevOptionsViewModel.wipeAndResync()`** — deletes all Room messages + threads, removes
+  `first_sync_completed` pref, enqueues full re-import. Never touches `content://sms`.
+- **`DevOptionsScreen`** — "Wipe DB + re-import" button added to SMS sync section.
+
+### Per-number notification filtering
 - **`ConversationsViewModel`** — `togglePin(threadId, currentlyPinned)` and `toggleMute(threadId,
   currentlyMuted)` added; thin coroutine wrappers over `threadRepository.updatePinned` /
   `updateMuted`, mirroring the pattern already in `ThreadViewModel`.

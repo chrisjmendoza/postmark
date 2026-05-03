@@ -47,20 +47,24 @@ com.plusorminustwo.postmark
     └── parser              ← AppleReactionParser (scaffolded)
 
 ═══════════════════════════════════════════════════════
-DATABASE — ROOM SCHEMA v5
+DATABASE — ROOM SCHEMA v9
 ═══════════════════════════════════════════════════════
 Thread
 - id, displayName, address, lastMessageAt,
   lastMessagePreview (added v2),
   backupPolicy (GLOBAL/ALWAYS_INCLUDE/NEVER_INCLUDE),
   isMuted BOOLEAN DEFAULT false (added v5),
-  isPinned BOOLEAN DEFAULT false (added v6)
+  isPinned BOOLEAN DEFAULT false (added v6),
+  notificationsEnabled BOOLEAN DEFAULT true (added v8)
 
   Threads sort pinned-first (isPinned DESC, lastMessageAt DESC)
 
 Message
 - id, threadId, address, body, timestamp,
-  isSent, type
+  isSent, type,
+  isMms BOOLEAN (added v7),
+  attachmentUri TEXT nullable (added v9),
+  mimeType TEXT nullable (added v9)
 
 Reaction
 - id, messageId, senderAddress, emoji,
@@ -79,26 +83,21 @@ GlobalStats
   all threads, plus threadCount;
   topReactionEmojisJson added v5
 
-FTS5 virtual table (messages_fts)
+FTS4 virtual table (messages_fts)
 - mirrors message body, sync triggers in place
 - tokenize='unicode61'
 
 Reactions in separate table for independent
 emoji reaction querying.
 
-Migration 1→2: ALTER TABLE threads ADD COLUMN
-lastMessagePreview TEXT NOT NULL DEFAULT ''
-Migration 2→3: ALTER TABLE messages ADD COLUMN
-deliveryStatus INTEGER NOT NULL DEFAULT 0
+Migration 1→2: lastMessagePreview on threads
+Migration 2→3: deliveryStatus on messages
 Migration 3→4: CREATE TABLE global_stats
-Migration 4→5: ALTER TABLE threads ADD COLUMN
-isMuted INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE thread_stats ADD COLUMN
-topReactionEmojisJson TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE global_stats ADD COLUMN
-topReactionEmojisJson TEXT NOT NULL DEFAULT '[]'
-Migration 5→6: ALTER TABLE threads ADD COLUMN
-isPinned INTEGER NOT NULL DEFAULT 0
+Migration 4→5: isMuted on threads; topReactionEmojisJson on stats
+Migration 5→6: isPinned on threads
+Migration 6→7: isMms on messages
+Migration 7→8: notificationsEnabled on threads
+Migration 8→9: attachmentUri + mimeType on messages
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -193,6 +192,13 @@ WHAT IS WORKING (tested on device)
 ✅ Room schema v6 — all migrations non-destructive
 ✅ FirstLaunchSyncWorker — full SMS sync confirmed on device
    (620 threads, 51 069 messages synced on Samsung S24 Ultra)
+✅ MMS media attachments (schema v9):
+   - Images rendered via Coil AsyncImage in MessageBubble
+   - Video placeholder with PlayArrow icon
+   - Audio chip with MusicNote icon
+   - Thread list shows "📷 Photo" / "🎥 Video" / "🎵 Audio message"
+     instead of blank for media-only MMS messages
+   - "Wipe DB + re-import" in Dev Options re-syncs with attachment data
 ✅ Privacy mode — Settings → Notifications toggle; SmsReceiver
    shows "New message" with no sender/body when enabled
 ✅ ThemePreference persisted in SharedPreferences
@@ -280,33 +286,32 @@ IN PROGRESS / NEXT UP
 ACTIVE BRANCH: feat/ui-improvements
 
 TIER 1 — REMAINING (in priority order)
-1. PINNED CONVERSATIONS — implementing now
-   isPinned on ThreadEntity (schema v6, merged), sort order
-   is pinned-first, pin/unpin icons show in ConversationsScreen,
-   togglePin() exists in ThreadViewModel. ONLY MISSING:
-   - Wire Pin/Unpin ⋮ menu item in ConversationsScreen to
-     viewModel.togglePin(threadId)
-   - Long-press on conversation row as alternate entry point
-
-2. PER-NUMBER NOTIFICATION FILTERING
-   Let user exclude specific threads from notifying.
-   DB: notificationsEnabled BOOLEAN DEFAULT true on ThreadEntity
-   (Room migration 6→7 required). SmsReceiver checks flag.
-
-3. MULTIPART MESSAGE HANDLING
+1. MULTIPART MESSAGE HANDLING
    Verify all parts arrive before marking delivered;
    handle out-of-order part delivery.
 
-4. SEND QUEUE
+2. SEND QUEUE
    Queue outgoing when offline; send on reconnect;
    show "Queued" bubble state.
 
-5. SYNC COMPLETENESS INVESTIGATION
+3. SYNC COMPLETENESS INVESTIGATION
    Some threads + messages missing from sync.
    Likely causes: address normalization, cursor pagination,
    or type filtering in SmsSyncHandler / FirstLaunchSyncWorker.
 
+4. MMS MEDIA — PLAYBACK (follow-on)
+   Tap image → full-screen viewer, tap video → ExoPlayer dialog,
+   audio chip → MediaPlayer play/pause.
+
 COMPLETED THIS SPRINT (May 2, 2026)
+✅ MMS media attachments (schema v9, Coil 2.7.0)
+   - attachmentUri + mimeType columns on messages
+   - MmsParts extraction in both sync handlers
+   - MmsAttachment composable (image/video/audio)
+   - MessageBubble attachment-mode layout
+   - previewText extension for thread snippets
+   - "Wipe DB + re-import" in Dev Options
+✅ Per-number notification filtering (schema v8)
 ✅ WorkManager / Hilt init fix — NoSuchMethodException resolved
 ✅ Privacy mode — global toggle; SmsReceiver obeys
 ✅ Dev options: Clear sample data button

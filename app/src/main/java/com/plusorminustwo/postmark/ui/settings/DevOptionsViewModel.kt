@@ -198,6 +198,24 @@ class DevOptionsViewModel @Inject constructor(
         _feedback.value = "Sync worker enqueued"
     }
 
+    // Wipes all locally cached messages and threads, then re-runs the full historical
+    // sync so newly supported MMS attachments (images, audio, video) are imported.
+    // SAFE: never touches content://sms — only deletes from Room.
+    fun wipeAndResync() {
+        viewModelScope.launch {
+            messageRepository.deleteAll()
+            threadRepository.deleteAll()
+            context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
+                .edit().remove("first_sync_completed").apply()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                FirstLaunchSyncWorker.WORK_NAME,
+                ExistingWorkPolicy.REPLACE,
+                FirstLaunchSyncWorker.buildRequest()
+            )
+            _feedback.value = "DB wiped — full re-import started"
+        }
+    }
+
     private fun msg(id: Long, threadId: Long, address: String, body: String, ts: Long, isSent: Boolean, type: Int) =
         Message(id, threadId, address, body, ts, isSent, type)
 }

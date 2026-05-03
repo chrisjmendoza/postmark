@@ -57,7 +57,34 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Wire "Back up now" button to `BackupScheduler.runNow()` via injected instance
 - [x] Show backup history list (scan `getExternalFilesDir("backups")`)
 - [x] `WorkManager` status observer — show live "Backup running…" indicator
-- [ ] Backup restore (read JSON, apply to Room with migration version check)
+- [x] Backup restore (read JSON, apply to Room with migration version check)
+
+---
+
+## Phase 4 — Export 🚧 In Progress
+
+- [x] `ExportFormatter.formatForCopy()` — clean labeled transcript per spec
+- [x] `ExportBottomSheet` — Copy + Share buttons
+- [ ] **Rendered image export** — draw conversation to `Canvas`, convert to `Bitmap`, share via `FileProvider` + `ACTION_SEND`
+- [x] Wire selection → `ExportBottomSheet` from `ThreadScreen`
+- [ ] AI Export as distinct format option (same as Copy but labelled separately in sheet)
+
+---
+
+## Phase 4b — MMS Media 🚧 Core done, playback pending
+
+- [x] **Coil 2.7.0** — `coil-compose` added as dependency
+- [x] **Room schema v9** — `attachmentUri TEXT` + `mimeType TEXT` nullable columns on messages; `MIGRATION_8_9` non-destructive
+- [x] **MmsParts extraction** — both `FirstLaunchSyncWorker` and `SmsSyncHandler` query `_id`/`ct`/`text` from `content://mms/{id}/part`; capture first image/video/audio part URI; skip SMIL
+- [x] **`previewText` extension** — "📷 Photo" / "🎥 Video" / "🎵 Audio message" fallback when body empty; used for thread list preview
+- [x] **`MmsAttachment` composable** — `AsyncImage` for images, play-icon placeholder for video, chip for audio
+- [x] **`MessageBubble` updated** — attachment-mode vs text-mode layout switch; caption below attachment when body non-empty
+- [x] **"Wipe DB + re-import"** in Dev Options — retroactive re-sync for previously imported MMS without attachment data
+- [ ] Tap image → full-screen pinch-to-zoom viewer
+- [ ] Tap video → `ExoPlayer` dialog
+- [ ] Audio chip → `MediaPlayer` / `ExoPlayer` playback controls
+- [ ] Rich media in reply bar (attachment picker, camera, `READ_MEDIA_IMAGES`)
+- [ ] Group MMS — multi-recipient threads, per-bubble sender display
 
 ---
 
