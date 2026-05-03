@@ -20,7 +20,9 @@ data class ThreadEntity(
     val lastMessagePreview: String = "",
     val backupPolicy: BackupPolicy = BackupPolicy.GLOBAL,
     val isMuted: Boolean = false,
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    // When false the thread is fully silenced — no notification is posted for incoming messages.
+    val notificationsEnabled: Boolean = true
 )
 
 /**
@@ -35,7 +37,8 @@ fun ThreadEntity.toDomain() = Thread(
     lastMessagePreview = lastMessagePreview,
     backupPolicy = backupPolicy,
     isMuted = isMuted,
-    isPinned = isPinned
+    isPinned = isPinned,
+    notificationsEnabled = notificationsEnabled
 )
 
 /**
@@ -50,5 +53,6 @@ fun Thread.toEntity() = ThreadEntity(
     lastMessagePreview = lastMessagePreview,
     backupPolicy = backupPolicy,
     isMuted = isMuted,
-    isPinned = isPinned
+    isPinned = isPinned,
+    notificationsEnabled = notificationsEnabled
 )

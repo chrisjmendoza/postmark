@@ -544,6 +544,8 @@ private class ActionsThreadDao : ThreadDao {
     override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) = Unit
     override suspend fun updateLastMessagePreview(threadId: Long, preview: String) = Unit
     override suspend fun isMutedByAddress(address: String): Boolean? = null
+    override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
+    override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
 }

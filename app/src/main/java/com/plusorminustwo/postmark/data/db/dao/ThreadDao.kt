@@ -38,6 +38,12 @@ interface ThreadDao {
     @Query("UPDATE threads SET isPinned = :isPinned WHERE id = :threadId")
     suspend fun updatePinned(threadId: Long, isPinned: Boolean)
 
+    @Query("UPDATE threads SET notificationsEnabled = :enabled WHERE id = :threadId")
+    suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean)
+
+    @Query("SELECT notificationsEnabled FROM threads WHERE address = :address LIMIT 1")
+    suspend fun isNotificationsEnabledByAddress(address: String): Boolean?
+
     @Query("SELECT * FROM threads WHERE backupPolicy != 'NEVER_INCLUDE'")
     suspend fun getThreadsForBackup(): List<ThreadEntity>
 

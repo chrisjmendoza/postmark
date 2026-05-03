@@ -365,7 +365,7 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
-    // ── Mute / Pin ────────────────────────────────────────────────────────────
+    // ── Mute / Pin / Notifications ────────────────────────────────────────────
 
     fun toggleMute() {
         val current = uiState.value.thread?.isMuted ?: return
@@ -379,6 +379,15 @@ class ThreadViewModel @Inject constructor(
         val current = uiState.value.thread?.isPinned ?: return
         viewModelScope.launch {
             threadRepository.updatePinned(threadId, !current)
+        }
+    }
+
+    /** Flips [notificationsEnabled] for this thread. Called from the thread ⋮ menu.
+     *  When set to false, [SmsReceiver] will skip posting any notification for this number. */
+    fun toggleNotificationsEnabled() {
+        val current = uiState.value.thread?.notificationsEnabled ?: return
+        viewModelScope.launch {
+            threadRepository.updateNotificationsEnabled(threadId, !current)
         }
     }
 

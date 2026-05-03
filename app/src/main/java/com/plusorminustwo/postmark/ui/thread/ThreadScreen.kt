@@ -137,6 +137,7 @@ fun ThreadScreen(
         onSetSelectionScope = { viewModel.setSelectionScope(it) },
         onToggleMute = { viewModel.toggleMute() },
         onTogglePin = { viewModel.togglePin() },
+        onToggleNotifications = { viewModel.toggleNotificationsEnabled() },
         onEnterSelectionMode = { viewModel.enterSelectionMode() },
         onReplyTextChanged = { viewModel.onReplyTextChanged(it) },
         onSendMessage = { viewModel.sendMessage() },
@@ -185,6 +186,7 @@ private fun ThreadContent(
     onSetSelectionScope: (SelectionScope) -> Unit,
     onToggleMute: () -> Unit,
     onTogglePin: () -> Unit,
+    onToggleNotifications: () -> Unit,
     onEnterSelectionMode: () -> Unit,
     onReplyTextChanged: (String) -> Unit,
     onSendMessage: () -> Unit,
@@ -491,6 +493,10 @@ private fun ThreadContent(
                                 DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },
                                     onClick = { menuExpanded = false; onToggleMute() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (uiState.thread?.notificationsEnabled == false) "Enable notifications" else "Disable notifications") },
+                                    onClick = { menuExpanded = false; onToggleNotifications() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isPinned == true) "Unpin" else "Pin") },
@@ -1499,6 +1505,7 @@ private fun ThreadScreenPreview() {
             onSetSelectionScope = {},
             onToggleMute = {},
             onTogglePin = {},
+            onToggleNotifications = {},
             onEnterSelectionMode = {},
             onReplyTextChanged = {},
             onSendMessage = {},

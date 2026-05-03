@@ -17,7 +17,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -97,6 +97,16 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // Add isMms flag — defaults 0 (false) so all existing rows are treated as SMS.
                 db.execSQL(
                     "ALTER TABLE messages ADD COLUMN isMms INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add per-thread notification toggle — defaults 1 (true) so existing threads
+                // keep their current notification behaviour unchanged after the upgrade.
+                db.execSQL(
+                    "ALTER TABLE threads ADD COLUMN notificationsEnabled INTEGER NOT NULL DEFAULT 1"
                 )
             }
         }
