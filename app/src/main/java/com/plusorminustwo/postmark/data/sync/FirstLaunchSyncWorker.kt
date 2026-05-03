@@ -232,6 +232,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             Log.w(TAG, "MMS cursor was null — skipping MMS sync")
             return 0
         }
+        debugLog("syncAllMms: cursor has ${mmsCursor.count} rows")
 
         val threads  = mutableMapOf<Long, Thread>()
         val messages = mutableListOf<Message>()
@@ -253,7 +254,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 val timestamp = dateSec * 1000L          // seconds → millis
                 val parts     = getMmsBody(rawId)
                 val address   = getMmsAddress(rawId, isSent)
-
+                debugLog("syncAllMms: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
                 val existing = threads[threadId]
                 if (existing == null || timestamp > existing.lastMessageAt) {
                     val displayName = lookupContactName(address) ?: address
@@ -315,7 +316,11 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         val cursor = applicationContext.contentResolver.query(
             Uri.parse("content://mms/$mmsId/part"),
             arrayOf("_id", "ct", "text"), null, null, null
-        ) ?: return MmsParts("[MMS]", null, null)
+        ) ?: run {
+            Log.w(TAG, "getMmsBody: parts cursor null for mmsId=$mmsId")
+            return MmsParts("[MMS]", null, null)
+        }
+        debugLog("getMmsBody: mmsId=$mmsId  partCount=${cursor.count}")
         val sb = StringBuilder()
         var attachmentUri: String? = null
         var mimeType: String? = null
@@ -334,11 +339,13 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                     ct == "application/smil" -> Unit
                     // Store the first image/video/audio part URI.
                     ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/") -> {
+                        debugLog("getMmsBody: found media part ct=$ct  partId=$partId")
                         if (attachmentUri == null) {
                             attachmentUri = "content://mms/part/$partId"
                             mimeType = ct
                         }
                     }
+                    else -> debugLog("getMmsBody: skipping unknown part ct=$ct")
                 }
             }
         }

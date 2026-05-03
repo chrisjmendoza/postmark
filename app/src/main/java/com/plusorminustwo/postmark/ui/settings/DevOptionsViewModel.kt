@@ -2,6 +2,7 @@ package com.plusorminustwo.postmark.ui.settings
 
 import android.content.Context
 import android.provider.Telephony
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
@@ -188,6 +189,7 @@ class DevOptionsViewModel @Inject constructor(
     }
 
     fun triggerSync() {
+        Log.i("SyncTrigger", "DevOptionsViewModel.triggerSync — enqueuing REPLACE")
         context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
             .edit().remove("first_sync_completed").apply()
         WorkManager.getInstance(context).enqueueUniqueWork(
@@ -203,6 +205,7 @@ class DevOptionsViewModel @Inject constructor(
     // SAFE: never touches content://sms — only deletes from Room.
     fun wipeAndResync() {
         viewModelScope.launch {
+            Log.i("SyncTrigger", "DevOptionsViewModel.wipeAndResync — wiping DB then enqueuing REPLACE")
             messageRepository.deleteAll()
             threadRepository.deleteAll()
             context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)

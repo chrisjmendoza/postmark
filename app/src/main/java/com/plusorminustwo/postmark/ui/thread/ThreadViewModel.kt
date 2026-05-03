@@ -1,6 +1,8 @@
 ﻿package com.plusorminustwo.postmark.ui.thread
 
+import android.app.role.RoleManager
 import android.content.Context
+import android.os.Build
 import android.provider.Telephony
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -90,6 +92,11 @@ class ThreadViewModel @Inject constructor(
     private val _reactionPickerMessageId  = MutableStateFlow<Long?>(null)
     private val _reactionPickerBubbleY    = MutableStateFlow(0f)
     private val _highlightedMessageId     = MutableStateFlow<Long?>(null)
+
+    // Fires once each time the user sends a message so the UI can unconditionally
+    // scroll to the bottom regardless of the current scroll position.
+    private val _scrollToBottomEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val scrollToBottomEvent: SharedFlow<Unit> = _scrollToBottomEvent.asSharedFlow()
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
@@ -324,6 +331,9 @@ class ThreadViewModel @Inject constructor(
 
         val thread = uiState.value.thread ?: return
         _replyText.value = ""
+        // Signal the UI to scroll to bottom before the insert so the optimistic
+        // message is visible as soon as it lands in the list.
+        _scrollToBottomEvent.tryEmit(Unit)
 
         viewModelScope.launch {
             _isSending.value = true
@@ -354,8 +364,15 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
-    private fun isDefaultSmsApp(): Boolean =
-        Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+    private fun isDefaultSmsApp(): Boolean {
+        // On Android 10+ the RoleManager is the authoritative source — getDefaultSmsPackage
+        // can lag behind after the role is granted via the system dialog.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val rm = context.getSystemService(RoleManager::class.java)
+            if (rm.isRoleHeld(RoleManager.ROLE_SMS)) return true
+        }
+        return Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+    }
 
     // ── Backup policy ─────────────────────────────────────────────────────────
 

@@ -4,7 +4,125 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## [Unreleased]
+
+### Thread view — auto-scroll to bottom on send
+- **`ThreadViewModel.scrollToBottomEvent`** — new `SharedFlow<Unit>` that fires once per
+  `sendMessage()` call, before the coroutine inserts the optimistic message. The scroll is
+  triggered before the DB round-trip so the list is already animating as the row lands.
+- **`ThreadContent`** — new `LaunchedEffect(Unit)` collects `scrollToBottomEvent` and calls
+  `listState.animateScrollToItem(0)` unconditionally regardless of how far back in history
+  the user has scrolled. Kept separate from the existing incoming-message FAB nudge so that
+  arriving messages while reading history still show the FAB rather than hijacking position.
+
+### Conversations — banner tap + default-app re-check fixes
+- **Banner tap** now launches the system SMS default dialog. API 29+:
+  `RoleManager.createRequestRoleIntent(ROLE_SMS)`; API 26–28: `ACTION_CHANGE_DEFAULT` with
+  `EXTRA_PACKAGE_NAME`.
+- **`ConversationsViewModel._isDefaultSmsApp`** changed from a one-shot
+  `MutableStateFlow(checkIsDefaultSmsApp())` (evaluated once at ViewModel creation, never
+  updated) to a re-checkable flow backed by `refreshDefaultSmsStatus()`.
+- **`ConversationsScreen`** adds a `DisposableEffect` + `LifecycleEventObserver` that calls
+  `refreshDefaultSmsStatus()` on every `Lifecycle.Event.ON_RESUME`. Banner now disappears
+  immediately when the user returns after granting the role.
+
+### First-launch sync recovery — threads-without-messages case
+- **`ConversationsViewModel.init`** recovery guard extended: in addition to catching
+  `syncDone && threadsEmpty`, it now also fires when `!threadsEmpty && messagesEmpty`
+  (both `messageDao.getMaxId()` and `messageDao.getMaxMmsId()` return null). Fixes a state
+  where `FirstLaunchSyncWorker` was killed between the thread upsert and the message insert:
+  thread list showed previews (from denormalized `lastMessagePreview` on `ThreadEntity`) but
+  every thread view was empty because no `Message` rows had been written.
+
+### SMS send pipeline bug fixes (SmsManager audit)
+
+**Root causes found via `docs/SMS_RESEARCH.md` audit.**
+
+- **`SmsManagerWrapper` — `thread_id` missing from `ContentValues`** — Samsung/MIUI ROMs
+  can mis-group a message when `THREAD_ID` is omitted. Fixed by calling
+  `Telephony.Threads.getOrCreateThreadId(context, destinationAddress)` and writing the
+  result into the insert values. Also added `DATE_SENT` (epoch millis when PDU left device)
+  and `SEEN = 1` (notification acknowledged) to match the full contract.
+
+- **`SmsManagerWrapper` — delivery callbacks carried stale optimistic ID** — The
+  `EXTRA_MESSAGE_ID` bundled into the `sentIntent` / `deliveredIntent` PendingIntents was
+  the negative temporary ID from `ThreadViewModel` (e.g. `-1714000000000`). By the time
+  either intent fired, `SmsSyncHandler` had already deleted that row and inserted the real
+  row under the positive content-provider `_id`. `SmsSentDeliveryReceiver.updateDeliveryStatus`
+  was therefore always a no-op. Fixed by capturing the `Uri` returned by
+  `contentResolver.insert()`, parsing the row ID with `ContentUris.parseId()`, and
+  bundling it as a new `EXTRA_SMS_ROW_ID` extra.
+
+- **`SmsSentDeliveryReceiver` — Room updated with wrong ID; content provider never updated**
+  — Updated to read `EXTRA_SMS_ROW_ID` (positive), falling back to `EXTRA_MESSAGE_ID` only
+  if the new extra is absent (backward-compat). On `ACTION_SMS_SENT` failure,
+  `content://sms` row `STATUS` is now updated to `Telephony.Sms.STATUS_FAILED` so third-party
+  apps stop showing the message as pending. On `ACTION_SMS_DELIVERED`, `STATUS` is set to
+  `Telephony.Sms.STATUS_COMPLETE`.
+
+- **`SmsSyncHandler.syncLatestSms` — synced sent messages started as `DELIVERY_STATUS_NONE`**
+  — The content observer fires when we write to `content://sms/sent`; the resulting
+  incremental sync now sets `deliveryStatus = DELIVERY_STATUS_PENDING` for sent messages
+  (`isSent == true`) so the clock icon appears immediately. Received messages retain
+  `DELIVERY_STATUS_NONE` (no tracking).
+
+---
+
 ## 2026-05-02
+
+### Settings — default SMS app status row
+- **`SettingsScreen` — new "General" section** at the top of the screen with a
+  `DefaultSmsStatusRow`. When Postmark is already default: green checkmark + "Postmark is
+  your default SMS app". Otherwise: tappable row "Tap to set Postmark as your default SMS
+  app". API 29+: launches `RoleManager.createRequestRoleIntent(ROLE_SMS)`; API <29:
+  launches `ACTION_CHANGE_DEFAULT`. Status re-evaluated at composition time so the row
+  updates if the user returns from the system dialog.
+
+### MMS image loading fix — Coil `ContentResolver` binding
+- **`MmsAttachment` composable** — switched `AsyncImage` to `SubcomposeAsyncImage` to
+  support a composable error slot.
+- **`ImageRequest`** built with explicit `context` so Coil's `ContentUriFetcher` binds the
+  correct `ContentResolver` when opening `content://mms/part/` URIs (requires the default
+  SMS role — now grantable from the new Settings row).
+- `crossfade(true)` added for a smoother load transition.
+- Error slot shows "📷 Photo" label instead of silently blank space.
+
+### Stats screen — collapsible day sections + natural message order
+- **Message order within each day** reversed: oldest message now appears at the top of the
+  day group, reading downward naturally (was newest-on-top).
+- **Collapsible day sections** — tapping a day header toggles it collapsed / expanded;
+  chevron icon reflects current state.
+- **Collapse all / Expand all** `TextButton` added at the top of both day-list panels; label
+  and icon flip based on current expansion state.
+- `collapsedAllDays` resets when `allThreadMessages` changes; `collapsedSelectedDays` resets
+  when `selectedDays` changes so stale expansion state never leaks between data refreshes.
+
+### SMS/MMS sync audit — 5 gaps resolved
+- **Bug A (HIGH) — null-address rows silently dropped** — `processSmsCursor`
+  (`FirstLaunchSyncWorker`) and `syncLatestSms` (`SmsSyncHandler`) both skipped rows where
+  `address` was null (`?: continue`). Null addresses are normal for WAP push, carrier
+  service messages, and some Samsung OEM notifications — causing entire threads or intra-
+  thread gaps to be invisible. Fix: `?: ""` preserves the row; `lookupContactName` short-
+  circuits on empty input; display-name fallback is `address.ifEmpty { "Unknown" }`.
+- **Bug B (MEDIUM) — Samsung fallback missing outbox + failed URIs** — The per-mailbox
+  fallback list for OneUI devices omitted `content://sms/outbox` (type 4) and
+  `content://sms/failed` (type 5). Threads whose only messages were in those boxes were
+  silently skipped. Fix: both URIs added to `syncAllSms()` fallback list.
+- **Bug C (MEDIUM) — drafts/outbox/failed rendered as received** — `isSent` was
+  `type == MESSAGE_TYPE_SENT` (== 2) in all four sync paths; types 3/4/5 resolved to
+  `false` and appeared on the incoming (left) side. Fix: changed to
+  `type != MESSAGE_TYPE_INBOX` for SMS and `msgBox != MESSAGE_BOX_INBOX` for MMS.
+- **Bug D (MEDIUM) — `getMmsAddress` returns "insert-address-token"** — Samsung PDU
+  placeholder literal set as thread address before the real FROM address resolved.
+  Fix: both `getMmsAddress` (full sync) and `getMmsAddressIncremental` (incremental sync)
+  return `"Unknown"` when the address column equals `"insert-address-token"`.
+- **Bug F (LOW) — race window before first DB commit** — `SmsSyncHandler` bailed when
+  `maxKnownId == 0` (DB empty); a `ContentObserver` firing during `FirstLaunchSyncWorker`'s
+  first 500-row batch window would exit without processing that message. Fix: added
+  `SmsSyncHandler.triggerCatchUp()` (public suspend fun, runs one `syncLatestSms` +
+  `syncLatestMms` pass); injected into `FirstLaunchSyncWorker` via Hilt; called
+  immediately after `first_sync_completed = true`.
+- *(Bug E deferred — group MMS sent-address display label wrong; thread grouping unaffected.)*
 
 ### MMS media attachments — images, video, audio in message bubbles
 - **Room schema v9** — `MIGRATION_8_9` adds two nullable columns to the `messages` table:

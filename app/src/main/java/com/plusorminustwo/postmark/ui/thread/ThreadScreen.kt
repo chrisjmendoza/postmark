@@ -58,6 +58,8 @@ import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -128,6 +130,7 @@ fun ThreadScreen(
         quickReactionEmojis = quickReactionEmojis,
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
+        scrollToBottomEvent = viewModel.scrollToBottomEvent,
         onBack = onBack,
         onViewStats = onViewStats,
         onBackupSettingsClick = onBackupSettingsClick,
@@ -177,6 +180,7 @@ private fun ThreadContent(
     quickReactionEmojis: List<String>,
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
+    scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
     onBack: () -> Unit,
     onViewStats: () -> Unit,
     onBackupSettingsClick: () -> Unit,
@@ -254,6 +258,35 @@ private fun ThreadContent(
                 listState.animateScrollToItem(targetIndex, scrollOffset = -centeredOffset)
             }
             onHighlightMessage(scrollToMessageId)
+        }
+    }
+
+    // ── New-message auto-scroll / FAB nudge ────────────────────────────────
+    // fabVisible is hoisted here so both this effect and the scroll-triggered
+    // effect inside the inner Box can drive the same FAB state.
+    var fabVisible by remember { mutableStateOf(false) }
+
+    // When the user taps Send, scroll to the bottom unconditionally — even if
+    // they were reading history. This is distinct from an incoming message
+    // arriving while the user is scrolled up (that case uses the FAB nudge).
+    LaunchedEffect(Unit) {
+        scrollToBottomEvent.collect {
+            listState.animateScrollToItem(0)
+        }
+    }
+
+    val messageCount = uiState.messages.size
+    LaunchedEffect(messageCount) {
+        if (messageCount == 0) return@LaunchedEffect
+        if (listState.firstVisibleItemIndex <= 1) {
+            // Already at the bottom — scroll to reveal the new message.
+            listState.animateScrollToItem(0)
+        } else {
+            // User is reading history — show the FAB for 3 s so they know a
+            // new message arrived without hijacking their scroll position.
+            fabVisible = true
+            delay(3_000)
+            fabVisible = false
         }
     }
 
@@ -579,9 +612,26 @@ private fun ThreadContent(
             )
 
             val scrolledUp by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
+
+            // Auto-hide the FAB 3 s after the user stops scrolling.
+            // fabVisible is hoisted to the outer scope so the message-arrival
+            // effect above can also trigger it when the user is reading history.
+            LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
+                if (scrolledUp) {
+                    fabVisible = true
+                    delay(3_000)
+                    fabVisible = false
+                } else {
+                    fabVisible = false
+                }
+            }
+
             ScrollToLatestButton(
-                visible = scrolledUp,
-                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                visible = fabVisible,
+                onClick = {
+                    fabVisible = false
+                    scope.launch { listState.animateScrollToItem(0) }
+                },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 16.dp)
@@ -966,6 +1016,13 @@ private fun MmsAttachment(uri: String, mimeType: String?) {
                 model = ImageRequest.Builder(ctx)
                     .data(Uri.parse(uri))
                     .crossfade(true)
+                    .listener(onError = { _, result ->
+                        android.util.Log.e(
+                            "CoilMMS",
+                            "Failed to load uri=$uri",
+                            result.throwable
+                        )
+                    })
                     .build(),
                 contentDescription = "Photo",
                 contentScale = ContentScale.Crop,

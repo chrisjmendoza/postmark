@@ -4,8 +4,12 @@ import android.content.Context
 import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Telephony
+import android.util.Log
+import com.plusorminustwo.postmark.BuildConfig
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -30,6 +34,11 @@ class SmsSyncHandler @Inject constructor(
     private val statsUpdater: StatsUpdater
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Debug-only logs — filter logcat by tag "SmsSyncHandler" to follow MMS sync.
+    private fun debugLog(msg: String) { if (BuildConfig.DEBUG) Log.d(TAG, msg) }
+
+    companion object { private const val TAG = "SmsSyncHandler" }
 
     fun onSmsContentChanged(uri: Uri) {
         scope.launch { syncLatestSms(uri) }
@@ -107,7 +116,19 @@ class SmsSyncHandler @Inject constructor(
                     ensureThread(threadId, address, date)
                     ensuredThreadIds += threadId
                 }
-                newMessages += Message(id, threadId, address, body, date, isSent, type)
+                newMessages += Message(
+                    id = id,
+                    threadId = threadId,
+                    address = address,
+                    body = body,
+                    timestamp = date,
+                    isSent = isSent,
+                    type = type,
+                    // Sent messages arriving via incremental sync are waiting for the
+                    // SmsSentDeliveryReceiver callback; start them as PENDING so the UI
+                    // shows the clock icon.  Received messages have no delivery tracking.
+                    deliveryStatus = if (isSent) DELIVERY_STATUS_PENDING else DELIVERY_STATUS_NONE
+                )
             }
         }
 
@@ -147,15 +168,24 @@ class SmsSyncHandler @Inject constructor(
     private suspend fun syncLatestMms(@Suppress("UNUSED_PARAMETER") uri: Uri) {
         val maxStoredId = messageRepository.getMaxMmsId() ?: 0L
         // If nothing in DB yet, full sync hasn't run — bail out.
-        if (maxStoredId <= 0L) return
+        if (maxStoredId <= 0L) {
+            debugLog("syncLatestMms: no MMS in DB yet — skipping incremental pass")
+            return
+        }
         val maxRawId = maxStoredId - MMS_ID_OFFSET
+        debugLog("syncLatestMms: maxStoredId=$maxStoredId  maxRawId=$maxRawId")
 
         val cursor = context.contentResolver.query(
             Uri.parse("content://mms"),
             arrayOf("_id", "thread_id", "date", "msg_box"),
             "_id > ?", arrayOf(maxRawId.toString()),
             "_id ASC"
-        ) ?: return
+        ) ?: run {
+            Log.w(TAG, "syncLatestMms: cursor was null — provider unavailable or permission denied")
+            return
+        }
+
+        debugLog("syncLatestMms: cursor has ${cursor.count} new MMS rows")
 
         val newMessages       = mutableListOf<Message>()
         val ensuredThreadIds  = mutableSetOf<Long>()
@@ -177,6 +207,7 @@ class SmsSyncHandler @Inject constructor(
                 val timestamp = dateSec * 1000L
                 val parts     = getMmsBodyIncremental(rawId)
                 val address   = getMmsAddressIncremental(rawId, isSent)
+                debugLog("syncLatestMms: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
 
                 if (threadId !in ensuredThreadIds) {
                     ensureThread(threadId, address, timestamp)
@@ -220,7 +251,11 @@ class SmsSyncHandler @Inject constructor(
         val cursor = context.contentResolver.query(
             Uri.parse("content://mms/$mmsId/part"),
             arrayOf("_id", "ct", "text"), null, null, null
-        ) ?: return MmsParts("[MMS]", null, null)
+        ) ?: run {
+            Log.w(TAG, "getMmsBodyIncremental: parts cursor null for mmsId=$mmsId")
+            return MmsParts("[MMS]", null, null)
+        }
+        debugLog("getMmsBodyIncremental: mmsId=$mmsId  partCount=${cursor.count}")
         val sb = StringBuilder()
         var attachmentUri: String? = null
         var mimeType: String? = null
@@ -236,11 +271,13 @@ class SmsSyncHandler @Inject constructor(
                         sb.append(it.getString(textIdx) ?: "")
                     ct == "application/smil" -> Unit
                     ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/") -> {
+                        debugLog("getMmsBodyIncremental: found media part ct=$ct  partId=$partId")
                         if (attachmentUri == null) {
                             attachmentUri = "content://mms/part/$partId"
                             mimeType = ct
                         }
                     }
+                    else -> debugLog("getMmsBodyIncremental: skipping unknown part ct=$ct")
                 }
             }
         }

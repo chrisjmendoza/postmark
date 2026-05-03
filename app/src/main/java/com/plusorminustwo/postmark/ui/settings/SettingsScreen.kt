@@ -18,10 +18,16 @@ import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -43,14 +49,28 @@ fun SettingsScreen(
     val privacyModeEnabled by viewModel.privacyModeEnabled.collectAsState()
 
     val context = LocalContext.current
-    // Re-evaluated each time the screen enters composition (e.g. after returning from system settings).
-    val isDefaultSmsApp = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            context.getSystemService(RoleManager::class.java)
-                ?.isRoleHeld(RoleManager.ROLE_SMS) == true
-        } else {
-            Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
-        }
+
+    // ── Default-SMS state — re-checked on every resume so it reflects changes
+    // made in system settings without needing a restart.
+    fun checkIsDefault() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        context.getSystemService(RoleManager::class.java)
+            ?.isRoleHeld(RoleManager.ROLE_SMS) == true
+    } else {
+        Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+    }
+
+    var isDefaultSmsApp by rememberSaveable { mutableStateOf(checkIsDefault()) }
+    LifecycleResumeEffect(Unit) {
+        isDefaultSmsApp = checkIsDefault()
+        onPauseOrDispose {}
+    }
+
+    // Launcher for the system role-request dialog (must use startActivityForResult).
+    val roleRequestLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // Re-check after the user returns from the system dialog.
+        isDefaultSmsApp = checkIsDefault()
     }
 
     Scaffold(
@@ -80,7 +100,7 @@ fun SettingsScreen(
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             context.getSystemService(RoleManager::class.java)
                                 ?.createRequestRoleIntent(RoleManager.ROLE_SMS)
-                                ?.let { context.startActivity(it) }
+                                ?.let { roleRequestLauncher.launch(it) }
                         } else {
                             context.startActivity(
                                 Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT)
