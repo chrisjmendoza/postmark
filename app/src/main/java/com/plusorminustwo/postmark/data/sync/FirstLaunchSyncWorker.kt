@@ -27,7 +27,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val reactionParser: AppleReactionParser,
-    private val statsUpdater: StatsUpdater
+    private val statsUpdater: StatsUpdater,
+    private val smsSyncHandler: SmsSyncHandler  // for post-sync catch-up of race-window messages
 ) : CoroutineWorker(context, params) {
 
     // Verbose debug logs only appear in debug builds; warnings and errors always fire.
@@ -50,6 +51,9 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             writeStatus(status)
             applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putBoolean("first_sync_completed", true).apply()
+            // One final incremental pass catches any SMS/MMS that arrived during the sync window
+            // (i.e. after the cursor was opened but before the first DB commit).
+            smsSyncHandler.triggerCatchUp()
             Result.success(workDataOf(KEY_STATUS to status))
         } catch (e: Exception) {
             val msg = "${e.javaClass.simpleName}: ${e.message}"
@@ -93,6 +97,9 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 Uri.parse("content://sms/inbox"),
                 Uri.parse("content://sms/sent"),
                 Uri.parse("content://sms/draft"),
+                // outbox (type=4) and failed (type=5) are missing from some Samsung builds
+                Uri.parse("content://sms/outbox"),
+                Uri.parse("content://sms/failed"),
             )
             var anyNonNull = false
             fallbackUris.forEach { uri ->
@@ -155,14 +162,19 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         while (cursor.moveToNext()) {
             val id       = cursor.getLong(idIdx)
             val threadId = cursor.getLong(threadIdx)
-            val address  = cursor.getString(addressIdx) ?: continue
+            // Null address is valid for WAP push, carrier service messages, and some OEM ROMs.
+            // Preserve the row with an empty fallback — never skip a message just because the
+            // address field is missing.
+            val address  = cursor.getString(addressIdx) ?: ""
             val body     = cursor.getString(bodyIdx) ?: ""
             val date     = cursor.getLong(dateIdx)
             val type     = cursor.getInt(typeIdx)
-            val isSent   = type == Telephony.Sms.MESSAGE_TYPE_SENT
+            // Drafts (3), outbox (4), and failed sends (5) are all outgoing — only inbox (1) is
+            // received. Using != INBOX rather than == SENT prevents left-bubble display for them.
+            val isSent   = type != Telephony.Sms.MESSAGE_TYPE_INBOX
 
             if (!threads.containsKey(threadId)) {
-                val displayName = lookupContactName(address) ?: address
+                val displayName = lookupContactName(address) ?: address.ifEmpty { "Unknown" }
                 threads[threadId] = Thread(
                     id = threadId,
                     displayName = displayName,
@@ -183,6 +195,9 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     }
 
     private fun lookupContactName(address: String): String? {
+        // An empty address would produce content://com.android.contacts/phone_lookup/ with no
+        // segment, which may match every contact on some ROMs. Skip the lookup entirely.
+        if (address.isEmpty()) return null
         val uri = Uri.withAppendedPath(
             ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
             Uri.encode(address)
@@ -233,7 +248,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 val dateSec   = cursor.getLong(dateIdx)
                 val msgBox    = cursor.getInt(boxIdx)
                 val id        = MMS_ID_OFFSET + rawId
-                val isSent    = msgBox == Telephony.Mms.MESSAGE_BOX_SENT
+                // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
+                val isSent    = msgBox != Telephony.Mms.MESSAGE_BOX_INBOX
                 val timestamp = dateSec * 1000L          // seconds → millis
                 val parts     = getMmsBody(rawId)
                 val address   = getMmsAddress(rawId, isSent)
@@ -348,8 +364,12 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             "type = ?", arrayOf(addrType.toString()), null
         ) ?: return "Unknown"
         return cursor.use {
-            if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow("address")) ?: "Unknown"
-            else "Unknown"
+            if (it.moveToFirst()) {
+                val addr = it.getString(it.getColumnIndexOrThrow("address")) ?: "Unknown"
+                // "insert-address-token" is a Samsung PDU placeholder written before the real FROM
+                // address is resolved. Treat it as unknown to avoid persisting garbage display names.
+                if (addr == "insert-address-token") "Unknown" else addr
+            } else "Unknown"
         }
     }
 

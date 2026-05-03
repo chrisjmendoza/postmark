@@ -38,7 +38,15 @@ class SmsSyncHandler @Inject constructor(
     fun onMmsContentChanged(uri: Uri) {
         scope.launch { syncLatestMms(uri) }
     }
-
+    /**
+     * Performs one incremental SMS + MMS pass on the caller's coroutine.
+     * Called by [FirstLaunchSyncWorker] after the initial full sync completes to capture
+     * any messages that arrived in the race window before the first DB commit.
+     */
+    suspend fun triggerCatchUp() {
+        syncLatestSms(Telephony.Sms.CONTENT_URI)
+        syncLatestMms(Uri.parse("content://mms"))
+    }
     // ── Incremental sync ─────────────────────────────────────────────────────
     // Fetches every SMS row whose _id is greater than the highest id already
     // stored in Room.  This correctly handles burst delivery (multiple messages
@@ -86,11 +94,14 @@ class SmsSyncHandler @Inject constructor(
             while (it.moveToNext()) {
                 val id       = it.getLong(idIdx)
                 val threadId = it.getLong(threadIdx)
-                val address  = it.getString(addressIdx) ?: continue
+                // Null address is valid for WAP push, carrier service, and some OEM ROMs.
+                // Preserve the row with an empty fallback — never skip based on missing address.
+                val address  = it.getString(addressIdx) ?: ""
                 val body     = it.getString(bodyIdx) ?: ""
                 val date     = it.getLong(dateIdx)
                 val type     = it.getInt(typeIdx)
-                val isSent   = type == Telephony.Sms.MESSAGE_TYPE_SENT
+                // Drafts (3), outbox (4), and failed sends (5) are outgoing; only inbox (1) is received.
+                val isSent   = type != Telephony.Sms.MESSAGE_TYPE_INBOX
 
                 if (threadId !in ensuredThreadIds) {
                     ensureThread(threadId, address, date)
@@ -161,7 +172,8 @@ class SmsSyncHandler @Inject constructor(
                 val dateSec   = it.getLong(dateIdx)
                 val msgBox    = it.getInt(boxIdx)
                 val id        = MMS_ID_OFFSET + rawId
-                val isSent    = msgBox == android.provider.Telephony.Mms.MESSAGE_BOX_SENT
+                // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
+                val isSent    = msgBox != android.provider.Telephony.Mms.MESSAGE_BOX_INBOX
                 val timestamp = dateSec * 1000L
                 val parts     = getMmsBodyIncremental(rawId)
                 val address   = getMmsAddressIncremental(rawId, isSent)
@@ -243,14 +255,17 @@ class SmsSyncHandler @Inject constructor(
             "type = ?", arrayOf(addrType.toString()), null
         ) ?: return "Unknown"
         return cursor.use {
-            if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow("address")) ?: "Unknown"
-            else "Unknown"
+            if (it.moveToFirst()) {
+                val addr = it.getString(it.getColumnIndexOrThrow("address")) ?: "Unknown"
+                // "insert-address-token" is a Samsung PDU placeholder; treat as unknown.
+                if (addr == "insert-address-token") "Unknown" else addr
+            } else "Unknown"
         }
     }
 
     private suspend fun ensureThread(threadId: Long, address: String, timestamp: Long) {
         if (threadRepository.getById(threadId) != null) return
-        val displayName = lookupContactName(address) ?: address
+        val displayName = lookupContactName(address) ?: address.ifEmpty { "Unknown" }
         threadRepository.upsert(
             com.plusorminustwo.postmark.domain.model.Thread(
                 id = threadId,
@@ -263,6 +278,9 @@ class SmsSyncHandler @Inject constructor(
     }
 
     private fun lookupContactName(address: String): String? {
+        // An empty address would produce content://com.android.contacts/phone_lookup/ with no
+        // segment, which may match every contact on some ROMs. Skip the lookup entirely.
+        if (address.isEmpty()) return null
         val uri = Uri.withAppendedPath(
             ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
             Uri.encode(address)
