@@ -18,6 +18,8 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -69,6 +71,14 @@ fun ConversationsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // RoleManager.createRequestRoleIntent MUST be launched via startActivityForResult;
+    // a plain startActivity() is silently ignored on API 29+.
+    val roleRequestLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        viewModel.refreshDefaultSmsStatus()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -95,12 +105,13 @@ fun ConversationsScreen(
                 RoleDenialBanner(
                     onDismiss = viewModel::dismissRoleBanner,
                     onSetDefault = {
-                        // API 29+: RoleManager shows the system "Set default SMS app?" prompt
-                        // (the same UI reached via Settings > Apps > Default apps > SMS app).
+                        // API 29+: RoleManager shows the system "Set default SMS app?" prompt.
+                        // Must be launched via startActivityForResult — startActivity() is
+                        // silently ignored by the system on API 29+.
                         // API 26-28: ACTION_CHANGE_DEFAULT shows the equivalent system dialog.
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             val rm = context.getSystemService(RoleManager::class.java)
-                            context.startActivity(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
+                            roleRequestLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
                         } else {
                             @Suppress("DEPRECATION")
                             context.startActivity(
