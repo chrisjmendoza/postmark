@@ -192,6 +192,9 @@ WHAT IS WORKING (tested on device)
 ✅ Room schema v6 — all migrations non-destructive
 ✅ FirstLaunchSyncWorker — full SMS sync confirmed on device
    (620 threads, 51 069 messages synced on Samsung S24 Ultra)
+✅ Streaming MMS import — messages appear in thread view
+   progressively every 500 rows; foreground notification shows
+   ETA ("~42m 15s"); resume-on-kill safe (REPLACE strategy).
 ✅ MMS media attachments (schema v9):
    - Images rendered via Coil AsyncImage in MessageBubble
    - Video placeholder with PlayArrow icon
@@ -361,6 +364,13 @@ TIER 1 — REMAINING (in priority order)
    (Audio chip play/pause is now done.)
 
 COMPLETED THIS SPRINT (May 4, 2026)
+✅ Streaming MMS import (FirstLaunchSyncWorker)
+   processMmsCursor() now flushes every 500 rows via flushMmsBatch();
+   threads inserted into Room before messages (FK constraint);
+   persistedThreadIds set prevents redundant getById calls;
+   computeEta() appended to foreground notification text;
+   final pass still corrects thread timestamps/previews after cursor.
+   Resume-on-kill safe — WorkManager retry + REPLACE strategy.
 ✅ Reaction fallback parsing — Android + Apple (unified)
    - AndroidReactionParser: parses Google Messages / Samsung
      fallback format (`👍 to "text"` / `👍 to "text" removed`).

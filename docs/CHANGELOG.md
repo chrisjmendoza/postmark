@@ -6,6 +6,24 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### Streaming MMS import with progress ETA
+- **`FirstLaunchSyncWorker`** — MMS sync no longer accumulates all rows in memory before
+  writing. `processMmsCursor()` now flushes every 500 rows via `flushMmsBatch()`, making
+  messages visible in the thread view progressively during the hour-long import rather than
+  only at the end.
+- **`flushMmsBatch()`** — new private helper: for each batch it (1) ensures all referenced
+  threads exist in Room to satisfy the FK constraint (calling `threadRepository.getById`
+  once per new thread via a `persistedThreadIds` set), then (2) batch-inserts the messages
+  and clears the pending list.
+- **`computeEta()`** — new private helper: calculates a human-readable ETA string
+  (`~3m 12s` or `~45s`) from elapsed time and remaining row count.
+- **`postProgress()`** — now accepts an optional `eta: String` param appended to the
+  foreground notification text: `"Syncing MMS — 5,000 / 108,592 (~42m 15s)"`.
+- Thread timestamps/previews are still corrected in a final pass after the cursor is
+  exhausted, so SMS-derived thread data is never clobbered by intermediate MMS state.
+- Resume-on-kill safe: WorkManager retries from row 0 on force-stop; `REPLACE` conflict
+  strategy on both `MessageDao` and `ThreadDao` means re-inserted rows are idempotent.
+
 ### Reaction fallback parsing — Android + Apple (unified)
 - **`AndroidReactionParser`** — new `@Singleton` that parses Google Messages / Samsung
   reaction fallback SMS format (`👍 to "quoted text"` / `👍 to "quoted text" removed`).

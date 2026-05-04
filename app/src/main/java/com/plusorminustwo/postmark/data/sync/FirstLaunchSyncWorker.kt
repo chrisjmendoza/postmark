@@ -67,9 +67,11 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
     // Updates the foreground notification text and progress bar.
     // Called every 500 rows during the MMS per-row query phase and after each SMS persist batch.
-    private suspend fun postProgress(phase: String, done: Int, total: Int) {
-        val text = if (total > 0) "$phase \u2014 ${"%,d".format(done)} / ${"%,d".format(total)}"
+    // [eta] is an optional estimated time remaining string, e.g. "~3m 12s".
+    private suspend fun postProgress(phase: String, done: Int, total: Int, eta: String = "") {
+        val base = if (total > 0) "$phase \u2014 ${"%,d".format(done)} / ${"%,d".format(total)}"
                    else phase
+        val text = if (eta.isNotEmpty()) "$base ($eta)" else base
         setForeground(buildForegroundInfo(buildSyncNotification(text, done, total)))
     }
 
@@ -89,7 +91,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 else Result.failure(workDataOf(KEY_ERROR to msg))
             }
             postProgress("Syncing MMS\u2026", 0, 0)
-            val mmsCount = syncAllMms { done, total -> postProgress("Syncing MMS", done, total) }
+            val mmsCount = syncAllMms { done, total, eta -> postProgress("Syncing MMS", done, total, eta) }
             postProgress("Wrapping up\u2026", 0, 0)
             val status = "OK: ${smsResult.threadCount} threads, ${smsResult.messageCount} SMS + $mmsCount MMS"
             Log.i(TAG, "Sync complete — $status")
@@ -291,10 +293,10 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     // so that any SMS-originated threads are already in Room; MMS-only threads
     // are inserted here, and existing threads are updated if MMS has a newer
     // last message. Returns the count of MMS messages persisted.
-    private suspend fun syncAllMms(onProgress: suspend (Int, Int) -> Unit = { _, _ -> }): Int {
-        debugMmsLog("Querying content://mms …")
-        val threads  = mutableMapOf<Long, Thread>()
-        val messages = mutableListOf<Message>()
+    private suspend fun syncAllMms(onProgress: suspend (Int, Int, String) -> Unit = { _, _, _ -> }): Int {
+        debugMmsLog("Querying content://mms \u2026")
+        val threads = mutableMapOf<Long, Thread>()
+        var totalMmsCount = 0
         val mmsProjection = arrayOf("_id", "thread_id", "date", "msg_box")
 
         // ── Primary query ─────────────────────────────────────────────────────
@@ -306,7 +308,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
         if (primaryRowCount > 0) {
             // Happy path: primary URI returned rows — use them directly.
-            primaryCursor!!.use { processMmsCursor(it, threads, messages, primaryRowCount, onProgress) }
+            primaryCursor!!.use { totalMmsCount += processMmsCursor(it, threads, primaryRowCount, onProgress) }
         } else {
             // ── Samsung / OEM fallback ────────────────────────────────────────
             // Samsung OneUI returns a null or empty cursor for content://mms
@@ -325,21 +327,23 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 debugMmsLog("MMS fallback $uri → ${c?.count ?: "null"} rows")
                 // Pass each fallback cursor's own count as the total so progress
                 // resets per-URI — acceptable for the Samsung edge case.
-                c?.use { processMmsCursor(it, threads, messages, it.count, onProgress) }
+                c?.use { totalMmsCount += processMmsCursor(it, threads, it.count, onProgress) }
             }
         }
 
-        if (messages.isEmpty()) {
+        if (totalMmsCount == 0) {
             debugMmsLog("No MMS messages found")
             return 0
         }
 
-        Log.i(TAG_MMS, "MMS collected ${threads.size} threads, ${messages.size} messages — persisting …")
+        Log.i(TAG_MMS, "MMS sync complete — $totalMmsCount messages streamed across ${threads.size} threads")
 
-        // For each MMS thread: insert if new, or update lastMessageAt/Preview if newer.
+        // Final pass: update thread timestamps/previews to reflect the newest MMS data.
+        // Messages were already persisted during streaming; this just fixes thread metadata.
         threads.forEach { (threadId, mmsThread) ->
             val inRoom = threadRepository.getById(threadId)
             if (inRoom == null) {
+                // MMS-only thread that somehow wasn't inserted during streaming — insert now.
                 threadRepository.upsert(mmsThread)
             } else if (mmsThread.lastMessageAt > inRoom.lastMessageAt) {
                 threadRepository.updateLastMessageAt(threadId, mmsThread.lastMessageAt)
@@ -347,30 +351,30 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             }
         }
 
-        messages.chunked(500).forEach { chunk -> messageRepository.insertAll(chunk) }
-        Log.i(TAG_MMS, "MMS persist complete")
-
-        return messages.size
+        return totalMmsCount
     }
 
-    // Extracts MMS rows from a cursor into the shared threads map and messages list.
-    // Called once for the primary URI or once per fallback URI (inbox/sent).
-    // Mirrors processSmsCursor() for symmetry with the SMS fallback path.
-    // Fires onProgress every 500 rows (and once at the end) so the notification stays live
-    // during the slow per-row getMmsBody + getMmsAddress sub-queries.
+    // Extracts MMS rows from a cursor, streaming inserts to Room every 500 rows so messages
+    // appear in the UI progressively rather than after the entire cursor is exhausted.
+    // Returns the total number of messages persisted.
     private suspend fun processMmsCursor(
         cursor: Cursor,
         threads: MutableMap<Long, Thread>,
-        messages: MutableList<Message>,
         total: Int = 0,
-        onProgress: suspend (Int, Int) -> Unit = { _, _ -> }
-    ) {
+        onProgress: suspend (Int, Int, String) -> Unit = { _, _, _ -> }
+    ): Int {
         val idIdx     = cursor.getColumnIndexOrThrow("_id")
         val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
         val dateIdx   = cursor.getColumnIndexOrThrow("date")
         val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
 
+        val startTimeMs = System.currentTimeMillis()
+        val pendingMessages = mutableListOf<Message>()
+        // Tracks which thread IDs have already been ensured in Room this cursor pass
+        // so we only call getById once per new thread (foreign key guard).
+        val persistedThreadIds = mutableSetOf<Long>()
         var done = 0
+
         while (cursor.moveToNext()) {
             val rawId     = cursor.getLong(idIdx)
             val threadId  = cursor.getLong(threadIdx)
@@ -398,7 +402,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 )
             }
 
-            messages += Message(
+            pendingMessages += Message(
                 id = id,
                 threadId = threadId,
                 address = address,
@@ -411,10 +415,45 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 mimeType = parts.mimeType
             )
             done++
-            // Fire progress every 500 rows; the final partial batch is reported after the loop.
-            if (done % 500 == 0) onProgress(done, total)
+            if (done % 500 == 0) {
+                flushMmsBatch(pendingMessages, persistedThreadIds, threads)
+                onProgress(done, total, computeEta(startTimeMs, done, total))
+            }
         }
-        onProgress(done, total) // final update with exact count
+        // Flush any remaining rows in the final partial batch.
+        if (pendingMessages.isNotEmpty()) flushMmsBatch(pendingMessages, persistedThreadIds, threads)
+        onProgress(done, total, "") // final update with exact count
+        return done
+    }
+
+    // Ensures all threads referenced by [pending] exist in Room (required by FK constraint),
+    // then batch-inserts the messages and clears the list.
+    private suspend fun flushMmsBatch(
+        pending: MutableList<Message>,
+        persistedThreadIds: MutableSet<Long>,
+        threads: Map<Long, Thread>
+    ) {
+        val newThreadIds = pending.map { it.threadId }.toSet() - persistedThreadIds
+        newThreadIds.forEach { threadId ->
+            // Only insert if not already in Room (e.g. from SMS sync or a prior batch).
+            if (threadRepository.getById(threadId) == null) {
+                threads[threadId]?.let { threadRepository.upsert(it) }
+            }
+            persistedThreadIds += threadId
+        }
+        messageRepository.insertAll(pending)
+        pending.clear()
+    }
+
+    // Returns a human-readable ETA string based on elapsed time and remaining rows.
+    private fun computeEta(startTimeMs: Long, done: Int, total: Int): String {
+        if (done <= 0 || total <= done) return ""
+        val elapsedMs = System.currentTimeMillis() - startTimeMs
+        val remainingMs = (total - done).toLong() * elapsedMs / done
+        val secs = remainingMs / 1000
+        val mins = secs / 60
+        val remSecs = secs % 60
+        return if (mins > 0) "~${mins}m ${remSecs}s" else "~${remSecs}s"
     }
 
     // Reads all parts of an MMS message and returns the text body plus the content URI
