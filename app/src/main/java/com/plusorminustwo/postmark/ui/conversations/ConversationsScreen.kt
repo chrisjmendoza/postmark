@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,6 +57,7 @@ fun ConversationsScreen(
     val threads by viewModel.threads.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncStatus by viewModel.syncStatus.collectAsState()
+    val syncProgress by viewModel.syncProgress.collectAsState()
     val isDefaultSmsApp by viewModel.isDefaultSmsApp.collectAsState()
     val roleBannerDismissed by viewModel.roleBannerDismissed.collectAsState()
     val threadList = threads  // local val so Kotlin can smart-cast the nullable
@@ -131,9 +133,13 @@ fun ConversationsScreen(
                 threadList.isEmpty() -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         if (isSyncing) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                CircularProgressIndicator()
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.padding(horizontal = 24.dp)
+                            ) {
                                 Text("Syncing messages…", style = MaterialTheme.typography.bodyLarge)
+                                SyncProgressBanner(syncProgress)
                             }
                         } else {
                             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -157,9 +163,9 @@ fun ConversationsScreen(
                     }
                 }
                 else -> {
-                    // Thin progress bar below the top bar while a sync is in flight.
+                    // Progress banner below the top bar while a sync is in flight.
                     if (isSyncing) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        SyncProgressBanner(syncProgress)
                     }
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         items(threadList, key = { it.id }) { thread ->
@@ -183,6 +189,62 @@ fun ConversationsScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── Sync progress banner ──────────────────────────────────────────────────────
+/** Fills the full width with a determinate (or indeterminate) progress bar and
+ *  a text line showing the current phase, row counts, and ETA.
+ *  Shown both above the thread list (while threads already exist) and in the
+ *  center of the empty-state screen (first launch). */
+@Composable
+private fun SyncProgressBanner(progress: SyncProgress?) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (progress != null && progress.total > 0) {
+                // Determinate — we know how many rows there are.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${progress.phase} \u2014 ${ "%,d".format(progress.done)} / ${"%,d".format(progress.total)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (progress.eta.isNotEmpty()) {
+                        Text(
+                            text = progress.eta,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.End
+                        )
+                    }
+                }
+                LinearProgressIndicator(
+                    progress = { progress.done.toFloat() / progress.total },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                // Indeterminate — early in sync or SMS phase (no total known).
+                val label = progress?.phase?.takeIf { it.isNotEmpty() } ?: "Syncing\u2026"
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
         }
     }

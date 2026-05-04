@@ -85,6 +85,9 @@ class MessageRepository @Inject constructor(
     /** Returns the highest stored MMS row id (offset by MMS_ID_OFFSET), or null. */
     suspend fun getMaxMmsId(): Long? = messageDao.getMaxMmsId()
 
+    /** Returns the lowest stored MMS row id (offset by MMS_ID_OFFSET), or null. */
+    suspend fun getMinMmsId(): Long? = messageDao.getMinMmsId()
+
     suspend fun deleteAll() {
         reactionDao.deleteAll()
         messageDao.deleteAll()

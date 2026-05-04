@@ -526,6 +526,7 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun deleteAll() = Unit
     override suspend fun getMaxId(): Long? = null
     override suspend fun getMaxMmsId(): Long? = null
+    override suspend fun getMinMmsId(): Long? = null
     override suspend fun deleteById(messageId: Long) = Unit
     override suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity? = null
 }

@@ -85,6 +85,11 @@ interface MessageDao {
     @Query("SELECT MAX(id) FROM messages WHERE isMms = 1")
     suspend fun getMaxMmsId(): Long?
 
+    // Returns the lowest stored MMS row id (already offset). Used by FirstLaunchSyncWorker
+    // to resume a newest-first import — subtract MMS_ID_OFFSET to get raw MMS _id.
+    @Query("SELECT MIN(id) FROM messages WHERE isMms = 1")
+    suspend fun getMinMmsId(): Long?
+
     /** Used for the 8-week activity heatmap (all threads). */
     @Query("SELECT * FROM messages WHERE timestamp >= :startMs ORDER BY timestamp ASC")
     fun observeMessagesFrom(startMs: Long): Flow<List<MessageEntity>>

@@ -76,6 +76,25 @@ class ConversationsViewModel @Inject constructor(
         .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    // Live progress data emitted by the worker every 500 rows via setProgress().
+    // Null when the worker is not running or hasn't emitted progress yet.
+    val syncProgress: StateFlow<SyncProgress?> = workManager
+        .getWorkInfosForUniqueWorkFlow(FirstLaunchSyncWorker.WORK_NAME)
+        .map { infos ->
+            val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
+                ?: return@map null
+            val data = running.progress
+            val done = data.getInt(FirstLaunchSyncWorker.KEY_PROGRESS_DONE, -1)
+            if (done < 0) null
+            else SyncProgress(
+                phase = data.getString(FirstLaunchSyncWorker.KEY_PROGRESS_PHASE) ?: "",
+                done  = done,
+                total = data.getInt(FirstLaunchSyncWorker.KEY_PROGRESS_TOTAL, 0),
+                eta   = data.getString(FirstLaunchSyncWorker.KEY_PROGRESS_ETA) ?: ""
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     // Last known sync result — reads from SharedPreferences (written by the worker),
     // and updates live when a new work run completes.
     val syncStatus: StateFlow<String?> = workManager
@@ -273,3 +292,11 @@ class ConversationsViewModel @Inject constructor(
     private fun msg(id: Long, threadId: Long, address: String, body: String, ts: Long, isSent: Boolean, type: Int) =
         Message(id, threadId, address, body, ts, isSent, type)
 }
+
+/** Snapshot of in-progress sync data emitted by [FirstLaunchSyncWorker] via setProgress(). */
+data class SyncProgress(
+    val phase: String,
+    val done: Int,
+    val total: Int,
+    val eta: String
+)

@@ -73,6 +73,13 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                    else phase
         val text = if (eta.isNotEmpty()) "$base ($eta)" else base
         setForeground(buildForegroundInfo(buildSyncNotification(text, done, total)))
+        // Also push progress to WorkManager so the UI can display it without polling the notification.
+        setProgress(workDataOf(
+            KEY_PROGRESS_PHASE to phase,
+            KEY_PROGRESS_DONE  to done,
+            KEY_PROGRESS_TOTAL to total,
+            KEY_PROGRESS_ETA   to eta
+        ))
     }
 
     override suspend fun doWork(): Result {
@@ -299,16 +306,31 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         var totalMmsCount = 0
         val mmsProjection = arrayOf("_id", "thread_id", "date", "msg_box")
 
+        // Checkpoint resume: find the lowest MMS raw ID already in Room so we can
+        // fast-skip those rows on restart instead of re-running the slow sub-queries.
+        // We import newest-first (_id DESC), so a killed worker has already persisted
+        // IDs from the top down to some minimum. On resume, skip rawId >= that minimum.
+        // MMS IDs in Room are offset by MMS_ID_OFFSET, so subtract to get the raw _id.
+        val resumeBeforeRawId: Long = (messageRepository.getMinMmsId() ?: 0L)
+            .let { if (it > 0) it - MMS_ID_OFFSET else Long.MAX_VALUE }
+        if (resumeBeforeRawId < Long.MAX_VALUE) {
+            Log.i(TAG_MMS, "syncAllMms: resuming, skipping rawId >= $resumeBeforeRawId")
+        }
+
+        // Sort by _id DESC (newest first) so recent messages appear in Room quickly.
+        // Also ensures IDs are monotonically decreasing, making the resume skip exact.
+        val sortOrder = "_id DESC"
+
         // ── Primary query ─────────────────────────────────────────────────────
         val primaryCursor = applicationContext.contentResolver.query(
-            Uri.parse("content://mms"), mmsProjection, null, null, "date ASC"
+            Uri.parse("content://mms"), mmsProjection, null, null, sortOrder
         )
         val primaryRowCount = primaryCursor?.count ?: -1
         debugMmsLog("syncAllMms: primary cursor: ${if (primaryCursor == null) "NULL" else "$primaryRowCount rows"}")
 
         if (primaryRowCount > 0) {
             // Happy path: primary URI returned rows — use them directly.
-            primaryCursor!!.use { totalMmsCount += processMmsCursor(it, threads, primaryRowCount, onProgress) }
+            primaryCursor!!.use { totalMmsCount += processMmsCursor(it, threads, primaryRowCount, resumeBeforeRawId, onProgress) }
         } else {
             // ── Samsung / OEM fallback ────────────────────────────────────────
             // Samsung OneUI returns a null or empty cursor for content://mms
@@ -322,12 +344,12 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 Uri.parse("content://mms/sent"),
             ).forEach { uri ->
                 val c = applicationContext.contentResolver.query(
-                    uri, mmsProjection, null, null, "date ASC"
+                    uri, mmsProjection, null, null, sortOrder
                 )
                 debugMmsLog("MMS fallback $uri → ${c?.count ?: "null"} rows")
                 // Pass each fallback cursor's own count as the total so progress
                 // resets per-URI — acceptable for the Samsung edge case.
-                c?.use { totalMmsCount += processMmsCursor(it, threads, it.count, onProgress) }
+                c?.use { totalMmsCount += processMmsCursor(it, threads, it.count, resumeBeforeRawId, onProgress) }
             }
         }
 
@@ -356,11 +378,15 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
     // Extracts MMS rows from a cursor, streaming inserts to Room every 500 rows so messages
     // appear in the UI progressively rather than after the entire cursor is exhausted.
-    // Returns the total number of messages persisted.
+    // Rows with rawId >= resumeBeforeRawId are fast-skipped (no sub-queries) to support
+    // checkpoint resume when the worker is killed and restarted. Since we import newest-first
+    // (_id DESC), those rows were already persisted in a prior run.
+    // Returns the count of newly inserted messages (skipped rows not counted).
     private suspend fun processMmsCursor(
         cursor: Cursor,
         threads: MutableMap<Long, Thread>,
         total: Int = 0,
+        resumeBeforeRawId: Long = Long.MAX_VALUE,
         onProgress: suspend (Int, Int, String) -> Unit = { _, _, _ -> }
     ): Int {
         val idIdx     = cursor.getColumnIndexOrThrow("_id")
@@ -373,7 +399,10 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         // Tracks which thread IDs have already been ensured in Room this cursor pass
         // so we only call getById once per new thread (foreign key guard).
         val persistedThreadIds = mutableSetOf<Long>()
-        var done = 0
+        // walked = all rows visited (skip + new); inserted = only newly persisted rows.
+        var walked = 0
+        var inserted = 0
+        val resuming = resumeBeforeRawId < Long.MAX_VALUE
 
         while (cursor.moveToNext()) {
             val rawId     = cursor.getLong(idIdx)
@@ -381,11 +410,27 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             val dateSec   = cursor.getLong(dateIdx)
             val msgBox    = cursor.getInt(boxIdx)
             val id        = MMS_ID_OFFSET + rawId
-            // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
             val isSent    = msgBox != Telephony.Mms.MESSAGE_BOX_INBOX
-            val timestamp = dateSec * 1000L          // seconds → millis
-            val parts     = getMmsBody(rawId)
-            val address   = getMmsAddress(rawId, isSent)
+            val timestamp = dateSec * 1000L
+            walked++
+
+            if (rawId >= resumeBeforeRawId) {
+                // Fast skip: already in Room (imported in a prior run, newest-first).
+                if (threads[threadId] == null) {
+                    threads[threadId] = Thread(
+                        id = threadId, displayName = "", address = "",
+                        lastMessageAt = timestamp, lastMessagePreview = "",
+                        backupPolicy = BackupPolicy.GLOBAL
+                    )
+                }
+                persistedThreadIds += threadId
+                if (walked % 500 == 0) onProgress(walked, total, "Resuming\u2026")
+                continue
+            }
+
+            // New row — run the slow sub-queries and queue for insert.
+            val parts   = getMmsBody(rawId)
+            val address = getMmsAddress(rawId, isSent)
             debugMmsLog("processMmsCursor: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
 
             val existing = threads[threadId]
@@ -396,7 +441,6 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                     displayName = displayName,
                     address = address,
                     lastMessageAt = timestamp,
-                    // Use emoji label for media-only messages in the preview.
                     lastMessagePreview = parts.previewText(),
                     backupPolicy = BackupPolicy.GLOBAL
                 )
@@ -414,16 +458,18 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 attachmentUri = parts.attachmentUri,
                 mimeType = parts.mimeType
             )
-            done++
-            if (done % 500 == 0) {
+            inserted++
+            if (inserted % 500 == 0) {
                 flushMmsBatch(pendingMessages, persistedThreadIds, threads)
-                onProgress(done, total, computeEta(startTimeMs, done, total))
+                val eta = computeEta(System.currentTimeMillis() - startTimeMs, inserted,
+                    if (resuming) total - (walked - inserted) else total)
+                onProgress(walked, total, eta)
             }
         }
         // Flush any remaining rows in the final partial batch.
         if (pendingMessages.isNotEmpty()) flushMmsBatch(pendingMessages, persistedThreadIds, threads)
-        onProgress(done, total, "") // final update with exact count
-        return done
+        onProgress(walked, total, "") // final update with exact count
+        return inserted
     }
 
     // Ensures all threads referenced by [pending] exist in Room (required by FK constraint),
@@ -446,15 +492,9 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     }
 
     // Returns a human-readable ETA string based on elapsed time and remaining rows.
-    private fun computeEta(startTimeMs: Long, done: Int, total: Int): String {
-        if (done <= 0 || total <= done) return ""
-        val elapsedMs = System.currentTimeMillis() - startTimeMs
-        val remainingMs = (total - done).toLong() * elapsedMs / done
-        val secs = remainingMs / 1000
-        val mins = secs / 60
-        val remSecs = secs % 60
-        return if (mins > 0) "~${mins}m ${remSecs}s" else "~${remSecs}s"
-    }
+    // Extracted as a companion-object function so it can be unit-tested without a WorkManager context.
+    private fun computeEta(elapsedMs: Long, done: Int, total: Int) =
+        Companion.computeEta(elapsedMs, done, total)
 
     // Reads all parts of an MMS message and returns the text body plus the content URI
     // of the first media attachment (image, video, or audio). The URI points to
@@ -555,9 +595,25 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     }
 
     companion object {
-        const val WORK_NAME = "first_launch_sms_sync"
+        const val WORK_NAME  = "first_launch_sms_sync"
         const val KEY_STATUS = "last_sync_status"
         const val KEY_ERROR  = "last_sync_error"
+        // WorkManager progress keys — readable via WorkInfo.progress while the worker is RUNNING.
+        const val KEY_PROGRESS_PHASE = "progress_phase"
+        const val KEY_PROGRESS_DONE  = "progress_done"
+        const val KEY_PROGRESS_TOTAL = "progress_total"
+        const val KEY_PROGRESS_ETA   = "progress_eta"
+
+        /** Returns a human-readable ETA string from elapsed time and row counts.
+         *  Pure function — no side effects, no clock access. Testable in isolation. */
+        internal fun computeEta(elapsedMs: Long, done: Int, total: Int): String {
+            if (done <= 0 || total <= done) return ""
+            val remainingMs = (total - done).toLong() * elapsedMs / done
+            val secs = remainingMs / 1000
+            val mins = secs / 60
+            val remSecs = secs % 60
+            return if (mins > 0) "~${mins}m ${remSecs}s" else "~${remSecs}s"
+        }
         private const val TAG          = "PostmarkSync"
         private const val TAG_MMS      = "PostmarkMms"
         private const val PREFS        = "postmark_prefs"

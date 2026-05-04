@@ -6,7 +6,22 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
-### Streaming MMS import with progress ETA
+### MMS import — newest-first order + checkpoint resume (May 4, 2026)
+- **Sort order changed to `_id DESC`** — MMS cursor now walks newest→oldest so recent
+  conversations appear in Room within the first few hundred rows, rather than after the
+  entire historical backlog is processed.
+- **Checkpoint resume on worker restart** — `syncAllMms()` calls `messageRepository.getMinMmsId()`
+  at startup to find the lowest MMS raw ID already persisted. On a WorkManager retry (OS kill,
+  memory pressure, battery management), `processMmsCursor()` fast-skips any row with
+  `rawId >= resumeBeforeRawId` using only cheap cursor columns (no `getMmsBody`/`getMmsAddress`
+  sub-queries). This turns a potential 30–40 minute re-scan into seconds.
+- **Progress during skip phase** — the in-app banner and notification show `"Resuming…"` with
+  a fast-advancing count every 500 rows so the UI doesn't appear frozen.
+- **`MessageDao.getMinMmsId()`** — new `SELECT MIN(id) FROM messages WHERE isMms = 1` query.
+- **`MessageRepository.getMinMmsId()`** — thin delegator.
+- All 322 unit tests passing.
+
+### MMS import — streaming with ETA + in-app progress banner (May 4, 2026)
 - **`FirstLaunchSyncWorker`** — MMS sync no longer accumulates all rows in memory before
   writing. `processMmsCursor()` now flushes every 500 rows via `flushMmsBatch()`, making
   messages visible in the thread view progressively during the hour-long import rather than
