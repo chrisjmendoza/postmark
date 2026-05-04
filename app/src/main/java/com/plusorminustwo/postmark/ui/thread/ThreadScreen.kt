@@ -58,6 +58,8 @@ import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -154,7 +156,9 @@ fun ThreadScreen(
         onToggleTimestamp = { viewModel.toggleTimestamp(it) },
         onToggleMessageIds = { viewModel.toggleMessageIds(it) },
         onRetry = { viewModel.retrySend(it) },
-        onSelectByDateRange = { start, end -> viewModel.selectByDateRange(start, end) }
+        onSelectByDateRange = { start, end -> viewModel.selectByDateRange(start, end) },
+        onAttachmentSelected = { uri, mimeType -> viewModel.onAttachmentSelected(uri, mimeType) },
+        onClearAttachment = { viewModel.clearAttachment() }
     )
 }
 
@@ -205,6 +209,8 @@ private fun ThreadContent(
     onToggleMessageIds: (List<Long>) -> Unit,
     onRetry: (Long) -> Unit = {},
     onSelectByDateRange: (LocalDate, LocalDate) -> Unit = { _, _ -> },
+    onAttachmentSelected: (Uri, String) -> Unit = { _, _ -> },
+    onClearAttachment: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -558,9 +564,13 @@ private fun ThreadContent(
             // Scaffold doesn't resize and shift message positions.
             if (!uiState.isSelectionMode) {
                 ReplyBar(
-                    text = uiState.replyText,
-                    onTextChange = { onReplyTextChanged(it) },
-                    onSend = { onSendMessage() }
+                    text                 = uiState.replyText,
+                    pendingAttachmentUri = uiState.pendingAttachmentUri,
+                    pendingMimeType      = uiState.pendingMimeType,
+                    onTextChange         = { onReplyTextChanged(it) },
+                    onAttachmentSelected = onAttachmentSelected,
+                    onClearAttachment    = onClearAttachment,
+                    onSend               = { onSendMessage() }
                 )
             }
         }
@@ -977,6 +987,12 @@ private fun MessageBubble(
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 if (showTimestamp) {
+                    // SMS / MMS type label — helps when scrolling back into pre-RCS history.
+                    Text(
+                        text = if (message.isMms) "MMS" else "SMS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                    )
                     Text(
                         text = timeFormatter.format(Date(message.timestamp)),
                         style = MaterialTheme.typography.labelSmall,
@@ -1298,64 +1314,149 @@ private fun DeliveryStatusIndicator(
 }
 
 // ── ReplyBar ───────────────────────────────────────────────────────────────────
+// Bottom compose bar with text input, optional attachment preview chip,
+// attach button (photo / audio picker), and send button.
 
 @Composable
 private fun ReplyBar(
     text: String,
+    pendingAttachmentUri: String?,
+    pendingMimeType: String?,
     onTextChange: (String) -> Unit,
+    onAttachmentSelected: (Uri, String) -> Unit,
+    onClearAttachment: () -> Unit,
     onSend: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val counterText = remember(text.length) { smsCounter(text.length) }
+    val context = LocalContext.current
+    var showAttachMenu by remember { mutableStateOf(false) }
+
+    // Single launcher; the MIME filter is set per menu item.
+    val mediaLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+            onAttachmentSelected(uri, mimeType)
+        }
+    }
+
+    // Friendly label for the attachment preview chip.
+    val attachLabel: String? = when {
+        pendingMimeType?.startsWith("image/") == true  -> "📷 Photo"
+        pendingMimeType?.startsWith("video/") == true  -> "🎥 Video"
+        pendingMimeType?.startsWith("audio/") == true  -> "🎵 Audio"
+        pendingAttachmentUri != null                    -> "📎 Attachment"
+        else                                            -> null
+    }
+
+    // Only show the SMS counter when no attachment is pending (pure SMS mode).
+    val counterText = if (pendingAttachmentUri == null) {
+        remember(text.length) { smsCounter(text.length) }
+    } else null
+
     Column(modifier = modifier) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.Bottom
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                TextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message") },
-                    maxLines = 4,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        focusedIndicatorColor   = androidx.compose.ui.graphics.Color.Transparent,
-                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                        disabledIndicatorColor  = androidx.compose.ui.graphics.Color.Transparent,
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                    trailingIcon = counterText?.let { ct ->
-                        {
-                            Text(
-                                text = ct,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (text.length > 160) MaterialTheme.colorScheme.error
-                                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(end = 8.dp)
+                // Attachment preview chip — shown while media is queued for sending.
+                if (attachLabel != null) {
+                    InputChip(
+                        selected     = false,
+                        onClick      = {},
+                        label        = { Text(attachLabel, style = MaterialTheme.typography.bodySmall) },
+                        trailingIcon = {
+                            IconButton(
+                                onClick  = onClearAttachment,
+                                modifier = Modifier.size(18.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Remove attachment",
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        },
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                }
+
+                // Text input row: [attach] [field] [send]
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    // Attach button opens a dropdown with media type choices.
+                    Box {
+                        IconButton(onClick = { showAttachMenu = true }) {
+                            Icon(Icons.Default.AttachFile, contentDescription = "Attach media")
+                        }
+                        DropdownMenu(
+                            expanded = showAttachMenu,
+                            onDismissRequest = { showAttachMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text    = { Text("Photo or video") },
+                                onClick = {
+                                    showAttachMenu = false
+                                    mediaLauncher.launch("image/*")
+                                }
+                            )
+                            DropdownMenuItem(
+                                text    = { Text("Audio file") },
+                                onClick = {
+                                    showAttachMenu = false
+                                    mediaLauncher.launch("audio/*")
+                                }
                             )
                         }
                     }
-                )
-                Spacer(Modifier.width(4.dp))
-                IconButton(
-                    onClick = onSend,
-                    enabled = text.isNotBlank(),
-                    colors = IconButtonDefaults.iconButtonColors(
-                        containerColor         = MaterialTheme.colorScheme.primary,
-                        contentColor           = MaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    TextField(
+                        value         = text,
+                        onValueChange = onTextChange,
+                        modifier      = Modifier.weight(1f),
+                        placeholder   = { Text("Message") },
+                        maxLines      = 4,
+                        colors        = TextFieldDefaults.colors(
+                            focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            focusedIndicatorColor   = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            disabledIndicatorColor  = androidx.compose.ui.graphics.Color.Transparent,
+                        ),
+                        shape         = RoundedCornerShape(24.dp),
+                        textStyle     = MaterialTheme.typography.bodyMedium,
+                        trailingIcon  = counterText?.let { ct ->
+                            {
+                                Text(
+                                    text     = ct,
+                                    style    = MaterialTheme.typography.labelSmall,
+                                    color    = if (text.length > 160) MaterialTheme.colorScheme.error
+                                               else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                            }
+                        }
                     )
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(
+                        onClick  = onSend,
+                        // Enabled when there is text OR a media attachment is pending.
+                        enabled  = text.isNotBlank() || pendingAttachmentUri != null,
+                        colors   = IconButtonDefaults.iconButtonColors(
+                            containerColor         = MaterialTheme.colorScheme.primary,
+                            contentColor           = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    }
                 }
             }
         }

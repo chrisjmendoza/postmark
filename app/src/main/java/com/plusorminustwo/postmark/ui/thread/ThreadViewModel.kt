@@ -2,6 +2,9 @@
 
 import android.app.role.RoleManager
 import android.content.Context
+import android.content.Intent
+import android.app.PendingIntent
+import android.net.Uri
 import android.os.Build
 import android.provider.Telephony
 import androidx.lifecycle.SavedStateHandle
@@ -18,6 +21,8 @@ import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
+import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -57,7 +62,10 @@ data class ThreadUiState(
     val expandedTimestampIds: Set<Long> = emptySet(),
     val reactionPickerMessageId: Long? = null,
     val reactionPickerBubbleY: Float = 0f,
-    val highlightedMessageId: Long? = null
+    val highlightedMessageId: Long? = null,
+    // Pending outgoing MMS attachment (URI string + MIME type). Null when composing plain SMS.
+    val pendingAttachmentUri: String? = null,
+    val pendingMimeType: String? = null
 )
 
 /**
@@ -77,6 +85,7 @@ class ThreadViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val smsManagerWrapper: SmsManagerWrapper,
+    private val mmsManagerWrapper: MmsManagerWrapper,
     private val timestampPrefRepo: TimestampPreferenceRepository
 ) : ViewModel() {
 
@@ -92,6 +101,9 @@ class ThreadViewModel @Inject constructor(
     private val _reactionPickerMessageId  = MutableStateFlow<Long?>(null)
     private val _reactionPickerBubbleY    = MutableStateFlow(0f)
     private val _highlightedMessageId     = MutableStateFlow<Long?>(null)
+    // URI string + MIME type of a pending outgoing MMS attachment; null when composing SMS.
+    private val _pendingAttachmentUri = MutableStateFlow<String?>(null)
+    private val _pendingMimeType      = MutableStateFlow<String?>(null)
 
     // Fires once each time the user sends a message so the UI can unconditionally
     // scroll to the bottom regardless of the current scroll position.
@@ -125,7 +137,9 @@ class ThreadViewModel @Inject constructor(
         val selectionScope: SelectionScope,
         val reactionPickerMessageId: Long?,
         val reactionPickerBubbleY: Float,
-        val highlightedMessageId: Long?
+        val highlightedMessageId: Long?,
+        val pendingAttachmentUri: String?,
+        val pendingMimeType: String?
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -142,7 +156,9 @@ class ThreadViewModel @Inject constructor(
             _selectionScope,
             _reactionPickerMessageId,
             _reactionPickerBubbleY,
-            _highlightedMessageId
+            _highlightedMessageId,
+            _pendingAttachmentUri,
+            _pendingMimeType
         ) { arr ->
             InnerState(
                 replyText               = arr[0] as String,
@@ -152,7 +168,9 @@ class ThreadViewModel @Inject constructor(
                 selectionScope          = arr[4] as SelectionScope,
                 reactionPickerMessageId = arr[5] as Long?,
                 reactionPickerBubbleY   = arr[6] as Float,
-                highlightedMessageId    = arr[7] as Long?
+                highlightedMessageId    = arr[7] as Long?,
+                pendingAttachmentUri    = arr[8] as String?,
+                pendingMimeType         = arr[9] as String?
             )
         }
     ) { thread, messages, selected, selectionMode, inner ->
@@ -168,7 +186,9 @@ class ThreadViewModel @Inject constructor(
             expandedTimestampIds = inner.expandedTimestampIds,
             reactionPickerMessageId = inner.reactionPickerMessageId,
             reactionPickerBubbleY   = inner.reactionPickerBubbleY,
-            highlightedMessageId    = inner.highlightedMessageId
+            highlightedMessageId    = inner.highlightedMessageId,
+            pendingAttachmentUri    = inner.pendingAttachmentUri,
+            pendingMimeType         = inner.pendingMimeType
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
@@ -320,9 +340,25 @@ class ThreadViewModel @Inject constructor(
 
     fun dismissDefaultSmsDialog() { _showDefaultSmsDialog.value = false }
 
+    // Stores the selected media attachment for the next outgoing MMS.
+    // Triggers: user taps attach button and picks a photo/audio file.
+    fun onAttachmentSelected(uri: Uri, mimeType: String) {
+        _pendingAttachmentUri.value = uri.toString()
+        _pendingMimeType.value      = mimeType
+    }
+
+    // Clears any pending attachment (user taps the × on the preview chip).
+    fun clearAttachment() {
+        _pendingAttachmentUri.value = null
+        _pendingMimeType.value      = null
+    }
+
     fun sendMessage() {
-        val text = _replyText.value.trim()
-        if (text.isEmpty() || _isSending.value) return
+        val text             = _replyText.value.trim()
+        val attachmentUri    = _pendingAttachmentUri.value
+        val mimeType         = _pendingMimeType.value
+        // Require at least text OR an attachment; also block re-entrant sends.
+        if ((text.isEmpty() && attachmentUri == null) || _isSending.value) return
 
         if (!isDefaultSmsApp()) {
             _showDefaultSmsDialog.value = true
@@ -331,6 +367,7 @@ class ThreadViewModel @Inject constructor(
 
         val thread = uiState.value.thread ?: return
         _replyText.value = ""
+        clearAttachment()
         // Signal the UI to scroll to bottom before the insert so the optimistic
         // message is visible as soon as it lands in the list.
         _scrollToBottomEvent.tryEmit(Unit)
@@ -339,18 +376,57 @@ class ThreadViewModel @Inject constructor(
             _isSending.value = true
             val now    = System.currentTimeMillis()
             val tempId = -now
-            val optimistic = Message(
-                id = tempId,
-                threadId = threadId,
-                address = thread.address,
-                body = text,
-                timestamp = now,
-                isSent = true,
-                type = Telephony.Sms.MESSAGE_TYPE_SENT,
-                deliveryStatus = DELIVERY_STATUS_PENDING
-            )
-            messageRepository.insert(optimistic)
-            smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
+
+            if (attachmentUri != null && mimeType != null) {
+                // ── MMS path ──────────────────────────────────────────────────
+                // Optimistic message shown immediately with attachment preview.
+                val optimistic = Message(
+                    id             = tempId,
+                    threadId       = threadId,
+                    address        = thread.address,
+                    body           = text,
+                    timestamp      = now,
+                    isSent         = true,
+                    type           = Telephony.Mms.MESSAGE_BOX_SENT,
+                    deliveryStatus = DELIVERY_STATUS_PENDING,
+                    isMms          = true,
+                    attachmentUri  = attachmentUri,
+                    mimeType       = mimeType
+                )
+                messageRepository.insert(optimistic)
+                // PendingIntent for MmsSentReceiver — updates Room when MMSC responds.
+                val reqCode   = (tempId and 0x3FFF_FFFFL).toInt()
+                val sentIntent = PendingIntent.getBroadcast(
+                    context, reqCode,
+                    Intent(context, MmsSentReceiver::class.java).apply {
+                        action = MmsSentReceiver.ACTION_MMS_SENT
+                        putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, tempId)
+                    },
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
+                )
+                mmsManagerWrapper.sendMms(
+                    toAddress     = thread.address,
+                    textBody      = text,
+                    attachmentUri = Uri.parse(attachmentUri),
+                    mimeType      = mimeType,
+                    messageId     = tempId,
+                    sentIntent    = sentIntent
+                )
+            } else {
+                // ── SMS path (existing behaviour) ─────────────────────────────
+                val optimistic = Message(
+                    id             = tempId,
+                    threadId       = threadId,
+                    address        = thread.address,
+                    body           = text,
+                    timestamp      = now,
+                    isSent         = true,
+                    type           = Telephony.Sms.MESSAGE_TYPE_SENT,
+                    deliveryStatus = DELIVERY_STATUS_PENDING
+                )
+                messageRepository.insert(optimistic)
+                smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
+            }
             _isSending.value = false
         }
     }
