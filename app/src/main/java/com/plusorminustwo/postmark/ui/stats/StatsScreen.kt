@@ -20,8 +20,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -413,6 +415,16 @@ private fun HeatmapView(
     var collapsedAllDays by remember(allThreadMessages) { mutableStateOf(emptySet<LocalDate>()) }
     var collapsedSelectedDays by remember(selectedDays) { mutableStateOf(emptySet<LocalDate>()) }
 
+    // Month/year jump picker — shown when the user taps the month/year label.
+    var showMonthYearPicker by remember { mutableStateOf(false) }
+    if (showMonthYearPicker) {
+        MonthYearPickerDialog(
+            initialMonth = month,
+            onSelect     = { onMonthChange(it); showMonthYearPicker = false },
+            onDismiss    = { showMonthYearPicker = false }
+        )
+    }
+
     LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
 
         // ── Month navigation ──────────────────────────────────────────────────
@@ -425,10 +437,14 @@ private fun HeatmapView(
                 IconButton(onClick = { onMonthChange(month.minusMonths(1)) }) {
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous month")
                 }
+                // Tapping the label opens the fast month/year jump picker.
                 Text(
                     text = firstDate.format(monthHeaderFmt),
                     style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .clickable { showMonthYearPicker = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
                 IconButton(
                     onClick = { onMonthChange(month.plusMonths(1)) },
@@ -1237,6 +1253,98 @@ private fun HorizontalBarChart(values: IntArray, labels: List<String>) {
                     modifier = Modifier.width(24.dp),
                     textAlign = TextAlign.Start
                 )
+            }
+        }
+    }
+}
+
+// ── MonthYearPickerDialog ─────────────────────────────────────────────────────
+// Allows the user to jump directly to any past month by selecting a year then
+// tapping a month name. Future months are shown dimmed and are not clickable.
+
+@Composable
+private fun MonthYearPickerDialog(
+    initialMonth: YearMonth,
+    onSelect: (YearMonth) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedYear by remember { mutableIntStateOf(initialMonth.year) }
+    val now = YearMonth.now()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            tonalElevation = 6.dp
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+
+                // ── Year navigation ───────────────────────────────────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { selectedYear-- }) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous year")
+                    }
+                    Text(
+                        text = selectedYear.toString(),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(
+                        onClick  = { selectedYear++ },
+                        enabled  = selectedYear < now.year
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next year")
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // ── Month grid (3 columns × 4 rows) ───────────────────────────
+                val monthLabels = listOf(
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+                )
+                for (row in 0 until 4) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        for (col in 0 until 3) {
+                            val monthNum = row * 3 + col + 1   // 1–12
+                            val ym       = YearMonth.of(selectedYear, monthNum)
+                            val isFuture = ym > now
+                            val isSelected = ym == initialMonth
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .padding(4.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .then(
+                                        if (isSelected)
+                                            Modifier.background(MaterialTheme.colorScheme.primary)
+                                        else Modifier
+                                    )
+                                    .then(
+                                        if (!isFuture)
+                                            Modifier.clickable { onSelect(ym) }
+                                        else
+                                            Modifier.alpha(0.3f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text  = monthLabels[monthNum - 1],
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isSelected)
+                                        MaterialTheme.colorScheme.onPrimary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
