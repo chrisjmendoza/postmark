@@ -35,7 +35,7 @@ class SmsSyncHandler @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // Debug-only logs — filter logcat by tag "SmsSyncHandler" to follow MMS sync.
+    // Debug-only logs — filter logcat by tag "SmsSyncHandler" to follow incremental SMS/MMS sync.
     private fun debugLog(msg: String) { if (BuildConfig.DEBUG) Log.d(TAG, msg) }
 
     companion object { private const val TAG = "SmsSyncHandler" }
@@ -272,10 +272,12 @@ class SmsSyncHandler @Inject constructor(
                 val ct     = it.getString(ctIdx) ?: continue
                 val partId = it.getLong(idIdx)
                 when {
-                    ct == "text/plain" ->
+                    ct.equals("text/plain", ignoreCase = true) ->
                         sb.append(it.getString(textIdx) ?: "")
-                    ct == "application/smil" -> Unit
-                    ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/") -> {
+                    ct.equals("application/smil", ignoreCase = true) -> Unit
+                    ct.startsWith("image/", ignoreCase = true) ||
+                    ct.startsWith("video/", ignoreCase = true) ||
+                    ct.startsWith("audio/", ignoreCase = true) -> {
                         debugLog("getMmsBodyIncremental: found media part ct=$ct  partId=$partId")
                         if (attachmentUri == null) {
                             attachmentUri = "content://mms/part/$partId"

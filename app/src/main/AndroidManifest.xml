@@ -65,6 +65,15 @@
             </intent-filter>
         </activity>
 
+        <!-- WorkManager foreground service — must declare foregroundServiceType
+             on API 34+ or the OS throws IllegalArgumentException on start.
+             tools:node="merge" lets WorkManager's own manifest declaration merge
+             with this override so we only need to set the type. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
         <!-- Required for default SMS role: handles send requests without UI
              (lock-screen reply, accessibility services, etc.) -->
         <service
@@ -121,6 +130,11 @@
         <!-- Handles the "Mark as read" action on incoming SMS notifications -->
         <receiver
             android:name=".service.sms.MarkAsReadReceiver"
+            android:exported="false" />
+
+        <!-- Receives the PendingIntent from SmsManager.sendMultimediaMessage() -->
+        <receiver
+            android:name=".service.sms.MmsSentReceiver"
             android:exported="false" />
 
         <!-- FileProvider for sharing exported images -->

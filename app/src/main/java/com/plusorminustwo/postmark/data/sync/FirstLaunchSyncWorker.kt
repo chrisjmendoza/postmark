@@ -1,15 +1,19 @@
 package com.plusorminustwo.postmark.data.sync
 
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
 import com.plusorminustwo.postmark.BuildConfig
+import com.plusorminustwo.postmark.PostmarkApplication
+import com.plusorminustwo.postmark.R
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -33,11 +37,49 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
     // Verbose debug logs only appear in debug builds; warnings and errors always fire.
     private fun debugLog(msg: String) { if (BuildConfig.DEBUG) Log.d(TAG, msg) }
+    // MMS-specific debug logs — filter logcat with: adb logcat -s PostmarkMms
+    private fun debugMmsLog(msg: String) { if (BuildConfig.DEBUG) Log.d(TAG_MMS, msg) }
+
+    // Builds the sync notification. When total > 0 shows a determinate progress bar;
+    // when total == 0 shows an indeterminate spinner.
+    private fun buildSyncNotification(text: String, done: Int = 0, total: Int = 0): android.app.Notification =
+        NotificationCompat.Builder(applicationContext, PostmarkApplication.CHANNEL_SYNC)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Syncing messages")
+            .setContentText(text)
+            .setOngoing(true)
+            .setProgress(total, done, total == 0)
+            .build()
+
+    // Wraps a notification into ForegroundInfo with the correct foreground service type.
+    private fun buildForegroundInfo(notification: android.app.Notification): ForegroundInfo =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(NOTIF_ID_SYNC, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIF_ID_SYNC, notification)
+        }
+
+    // Promotes this worker to a foreground service so the OS will not kill it
+    // during large SMS/MMS syncs on Samsung and other aggressive OEM ROMs.
+    override suspend fun getForegroundInfo(): ForegroundInfo =
+        buildForegroundInfo(buildSyncNotification("Importing your SMS and MMS history\u2026"))
+
+    // Updates the foreground notification text and progress bar.
+    // Called every 500 rows during the MMS per-row query phase and after each SMS persist batch.
+    private suspend fun postProgress(phase: String, done: Int, total: Int) {
+        val text = if (total > 0) "$phase \u2014 ${"%,d".format(done)} / ${"%,d".format(total)}"
+                   else phase
+        setForeground(buildForegroundInfo(buildSyncNotification(text, done, total)))
+    }
 
     override suspend fun doWork(): Result {
+        // Elevate to foreground service immediately — prevents the OS (especially
+        // Samsung OneUI battery optimisation) from killing the worker mid-sync.
+        setForeground(getForegroundInfo())
         debugLog("doWork() started — attempt ${runAttemptCount + 1}")
         return try {
-            val smsResult = syncAllSms()
+            postProgress("Syncing SMS\u2026", 0, 0)
+            val smsResult = syncAllSms { done, total -> postProgress("Syncing SMS", done, total) }
             if (smsResult.threadCount < 0) {
                 val msg = "SMS cursor was null — provider unavailable or permission denied"
                 Log.w(TAG, msg)
@@ -45,7 +87,9 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 return if (runAttemptCount < 3) Result.retry()
                 else Result.failure(workDataOf(KEY_ERROR to msg))
             }
-            val mmsCount = syncAllMms()
+            postProgress("Syncing MMS\u2026", 0, 0)
+            val mmsCount = syncAllMms { done, total -> postProgress("Syncing MMS", done, total) }
+            postProgress("Wrapping up\u2026", 0, 0)
             val status = "OK: ${smsResult.threadCount} threads, ${smsResult.messageCount} SMS + $mmsCount MMS"
             Log.i(TAG, "Sync complete — $status")
             writeStatus(status)
@@ -64,7 +108,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         }
     }
 
-    private suspend fun syncAllSms(): SyncResult {
+    private suspend fun syncAllSms(onProgress: suspend (Int, Int) -> Unit = { _, _ -> }): SyncResult {
         debugLog("Device: ${Build.MANUFACTURER} ${Build.MODEL} API ${Build.VERSION.SDK_INT}")
         debugLog("Querying content://sms …")
 
@@ -123,7 +167,13 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             Log.w(TAG, "0 threads collected — DB will remain empty. Check READ_SMS permission and default SMS role.")
         }
         threadRepository.upsertAll(threads.values.toList())
-        messages.chunked(500).forEach { chunk -> messageRepository.insertAll(chunk) }
+        val smsTotal = messages.size
+        messages.chunked(500).forEachIndexed { idx, chunk ->
+            messageRepository.insertAll(chunk)
+            // Report progress after each 500-message batch so the notification updates
+            // smoothly as the DB writes complete.
+            onProgress(minOf((idx + 1) * 500, smsTotal), smsTotal)
+        }
         Log.i(TAG, "Persist complete")
 
         debugLog("Running reaction parser …")
@@ -222,8 +272,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     // so that any SMS-originated threads are already in Room; MMS-only threads
     // are inserted here, and existing threads are updated if MMS has a newer
     // last message. Returns the count of MMS messages persisted.
-    private suspend fun syncAllMms(): Int {
-        debugLog("Querying content://mms …")
+    private suspend fun syncAllMms(onProgress: suspend (Int, Int) -> Unit = { _, _ -> }): Int {
+        debugMmsLog("Querying content://mms …")
         val threads  = mutableMapOf<Long, Thread>()
         val messages = mutableListOf<Message>()
         val mmsProjection = arrayOf("_id", "thread_id", "date", "msg_box")
@@ -233,11 +283,11 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             Uri.parse("content://mms"), mmsProjection, null, null, "date ASC"
         )
         val primaryRowCount = primaryCursor?.count ?: -1
-        debugLog("syncAllMms: primary cursor: ${if (primaryCursor == null) "NULL" else "$primaryRowCount rows"}")
+        debugMmsLog("syncAllMms: primary cursor: ${if (primaryCursor == null) "NULL" else "$primaryRowCount rows"}")
 
         if (primaryRowCount > 0) {
             // Happy path: primary URI returned rows — use them directly.
-            primaryCursor!!.use { processMmsCursor(it, threads, messages) }
+            primaryCursor!!.use { processMmsCursor(it, threads, messages, primaryRowCount, onProgress) }
         } else {
             // ── Samsung / OEM fallback ────────────────────────────────────────
             // Samsung OneUI returns a null or empty cursor for content://mms
@@ -245,7 +295,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             // content://sms (see syncAllSms). The per-mailbox sub-URIs remain
             // readable and return the actual messages.
             primaryCursor?.close()
-            Log.w(TAG, "MMS primary cursor returned $primaryRowCount rows — trying mailbox fallback URIs")
+            Log.w(TAG_MMS, "MMS primary cursor returned $primaryRowCount rows — trying mailbox fallback URIs")
             listOf(
                 Uri.parse("content://mms/inbox"),
                 Uri.parse("content://mms/sent"),
@@ -253,17 +303,19 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 val c = applicationContext.contentResolver.query(
                     uri, mmsProjection, null, null, "date ASC"
                 )
-                debugLog("MMS fallback $uri → ${c?.count ?: "null"} rows")
-                c?.use { processMmsCursor(it, threads, messages) }
+                debugMmsLog("MMS fallback $uri → ${c?.count ?: "null"} rows")
+                // Pass each fallback cursor's own count as the total so progress
+                // resets per-URI — acceptable for the Samsung edge case.
+                c?.use { processMmsCursor(it, threads, messages, it.count, onProgress) }
             }
         }
 
         if (messages.isEmpty()) {
-            debugLog("No MMS messages found")
+            debugMmsLog("No MMS messages found")
             return 0
         }
 
-        Log.i(TAG, "MMS collected ${threads.size} threads, ${messages.size} messages — persisting …")
+        Log.i(TAG_MMS, "MMS collected ${threads.size} threads, ${messages.size} messages — persisting …")
 
         // For each MMS thread: insert if new, or update lastMessageAt/Preview if newer.
         threads.forEach { (threadId, mmsThread) ->
@@ -277,7 +329,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         }
 
         messages.chunked(500).forEach { chunk -> messageRepository.insertAll(chunk) }
-        Log.i(TAG, "MMS persist complete")
+        Log.i(TAG_MMS, "MMS persist complete")
 
         return messages.size
     }
@@ -285,16 +337,21 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     // Extracts MMS rows from a cursor into the shared threads map and messages list.
     // Called once for the primary URI or once per fallback URI (inbox/sent).
     // Mirrors processSmsCursor() for symmetry with the SMS fallback path.
-    private fun processMmsCursor(
+    // Fires onProgress every 500 rows (and once at the end) so the notification stays live
+    // during the slow per-row getMmsBody + getMmsAddress sub-queries.
+    private suspend fun processMmsCursor(
         cursor: Cursor,
         threads: MutableMap<Long, Thread>,
-        messages: MutableList<Message>
+        messages: MutableList<Message>,
+        total: Int = 0,
+        onProgress: suspend (Int, Int) -> Unit = { _, _ -> }
     ) {
         val idIdx     = cursor.getColumnIndexOrThrow("_id")
         val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
         val dateIdx   = cursor.getColumnIndexOrThrow("date")
         val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
 
+        var done = 0
         while (cursor.moveToNext()) {
             val rawId     = cursor.getLong(idIdx)
             val threadId  = cursor.getLong(threadIdx)
@@ -306,7 +363,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             val timestamp = dateSec * 1000L          // seconds → millis
             val parts     = getMmsBody(rawId)
             val address   = getMmsAddress(rawId, isSent)
-            debugLog("processMmsCursor: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
+            debugMmsLog("processMmsCursor: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
 
             val existing = threads[threadId]
             if (existing == null || timestamp > existing.lastMessageAt) {
@@ -334,7 +391,11 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 attachmentUri = parts.attachmentUri,
                 mimeType = parts.mimeType
             )
+            done++
+            // Fire progress every 500 rows; the final partial batch is reported after the loop.
+            if (done % 500 == 0) onProgress(done, total)
         }
+        onProgress(done, total) // final update with exact count
     }
 
     // Reads all parts of an MMS message and returns the text body plus the content URI
@@ -346,10 +407,10 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             Uri.parse("content://mms/$mmsId/part"),
             arrayOf("_id", "ct", "text"), null, null, null
         ) ?: run {
-            Log.w(TAG, "getMmsBody: parts cursor null for mmsId=$mmsId")
+            Log.w(TAG_MMS, "getMmsBody: parts cursor null for mmsId=$mmsId")
             return MmsParts("[MMS]", null, null)
         }
-        debugLog("getMmsBody: mmsId=$mmsId  partCount=${cursor.count}")
+        debugMmsLog("getMmsBody: mmsId=$mmsId  partCount=${cursor.count}")
         val sb = StringBuilder()
         var attachmentUri: String? = null
         var mimeType: String? = null
@@ -362,19 +423,22 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
                 val partId = it.getLong(idIdx)
                 when {
                     // Accumulate text body from all text/plain parts.
-                    ct == "text/plain" ->
+                    ct.equals("text/plain", ignoreCase = true) ->
                         sb.append(it.getString(textIdx) ?: "")
                     // Skip SMIL layout descriptor — not user-visible content.
-                    ct == "application/smil" -> Unit
-                    // Store the first image/video/audio part URI.
-                    ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/") -> {
-                        debugLog("getMmsBody: found media part ct=$ct  partId=$partId")
+                    ct.equals("application/smil", ignoreCase = true) -> Unit
+                    // Store the first image/video/audio part URI (case-insensitive for
+                    // Samsung and other OEMs that use mixed-case MIME types like audio/AMR).
+                    ct.startsWith("image/", ignoreCase = true) ||
+                    ct.startsWith("video/", ignoreCase = true) ||
+                    ct.startsWith("audio/", ignoreCase = true) -> {
+                        debugMmsLog("getMmsBody: found media part ct=$ct  partId=$partId")
                         if (attachmentUri == null) {
                             attachmentUri = "content://mms/part/$partId"
                             mimeType = ct
                         }
                     }
-                    else -> debugLog("getMmsBody: skipping unknown part ct=$ct")
+                    else -> debugMmsLog("getMmsBody: skipping unknown part ct=$ct")
                 }
             }
         }
@@ -436,8 +500,13 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         const val WORK_NAME = "first_launch_sms_sync"
         const val KEY_STATUS = "last_sync_status"
         const val KEY_ERROR  = "last_sync_error"
-        private const val TAG   = "PostmarkSync"
-        private const val PREFS = "postmark_prefs"
+        private const val TAG          = "PostmarkSync"
+        private const val TAG_MMS      = "PostmarkMms"
+        private const val PREFS        = "postmark_prefs"
+        // Notification ID for the foreground-service progress notification.
+        // Must be > 0 and distinct from SMS notification IDs (which are sender hashCodes
+        // or Int.MIN_VALUE for the summary).
+        private const val NOTIF_ID_SYNC = 1_001
 
         // Shared projection used for both the primary URI and Samsung fallback URIs.
         internal val SMS_PROJECTION = arrayOf(
