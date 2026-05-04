@@ -1,6 +1,7 @@
 package com.plusorminustwo.postmark.data.sync
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.database.Cursor
 import android.net.Uri
@@ -8,7 +9,9 @@ import android.os.Build
 import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
+import android.app.PendingIntent
 import androidx.core.app.NotificationCompat
+import com.plusorminustwo.postmark.ui.MainActivity
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
 import com.plusorminustwo.postmark.BuildConfig
@@ -43,14 +46,23 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
     // Builds the sync notification. When total > 0 shows a determinate progress bar;
     // when total == 0 shows an indeterminate spinner.
-    private fun buildSyncNotification(text: String, done: Int = 0, total: Int = 0): android.app.Notification =
-        NotificationCompat.Builder(applicationContext, PostmarkApplication.CHANNEL_SYNC)
+    private fun buildSyncNotification(text: String, done: Int = 0, total: Int = 0): android.app.Notification {
+        val openAppIntent = Intent(applicationContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            applicationContext, 0, openAppIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return NotificationCompat.Builder(applicationContext, PostmarkApplication.CHANNEL_SYNC)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Syncing messages")
             .setContentText(text)
             .setOngoing(true)
             .setProgress(total, done, total == 0)
+            .setContentIntent(pendingIntent)
             .build()
+    }
 
     // Wraps a notification into ForegroundInfo with the correct foreground service type.
     private fun buildForegroundInfo(notification: android.app.Notification): ForegroundInfo =
@@ -481,9 +493,18 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     ) {
         val newThreadIds = pending.map { it.threadId }.toSet() - persistedThreadIds
         newThreadIds.forEach { threadId ->
-            // Only insert if not already in Room (e.g. from SMS sync or a prior batch).
-            if (threadRepository.getById(threadId) == null) {
-                threads[threadId]?.let { threadRepository.upsert(it) }
+            val mmsThread = threads[threadId]
+            val inRoom = threadRepository.getById(threadId)
+            if (inRoom == null) {
+                // MMS-only thread — insert it now so the FK constraint is satisfied.
+                mmsThread?.let { threadRepository.upsert(it) }
+            } else if (mmsThread != null && mmsThread.lastMessageAt > inRoom.lastMessageAt) {
+                // Thread exists (from SMS sync). Since we import DESC, the first time we see
+                // a thread its mmsThread entry already holds the newest MMS timestamp — push
+                // it to Room now so the conversation bubbles up during streaming, not just
+                // after the final pass when all 108k rows are done.
+                threadRepository.updateLastMessageAt(threadId, mmsThread.lastMessageAt)
+                threadRepository.updateLastMessagePreview(threadId, mmsThread.lastMessagePreview)
             }
             persistedThreadIds += threadId
         }

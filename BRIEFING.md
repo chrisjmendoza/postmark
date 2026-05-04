@@ -191,7 +191,7 @@ WHAT IS WORKING (tested on device)
 ✅ GlobalStats aggregated across all threads
 ✅ Room schema v6 — all migrations non-destructive
 ✅ FirstLaunchSyncWorker — full SMS sync confirmed on device
-   (620 threads, 51 069 messages synced on Samsung S24 Ultra)
+   (620 threads, 51 069 SMS + 108 000+ MMS synced on Samsung S24 Ultra)
 ✅ Streaming MMS import — newest-first (_id DESC); messages appear
    in thread view progressively every 500 rows; foreground notification
    and in-app banner show ETA ("~42m 15s").
@@ -349,7 +349,18 @@ IN PROGRESS / NEXT UP
 ACTIVE BRANCH: feat/ui-improvements
 
 TIER 1 — REMAINING (in priority order)
-1. MULTIPART MESSAGE HANDLING
+1. MMS SEND BUG — IMAGE FAILS WITH RED ⚠ (May 4, 2026)
+   Tapping send with an image attachment produces a red !
+   (failed send state) and no message is sent. SMS text-only
+   send works fine. Likely candidates:
+   - MmsManagerWrapper PDU build or FileProvider URI issue
+   - SmsManager.sendMultimediaMessage() permission or
+     MMSC connectivity failure
+   - MmsSentReceiver not receiving the sent-intent callback
+   Start debug by checking logcat for MmsManagerWrapper tag
+   and verifying the PDU temp file is written + readable.
+
+2. MULTIPART MESSAGE HANDLING
    Verify all parts arrive before marking delivered;
    handle out-of-order part delivery.
 
