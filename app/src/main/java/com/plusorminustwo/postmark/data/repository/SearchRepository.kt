@@ -21,21 +21,29 @@ class SearchRepository @Inject constructor(
         threadId: Long? = null,
         isSent: Boolean? = null,
         startMs: Long? = null,
+        isMms: Boolean? = null,
         reactionEmoji: String? = null,
         limit: Int = 50,
         offset: Int = 0
     ): List<Message> {
-        val ftsQuery = FtsQueryBuilder.build(rawQuery)
-        if (ftsQuery.isBlank()) return emptyList()
-
-        val tid = threadId ?: -1L
+        val tid      = threadId ?: -1L
         val isSentInt = when (isSent) { true -> 1; false -> 0; null -> -1 }
-        val sMs = startMs ?: -1L
+        val sMs      = startMs ?: -1L
+        val isMmsInt  = when (isMms) { true -> 1; false -> 0; null -> -1 }
+
+        // When there's no text query but an isMms filter is set, use the plain
+        // browse query instead of FTS (FTS requires a non-empty match term).
+        val ftsQuery = FtsQueryBuilder.build(rawQuery)
+        if (ftsQuery.isBlank()) {
+            if (isMms == null) return emptyList()
+            return searchDao.browseFiltered(tid, isSentInt, sMs, isMmsInt, limit, offset)
+                .map { it.toDomain() }
+        }
 
         return if (reactionEmoji != null) {
-            searchDao.searchMessagesFilteredWithReaction(ftsQuery, tid, isSentInt, sMs, reactionEmoji, limit, offset)
+            searchDao.searchMessagesFilteredWithReaction(ftsQuery, tid, isSentInt, sMs, isMmsInt, reactionEmoji, limit, offset)
         } else {
-            searchDao.searchMessagesFiltered(ftsQuery, tid, isSentInt, sMs, limit, offset)
+            searchDao.searchMessagesFiltered(ftsQuery, tid, isSentInt, sMs, isMmsInt, limit, offset)
         }.map { it.toDomain() }
     }
 }

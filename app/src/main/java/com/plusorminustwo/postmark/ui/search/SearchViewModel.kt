@@ -17,6 +17,7 @@ import javax.inject.Inject
 data class SearchFilters(
     val threadId: Long? = null,
     val isSentOnly: Boolean? = null,
+    val isMms: Boolean? = null,
     val reactionEmoji: String? = null,
     val dateRange: SearchDateRange = SearchDateRange.ALL_TIME
 )
@@ -87,8 +88,13 @@ class SearchViewModel @Inject constructor(
         _filters.update { it.copy(reactionEmoji = emoji) }
     }
 
+    fun setProtocolFilter(isMms: Boolean?) {
+        _filters.update { it.copy(isMms = isMms) }
+    }
+
     private fun search(query: String, filters: SearchFilters) {
-        if (query.isBlank()) {
+        // Allow browse (blank query) when a protocol filter is active.
+        if (query.isBlank() && filters.isMms == null) {
             _results.value = emptyList()
             return
         }
@@ -96,10 +102,11 @@ class SearchViewModel @Inject constructor(
             _isLoading.value = true
             val (startMs, _) = filters.dateRange.toBoundsMs()
             _results.value = searchRepository.search(
-                rawQuery = query,
-                threadId = filters.threadId,
-                isSent = filters.isSentOnly,
-                startMs = startMs,
+                rawQuery    = query,
+                threadId    = filters.threadId,
+                isSent      = filters.isSentOnly,
+                startMs     = startMs,
+                isMms       = filters.isMms,
                 reactionEmoji = filters.reactionEmoji
             )
             _isLoading.value = false

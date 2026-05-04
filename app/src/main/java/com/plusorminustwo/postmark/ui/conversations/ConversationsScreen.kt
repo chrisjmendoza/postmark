@@ -157,6 +157,10 @@ fun ConversationsScreen(
                     }
                 }
                 else -> {
+                    // Thin progress bar below the top bar while a sync is in flight.
+                    if (isSyncing) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         items(threadList, key = { it.id }) { thread ->
                             ThreadRow(

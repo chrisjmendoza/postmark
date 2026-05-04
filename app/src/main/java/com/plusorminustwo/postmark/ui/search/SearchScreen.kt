@@ -124,19 +124,29 @@ fun SearchScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             FilterChips(
-                filters = uiState.filters,
-                selectedThread = uiState.selectedThread,
-                onFiltersChange = viewModel::onFiltersChange,
-                onDateRangeChange = viewModel::setDateRangeFilter,
-                onThreadChipClick = { showThreadSheet = true },
+                filters            = uiState.filters,
+                selectedThread     = uiState.selectedThread,
+                onFiltersChange    = viewModel::onFiltersChange,
+                onDateRangeChange  = viewModel::setDateRangeFilter,
+                onThreadChipClick  = { showThreadSheet = true },
                 onClearThreadFilter = { viewModel.setThreadFilter(null) },
                 onReactionChipClick = { showEmojiSheet = true },
-                onClearReactionFilter = { viewModel.setReactionFilter(null) }
+                onClearReactionFilter = { viewModel.setReactionFilter(null) },
+                onProtocolFilter    = viewModel::setProtocolFilter
             )
 
             if (uiState.isLoading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
+                }
+            } else if (uiState.results.isEmpty() && uiState.query.isBlank() && uiState.filters.isMms == null) {
+                // Nothing typed and no protocol filter — show prompt.
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text  = "Type to search, or pick SMS / MMS to browse",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -163,12 +173,27 @@ private fun FilterChips(
     onThreadChipClick: () -> Unit,
     onClearThreadFilter: () -> Unit,
     onReactionChipClick: () -> Unit,
-    onClearReactionFilter: () -> Unit
+    onClearReactionFilter: () -> Unit,
+    onProtocolFilter: (Boolean?) -> Unit
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        item {
+            FilterChip(
+                selected = filters.isMms == false,
+                onClick  = { onProtocolFilter(if (filters.isMms == false) null else false) },
+                label    = { Text("SMS") }
+            )
+        }
+        item {
+            FilterChip(
+                selected = filters.isMms == true,
+                onClick  = { onProtocolFilter(if (filters.isMms == true) null else true) },
+                label    = { Text("MMS") }
+            )
+        }
         item {
             FilterChip(
                 selected = filters.isSentOnly == true,
