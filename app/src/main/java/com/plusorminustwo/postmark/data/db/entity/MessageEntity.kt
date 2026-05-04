@@ -43,7 +43,15 @@ data class MessageEntity(
     val timestamp: Long,
     val isSent: Boolean,
     val type: Int = 1,
-    val deliveryStatus: Int = DELIVERY_STATUS_NONE
+    val deliveryStatus: Int = DELIVERY_STATUS_NONE,
+    // True when this row was sourced from content://mms rather than content://sms.
+    // IDs for MMS rows are offset by MMS_ID_OFFSET to prevent primary-key collisions.
+    val isMms: Boolean = false,
+    // Content URI pointing to the first media part of an MMS (e.g. content://mms/part/42).
+    // Null for SMS rows and text-only MMS. Readable by the default SMS app role.
+    val attachmentUri: String? = null,
+    // MIME type of the attachment part (e.g. "image/jpeg", "audio/mpeg"). Null when no attachment.
+    val mimeType: String? = null
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -54,7 +62,10 @@ fun MessageEntity.toDomain() = Message(
     timestamp = timestamp,
     isSent = isSent,
     type = type,
-    deliveryStatus = deliveryStatus
+    deliveryStatus = deliveryStatus,
+    isMms = isMms,
+    attachmentUri = attachmentUri,
+    mimeType = mimeType
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -65,5 +76,8 @@ fun Message.toEntity() = MessageEntity(
     timestamp = timestamp,
     isSent = isSent,
     type = type,
-    deliveryStatus = deliveryStatus
+    deliveryStatus = deliveryStatus,
+    isMms = isMms,
+    attachmentUri = attachmentUri,
+    mimeType = mimeType
 )

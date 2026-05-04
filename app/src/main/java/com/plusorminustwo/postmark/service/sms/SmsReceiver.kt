@@ -52,7 +52,11 @@ class SmsReceiver : BroadcastReceiver() {
                 val pendingResult = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
-                        if (!threadRepository.isMutedByAddress(sender)) {
+                        // Skip notification entirely if the user has disabled notifications for
+                        // this number (stronger than mute — no badge, no sound, no banner).
+                        val notificationsEnabled =
+                            threadRepository.isNotificationsEnabledByAddress(sender)
+                        if (notificationsEnabled && !threadRepository.isMutedByAddress(sender)) {
                             postIncomingNotification(
                                 context, sender, body,
                                 privacyMode = privacyModeRepository.isEnabled()

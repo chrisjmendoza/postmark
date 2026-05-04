@@ -63,9 +63,10 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return
         val prefs = getSharedPreferences("postmark_prefs", MODE_PRIVATE)
         if (prefs.getBoolean("first_sync_completed", false)) return
+        android.util.Log.i("SyncTrigger", "MainActivity.triggerFirstLaunchSyncIfPermitted — enqueuing KEEP")
         WorkManager.getInstance(this).enqueueUniqueWork(
             FirstLaunchSyncWorker.WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
+            ExistingWorkPolicy.KEEP,
             FirstLaunchSyncWorker.buildRequest()
         )
     }

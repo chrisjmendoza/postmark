@@ -38,7 +38,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Wire "Select day" to `ThreadViewModel.selectDay()` — selects all messages for that day
 - [x] **Floating date pill** — overlay at list top, fades in on scroll, auto-hides after 1.8 s idle
 - [x] **Calendar picker** — month grid dialog; active days (blue dot), empty days grayed; tap empty → snap to nearest + `Snackbar`; `findNearestActiveDate()` with 11 unit tests
-- [ ] **Range select** — long-press first message, tap last to select range
+- [x] **Range select** — long-press first message, tap last to select range
 - [x] **Message grouping** — consecutive same-sender messages within 3 min cluster; sender-side corners narrow (TOP/MIDDLE); timestamp shown at cluster tail only
 - [x] **Emoji reaction picker** — long-press bubble → iMessage-style pill (5 usage-ranked quick reactions + ➕ more); `EmojiPickerBottomSheet` with 8-col grid, 4 sections, search; `EmojiData.kt` houses section data
 - [x] **Message action top bar** — long-press → Copy (toast) / Select / Forward; `ActionItem` tints corrected; scrim restricted to content area below action bar
@@ -57,7 +57,40 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Wire "Back up now" button to `BackupScheduler.runNow()` via injected instance
 - [x] Show backup history list (scan `getExternalFilesDir("backups")`)
 - [x] `WorkManager` status observer — show live "Backup running…" indicator
-- [ ] Backup restore (read JSON, apply to Room with migration version check)
+- [x] Backup restore (read JSON, apply to Room with migration version check)
+
+---
+
+## Phase 4 — Export 🚧 In Progress
+
+- [x] `ExportFormatter.formatForCopy()` — clean labeled transcript per spec
+- [x] `ExportBottomSheet` — Copy + Share buttons
+- [ ] **Rendered image export** — draw conversation to `Canvas`, convert to `Bitmap`, share via `FileProvider` + `ACTION_SEND`
+- [x] Wire selection → `ExportBottomSheet` from `ThreadScreen`
+- [ ] AI Export as distinct format option (same as Copy but labelled separately in sheet)
+
+---
+
+## Phase 4b — MMS Media 🚧 Core done, playback pending
+
+- [x] **Coil 2.7.0** — `coil-compose` added as dependency
+- [x] **Room schema v9** — `attachmentUri TEXT` + `mimeType TEXT` nullable columns on messages; `MIGRATION_8_9` non-destructive
+- [x] **MmsParts extraction** — both `FirstLaunchSyncWorker` and `SmsSyncHandler` query `_id`/`ct`/`text` from `content://mms/{id}/part`; capture first image/video/audio part URI; skip SMIL
+- [x] **`previewText` extension** — "📷 Photo" / "🎥 Video" / "🎵 Audio message" fallback when body empty; used for thread list preview
+- [x] **`MmsAttachment` composable** — `AsyncImage` for images, play-icon placeholder for video, chip for audio
+- [x] **`MessageBubble` updated** — attachment-mode vs text-mode layout switch; caption below attachment when body non-empty
+- [x] **"Wipe DB + re-import"** in Dev Options — retroactive re-sync for previously imported MMS without attachment data
+- [ ] Tap image → full-screen pinch-to-zoom viewer
+- [ ] Tap video → `ExoPlayer` dialog
+- [ ] Audio chip → `MediaPlayer` / `ExoPlayer` playback controls
+- [x] **Rich media in reply bar** — attach button + dropdown (photo/video, audio file), `GetContent` launcher, attachment preview chip, MMS send path (`MmsManagerWrapper` + WAP Binary PDU, `MmsSentReceiver`). Camera capture still pending.
+- [x] **SMS/MMS type label** — dimmed label next to timestamp in `MessageBubble`
+- [x] **Heatmap month/year jump picker** — tap label → `MonthYearPickerDialog`, year navigation, 4×3 month grid, future months disabled
+- [x] **MIME type case fix** — `ignoreCase = true` in both sync handlers for Samsung mixed-case MIME types
+- [x] **Foreground service crash fix** — `SystemForegroundService` declared in manifest with `foregroundServiceType=dataSync`; fixes Android 14 `IllegalArgumentException` that killed every MMS sync attempt
+- [x] **Sync progress notification** — determinate progress bar + counted label ("Syncing MMS — 5,000 / 108,592") updating every 500 rows; `ConversationsScreen` shows inline `LinearProgressIndicator` while sync is in flight
+- [ ] Camera capture in attach menu
+- [ ] Group MMS — multi-recipient threads, per-bubble sender display
 
 ---
 

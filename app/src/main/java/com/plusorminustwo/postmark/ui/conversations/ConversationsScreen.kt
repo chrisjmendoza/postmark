@@ -1,6 +1,11 @@
-package com.plusorminustwo.postmark.ui.conversations
+﻿package com.plusorminustwo.postmark.ui.conversations
 
+import android.app.role.RoleManager
+import android.content.Intent
+import android.os.Build
+import android.provider.Telephony
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,14 +18,21 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,6 +60,25 @@ fun ConversationsScreen(
     val roleBannerDismissed by viewModel.roleBannerDismissed.collectAsState()
     val threadList = threads  // local val so Kotlin can smart-cast the nullable
 
+    // Re-check whether we hold the default SMS role every time this screen resumes
+    // (e.g. after returning from the system default-apps settings screen).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshDefaultSmsStatus()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // RoleManager.createRequestRoleIntent MUST be launched via startActivityForResult;
+    // a plain startActivity() is silently ignored on API 29+.
+    val roleRequestLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        viewModel.refreshDefaultSmsStatus()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -70,7 +101,27 @@ fun ConversationsScreen(
             // Role denial banner — shown when the app is not the default SMS app
             // and the user hasn't dismissed it this install.
             if (!isDefaultSmsApp && !roleBannerDismissed) {
-                RoleDenialBanner(onDismiss = viewModel::dismissRoleBanner)
+                val context = LocalContext.current
+                RoleDenialBanner(
+                    onDismiss = viewModel::dismissRoleBanner,
+                    onSetDefault = {
+                        // API 29+: RoleManager shows the system "Set default SMS app?" prompt.
+                        // Must be launched via startActivityForResult — startActivity() is
+                        // silently ignored by the system on API 29+.
+                        // API 26-28: ACTION_CHANGE_DEFAULT shows the equivalent system dialog.
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            val rm = context.getSystemService(RoleManager::class.java)
+                            roleRequestLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
+                        } else {
+                            @Suppress("DEPRECATION")
+                            context.startActivity(
+                                Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT).putExtra(
+                                    Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, context.packageName
+                                )
+                            )
+                        }
+                    }
+                )
             }
             when {
                 threadList == null -> {
@@ -106,6 +157,10 @@ fun ConversationsScreen(
                     }
                 }
                 else -> {
+                    // Thin progress bar below the top bar while a sync is in flight.
+                    if (isSyncing) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         items(threadList, key = { it.id }) { thread ->
                             ThreadRow(
@@ -135,9 +190,10 @@ fun ConversationsScreen(
 
 // ── Role denial banner ────────────────────────────────────────────────────────
 /** Persistent amber banner explaining read-only limitations when the app is not
- *  the default SMS app. Dismissed via the × button; state persists across launches. */
+ *  the default SMS app. Tap the text to launch the system set-default dialog;
+ *  dismiss via the × button. State persists across launches. */
 @Composable
-private fun RoleDenialBanner(onDismiss: () -> Unit) {
+private fun RoleDenialBanner(onDismiss: () -> Unit, onSetDefault: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
         modifier = Modifier.fillMaxWidth()
@@ -147,10 +203,12 @@ private fun RoleDenialBanner(onDismiss: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Postmark isn’t your default SMS app — some messages may be missing.",
+                text = "Postmark isn\u2019t your default SMS app \u2014 tap to fix.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(onClick = onSetDefault)
             )
             IconButton(onClick = onDismiss) {
                 Icon(

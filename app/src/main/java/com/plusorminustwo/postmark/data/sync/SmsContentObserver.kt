@@ -17,13 +17,11 @@ class SmsContentObserver @Inject constructor(
 ) : ContentObserver(Handler(Looper.getMainLooper())) {
 
     private val smsUri: Uri = Telephony.Sms.CONTENT_URI
+    private val mmsUri: Uri = Uri.parse("content://mms")
 
     fun register() {
-        context.contentResolver.registerContentObserver(
-            smsUri,
-            /* notifyForDescendants = */ true,
-            this
-        )
+        context.contentResolver.registerContentObserver(smsUri, true, this)
+        context.contentResolver.registerContentObserver(mmsUri, true, this)
     }
 
     fun unregister() {
@@ -31,6 +29,11 @@ class SmsContentObserver @Inject constructor(
     }
 
     override fun onChange(selfChange: Boolean, uri: Uri?) {
-        smsSyncHandler.onSmsContentChanged(uri ?: smsUri)
+        val resolved = uri ?: smsUri
+        if (resolved.toString().startsWith("content://mms")) {
+            smsSyncHandler.onMmsContentChanged(resolved)
+        } else {
+            smsSyncHandler.onSmsContentChanged(resolved)
+        }
     }
 }

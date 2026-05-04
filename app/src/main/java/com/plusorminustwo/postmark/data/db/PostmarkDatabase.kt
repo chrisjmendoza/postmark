@@ -17,7 +17,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 6,
+    version = 9,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -89,6 +89,34 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE threads ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0"
                 )
+            }
+        }
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add isMms flag — defaults 0 (false) so all existing rows are treated as SMS.
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN isMms INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add per-thread notification toggle — defaults 1 (true) so existing threads
+                // keep their current notification behaviour unchanged after the upgrade.
+                db.execSQL(
+                    "ALTER TABLE threads ADD COLUMN notificationsEnabled INTEGER NOT NULL DEFAULT 1"
+                )
+            }
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Nullable columns for MMS media attachments. SQLite requires one
+                // ALTER TABLE per column; both default to NULL for existing SMS rows.
+                db.execSQL("ALTER TABLE messages ADD COLUMN attachmentUri TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN mimeType TEXT")
             }
         }
 

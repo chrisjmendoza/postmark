@@ -20,8 +20,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -397,19 +399,31 @@ private fun HeatmapView(
     val monthTotal = monthMessages.size
     var showAllMonthContacts by remember(monthMessages) { mutableStateOf(false) }
 
-    // All messages grouped by day (newest day first, newest message first within day)
-    // for the no-selection per-thread panel
+    // All messages grouped by day: newest day first, oldest message first within each day
     val allMessagesByDay = remember(allThreadMessages) {
         val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
             .also { it.timeZone = java.util.TimeZone.getDefault() }
         allThreadMessages
-            .sortedByDescending { it.timestamp }
+            .sortedBy { it.timestamp }          // oldest message at top within a day
             .groupBy { fmt.format(java.util.Date(it.timestamp)) }
             .entries
-            .sortedByDescending { it.key }
+            .sortedByDescending { it.key }      // newest day first in the list
             .map { (dayStr, msgs) -> LocalDate.parse(dayStr) to msgs }
     }
     var showAllMessages by remember(allThreadMessages) { mutableStateOf(false) }
+    // Track which days are collapsed in each panel — reset when underlying data changes
+    var collapsedAllDays by remember(allThreadMessages) { mutableStateOf(emptySet<LocalDate>()) }
+    var collapsedSelectedDays by remember(selectedDays) { mutableStateOf(emptySet<LocalDate>()) }
+
+    // Month/year jump picker — shown when the user taps the month/year label.
+    var showMonthYearPicker by remember { mutableStateOf(false) }
+    if (showMonthYearPicker) {
+        MonthYearPickerDialog(
+            initialMonth = month,
+            onSelect     = { onMonthChange(it); showMonthYearPicker = false },
+            onDismiss    = { showMonthYearPicker = false }
+        )
+    }
 
     LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
 
@@ -423,10 +437,14 @@ private fun HeatmapView(
                 IconButton(onClick = { onMonthChange(month.minusMonths(1)) }) {
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous month")
                 }
+                // Tapping the label opens the fast month/year jump picker.
                 Text(
                     text = firstDate.format(monthHeaderFmt),
                     style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .clickable { showMonthYearPicker = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
                 IconButton(
                     onClick = { onMonthChange(month.plusMonths(1)) },
@@ -581,39 +599,82 @@ private fun HeatmapView(
             val hiddenCount = if (showAllMessages) 0
                 else allMessagesByDay.sumOf { it.second.size } - visibleDays.sumOf { it.second.size }
 
-            item {
+            item(key = "all_panel_header") {
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
-                Spacer(Modifier.height(4.dp))
+                // ── Expand all / Collapse all button ──────────────────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    val allExpanded = collapsedAllDays.isEmpty()
+                    TextButton(onClick = {
+                        // Toggle: if everything is expanded, collapse all visible days;
+                        // if anything is collapsed, expand everything.
+                        collapsedAllDays = if (allExpanded)
+                            visibleDays.map { it.first }.toSet()
+                        else
+                            emptySet()
+                    }) {
+                        Icon(
+                            imageVector = if (allExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            if (allExpanded) "Collapse all" else "Expand all",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
             }
             visibleDays.forEach { (day, msgs) ->
+                // Evaluate collapsed state outside the item lambda so it controls
+                // whether the items(...) block below is registered at all.
+                val isCollapsed = day in collapsedAllDays
                 item(key = "all_header_$day") {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .then(
-                                if (onNavigateToThread != null)
-                                    Modifier.clickable { onNavigateToThread(null, day) }
-                                else Modifier
-                            )
+                            // Tap the header to toggle collapse; tap individual messages to navigate
+                            .clickable {
+                                collapsedAllDays =
+                                    if (isCollapsed) collapsedAllDays - day
+                                    else collapsedAllDays + day
+                            }
                             .padding(vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(day.format(fullDateFmt), style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            msgs.size.toString(),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = Color(0xFF378ADD)
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                msgs.size.toString(),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = Color(0xFF378ADD)
+                            )
+                            Icon(
+                                imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                                contentDescription = if (isCollapsed) "Expand" else "Collapse",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
-                items(msgs, key = { "all_msg_${it.id}" }) { msg ->
-                    DayMessageRow(
-                        msg         = msg,
-                        threadNames = threadNames,
-                        onClick     = onNavigateToThread?.let { cb -> { cb(msg.id, null) } }
-                    )
+                // Only register message items when the day is not collapsed
+                if (!isCollapsed) {
+                    items(msgs, key = { "all_msg_${it.id}" }) { msg ->
+                        DayMessageRow(
+                            msg         = msg,
+                            threadNames = threadNames,
+                            onClick     = onNavigateToThread?.let { cb -> { cb(msg.id, null) } }
+                        )
+                    }
                 }
             }
             if (hiddenCount > 0) {
@@ -681,51 +742,92 @@ private fun HeatmapView(
                     )
                 }
             } else {
-                // Per-thread: show a header + messages for each selected day (newest first)
+                // Per-thread: collapsible day groups, oldest message on top
+                item(key = "selected_expand_collapse") {
+                    // Expand all / Collapse all button for the selected-day panel
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        val allExpanded = collapsedSelectedDays.isEmpty()
+                        TextButton(onClick = {
+                            collapsedSelectedDays = if (allExpanded)
+                                sortedDays.toSet()
+                            else
+                                emptySet()
+                        }) {
+                            Icon(
+                                imageVector = if (allExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (allExpanded) "Collapse all" else "Expand all",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
                 sortedDays.sortedDescending().forEach { day ->
+                    val isCollapsed = day in collapsedSelectedDays
                     val dayMsgs = selectedDayMessages
                         .filter { msg -> fmt.format(java.util.Date(msg.timestamp)) == day.toString() }
-                        .sortedByDescending { it.timestamp }
+                        .sortedBy { it.timestamp }   // oldest message on top
                     val dayCount = dayMsgs.size
 
                     item(key = "header_$day") {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .then(
-                                    if (onNavigateToThread != null)
-                                        Modifier.clickable { onNavigateToThread(null, day) }
-                                    else Modifier
-                                )
+                                // Tap header to toggle collapse
+                                .clickable {
+                                    collapsedSelectedDays =
+                                        if (isCollapsed) collapsedSelectedDays - day
+                                        else collapsedSelectedDays + day
+                                }
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(day.format(fullDateFmt), style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                dayCount.toString(),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = Color(0xFF378ADD)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    dayCount.toString(),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = Color(0xFF378ADD)
+                                )
+                                Icon(
+                                    imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                                    contentDescription = if (isCollapsed) "Expand" else "Collapse",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
 
-                    if (dayMsgs.isEmpty()) {
-                        item(key = "empty_$day") {
-                            Text(
-                                "No messages",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
-                            )
-                        }
-                    } else {
-                        items(dayMsgs, key = { "msg_${it.id}" }) { msg ->
-                            DayMessageRow(
-                                msg         = msg,
-                                threadNames = threadNames,
-                                onClick     = onNavigateToThread?.let { cb -> { cb(msg.id, null) } }
-                            )
+                    if (!isCollapsed) {
+                        if (dayMsgs.isEmpty()) {
+                            item(key = "empty_$day") {
+                                Text(
+                                    "No messages",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
+                                )
+                            }
+                        } else {
+                            items(dayMsgs, key = { "msg_${it.id}" }) { msg ->
+                                DayMessageRow(
+                                    msg         = msg,
+                                    threadNames = threadNames,
+                                    onClick     = onNavigateToThread?.let { cb -> { cb(msg.id, null) } }
+                                )
+                            }
                         }
                     }
                 }
@@ -1151,6 +1253,98 @@ private fun HorizontalBarChart(values: IntArray, labels: List<String>) {
                     modifier = Modifier.width(24.dp),
                     textAlign = TextAlign.Start
                 )
+            }
+        }
+    }
+}
+
+// ── MonthYearPickerDialog ─────────────────────────────────────────────────────
+// Allows the user to jump directly to any past month by selecting a year then
+// tapping a month name. Future months are shown dimmed and are not clickable.
+
+@Composable
+private fun MonthYearPickerDialog(
+    initialMonth: YearMonth,
+    onSelect: (YearMonth) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedYear by remember { mutableIntStateOf(initialMonth.year) }
+    val now = YearMonth.now()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            tonalElevation = 6.dp
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+
+                // ── Year navigation ───────────────────────────────────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { selectedYear-- }) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous year")
+                    }
+                    Text(
+                        text = selectedYear.toString(),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(
+                        onClick  = { selectedYear++ },
+                        enabled  = selectedYear < now.year
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next year")
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // ── Month grid (3 columns × 4 rows) ───────────────────────────
+                val monthLabels = listOf(
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+                )
+                for (row in 0 until 4) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        for (col in 0 until 3) {
+                            val monthNum = row * 3 + col + 1   // 1–12
+                            val ym       = YearMonth.of(selectedYear, monthNum)
+                            val isFuture = ym > now
+                            val isSelected = ym == initialMonth
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .padding(4.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .then(
+                                        if (isSelected)
+                                            Modifier.background(MaterialTheme.colorScheme.primary)
+                                        else Modifier
+                                    )
+                                    .then(
+                                        if (!isFuture)
+                                            Modifier.clickable { onSelect(ym) }
+                                        else
+                                            Modifier.alpha(0.3f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text  = monthLabels[monthNum - 1],
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isSelected)
+                                        MaterialTheme.colorScheme.onPrimary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

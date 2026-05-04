@@ -3,11 +3,13 @@ package com.plusorminustwo.postmark.ui.thread
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.app.role.RoleManager
 import android.provider.Telephony
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -56,6 +58,10 @@ import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -83,6 +89,9 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
 
 private val PILL_HIDE_DELAY_MS = 1_800L
 
@@ -123,6 +132,7 @@ fun ThreadScreen(
         quickReactionEmojis = quickReactionEmojis,
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
+        scrollToBottomEvent = viewModel.scrollToBottomEvent,
         onBack = onBack,
         onViewStats = onViewStats,
         onBackupSettingsClick = onBackupSettingsClick,
@@ -136,6 +146,7 @@ fun ThreadScreen(
         onSetSelectionScope = { viewModel.setSelectionScope(it) },
         onToggleMute = { viewModel.toggleMute() },
         onTogglePin = { viewModel.togglePin() },
+        onToggleNotifications = { viewModel.toggleNotificationsEnabled() },
         onEnterSelectionMode = { viewModel.enterSelectionMode() },
         onReplyTextChanged = { viewModel.onReplyTextChanged(it) },
         onSendMessage = { viewModel.sendMessage() },
@@ -145,7 +156,9 @@ fun ThreadScreen(
         onToggleTimestamp = { viewModel.toggleTimestamp(it) },
         onToggleMessageIds = { viewModel.toggleMessageIds(it) },
         onRetry = { viewModel.retrySend(it) },
-        onSelectByDateRange = { start, end -> viewModel.selectByDateRange(start, end) }
+        onSelectByDateRange = { start, end -> viewModel.selectByDateRange(start, end) },
+        onAttachmentSelected = { uri, mimeType -> viewModel.onAttachmentSelected(uri, mimeType) },
+        onClearAttachment = { viewModel.clearAttachment() }
     )
 }
 
@@ -171,6 +184,7 @@ private fun ThreadContent(
     quickReactionEmojis: List<String>,
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
+    scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
     onBack: () -> Unit,
     onViewStats: () -> Unit,
     onBackupSettingsClick: () -> Unit,
@@ -184,6 +198,7 @@ private fun ThreadContent(
     onSetSelectionScope: (SelectionScope) -> Unit,
     onToggleMute: () -> Unit,
     onTogglePin: () -> Unit,
+    onToggleNotifications: () -> Unit,
     onEnterSelectionMode: () -> Unit,
     onReplyTextChanged: (String) -> Unit,
     onSendMessage: () -> Unit,
@@ -194,6 +209,8 @@ private fun ThreadContent(
     onToggleMessageIds: (List<Long>) -> Unit,
     onRetry: (Long) -> Unit = {},
     onSelectByDateRange: (LocalDate, LocalDate) -> Unit = { _, _ -> },
+    onAttachmentSelected: (Uri, String) -> Unit = { _, _ -> },
+    onClearAttachment: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -233,8 +250,49 @@ private fun ThreadContent(
             itemIndex++ // header item
         }
         if (targetIndex >= 0) {
-            listState.animateScrollToItem(targetIndex)
+            // Snap to item first so layoutInfo is populated for the target.
+            listState.scrollToItem(targetIndex)
+            // Wait for the frame that includes the target item in visibleItemsInfo.
+            snapshotFlow { listState.layoutInfo }
+                .first { info -> info.visibleItemsInfo.any { it.index == targetIndex } }
+            // Compute the offset that centers the item in the viewport.
+            val info = listState.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.index == targetIndex }
+            if (item != null) {
+                val viewportHeight = info.viewportEndOffset - info.viewportStartOffset
+                val centeredOffset = (viewportHeight / 2) - (item.size / 2)
+                listState.animateScrollToItem(targetIndex, scrollOffset = -centeredOffset)
+            }
             onHighlightMessage(scrollToMessageId)
+        }
+    }
+
+    // ── New-message auto-scroll / FAB nudge ────────────────────────────────
+    // fabVisible is hoisted here so both this effect and the scroll-triggered
+    // effect inside the inner Box can drive the same FAB state.
+    var fabVisible by remember { mutableStateOf(false) }
+
+    // When the user taps Send, scroll to the bottom unconditionally — even if
+    // they were reading history. This is distinct from an incoming message
+    // arriving while the user is scrolled up (that case uses the FAB nudge).
+    LaunchedEffect(Unit) {
+        scrollToBottomEvent.collect {
+            listState.animateScrollToItem(0)
+        }
+    }
+
+    val messageCount = uiState.messages.size
+    LaunchedEffect(messageCount) {
+        if (messageCount == 0) return@LaunchedEffect
+        if (listState.firstVisibleItemIndex <= 1) {
+            // Already at the bottom — scroll to reveal the new message.
+            listState.animateScrollToItem(0)
+        } else {
+            // User is reading history — show the FAB for 3 s so they know a
+            // new message arrived without hijacking their scroll position.
+            fabVisible = true
+            delay(3_000)
+            fabVisible = false
         }
     }
 
@@ -480,6 +538,10 @@ private fun ThreadContent(
                                     onClick = { menuExpanded = false; onToggleMute() }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text(if (uiState.thread?.notificationsEnabled == false) "Enable notifications" else "Disable notifications") },
+                                    onClick = { menuExpanded = false; onToggleNotifications() }
+                                )
+                                DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isPinned == true) "Unpin" else "Pin") },
                                     onClick = { menuExpanded = false; onTogglePin() }
                                 )
@@ -502,9 +564,13 @@ private fun ThreadContent(
             // Scaffold doesn't resize and shift message positions.
             if (!uiState.isSelectionMode) {
                 ReplyBar(
-                    text = uiState.replyText,
-                    onTextChange = { onReplyTextChanged(it) },
-                    onSend = { onSendMessage() }
+                    text                 = uiState.replyText,
+                    pendingAttachmentUri = uiState.pendingAttachmentUri,
+                    pendingMimeType      = uiState.pendingMimeType,
+                    onTextChange         = { onReplyTextChanged(it) },
+                    onAttachmentSelected = onAttachmentSelected,
+                    onClearAttachment    = onClearAttachment,
+                    onSend               = { onSendMessage() }
                 )
             }
         }
@@ -556,9 +622,26 @@ private fun ThreadContent(
             )
 
             val scrolledUp by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
+
+            // Auto-hide the FAB 3 s after the user stops scrolling.
+            // fabVisible is hoisted to the outer scope so the message-arrival
+            // effect above can also trigger it when the user is reading history.
+            LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
+                if (scrolledUp) {
+                    fabVisible = true
+                    delay(3_000)
+                    fabVisible = false
+                } else {
+                    fabVisible = false
+                }
+            }
+
             ScrollToLatestButton(
-                visible = scrolledUp,
-                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                visible = fabVisible,
+                onClick = {
+                    fabVisible = false
+                    scope.launch { listState.animateScrollToItem(0) }
+                },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 16.dp)
@@ -833,7 +916,6 @@ private fun MessageBubble(
             )
             .then(
                 if (isSelected) Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
-                else if (isHighlighted) Modifier.background(MaterialTheme.colorScheme.tertiaryContainer)
                 else Modifier
             )
             .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
@@ -843,10 +925,34 @@ private fun MessageBubble(
             Box(
                 modifier = Modifier
                     .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .then(
+                        // Tighter padding when an attachment fills the bubble edges.
+                        if (message.attachmentUri != null)
+                            Modifier.padding(4.dp)
+                        else
+                            Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
                     .onSizeChanged { bubbleWidthPx = it.width }
             ) {
-                Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
+                if (message.attachmentUri != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        // Render the media attachment (image, video, or audio).
+                        MmsAttachment(
+                            uri = message.attachmentUri,
+                            mimeType = message.mimeType
+                        )
+                        // Show caption text below the attachment if present.
+                        if (message.body.isNotEmpty()) {
+                            Text(
+                                text = message.body,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                } else {
+                    Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
+                }
             }
             if (message.reactions.isNotEmpty()) {
                 ReactionPills(
@@ -881,6 +987,12 @@ private fun MessageBubble(
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 if (showTimestamp) {
+                    // SMS / MMS type label — helps when scrolling back into pre-RCS history.
+                    Text(
+                        text = if (message.isMms) "MMS" else "SMS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                    )
                     Text(
                         text = timeFormatter.format(Date(message.timestamp)),
                         style = MaterialTheme.typography.labelSmall,
@@ -898,6 +1010,108 @@ private fun MessageBubble(
         }
         if (message.reactions.isNotEmpty() && (clusterPosition == ClusterPosition.BOTTOM || clusterPosition == ClusterPosition.SINGLE)) {
             Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+// ── MmsAttachment ─────────────────────────────────────────────────────────────
+// Renders the media content of an MMS message inside the bubble. Images use
+// Coil AsyncImage (content://mms/part/ URIs are readable by the default SMS app).
+// Video shows a play-icon placeholder. Audio shows a labelled chip.
+
+@Composable
+private fun MmsAttachment(uri: String, mimeType: String?) {
+    when {
+        // ── Image ──────────────────────────────────────────────────────────────
+        mimeType?.startsWith("image/") == true -> {
+            // Use ImageRequest.Builder with explicit context so Coil's
+            // ContentUriFetcher can call contentResolver.openInputStream()
+            // on the content://mms/part/ URI (requires default SMS role).
+            val ctx = LocalContext.current
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(ctx)
+                    .data(Uri.parse(uri))
+                    .crossfade(true)
+                    .listener(onError = { _, result ->
+                        android.util.Log.e(
+                            "CoilMMS",
+                            "Failed to load uri=$uri",
+                            result.throwable
+                        )
+                    })
+                    .build(),
+                contentDescription = "Photo",
+                contentScale = ContentScale.Crop,
+                error = {
+                    // Visible fallback so load failures don't silently disappear.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                RoundedCornerShape(8.dp)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "📷 Photo",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 240.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
+        }
+
+        // ── Video ──────────────────────────────────────────────────────────────
+        mimeType?.startsWith("video/") == true -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Video",
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // ── Audio ──────────────────────────────────────────────────────────────
+        mimeType?.startsWith("audio/") == true -> {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Text("Audio message", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        // ── Unknown attachment ─────────────────────────────────────────────────
+        else -> {
+            Text(
+                text = "[Attachment]",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -1100,64 +1314,149 @@ private fun DeliveryStatusIndicator(
 }
 
 // ── ReplyBar ───────────────────────────────────────────────────────────────────
+// Bottom compose bar with text input, optional attachment preview chip,
+// attach button (photo / audio picker), and send button.
 
 @Composable
 private fun ReplyBar(
     text: String,
+    pendingAttachmentUri: String?,
+    pendingMimeType: String?,
     onTextChange: (String) -> Unit,
+    onAttachmentSelected: (Uri, String) -> Unit,
+    onClearAttachment: () -> Unit,
     onSend: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val counterText = remember(text.length) { smsCounter(text.length) }
+    val context = LocalContext.current
+    var showAttachMenu by remember { mutableStateOf(false) }
+
+    // Single launcher; the MIME filter is set per menu item.
+    val mediaLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+            onAttachmentSelected(uri, mimeType)
+        }
+    }
+
+    // Friendly label for the attachment preview chip.
+    val attachLabel: String? = when {
+        pendingMimeType?.startsWith("image/") == true  -> "📷 Photo"
+        pendingMimeType?.startsWith("video/") == true  -> "🎥 Video"
+        pendingMimeType?.startsWith("audio/") == true  -> "🎵 Audio"
+        pendingAttachmentUri != null                    -> "📎 Attachment"
+        else                                            -> null
+    }
+
+    // Only show the SMS counter when no attachment is pending (pure SMS mode).
+    val counterText = if (pendingAttachmentUri == null) {
+        remember(text.length) { smsCounter(text.length) }
+    } else null
+
     Column(modifier = modifier) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.Bottom
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                TextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message") },
-                    maxLines = 4,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        focusedIndicatorColor   = androidx.compose.ui.graphics.Color.Transparent,
-                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                        disabledIndicatorColor  = androidx.compose.ui.graphics.Color.Transparent,
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                    trailingIcon = counterText?.let { ct ->
-                        {
-                            Text(
-                                text = ct,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (text.length > 160) MaterialTheme.colorScheme.error
-                                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(end = 8.dp)
+                // Attachment preview chip — shown while media is queued for sending.
+                if (attachLabel != null) {
+                    InputChip(
+                        selected     = false,
+                        onClick      = {},
+                        label        = { Text(attachLabel, style = MaterialTheme.typography.bodySmall) },
+                        trailingIcon = {
+                            IconButton(
+                                onClick  = onClearAttachment,
+                                modifier = Modifier.size(18.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Remove attachment",
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        },
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                }
+
+                // Text input row: [attach] [field] [send]
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    // Attach button opens a dropdown with media type choices.
+                    Box {
+                        IconButton(onClick = { showAttachMenu = true }) {
+                            Icon(Icons.Default.AttachFile, contentDescription = "Attach media")
+                        }
+                        DropdownMenu(
+                            expanded = showAttachMenu,
+                            onDismissRequest = { showAttachMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text    = { Text("Photo or video") },
+                                onClick = {
+                                    showAttachMenu = false
+                                    mediaLauncher.launch("image/*")
+                                }
+                            )
+                            DropdownMenuItem(
+                                text    = { Text("Audio file") },
+                                onClick = {
+                                    showAttachMenu = false
+                                    mediaLauncher.launch("audio/*")
+                                }
                             )
                         }
                     }
-                )
-                Spacer(Modifier.width(4.dp))
-                IconButton(
-                    onClick = onSend,
-                    enabled = text.isNotBlank(),
-                    colors = IconButtonDefaults.iconButtonColors(
-                        containerColor         = MaterialTheme.colorScheme.primary,
-                        contentColor           = MaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    TextField(
+                        value         = text,
+                        onValueChange = onTextChange,
+                        modifier      = Modifier.weight(1f),
+                        placeholder   = { Text("Message") },
+                        maxLines      = 4,
+                        colors        = TextFieldDefaults.colors(
+                            focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            focusedIndicatorColor   = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            disabledIndicatorColor  = androidx.compose.ui.graphics.Color.Transparent,
+                        ),
+                        shape         = RoundedCornerShape(24.dp),
+                        textStyle     = MaterialTheme.typography.bodyMedium,
+                        trailingIcon  = counterText?.let { ct ->
+                            {
+                                Text(
+                                    text     = ct,
+                                    style    = MaterialTheme.typography.labelSmall,
+                                    color    = if (text.length > 160) MaterialTheme.colorScheme.error
+                                               else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                            }
+                        }
                     )
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(
+                        onClick  = onSend,
+                        // Enabled when there is text OR a media attachment is pending.
+                        enabled  = text.isNotBlank() || pendingAttachmentUri != null,
+                        colors   = IconButtonDefaults.iconButtonColors(
+                            containerColor         = MaterialTheme.colorScheme.primary,
+                            contentColor           = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    }
                 }
             }
         }
@@ -1487,6 +1786,7 @@ private fun ThreadScreenPreview() {
             onSetSelectionScope = {},
             onToggleMute = {},
             onTogglePin = {},
+            onToggleNotifications = {},
             onEnterSelectionMode = {},
             onReplyTextChanged = {},
             onSendMessage = {},

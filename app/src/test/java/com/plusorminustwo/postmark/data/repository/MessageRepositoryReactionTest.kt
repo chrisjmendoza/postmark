@@ -181,4 +181,5 @@ private class StubMessageDao : MessageDao {
     override suspend fun getAllThreadIds(): List<Long> = emptyList()
     override suspend fun getAll(): List<MessageEntity> = emptyList()
     override suspend fun getMaxId(): Long? = null
+    override suspend fun getMaxMmsId(): Long? = null
 }

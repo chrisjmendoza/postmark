@@ -41,19 +41,27 @@ class ConversationsViewModel @Inject constructor(
         // so the banner can reappear if the role is lost in a future launch.
         if (checkIsDefaultSmsApp()) prefs.edit().remove("role_banner_dismissed").apply()
 
-        // Recovery: if a previous sync ran but imported 0 messages (e.g. Samsung
-        // OneUI returned an empty primary cursor and the old fallback didn't fire),
-        // clear the completion flag so the fixed sync runs on this launch.
+        // Recovery: re-sync if:
+        //   (a) sync marker is set but threads table is empty — original Samsung fallback case.
+        //   (b) threads exist but the messages table is completely empty — this happens when the
+        //       sync worker crashed between upsertAll(threads) and insertAll(messages), leaving
+        //       threads with lastMessagePreviews but no actual Message rows in Room.
         viewModelScope.launch {
-            val syncDone  = prefs.getBoolean("first_sync_completed", false)
-            val dbEmpty   = threadRepository.isEmpty()
-            android.util.Log.d("PostmarkSync", "ViewModel init — first_sync_completed=$syncDone, db_empty=$dbEmpty")
-            if (syncDone && dbEmpty) {
-                android.util.Log.w("PostmarkSync", "Recovery: sync was marked complete but DB is empty — re-triggering")
+            val syncDone      = prefs.getBoolean("first_sync_completed", false)
+            val threadsEmpty  = threadRepository.isEmpty()
+            val messagesEmpty = messageRepository.getMaxId() == null &&
+                                messageRepository.getMaxMmsId() == null
+            val needsRecovery = (syncDone && threadsEmpty) || (!threadsEmpty && messagesEmpty)
+            if (needsRecovery) {
+                android.util.Log.w(
+                    "SyncTrigger",
+                    "ConversationsViewModel.init: recovery — threadsEmpty=$threadsEmpty " +
+                    "messagesEmpty=$messagesEmpty, enqueuing KEEP"
+                )
                 prefs.edit().remove("first_sync_completed").apply()
                 workManager.enqueueUniqueWork(
                     FirstLaunchSyncWorker.WORK_NAME,
-                    ExistingWorkPolicy.REPLACE,
+                    ExistingWorkPolicy.KEEP,
                     FirstLaunchSyncWorker.buildRequest()
                 )
             }
@@ -88,9 +96,15 @@ class ConversationsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null))
 
     // ── Default SMS role ──────────────────────────────────────────────────────
-    // Checked once at ViewModel creation — sufficient because the user must go to
-    // Settings and relaunch to change the default app.
-    val isDefaultSmsApp: StateFlow<Boolean> = MutableStateFlow(checkIsDefaultSmsApp())
+    // Re-checked on every screen resume via refreshDefaultSmsStatus() so the banner
+    // clears immediately when the user grants the role and returns to the app.
+    private val _isDefaultSmsApp = MutableStateFlow(checkIsDefaultSmsApp())
+    val isDefaultSmsApp: StateFlow<Boolean> = _isDefaultSmsApp.asStateFlow()
+
+    /** Called from ConversationsScreen's ON_RESUME lifecycle effect. */
+    fun refreshDefaultSmsStatus() {
+        _isDefaultSmsApp.value = checkIsDefaultSmsApp()
+    }
 
     private fun checkIsDefaultSmsApp(): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -111,6 +125,7 @@ class ConversationsViewModel @Inject constructor(
     }
 
     fun triggerSync() {
+        android.util.Log.i("SyncTrigger", "ConversationsViewModel.triggerSync — enqueuing REPLACE")
         prefs.edit().remove("first_sync_completed").apply()
         workManager.enqueueUniqueWork(
             FirstLaunchSyncWorker.WORK_NAME,

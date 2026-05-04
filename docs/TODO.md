@@ -75,23 +75,28 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🟡 TIER 2 — Feature Complete (needed before Play Store submission)
 
 ### MMS support
-- [ ] **Sync MMS from content://mms** — read during first sync and
-      incremental sync. Store attachments as file paths in new
-      `Attachment` entity (Room migration required).
-- [ ] **Inline image display** — `AsyncImage` (Coil) in bubble,
-      `fillMaxWidth`, tap → full-screen viewer.
-- [ ] **Inline video display** — thumbnail + play overlay, tap →
-      player dialog.
-- [ ] **Audio message playback** — waveform or simple play/pause
-      control inline in bubble.
-- [ ] **MMS media in conversation list** — when last message is
-      MMS-only, show "📷 Photo" or "🎥 Video" as snippet.
-- [ ] **Rich media in reply bar** — attachment button left of text
-      field. Image picker (`PickVisualMedia`), camera capture.
-      Requires `READ_MEDIA_IMAGES` / `CAMERA` permissions.
-- [ ] **Group MMS** — multiple recipient addresses → single thread
-      with comma-joined display name. Show sender name/avatar
-      per bubble within group thread.
+- [x] **Sync MMS from content://mms** — `getMmsBody()` / `getMmsBodyIncremental()` in
+      both sync handlers return `MmsParts(body, attachmentUri, mimeType)`. Queries
+      `_id`, `ct`, `text`; builds stable `content://mms/part/{id}` URI for media parts;
+      skips SMIL. Room schema v9 adds `attachmentUri` + `mimeType` columns.
+- [x] **Inline image display** — `AsyncImage` (Coil 2.7.0) in `MmsAttachment` composable,
+      `fillMaxWidth`, `ContentScale.Crop`, max 240 dp height, rounded 8 dp corners.
+- [x] **Inline video display** — `Box` with `PlayArrow` icon overlay, 120 dp height,
+      `surfaceVariant` background, rounded corners. Tap-to-play not yet wired.
+- [x] **Audio message chip** — `Surface` chip with `MusicNote` icon and "Audio message"
+      label in `secondaryContainer` color. Tap-to-play not yet wired.
+- [x] **MMS media in conversation list** — `previewText` extension returns "📷 Photo" /
+      "🎥 Video" / "🎵 Audio message" when body is empty; used by both sync handlers.
+- [ ] **Tap image → full-screen viewer** — `Dialog` or separate screen, pinch-to-zoom.
+- [ ] **Tap video → player dialog** — `ExoPlayer` / `VideoView` in a `Dialog`.
+- [ ] **Audio playback controls** — `MediaPlayer` or `ExoPlayer` play/pause on audio chip.
+- [ ] **Rich media in reply bar** — ~~attachment button left of text field. Image picker
+      (`PickVisualMedia`), camera capture. Requires `READ_MEDIA_IMAGES` / `CAMERA`.~~
+      **Done (different approach):** `GetContent` launcher with `image/*` / `audio/*` MIME
+      filter, attach button with dropdown, attachment preview chip, MMS send path via
+      `MmsManagerWrapper` + WAP Binary PDU. Camera capture still pending.
+- [ ] **Group MMS** — multiple recipient addresses → single thread with comma-joined
+      display name. Show sender name/avatar per bubble within group thread.
 
 ### Contact integration
 - [ ] **Contact photo / profile picture in avatar** — currently all
@@ -120,6 +125,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       to the phone's contact editor.
 
 ### Conversation list polish
+- [ ] **Unread filter button** — a toggle button (e.g. envelope icon or
+      "Unread" chip) in the conversation list top bar that, when active,
+      filters the list to only threads that have at least one unread message.
+      Tap again to clear the filter. Requires `isRead` flag already tracked
+      per message; derive `hasUnread` on `ThreadEntity` (or compute from
+      `MessageDao`) and expose a `showUnreadOnly: Boolean` toggle in
+      `ConversationsViewModel`. Badge the button with the current unread
+      thread count so the user knows at a glance how many are waiting.
 - [ ] **Unread count badge** — unread message count pill on each
       thread row. Requires `isRead` flag on `MessageEntity`.
 - [ ] **Swipe actions on conversation list** — swipe left: delete/archive with undo
@@ -162,8 +175,48 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `searchMessagesFilteredWithReaction()` subquery on `reactions`.
 - [x] **Reaction emoji list data-driven** — `ReactionDao.observeDistinctEmojis()`
       wired into `SearchScreen` via `SearchViewModel`; hardcoded list removed.
+- [x] **SMS/MMS protocol filter chips** — "SMS" and "MMS" chips in `SearchScreen`;
+      browse mode (protocol filter + blank query) supported via new `browseFiltered()`
+      DAO query. Empty state updated to prompt usage.
+- [ ] **Sort order toggle** — default is most-recent first; add a toggle
+      (sort icon button in top bar or a chip) to switch between:
+      - **Most recent** — `ORDER BY timestamp DESC` (default, already natural for FTS)
+      - **By contact** — group results by thread (display name), sorted
+        A–Z, with a sticky section header per thread showing the contact
+        name + avatar. Within each group messages sort newest-first.
+      `SearchViewModel` adds a `SortOrder` enum (`MOST_RECENT`, `BY_CONTACT`);
+      the grouped path can be a pure in-memory transform on `results` (no
+      new DAO query needed — just `groupBy { it.threadId }` + sort by
+      `displayName`). `SearchUiState` needs `sortOrder` and a derived
+      `groupedResults: Map<Thread, List<Message>>` for the `BY_CONTACT` view.
+- [ ] **Reactions shown on search result rows** — when a message has
+      reactions (already stored as `Message.reactions`), render the
+      reaction pills below the body text inside `SearchResultRow` — the
+      same `ReactionPills` composable used in the thread view. Currently
+      `SearchResultRow` only shows the body text; it ignores `message.reactions`
+      entirely. The search query already joins reactions (via
+      `MessageRepository.observeByThread`) but the DAO query used by
+      `SearchRepository.search()` should also populate `reactions` on each
+      result. Check whether `searchRepository.search()` populates
+      `Message.reactions` or returns empty lists; if the latter, update
+      `SearchRepository` to join with `ReactionDao` (same pattern as
+      `MessageRepository.observeByThread`).
+- [ ] **"Reacted to" filter-message exclusion in results** — Apple reaction
+      fallback phrases ("Liked \"...\""  etc.) are stored as both a
+      `ReactionEntity` *and* left as a raw message in the `messages` table.
+      These raw reaction-phrase messages currently appear as search results.
+      Add a flag or filter to suppress them from the default result set
+      (they are already parsed into reactions; showing the raw phrase is
+      noise). Simplest approach: mark messages whose body matches the
+      reaction-phrase pattern with a `isReactionMessage BOOLEAN DEFAULT 0`
+      flag set during sync, then add `AND isReactionMessage = 0` to the
+      default search query. Opt-in toggle could expose them if needed.
 - [ ] **Search within thread** — entry point: search icon in thread
       toolbar. Scopes results to current `threadId`.
+- [ ] **Contact/thread search** — global search currently only searches
+      message bodies; add a second result section (or a tab) that matches
+      `Thread.displayName` / `Thread.address` so users can find a contact
+      by name without scrolling through the full conversations list.
 
 ### Export — image rendering
 - [ ] **Image export** — render selected messages to `Canvas`,

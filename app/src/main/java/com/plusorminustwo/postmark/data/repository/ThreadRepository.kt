@@ -58,4 +58,12 @@ class ThreadRepository @Inject constructor(
     /** Returns true if the thread with [address] has notifications muted, false otherwise. */
     suspend fun isMutedByAddress(address: String): Boolean =
         dao.isMutedByAddress(address) ?: false
+
+    /** Returns true if the thread with [address] has notifications enabled (default), false if
+     *  the user has fully disabled notifications for that number. */
+    suspend fun isNotificationsEnabledByAddress(address: String): Boolean =
+        dao.isNotificationsEnabledByAddress(address) ?: true
+
+    suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) =
+        dao.updateNotificationsEnabled(threadId, enabled)
 }

@@ -92,6 +92,12 @@ fun DevOptionsScreen(
             DevButton("Trigger sync now", "Reset flag and enqueue sync worker immediately") {
                 viewModel.triggerSync()
             }
+            DevButton(
+                "Wipe DB + re-import",
+                "Delete all local data then re-import everything from system SMS (safe — never deletes from system)"
+            ) {
+                viewModel.wipeAndResync()
+            }
         }
     }
 }

@@ -104,7 +104,10 @@ class SearchDateRangeTest {
     @Test
     fun `search includes messages inside selected range`() = runTest {
         val nowMs = System.currentTimeMillis()
-        val recentMessage = msg(id = 1, timestamp = nowMs - 3_600_000L) // 1 hour ago
+        // Compute today's midnight the same way SearchDateRange.TODAY does, then place
+        // the message 1 second AFTER midnight — always within today regardless of timezone.
+        val todayMidnightMs = SearchDateRange.TODAY.toBoundsMs(nowMs).first!!
+        val recentMessage = msg(id = 1, timestamp = todayMidnightMs + 1_000L)
 
         val dao = SpySearchDao(listOf(recentMessage))
         val viewModel = buildViewModel(dao)
@@ -114,7 +117,7 @@ class SearchDateRangeTest {
 
         val startMs = dao.capturedStartMs
         assertNotNull(startMs)
-        // Message from 1 hour ago is within today
+        // Message placed 1 second past midnight is always within today
         assertTrue(recentMessage.timestamp >= startMs!!)
     }
 
@@ -208,6 +211,8 @@ class SearchDateRangeTest {
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
         override suspend fun isMutedByAddress(address: String): Boolean? = null
+        override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
+        override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) {}
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}

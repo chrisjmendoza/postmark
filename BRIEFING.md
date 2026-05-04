@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: May 2, 2026
+Last updated: May 3, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -47,20 +47,24 @@ com.plusorminustwo.postmark
     └── parser              ← AppleReactionParser (scaffolded)
 
 ═══════════════════════════════════════════════════════
-DATABASE — ROOM SCHEMA v5
+DATABASE — ROOM SCHEMA v9
 ═══════════════════════════════════════════════════════
 Thread
 - id, displayName, address, lastMessageAt,
   lastMessagePreview (added v2),
   backupPolicy (GLOBAL/ALWAYS_INCLUDE/NEVER_INCLUDE),
   isMuted BOOLEAN DEFAULT false (added v5),
-  isPinned BOOLEAN DEFAULT false (added v6)
+  isPinned BOOLEAN DEFAULT false (added v6),
+  notificationsEnabled BOOLEAN DEFAULT true (added v8)
 
   Threads sort pinned-first (isPinned DESC, lastMessageAt DESC)
 
 Message
 - id, threadId, address, body, timestamp,
-  isSent, type
+  isSent, type,
+  isMms BOOLEAN (added v7),
+  attachmentUri TEXT nullable (added v9),
+  mimeType TEXT nullable (added v9)
 
 Reaction
 - id, messageId, senderAddress, emoji,
@@ -79,26 +83,21 @@ GlobalStats
   all threads, plus threadCount;
   topReactionEmojisJson added v5
 
-FTS5 virtual table (messages_fts)
+FTS4 virtual table (messages_fts)
 - mirrors message body, sync triggers in place
 - tokenize='unicode61'
 
 Reactions in separate table for independent
 emoji reaction querying.
 
-Migration 1→2: ALTER TABLE threads ADD COLUMN
-lastMessagePreview TEXT NOT NULL DEFAULT ''
-Migration 2→3: ALTER TABLE messages ADD COLUMN
-deliveryStatus INTEGER NOT NULL DEFAULT 0
+Migration 1→2: lastMessagePreview on threads
+Migration 2→3: deliveryStatus on messages
 Migration 3→4: CREATE TABLE global_stats
-Migration 4→5: ALTER TABLE threads ADD COLUMN
-isMuted INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE thread_stats ADD COLUMN
-topReactionEmojisJson TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE global_stats ADD COLUMN
-topReactionEmojisJson TEXT NOT NULL DEFAULT '[]'
-Migration 5→6: ALTER TABLE threads ADD COLUMN
-isPinned INTEGER NOT NULL DEFAULT 0
+Migration 4→5: isMuted on threads; topReactionEmojisJson on stats
+Migration 5→6: isPinned on threads
+Migration 6→7: isMms on messages
+Migration 7→8: notificationsEnabled on threads
+Migration 8→9: attachmentUri + mimeType on messages
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -193,6 +192,28 @@ WHAT IS WORKING (tested on device)
 ✅ Room schema v6 — all migrations non-destructive
 ✅ FirstLaunchSyncWorker — full SMS sync confirmed on device
    (620 threads, 51 069 messages synced on Samsung S24 Ultra)
+✅ MMS media attachments (schema v9):
+   - Images rendered via Coil AsyncImage in MessageBubble
+   - Video placeholder with PlayArrow icon
+   - Audio chip with MusicNote icon
+   - Thread list shows "📷 Photo" / "🎥 Video" / "🎵 Audio message"
+     instead of blank for media-only MMS messages
+   - "Wipe DB + re-import" in Dev Options re-syncs with attachment data
+   - MMS image loading fixed: SubcomposeAsyncImage + explicit context
+     so Coil's ContentUriFetcher binds the correct ContentResolver
+     for content://mms/part/ URIs; error slot shows "📷 Photo" label
+✅ MMS sending — images, audio, video:
+   - Attach button in ReplyBar (📎 dropdown: "Photo or video" / "Audio file")
+   - Attachment preview chip with ✕ clear button
+   - MmsManagerWrapper builds WAP Binary M-Send.req PDU, sends via
+     SmsManager.sendMultimediaMessage(); temp PDU via FileProvider cacheDir
+   - MmsSentReceiver updates Room + content://mms on SENT/FAILED
+   - SMS/MMS type label dimmed next to timestamp in each bubble
+✅ Stats screen — Heatmap month/year jump picker:
+   - Tap month/year label → MonthYearPickerDialog
+   - Year nav (← year →, right disabled at current year)
+   - 4×3 month grid; future months at 30% alpha + non-clickable
+   - Selected month highlighted with primary color
 ✅ Privacy mode — Settings → Notifications toggle; SmsReceiver
    shows "New message" with no sender/body when enabled
 ✅ ThemePreference persisted in SharedPreferences
@@ -241,12 +262,51 @@ WHAT IS WORKING (tested on device)
      — user's top picks surface first in pill (left→right
      most used → least); unused defaults fill remaining
      slots up to 8
+✅ Thread screen — send auto-scrolls to bottom:
+   ThreadViewModel emits scrollToBottomEvent (SharedFlow<Unit>)
+   on sendMessage(); ThreadContent collects it and calls
+   animateScrollToItem(0) unconditionally regardless of scroll pos.
+   Separate from the incoming-message FAB nudge path.
+✅ Settings screen — Default SMS app status row:
+   New "General" section at top; green tick when already default;
+   tappable row launches RoleManager/ACTION_CHANGE_DEFAULT otherwise;
+   status re-evaluated on composition.
+✅ Role denial banner (Conversations) — fully working:
+   - Banner tap fixed: was using context.startActivity() which the
+     system silently ignores for RoleManager intents on API 29+.
+     Now uses rememberLauncherForActivityResult (same pattern as
+     SettingsScreen). Result callback calls refreshDefaultSmsStatus().
+   - Banner disappears immediately on return (refreshDefaultSmsStatus
+     on ON_RESUME via DisposableEffect + LifecycleEventObserver).
+✅ First-launch sync recovery — threads-without-messages:
+   ConversationsViewModel.init recovery guard extended to also fire
+   when threads exist but messages table is empty (both getMaxId()
+   and getMaxMmsId() return null). Catches worker killed between
+   thread upsert and message insert.
+✅ SMS/MMS sync audit — 5 gaps resolved (Bugs A–D, F):
+   A: null-address rows now preserved (?: "" not ?: continue)
+   B: Samsung fallback now includes outbox + failed URIs
+   C: isSent uses type != INBOX / msgBox != INBOX (covers drafts/outbox/failed)
+   D: "insert-address-token" MMS placeholder replaced with "Unknown"
+   F: SmsSyncHandler.triggerCatchUp() called at end of FirstLaunchSyncWorker
+      to catch messages arriving in the race window before first DB commit
+✅ SMS send pipeline fixed (SmsManager audit):
+   - SmsManagerWrapper: adds THREAD_ID, DATE_SENT, SEEN=1 to ContentValues;
+     captures insert Uri, parses real row ID as EXTRA_SMS_ROW_ID in
+     sentIntent/deliveredIntent so delivery callbacks resolve correct row
+   - SmsSentDeliveryReceiver: reads EXTRA_SMS_ROW_ID; updates content://sms
+     STATUS to STATUS_FAILED / STATUS_COMPLETE on delivery events
+   - SmsSyncHandler.syncLatestSms: sets DELIVERY_STATUS_PENDING for sent
+     rows so clock icon appears immediately after send
+✅ Stats screen — collapsible day sections + natural message order:
+   Oldest message first within each day; tappable day headers
+   collapse/expand; Collapse all / Expand all button at top of panels
+✅ Thread view auto-scroll on send — DONE (May 3)
+✅ Default SMS banner launcher fix — DONE (May 3)
 ✅ Thread screen UX improvements:
-   - Scroll-to-latest button moved to bottom-center,
-     using VerticalAlignBottom icon and tertiaryContainer
-     color for high visibility.
-   - Cluster-aware spacing for message bubbles ensures
-     tight grouping while providing clearance for reactions.
+   - Scroll-to-latest button at bottom-center,
+     VerticalAlignBottom icon, tertiaryContainer color.
+   - Cluster-aware spacing for message bubbles.
 ✅ Stats screen emoji cards:
    - "Top Emoji (Messages)" and "Top Emoji (Reactions)"
      only render when non-empty (guards added April 29)
@@ -256,9 +316,9 @@ WHAT IS WORKING (tested on device)
      layer (was private in StatsScreen)
 
 ═══════════════════════════════════════════════════════
-SAMSUNG SYNC — RESOLVED (May 2, 2026)
+SAMSUNG + SYNC — RESOLVED (May 2–3, 2026)
 ╔═══════════════════════════════════════════════════════
-Two bugs compounded:
+Two original bugs fixed (May 2):
 1. WorkManager init: AndroidX Startup ran WorkManagerInitializer
    before Hilt injected HiltWorkerFactory, causing
    NoSuchMethodException on FirstLaunchSyncWorker. Fixed by
@@ -266,13 +326,16 @@ Two bugs compounded:
    tools:node="remove".
 2. Samsung READ_SMS: content://sms returns null cursor despite
    permissions. Fixed by falling back to content://sms/inbox +
-   /sent + /draft when primaryRowCount <= 0.
+   /sent + /draft + /outbox + /failed when primaryRowCount <= 0.
+
+Five additional sync gaps resolved (May 3 audit):
+3. Null-address rows silently dropped — now preserved as address=""
+4. isSent wrong for drafts/outbox/failed — now uses != INBOX check
+5. "insert-address-token" MMS placeholder — replaced with "Unknown"
+6. Race window before first DB commit — triggerCatchUp() at end of worker
+7. Delivery callbacks used stale temp ID — fixed via EXTRA_SMS_ROW_ID
 ✔️ Confirmed working: 620 threads, 51 069 messages synced on
    Samsung S24 Ultra (OneUI).
-
-⚠️ KNOWN ISSUE: Sync appears incomplete. Some threads are missing
-   entirely and some existing threads have message gaps.
-   Needs investigation — deferred until Tier 1 UI items done.
 
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
@@ -280,33 +343,49 @@ IN PROGRESS / NEXT UP
 ACTIVE BRANCH: feat/ui-improvements
 
 TIER 1 — REMAINING (in priority order)
-1. PINNED CONVERSATIONS — implementing now
-   isPinned on ThreadEntity (schema v6, merged), sort order
-   is pinned-first, pin/unpin icons show in ConversationsScreen,
-   togglePin() exists in ThreadViewModel. ONLY MISSING:
-   - Wire Pin/Unpin ⋮ menu item in ConversationsScreen to
-     viewModel.togglePin(threadId)
-   - Long-press on conversation row as alternate entry point
-
-2. PER-NUMBER NOTIFICATION FILTERING
-   Let user exclude specific threads from notifying.
-   DB: notificationsEnabled BOOLEAN DEFAULT true on ThreadEntity
-   (Room migration 6→7 required). SmsReceiver checks flag.
-
-3. MULTIPART MESSAGE HANDLING
+1. MULTIPART MESSAGE HANDLING
    Verify all parts arrive before marking delivered;
    handle out-of-order part delivery.
 
-4. SEND QUEUE
+2. SEND QUEUE
    Queue outgoing when offline; send on reconnect;
    show "Queued" bubble state.
 
-5. SYNC COMPLETENESS INVESTIGATION
+3. SYNC COMPLETENESS INVESTIGATION
    Some threads + messages missing from sync.
    Likely causes: address normalization, cursor pagination,
    or type filtering in SmsSyncHandler / FirstLaunchSyncWorker.
 
+4. MMS MEDIA — PLAYBACK (follow-on)
+   Tap image → full-screen viewer, tap video → ExoPlayer dialog,
+   audio chip → MediaPlayer play/pause.
+
+COMPLETED THIS SPRINT (May 3, 2026)
+✅ Thread auto-scroll to bottom on send
+   (SharedFlow event from ViewModel → LaunchedEffect in ThreadContent)
+✅ Settings — default SMS app status row
+✅ Role denial banner — tap fixed (rememberLauncherForActivityResult)
+   and dismisses on resume (DisposableEffect + LifecycleEventObserver)
+✅ First-launch sync recovery for threads-without-messages case
+✅ SMS/MMS sync audit — 5 gaps resolved (A null-addr, B Samsung
+   outbox/failed URIs, C isSent for drafts, D insert-address-token,
+   F race window)
+✅ SMS send pipeline fixed (THREAD_ID/DATE_SENT in ContentValues,
+   EXTRA_SMS_ROW_ID for delivery callbacks, STATUS updates on
+   content://sms, DELIVERY_STATUS_PENDING immediately on send)
+✅ Stats screen — collapsible day sections + natural message order
+✅ MMS image loading fix (SubcomposeAsyncImage + explicit context)
+✅ CHANGELOG updated with all May 2–3 work
+
 COMPLETED THIS SPRINT (May 2, 2026)
+✅ MMS media attachments (schema v9, Coil 2.7.0)
+   - attachmentUri + mimeType columns on messages
+   - MmsParts extraction in both sync handlers
+   - MmsAttachment composable (image/video/audio)
+   - MessageBubble attachment-mode layout
+   - previewText extension for thread snippets
+   - "Wipe DB + re-import" in Dev Options
+✅ Per-number notification filtering (schema v8)
 ✅ WorkManager / Hilt init fix — NoSuchMethodException resolved
 ✅ Privacy mode — global toggle; SmsReceiver obeys
 ✅ Dev options: Clear sample data button

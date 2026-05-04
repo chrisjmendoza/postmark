@@ -4,9 +4,223 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## [Unreleased]
+
+### MMS sending (images, audio, video)
+- **`MmsManagerWrapper`** — new `@Singleton` that builds a WAP Binary M-Send.req PDU and
+  calls `SmsManager.sendMultimediaMessage()`. Supports one media attachment (image, video,
+  audio) plus optional text body. Well-known MIME types use short-integer encoding per the
+  OMA MMS 1.2 / WSP spec; unknown types (audio/amr, audio/mpeg, etc.) are encoded as
+  null-terminated ASCII text. PDU is written to `cacheDir` via FileProvider and deleted
+  after sending (60 s delayed cleanup).
+- **`MmsSentReceiver`** — new `@AndroidEntryPoint` broadcast receiver that handles the
+  `MMS_SENT` sent-intent from `sendMultimediaMessage()`. Updates Room and the system
+  `content://mms` row to SENT or FAILED.
+- **`ThreadViewModel`** — new `pendingAttachmentUri` / `pendingMimeType` state flows;
+  `sendMessage()` now routes through the MMS path when an attachment is pending (or falls
+  back to SMS for text-only); `onAttachmentSelected()` / `clearAttachment()` manage the
+  pending state.
+- **`ReplyBar`** — new attach button with dropdown menu ("Photo or video" → image/* picker,
+  "Audio file" → audio/* picker); attachment preview chip (📷 Photo / 🎥 Video / 🎵 Audio /
+  📎 Attachment) with ✕ clear button; send button now enabled when attachment is pending
+  (even with no text).
+- **`AndroidManifest.xml`** — registered `MmsSentReceiver`.
+
+### Thread view — SMS/MMS type label
+- In `MessageBubble`, a dimmed "SMS" or "MMS" label is shown next to the timestamp whenever
+  the timestamp row is visible, using `labelSmall` style at 55% alpha.
+
+### Stats — heatmap month/year jump picker
+- Tapping the month/year label in `HeatmapView` now opens `MonthYearPickerDialog`: a year
+  navigation row (← year →, right disabled for current/future years) and a 4×3 month grid
+  (Jan–Dec). Future months are shown at 30% alpha and are not selectable. Selected month is
+  highlighted with `MaterialTheme.colorScheme.primary` background.
+
+### Historical sync — foreground service crash fix (Android 14)
+- **`AndroidManifest.xml`** — added explicit `<service>` entry for
+  `androidx.work.impl.foreground.SystemForegroundService` with
+  `android:foregroundServiceType="dataSync"` and `tools:node="merge"`.
+  Android 14 (API 34) enforces that the declared `foregroundServiceType` of a service
+  is a subset of the type requested at runtime. Without this declaration WorkManager's
+  `setForeground()` call threw `IllegalArgumentException` and killed
+  `FirstLaunchSyncWorker` on every launch — preventing MMS data from ever being
+  persisted. SMS had been synced in an earlier app version before the foreground
+  service requirement was added; MMS never completed successfully until now.
+
+### Historical sync — sync progress notification
+- **`FirstLaunchSyncWorker`** — foreground notification now shows a determinate
+  progress bar and counts: `"Syncing SMS — 12,500 / 51,234"` and
+  `"Syncing MMS — 5,000 / 108,592"`. Updates every 500 rows. Phase labels:
+  "Syncing SMS…" (indeterminate spinner at start) → counted SMS persist batches →
+  "Syncing MMS…" → counted MMS per-row sub-query phase → "Wrapping up…"
+  (indeterminate) for the final catch-up pass.
+- **`ConversationsScreen`** — `LinearProgressIndicator` below the top bar while a
+  sync is in flight, visible on the conversation list during the initial import.
+
+### Search — SMS/MMS protocol filter chips
+- **`SearchScreen`** — two new filter chips ("SMS" and "MMS") at the start of the
+  filter chip row. Tapping one filters results to that protocol; tapping again clears.
+- **`SearchViewModel`** — `SearchFilters` gains `isMms: Boolean?`;
+  `setProtocolFilter(isMms: Boolean?)` toggles/clears; blank query is now allowed
+  when a protocol filter is active (browse mode without search text).
+- **`SearchRepository`** — protocol-only queries (blank text + protocol filter) route
+  to new `browseFiltered()` DAO query (no FTS required); FTS queries pass `isMmsInt`
+  sentinel parameter.
+- **`SearchDao`** — `isMmsInt: Int = -1` added to both `searchMessagesFiltered` and
+  `searchMessagesFilteredWithReaction`; new `browseFiltered()` query.
+- Empty state updated: "Type to search, or pick SMS / MMS to browse".
+
+### Historical sync — case-insensitive MIME type matching
+- `FirstLaunchSyncWorker.getMmsBody()` and `SmsSyncHandler.getMmsBodyIncremental()` now
+  use `equals(ignoreCase = true)` for `text/plain` / `application/smil` and
+  `startsWith(..., ignoreCase = true)` for `image/`, `video/`, `audio/`. Fixes missing
+  images and voice memos from Samsung and other OEMs that store MIME types with mixed case
+  (e.g., `audio/AMR`, `image/JPEG`).
+
+### Thread view — auto-scroll to bottom on send
+- **`ThreadViewModel.scrollToBottomEvent`** — new `SharedFlow<Unit>` that fires once per
+  `sendMessage()` call, before the coroutine inserts the optimistic message. The scroll is
+  triggered before the DB round-trip so the list is already animating as the row lands.
+- **`ThreadContent`** — new `LaunchedEffect(Unit)` collects `scrollToBottomEvent` and calls
+  `listState.animateScrollToItem(0)` unconditionally regardless of how far back in history
+  the user has scrolled. Kept separate from the existing incoming-message FAB nudge so that
+  arriving messages while reading history still show the FAB rather than hijacking position.
+
+### Conversations — banner tap + default-app re-check fixes
+- **Banner tap** now launches the system SMS default dialog. API 29+:
+  `RoleManager.createRequestRoleIntent(ROLE_SMS)`; API 26–28: `ACTION_CHANGE_DEFAULT` with
+  `EXTRA_PACKAGE_NAME`.
+- **`ConversationsViewModel._isDefaultSmsApp`** changed from a one-shot
+  `MutableStateFlow(checkIsDefaultSmsApp())` (evaluated once at ViewModel creation, never
+  updated) to a re-checkable flow backed by `refreshDefaultSmsStatus()`.
+- **`ConversationsScreen`** adds a `DisposableEffect` + `LifecycleEventObserver` that calls
+  `refreshDefaultSmsStatus()` on every `Lifecycle.Event.ON_RESUME`. Banner now disappears
+  immediately when the user returns after granting the role.
+
+### First-launch sync recovery — threads-without-messages case
+- **`ConversationsViewModel.init`** recovery guard extended: in addition to catching
+  `syncDone && threadsEmpty`, it now also fires when `!threadsEmpty && messagesEmpty`
+  (both `messageDao.getMaxId()` and `messageDao.getMaxMmsId()` return null). Fixes a state
+  where `FirstLaunchSyncWorker` was killed between the thread upsert and the message insert:
+  thread list showed previews (from denormalized `lastMessagePreview` on `ThreadEntity`) but
+  every thread view was empty because no `Message` rows had been written.
+
+### SMS send pipeline bug fixes (SmsManager audit)
+
+**Root causes found via `docs/SMS_RESEARCH.md` audit.**
+
+- **`SmsManagerWrapper` — `thread_id` missing from `ContentValues`** — Samsung/MIUI ROMs
+  can mis-group a message when `THREAD_ID` is omitted. Fixed by calling
+  `Telephony.Threads.getOrCreateThreadId(context, destinationAddress)` and writing the
+  result into the insert values. Also added `DATE_SENT` (epoch millis when PDU left device)
+  and `SEEN = 1` (notification acknowledged) to match the full contract.
+
+- **`SmsManagerWrapper` — delivery callbacks carried stale optimistic ID** — The
+  `EXTRA_MESSAGE_ID` bundled into the `sentIntent` / `deliveredIntent` PendingIntents was
+  the negative temporary ID from `ThreadViewModel` (e.g. `-1714000000000`). By the time
+  either intent fired, `SmsSyncHandler` had already deleted that row and inserted the real
+  row under the positive content-provider `_id`. `SmsSentDeliveryReceiver.updateDeliveryStatus`
+  was therefore always a no-op. Fixed by capturing the `Uri` returned by
+  `contentResolver.insert()`, parsing the row ID with `ContentUris.parseId()`, and
+  bundling it as a new `EXTRA_SMS_ROW_ID` extra.
+
+- **`SmsSentDeliveryReceiver` — Room updated with wrong ID; content provider never updated**
+  — Updated to read `EXTRA_SMS_ROW_ID` (positive), falling back to `EXTRA_MESSAGE_ID` only
+  if the new extra is absent (backward-compat). On `ACTION_SMS_SENT` failure,
+  `content://sms` row `STATUS` is now updated to `Telephony.Sms.STATUS_FAILED` so third-party
+  apps stop showing the message as pending. On `ACTION_SMS_DELIVERED`, `STATUS` is set to
+  `Telephony.Sms.STATUS_COMPLETE`.
+
+- **`SmsSyncHandler.syncLatestSms` — synced sent messages started as `DELIVERY_STATUS_NONE`**
+  — The content observer fires when we write to `content://sms/sent`; the resulting
+  incremental sync now sets `deliveryStatus = DELIVERY_STATUS_PENDING` for sent messages
+  (`isSent == true`) so the clock icon appears immediately. Received messages retain
+  `DELIVERY_STATUS_NONE` (no tracking).
+
+---
+
 ## 2026-05-02
 
-### Pinned conversations — long-press context menu
+### Settings — default SMS app status row
+- **`SettingsScreen` — new "General" section** at the top of the screen with a
+  `DefaultSmsStatusRow`. When Postmark is already default: green checkmark + "Postmark is
+  your default SMS app". Otherwise: tappable row "Tap to set Postmark as your default SMS
+  app". API 29+: launches `RoleManager.createRequestRoleIntent(ROLE_SMS)`; API <29:
+  launches `ACTION_CHANGE_DEFAULT`. Status re-evaluated at composition time so the row
+  updates if the user returns from the system dialog.
+
+### MMS image loading fix — Coil `ContentResolver` binding
+- **`MmsAttachment` composable** — switched `AsyncImage` to `SubcomposeAsyncImage` to
+  support a composable error slot.
+- **`ImageRequest`** built with explicit `context` so Coil's `ContentUriFetcher` binds the
+  correct `ContentResolver` when opening `content://mms/part/` URIs (requires the default
+  SMS role — now grantable from the new Settings row).
+- `crossfade(true)` added for a smoother load transition.
+- Error slot shows "📷 Photo" label instead of silently blank space.
+
+### Stats screen — collapsible day sections + natural message order
+- **Message order within each day** reversed: oldest message now appears at the top of the
+  day group, reading downward naturally (was newest-on-top).
+- **Collapsible day sections** — tapping a day header toggles it collapsed / expanded;
+  chevron icon reflects current state.
+- **Collapse all / Expand all** `TextButton` added at the top of both day-list panels; label
+  and icon flip based on current expansion state.
+- `collapsedAllDays` resets when `allThreadMessages` changes; `collapsedSelectedDays` resets
+  when `selectedDays` changes so stale expansion state never leaks between data refreshes.
+
+### SMS/MMS sync audit — 5 gaps resolved
+- **Bug A (HIGH) — null-address rows silently dropped** — `processSmsCursor`
+  (`FirstLaunchSyncWorker`) and `syncLatestSms` (`SmsSyncHandler`) both skipped rows where
+  `address` was null (`?: continue`). Null addresses are normal for WAP push, carrier
+  service messages, and some Samsung OEM notifications — causing entire threads or intra-
+  thread gaps to be invisible. Fix: `?: ""` preserves the row; `lookupContactName` short-
+  circuits on empty input; display-name fallback is `address.ifEmpty { "Unknown" }`.
+- **Bug B (MEDIUM) — Samsung fallback missing outbox + failed URIs** — The per-mailbox
+  fallback list for OneUI devices omitted `content://sms/outbox` (type 4) and
+  `content://sms/failed` (type 5). Threads whose only messages were in those boxes were
+  silently skipped. Fix: both URIs added to `syncAllSms()` fallback list.
+- **Bug C (MEDIUM) — drafts/outbox/failed rendered as received** — `isSent` was
+  `type == MESSAGE_TYPE_SENT` (== 2) in all four sync paths; types 3/4/5 resolved to
+  `false` and appeared on the incoming (left) side. Fix: changed to
+  `type != MESSAGE_TYPE_INBOX` for SMS and `msgBox != MESSAGE_BOX_INBOX` for MMS.
+- **Bug D (MEDIUM) — `getMmsAddress` returns "insert-address-token"** — Samsung PDU
+  placeholder literal set as thread address before the real FROM address resolved.
+  Fix: both `getMmsAddress` (full sync) and `getMmsAddressIncremental` (incremental sync)
+  return `"Unknown"` when the address column equals `"insert-address-token"`.
+- **Bug F (LOW) — race window before first DB commit** — `SmsSyncHandler` bailed when
+  `maxKnownId == 0` (DB empty); a `ContentObserver` firing during `FirstLaunchSyncWorker`'s
+  first 500-row batch window would exit without processing that message. Fix: added
+  `SmsSyncHandler.triggerCatchUp()` (public suspend fun, runs one `syncLatestSms` +
+  `syncLatestMms` pass); injected into `FirstLaunchSyncWorker` via Hilt; called
+  immediately after `first_sync_completed = true`.
+- *(Bug E deferred — group MMS sent-address display label wrong; thread grouping unaffected.)*
+
+### MMS media attachments — images, video, audio in message bubbles
+- **Room schema v9** — `MIGRATION_8_9` adds two nullable columns to the `messages` table:
+  `attachmentUri TEXT` (stable `content://mms/part/{id}` URI) and `mimeType TEXT`.
+  Both are `NULL` for plain SMS rows; non-destructive migration.
+- **Coil 2.7.0** — `io.coil-kt:coil-compose` added for async image loading in bubbles.
+- **`Message` domain model** — `attachmentUri: String?` and `mimeType: String?` added.
+  New `previewText` extension returns body when non-empty, otherwise "📷 Photo" /
+  "🎥 Video" / "🎵 Audio message" / "[MMS]" based on mime type.
+- **`MessageEntity`** — both new fields wired through `toDomain()` / `toEntity()`.
+- **`FirstLaunchSyncWorker`** — `getMmsBody()` rewritten to return `MmsParts(body,
+  attachmentUri, mimeType)`. Queries `_id`, `ct`, `text` from `content://mms/{id}/part`;
+  accumulates `text/plain` into body; captures first `image/*`, `video/*`, or `audio/*`
+  part as `content://mms/part/{partId}`; skips `application/smil`. Thread preview uses
+  `parts.previewText()`.
+- **`SmsSyncHandler`** — `getMmsBodyIncremental()` receives same `MmsParts` treatment.
+  SMS incremental path uses `latest.previewText` extension for thread preview.
+- **`ThreadScreen` — `MmsAttachment` composable** — new private composable. Renders:
+  `AsyncImage` (Coil, `ContentScale.Crop`, max 240 dp) for images; `Box` with `PlayArrow`
+  icon for video; `Surface` chip with `MusicNote` icon for audio; fallback text otherwise.
+- **`MessageBubble`** — switches between attachment-mode padding (`4.dp`, renders
+  `MmsAttachment` + optional caption) and text-mode padding (`12/8.dp`, body text only).
+- **`DevOptionsViewModel.wipeAndResync()`** — deletes all Room messages + threads, removes
+  `first_sync_completed` pref, enqueues full re-import. Never touches `content://sms`.
+- **`DevOptionsScreen`** — "Wipe DB + re-import" button added to SMS sync section.
+
+### Per-number notification filtering
 - **`ConversationsViewModel`** — `togglePin(threadId, currentlyPinned)` and `toggleMute(threadId,
   currentlyMuted)` added; thin coroutine wrappers over `threadRepository.updatePinned` /
   `updateMuted`, mirroring the pattern already in `ThreadViewModel`.
