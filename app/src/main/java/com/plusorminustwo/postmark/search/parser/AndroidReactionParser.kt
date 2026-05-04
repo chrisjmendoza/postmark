@@ -34,7 +34,7 @@ class AndroidReactionParser @Inject constructor() {
         val isRemoval = match.groupValues[3].isNotBlank()
 
         // Reject anything whose first character is plain ASCII — that can't be an emoji.
-        if (emoji.isEmpty() || emoji[0].code <= 127) return null
+        if (emoji[0].code <= 127) return null
 
         return ParsedReaction(emoji, quotedText, isRemoval)
     }

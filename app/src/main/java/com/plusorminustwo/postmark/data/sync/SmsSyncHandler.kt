@@ -74,11 +74,14 @@ class SmsSyncHandler @Inject constructor(
             // Check if this is a reaction fallback (Apple or Android format)
             val appleParsed = appleReactionParser.parse(body)
             val androidParsed = if (appleParsed == null) androidReactionParser.parse(body) else null
-            if ((appleParsed != null && !appleParsed.isRemoval) ||
-                (androidParsed != null && !androidParsed.isRemoval)) {
+            val isActionableReaction = (appleParsed != null && !appleParsed.isRemoval) ||
+                (androidParsed != null && !androidParsed.isRemoval)
+            if (isActionableReaction) {
                 val threadMessages = messageRepository.getByThread(threadId)
-                val reaction = appleParsed?.let { appleReactionParser.processIncomingMessage(message, threadMessages, address) }
-                    ?: androidReactionParser.processIncomingMessage(message, threadMessages, address)
+                val reaction = when {
+                    appleParsed != null -> appleReactionParser.processIncomingMessage(message, threadMessages, address)
+                    else -> androidReactionParser.processIncomingMessage(message, threadMessages, address)
+                }
                 if (reaction != null) messageRepository.insertReaction(reaction)
             }
         }
