@@ -62,6 +62,9 @@ interface ReactionDao {
     @Query("SELECT DISTINCT emoji FROM reactions ORDER BY emoji")
     fun observeDistinctEmojis(): Flow<List<String>>
 
+    @Query("SELECT COUNT(*) FROM reactions WHERE messageId = :messageId AND senderAddress = :senderAddress AND emoji = :emoji")
+    suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int
+
     @Query("DELETE FROM reactions")
     suspend fun deleteAll()
 }

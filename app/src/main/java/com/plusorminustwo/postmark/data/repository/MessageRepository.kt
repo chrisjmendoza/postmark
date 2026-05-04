@@ -65,6 +65,20 @@ class MessageRepository @Inject constructor(
     suspend fun deleteOptimisticMessages(threadId: Long) =
         messageDao.deleteOptimisticMessages(threadId)
 
+    /** Deletes a single message by id (used to remove reaction fallback messages after parsing). */
+    suspend fun deleteById(messageId: Long) = messageDao.deleteById(messageId)
+
+    /** Returns the latest message in a thread (used to refresh thread preview after reaction cleanup). */
+    suspend fun getLatestForThread(threadId: Long): Message? =
+        messageDao.getLatestNonReactionForThread(threadId)?.toDomain()
+
+    /** Returns all messages ordered by timestamp (used by reprocessReactions debug tool). */
+    suspend fun getAll(): List<Message> = messageDao.getAll().map { it.toDomain() }
+
+    /** Returns true if a reaction with the same messageId + senderAddress + emoji already exists. */
+    suspend fun reactionExists(messageId: Long, senderAddress: String, emoji: String): Boolean =
+        reactionDao.countByMessageSenderAndEmoji(messageId, senderAddress, emoji) > 0
+
     /** Returns the highest SMS provider _id stored locally (SMS rows only), or null. */
     suspend fun getMaxId(): Long? = messageDao.getMaxId()
 

@@ -22,8 +22,9 @@ class AppleReactionParser @Inject constructor(
     private val patterns: List<ReactionPattern> by lazy { loadPatterns() }
 
     // Matches: Loved 'some text' or Loved "some text"
+    // Quote class covers: " " ' ' „ " « » (all common keyboard/locale variants)
     private val reactionRegex = Regex(
-        """^(.+?)\s+['"'"](.+?)['"'"]\s*$""",
+        """^(.+?)\s+[\u201C\u201D\u2018\u2019\u201E\u00AB\u00BB"'](.+?)[\u201C\u201D\u2018\u2019\u201E\u00AB\u00BB"']\s*$""",
         RegexOption.DOT_MATCHES_ALL
     )
 

@@ -89,7 +89,7 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       "🎥 Video" / "🎵 Audio message" when body is empty; used by both sync handlers.
 - [ ] **Tap image → full-screen viewer** — `Dialog` or separate screen, pinch-to-zoom.
 - [ ] **Tap video → player dialog** — `ExoPlayer` / `VideoView` in a `Dialog`.
-- [ ] **Audio playback controls** — `MediaPlayer` or `ExoPlayer` play/pause on audio chip.
+- [x] **Audio playback controls** — `MediaPlayer` play/pause on audio chip in `ThreadScreen`.
 - [ ] **Rich media in reply bar** — ~~attachment button left of text field. Image picker
       (`PickVisualMedia`), camera capture. Requires `READ_MEDIA_IMAGES` / `CAMERA`.~~
       **Done (different approach):** `GetContent` launcher with `image/*` / `audio/*` MIME

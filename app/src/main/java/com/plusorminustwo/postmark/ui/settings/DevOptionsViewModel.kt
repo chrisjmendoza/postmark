@@ -14,6 +14,7 @@ import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,7 @@ class DevOptionsViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val statsUpdater: StatsUpdater,
+    private val reactionParser: ReactionFallbackParser,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -35,6 +37,9 @@ class DevOptionsViewModel @Inject constructor(
 
     private val _isRecomputing = MutableStateFlow(false)
     val isRecomputing: StateFlow<Boolean> = _isRecomputing.asStateFlow()
+
+    private val _isReprocessing = MutableStateFlow(false)
+    val isReprocessing: StateFlow<Boolean> = _isReprocessing.asStateFlow()
 
     fun clearFeedback() { _feedback.value = null }
 
@@ -216,6 +221,45 @@ class DevOptionsViewModel @Inject constructor(
                 FirstLaunchSyncWorker.buildRequest()
             )
             _feedback.value = "DB wiped — full re-import started"
+        }
+    }
+
+    // ── Reprocess reactions (DEBUG) ────────────────────────────────────────
+    // Scans every stored message, converts any reaction fallback to a Reaction entity
+    // (deduped), and deletes the original message so it no longer shows as a bubble.
+
+    fun reprocessReactions() {
+        viewModelScope.launch {
+            _isReprocessing.value = true
+            try {
+                val allMessages = messageRepository.getAll()
+                val byThread = allMessages.groupBy { it.threadId }
+                var inserted = 0
+                var removed = 0
+                val toDelete = mutableListOf<Long>()
+
+                byThread.forEach { (_, msgs) ->
+                    msgs.forEach { msg ->
+                        val parsed = reactionParser.parse(msg.body) ?: return@forEach
+                        if (!parsed.isRemoval) {
+                            val reaction = reactionParser.processIncomingMessage(msg, msgs, msg.address)
+                            if (reaction != null && !messageRepository.reactionExists(
+                                    reaction.messageId, reaction.senderAddress, reaction.emoji)) {
+                                messageRepository.insertReaction(reaction)
+                                inserted++
+                            }
+                        }
+                        toDelete += msg.id
+                        removed++
+                    }
+                }
+
+                toDelete.forEach { messageRepository.deleteById(it) }
+                statsUpdater.recomputeAll()
+                _feedback.value = "Reactions reprocessed: $inserted inserted, $removed fallbacks removed"
+            } finally {
+                _isReprocessing.value = false
+            }
         }
     }
 

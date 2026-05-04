@@ -16,7 +16,7 @@ import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.previewText
-import com.plusorminustwo.postmark.search.parser.AppleReactionParser
+import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +30,7 @@ class SmsSyncHandler @Inject constructor(
     @ApplicationContext private val context: Context,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val reactionParser: AppleReactionParser,
+    private val reactionParser: ReactionFallbackParser,
     private val statsUpdater: StatsUpdater
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -134,29 +134,38 @@ class SmsSyncHandler @Inject constructor(
 
         if (newMessages.isEmpty()) return
 
-        // Persist all new messages in one batch.
-        messageRepository.insertAll(newMessages)
+        // Separate reaction-fallback messages from real messages before persisting.
+        // Reaction fallbacks (Android: "👍 to \"text\"", Apple: "Liked 'text'") must be
+        // resolved to Reaction entities and never stored as visible message bubbles.
+        val (reactionMsgs, normalMessages) = newMessages.partition { reactionParser.isReactionFallback(it.body) }
 
-        // Per-thread post-processing.
-        newMessages.groupBy { it.threadId }.forEach { (threadId, msgs) ->
-            // The list is ordered ASC so last() is the most recent.
-            val latest = msgs.last()
-            // Clean up any optimistic (negative-id) sent messages for this thread.
-            messageRepository.deleteOptimisticMessages(threadId)
-            threadRepository.updateLastMessageAt(threadId, latest.timestamp)
-            threadRepository.updateLastMessagePreview(threadId, latest.previewText)
+        if (normalMessages.isNotEmpty()) {
+            messageRepository.insertAll(normalMessages)
+            normalMessages.groupBy { it.threadId }.forEach { (threadId, msgs) ->
+                val latest = msgs.last()
+                messageRepository.deleteOptimisticMessages(threadId)
+                threadRepository.updateLastMessageAt(threadId, latest.timestamp)
+                threadRepository.updateLastMessagePreview(threadId, latest.previewText)
+            }
         }
+        // Clean up optimistic messages for threads that only received reaction fallbacks.
+        val normalThreadIds = normalMessages.map { it.threadId }.toSet()
+        reactionMsgs.map { it.threadId }.distinct()
+            .filter { it !in normalThreadIds }
+            .forEach { messageRepository.deleteOptimisticMessages(it) }
 
         // One stats recompute covers all affected threads.
         statsUpdater.recomputeAll()
 
-        // Apple reaction parser pass over new messages.
-        newMessages.forEach { message ->
+        // Resolve reaction fallback messages into Reaction entities (deduped).
+        reactionMsgs.forEach { message ->
             val parsed = reactionParser.parse(message.body) ?: return@forEach
             if (!parsed.isRemoval) {
                 val threadMessages = messageRepository.getByThread(message.threadId)
                 val reaction = reactionParser.processIncomingMessage(message, threadMessages, message.address)
-                if (reaction != null) messageRepository.insertReaction(reaction)
+                if (reaction != null && !messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
+                    messageRepository.insertReaction(reaction)
+                }
             }
         }
     }

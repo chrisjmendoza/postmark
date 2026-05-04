@@ -152,7 +152,7 @@ class SearchReactionFilterTest {
         private val reactingMessages: Map<String, List<MessageEntity>> = emptyMap()
     ) : SearchDao {
         override suspend fun searchMessagesFiltered(
-            query: String, threadId: Long, isSentInt: Int, startMs: Long, limit: Int, offset: Int
+            query: String, threadId: Long, isSentInt: Int, startMs: Long, isMmsInt: Int, limit: Int, offset: Int
         ) = allMessages.filter {
             (threadId == -1L || it.threadId == threadId) &&
             (isSentInt == -1 || it.isSent == (isSentInt == 1)) &&
@@ -160,7 +160,7 @@ class SearchReactionFilterTest {
         }
 
         override suspend fun searchMessagesFilteredWithReaction(
-            query: String, threadId: Long, isSentInt: Int, startMs: Long,
+            query: String, threadId: Long, isSentInt: Int, startMs: Long, isMmsInt: Int,
             reactionEmoji: String, limit: Int, offset: Int
         ): List<MessageEntity> {
             val withReaction = reactingMessages[reactionEmoji] ?: emptyList()
@@ -170,6 +170,10 @@ class SearchReactionFilterTest {
                 (startMs == -1L || it.timestamp >= startMs)
             }
         }
+
+        override suspend fun browseFiltered(
+            threadId: Long, isSentInt: Int, startMs: Long, isMmsInt: Int, limit: Int, offset: Int
+        ) = emptyList<MessageEntity>()
     }
 
     private class FakeThreadDao : ThreadDao {
@@ -209,5 +213,6 @@ class SearchReactionFilterTest {
         override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
         override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
         override suspend fun deleteAll() {}
+        override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0
     }
 }

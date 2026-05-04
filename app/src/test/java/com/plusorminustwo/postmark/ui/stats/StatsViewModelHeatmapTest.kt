@@ -278,6 +278,8 @@ private class FakeMessageDao : MessageDao {
     override suspend fun getAll(): List<MessageEntity> = emptyList()
     override suspend fun getMaxId(): Long? = null
     override suspend fun getMaxMmsId(): Long? = null
+    override suspend fun deleteById(messageId: Long) = Unit
+    override suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity? = null
 }
 
 private class FakeThreadDao : ThreadDao {
@@ -332,4 +334,5 @@ private class FakeReactionDao : ReactionDao {
     override suspend fun getByThread(threadId: Long): List<ReactionEntity> = emptyList()
     override suspend fun deleteAll() = Unit
     override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
+    override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0
 }

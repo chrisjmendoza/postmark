@@ -20,7 +20,8 @@ import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.Thread
-import com.plusorminustwo.postmark.search.parser.AppleReactionParser
+import com.plusorminustwo.postmark.domain.model.previewText
+import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
@@ -30,7 +31,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val reactionParser: AppleReactionParser,
+    private val reactionParser: ReactionFallbackParser,
     private val statsUpdater: StatsUpdater,
     private val smsSyncHandler: SmsSyncHandler  // for post-sync catch-up of race-window messages
 ) : CoroutineWorker(context, params) {
@@ -177,13 +178,31 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         Log.i(TAG, "Persist complete")
 
         debugLog("Running reaction parser …")
+        val reactionMsgIds = mutableListOf<Long>()
         threads.keys.forEach { threadId ->
             val threadMsgs = messageRepository.getByThread(threadId)
             threadMsgs.forEach { msg ->
                 val parsed = reactionParser.parse(msg.body) ?: return@forEach
                 if (!parsed.isRemoval) {
                     val reaction = reactionParser.processIncomingMessage(msg, threadMsgs, msg.address)
-                    if (reaction != null) messageRepository.insertReaction(reaction)
+                    if (reaction != null && !messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
+                        messageRepository.insertReaction(reaction)
+                    }
+                }
+                // Regardless of whether the reaction resolved, the fallback message itself
+                // should not appear as a visible bubble — delete it from the message table.
+                reactionMsgIds += msg.id
+            }
+        }
+        if (reactionMsgIds.isNotEmpty()) {
+            reactionMsgIds.forEach { messageRepository.deleteById(it) }
+            debugLog("Removed ${reactionMsgIds.size} reaction fallback messages")
+            // Fix any thread whose last-message preview was a reaction fallback text.
+            threads.keys.forEach { threadId ->
+                val latest = messageRepository.getLatestForThread(threadId)
+                if (latest != null) {
+                    threadRepository.updateLastMessageAt(threadId, latest.timestamp)
+                    threadRepository.updateLastMessagePreview(threadId, latest.previewText)
                 }
             }
         }

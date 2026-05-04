@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: May 3, 2026
+Last updated: May 4, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -356,9 +356,33 @@ TIER 1 — REMAINING (in priority order)
    Likely causes: address normalization, cursor pagination,
    or type filtering in SmsSyncHandler / FirstLaunchSyncWorker.
 
-4. MMS MEDIA — PLAYBACK (follow-on)
-   Tap image → full-screen viewer, tap video → ExoPlayer dialog,
-   audio chip → MediaPlayer play/pause.
+4. MMS MEDIA — remaining playback
+   Tap image → full-screen viewer, tap video → ExoPlayer dialog.
+   (Audio chip play/pause is now done.)
+
+COMPLETED THIS SPRINT (May 4, 2026)
+✅ Reaction fallback parsing — Android + Apple (unified)
+   - AndroidReactionParser: parses Google Messages / Samsung
+     fallback format (`👍 to "text"` / `👍 to "text" removed`).
+     All quote variants; ASCII guard; excludes reaction msg from
+     candidate search. 15 unit tests in AndroidReactionParserTest.
+   - ReactionFallbackParser: unified wrapper (Android first, then Apple).
+   - AppleReactionParser: updated quote-variant regex.
+   - SmsSyncHandler: partitions reaction fallbacks BEFORE insert;
+     dedup check via countByMessageSenderAndEmoji.
+   - FirstLaunchSyncWorker: same partition logic; deletes fallback
+     messages from Room after processing; fixes thread previews.
+   - ReactionDao: added countByMessageSenderAndEmoji.
+   - MessageDao: added deleteById + getLatestNonReactionForThread.
+   - MessageRepository: added deleteById, getLatestForThread,
+     getAll, reactionExists.
+✅ Thread view — voice memo play button
+   Interactive play/pause MediaPlayer on audio MMS chip;
+   DisposableEffect cleanup; "Playing…" label while active.
+✅ Dev Options — Reprocess Reactions debug action
+   Scans all messages, inserts reactions (deduped), deletes
+   fallback msgs, calls StatsUpdater.recomputeAll().
+✅ All 308 unit tests passing.
 
 COMPLETED THIS SPRINT (May 3, 2026)
 ✅ Thread auto-scroll to bottom on send

@@ -15,7 +15,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] `SmsContentObserver` watching `content://sms`
 - [x] `SmsSyncHandler` — incremental sync from content provider to Room
 - [x] `FirstLaunchSyncWorker` — full historical sync with retry; Logcat tag `PostmarkSync`; last-sync status written to SharedPrefs; WorkManager Hilt init fixed (disabled `WorkManagerInitializer` in AndroidManifest)
-- [x] `AppleReactionParser` — 6 emoji × 5 languages, loaded from JSON asset
+- [x] `AppleReactionParser` — 6 emoji × 5 languages, loaded from JSON asset; unified with `AndroidReactionParser` via `ReactionFallbackParser`
 - [x] Room schema: Thread, Message, Reaction, ThreadStats; migrations 1→2 (lastMessagePreview), 2→3 (deliveryStatus), 4→5 (isMuted, topReactionEmojisJson), 5→6 (isPinned)
 - [x] FTS4 virtual table with INSERT/UPDATE/DELETE sync triggers
 - [x] Hilt DI wired end-to-end
@@ -82,7 +82,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **"Wipe DB + re-import"** in Dev Options — retroactive re-sync for previously imported MMS without attachment data
 - [ ] Tap image → full-screen pinch-to-zoom viewer
 - [ ] Tap video → `ExoPlayer` dialog
-- [ ] Audio chip → `MediaPlayer` / `ExoPlayer` playback controls
+- [x] Audio chip → `MediaPlayer` playback controls — play/pause button in `ThreadScreen`; `DisposableEffect` for cleanup
 - [x] **Rich media in reply bar** — attach button + dropdown (photo/video, audio file), `GetContent` launcher, attachment preview chip, MMS send path (`MmsManagerWrapper` + WAP Binary PDU, `MmsSentReceiver`). Camera capture still pending.
 - [x] **SMS/MMS type label** — dimmed label next to timestamp in `MessageBubble`
 - [x] **Heatmap month/year jump picker** — tap label → `MonthYearPickerDialog`, year navigation, 4×3 month grid, future months disabled

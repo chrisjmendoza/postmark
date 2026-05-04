@@ -2,7 +2,7 @@
   "patterns": [
     {
       "emoji": "❤️",
-      "verbs": ["Loved", "Vond geweldig", "aimé", "liebte", "Le encantó"],
+      "verbs": ["Loved", "Vond geweldig", "A adoré", "Mochte", "Le encantó"],
       "removeVerbs": [
         "Removed a heart from",
         "Verwijderde een hart van",
@@ -13,7 +13,7 @@
     },
     {
       "emoji": "😂",
-      "verbs": ["Laughed at", "Lacte om", "rit de", "lachte über", "Se rio de"],
+      "verbs": ["Laughed at", "Lacte om", "A ri de", "Lachte über", "Se rio de"],
       "removeVerbs": [
         "Removed a laugh from",
         "Verwijderde een lach van",
@@ -24,7 +24,7 @@
     },
     {
       "emoji": "👍",
-      "verbs": ["Liked", "Vond leuk", "a aimé", "mochte", "Le gustó"],
+      "verbs": ["Liked", "Vond leuk", "A aimé", "Le gustó"],
       "removeVerbs": [
         "Removed a like from",
         "Verwijderde een vind-ik-leuk van",
@@ -35,7 +35,7 @@
     },
     {
       "emoji": "👎",
-      "verbs": ["Disliked", "Vond niet leuk", "n'a pas aimé", "mochte nicht", "No le gustó"],
+      "verbs": ["Disliked", "Vond niet leuk", "N'a pas aimé", "Mochte nicht", "No le gustó"],
       "removeVerbs": [
         "Removed a dislike from",
         "Verwijderde een niet-leuk van",
@@ -46,7 +46,7 @@
     },
     {
       "emoji": "‼️",
-      "verbs": ["Emphasized", "Benadrukte", "a mis l'accent sur", "betonte", "Enfatizó"],
+      "verbs": ["Emphasized", "Benadrukte", "A insisté sur", "Betonte", "Enfatizó"],
       "removeVerbs": [
         "Removed an exclamation mark from",
         "Verwijderde een uitroepteken van",
@@ -57,7 +57,7 @@
     },
     {
       "emoji": "❓",
-      "verbs": ["Questioned", "Vond het vreemd", "a trouvé cela étrange", "hinterfragte", "Cuestionó"],
+      "verbs": ["Questioned", "Vroeg zich af over", "S'est interrogé sur", "Fragte zu", "Preguntó sobre"],
       "removeVerbs": [
         "Removed a question mark from",
         "Verwijderde een vraagteken van",

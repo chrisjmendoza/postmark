@@ -19,6 +19,7 @@ fun DevOptionsScreen(
 ) {
     val feedback by viewModel.feedback.collectAsState()
     val isRecomputing by viewModel.isRecomputing.collectAsState()
+    val isReprocessing by viewModel.isReprocessing.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(feedback) {
@@ -97,6 +98,30 @@ fun DevOptionsScreen(
                 "Delete all local data then re-import everything from system SMS (safe — never deletes from system)"
             ) {
                 viewModel.wipeAndResync()
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+            DevSectionHeader("Reactions (debug)")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Reprocess reactions", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Scan all messages, convert reaction fallbacks to Reaction entities, remove fallback bubbles",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (isReprocessing) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    IconButton(onClick = viewModel::reprocessReactions) {
+                        Icon(Icons.Default.Refresh, "Reprocess reactions")
+                    }
+                }
             }
         }
     }

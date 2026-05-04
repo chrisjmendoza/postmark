@@ -6,7 +6,44 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
-### MMS sending (images, audio, video)
+### Reaction fallback parsing — Android + Apple (unified)
+- **`AndroidReactionParser`** — new `@Singleton` that parses Google Messages / Samsung
+  reaction fallback SMS format (`👍 to "quoted text"` / `👍 to "quoted text" removed`).
+  Accepts all common quote variants (curly, smart, guillemets, straight). Rejects
+  plain ASCII "emoji" (guards `emoji[0].code <= 127`). Finds the original message via
+  exact → prefix → fuzzy `.contains()` match; excludes the reaction message itself from
+  candidates. 15 unit tests in `AndroidReactionParserTest`.
+- **`ReactionFallbackParser`** — new `@Singleton` unified wrapper; tries Android format
+  first, then Apple. `SmsSyncHandler` and `FirstLaunchSyncWorker` now inject
+  `ReactionFallbackParser` instead of `AppleReactionParser` directly.
+- **`AppleReactionParser`** — updated quote-variant regex to use the same Unicode class as
+  `AndroidReactionParser`, ensuring consistent handling of curly/guillemet quotes in both
+  parsers.
+- **`SmsSyncHandler`** — reaction fallback messages are now partitioned BEFORE insert:
+  reaction messages are resolved to `Reaction` entities (with dedup check via
+  `ReactionDao.countByMessageSenderAndEmoji`) and never written to the messages table.
+- **`FirstLaunchSyncWorker`** — same partition-and-resolve logic during initial historical
+  sync; reaction fallback message IDs are deleted from Room after processing; thread
+  previews are updated to the latest non-reaction message after cleanup.
+- **`ReactionDao`** — added `countByMessageSenderAndEmoji` for dedup guard.
+- **`MessageDao`** — added `deleteById` and `getLatestNonReactionForThread`.
+- **`MessageRepository`** — added `deleteById`, `getLatestForThread`, `getAll`,
+  `reactionExists` helpers.
+
+### Thread view — voice memo play button
+- The audio attachment chip in `ThreadScreen` is now an interactive play/pause button
+  backed by `MediaPlayer`. Tapping plays the audio from the MMS part URI; tapping again
+  pauses. "Voice memo" label changes to "Playing…" while active. `DisposableEffect` ensures
+  the player is released when the composable leaves composition.
+
+### Dev Options — Reprocess Reactions
+- **`DevOptionsViewModel`** — new `reprocessReactions()` function: scans all messages,
+  resolves reaction fallbacks (both Android and Apple formats, deduped), deletes the
+  fallback messages from Room, and calls `StatsUpdater.recomputeAll()`.
+- **`DevOptionsScreen`** — new "Reactions (debug)" section with description and a
+  refresh button (shows `CircularProgressIndicator` while processing).
+
+
 - **`MmsManagerWrapper`** — new `@Singleton` that builds a WAP Binary M-Send.req PDU and
   calls `SmsManager.sendMultimediaMessage()`. Supports one media attachment (image, video,
   audio) plus optional text body. Well-known MIME types use short-integer encoding per the

@@ -3,6 +3,7 @@ package com.plusorminustwo.postmark.ui.thread
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.app.role.RoleManager
@@ -1089,18 +1090,67 @@ private fun MmsAttachment(uri: String, mimeType: String?) {
 
         // ── Audio ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("audio/") == true -> {
+            val ctx = LocalContext.current
+            var isPlaying by remember { mutableStateOf(false) }
+            val playerRef = remember { mutableStateOf<MediaPlayer?>(null) }
+
+            DisposableEffect(uri) {
+                onDispose {
+                    playerRef.value?.release()
+                    playerRef.value = null
+                }
+            }
+
             Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.secondaryContainer,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Text("Audio message", style = MaterialTheme.typography.bodySmall)
+                    IconButton(
+                        onClick = {
+                            if (isPlaying) {
+                                playerRef.value?.pause()
+                                isPlaying = false
+                            } else {
+                                playerRef.value?.release()
+                                val mp = MediaPlayer()
+                                playerRef.value = mp
+                                try {
+                                    mp.setDataSource(ctx, Uri.parse(uri))
+                                    mp.prepare()
+                                    mp.setOnCompletionListener { isPlaying = false }
+                                    mp.start()
+                                    isPlaying = true
+                                } catch (e: Exception) {
+                                    android.util.Log.e("AudioPlayer", "Playback failed for $uri", e)
+                                    mp.release()
+                                    playerRef.value = null
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Column {
+                        Text("Voice memo", style = MaterialTheme.typography.bodySmall)
+                        if (isPlaying) {
+                            Text(
+                                "Playing…",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
         }

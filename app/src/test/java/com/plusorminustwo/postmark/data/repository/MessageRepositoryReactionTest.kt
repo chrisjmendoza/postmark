@@ -127,6 +127,7 @@ private class FixedTopEmojiFakeReactionDao(
     override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
     override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
     override suspend fun deleteAll() = Unit
+    override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0
 }
 
 /**
@@ -151,6 +152,7 @@ private class LiveTopEmojiFakeReactionDao(
     override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
     override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
     override suspend fun deleteAll() = Unit
+    override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0
 }
 
 /**
@@ -182,4 +184,6 @@ private class StubMessageDao : MessageDao {
     override suspend fun getAll(): List<MessageEntity> = emptyList()
     override suspend fun getMaxId(): Long? = null
     override suspend fun getMaxMmsId(): Long? = null
+    override suspend fun deleteById(messageId: Long) = Unit
+    override suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity? = null
 }
