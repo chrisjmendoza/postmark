@@ -224,63 +224,37 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     // last message. Returns the count of MMS messages persisted.
     private suspend fun syncAllMms(): Int {
         debugLog("Querying content://mms …")
-        val mmsCursor = applicationContext.contentResolver.query(
-            Uri.parse("content://mms"),
-            arrayOf("_id", "thread_id", "date", "msg_box"),
-            null, null, "date ASC"
-        ) ?: run {
-            Log.w(TAG, "MMS cursor was null — skipping MMS sync")
-            return 0
-        }
-        debugLog("syncAllMms: cursor has ${mmsCursor.count} rows")
-
         val threads  = mutableMapOf<Long, Thread>()
         val messages = mutableListOf<Message>()
+        val mmsProjection = arrayOf("_id", "thread_id", "date", "msg_box")
 
-        mmsCursor.use { cursor ->
-            val idIdx     = cursor.getColumnIndexOrThrow("_id")
-            val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
-            val dateIdx   = cursor.getColumnIndexOrThrow("date")
-            val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+        // ── Primary query ─────────────────────────────────────────────────────
+        val primaryCursor = applicationContext.contentResolver.query(
+            Uri.parse("content://mms"), mmsProjection, null, null, "date ASC"
+        )
+        val primaryRowCount = primaryCursor?.count ?: -1
+        debugLog("syncAllMms: primary cursor: ${if (primaryCursor == null) "NULL" else "$primaryRowCount rows"}")
 
-            while (cursor.moveToNext()) {
-                val rawId     = cursor.getLong(idIdx)
-                val threadId  = cursor.getLong(threadIdx)
-                val dateSec   = cursor.getLong(dateIdx)
-                val msgBox    = cursor.getInt(boxIdx)
-                val id        = MMS_ID_OFFSET + rawId
-                // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
-                val isSent    = msgBox != Telephony.Mms.MESSAGE_BOX_INBOX
-                val timestamp = dateSec * 1000L          // seconds → millis
-                val parts     = getMmsBody(rawId)
-                val address   = getMmsAddress(rawId, isSent)
-                debugLog("syncAllMms: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
-                val existing = threads[threadId]
-                if (existing == null || timestamp > existing.lastMessageAt) {
-                    val displayName = lookupContactName(address) ?: address
-                    threads[threadId] = Thread(
-                        id = threadId,
-                        displayName = displayName,
-                        address = address,
-                        lastMessageAt = timestamp,
-                        // Use emoji label for media-only messages in the preview.
-                        lastMessagePreview = parts.previewText(),
-                        backupPolicy = BackupPolicy.GLOBAL
-                    )
-                }
-
-                messages += Message(
-                    id = id,
-                    threadId = threadId,
-                    address = address,
-                    body = parts.body,
-                    timestamp = timestamp,
-                    isSent = isSent,
-                    type = msgBox,
-                    isMms = true,
-                    attachmentUri = parts.attachmentUri,
-                    mimeType = parts.mimeType
+        if (primaryRowCount > 0) {
+            // Happy path: primary URI returned rows — use them directly.
+            primaryCursor!!.use { processMmsCursor(it, threads, messages) }
+        } else {
+            // ── Samsung / OEM fallback ────────────────────────────────────────
+            // Samsung OneUI returns a null or empty cursor for content://mms
+            // despite READ_SMS being granted — the same failure mode as
+            // content://sms (see syncAllSms). The per-mailbox sub-URIs remain
+            // readable and return the actual messages.
+            primaryCursor?.close()
+            Log.w(TAG, "MMS primary cursor returned $primaryRowCount rows — trying mailbox fallback URIs")
+            listOf(
+                Uri.parse("content://mms/inbox"),
+                Uri.parse("content://mms/sent"),
+            ).forEach { uri ->
+                val c = applicationContext.contentResolver.query(
+                    uri, mmsProjection, null, null, "date ASC"
                 )
+                debugLog("MMS fallback $uri → ${c?.count ?: "null"} rows")
+                c?.use { processMmsCursor(it, threads, messages) }
             }
         }
 
@@ -306,6 +280,61 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         Log.i(TAG, "MMS persist complete")
 
         return messages.size
+    }
+
+    // Extracts MMS rows from a cursor into the shared threads map and messages list.
+    // Called once for the primary URI or once per fallback URI (inbox/sent).
+    // Mirrors processSmsCursor() for symmetry with the SMS fallback path.
+    private fun processMmsCursor(
+        cursor: Cursor,
+        threads: MutableMap<Long, Thread>,
+        messages: MutableList<Message>
+    ) {
+        val idIdx     = cursor.getColumnIndexOrThrow("_id")
+        val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
+        val dateIdx   = cursor.getColumnIndexOrThrow("date")
+        val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+
+        while (cursor.moveToNext()) {
+            val rawId     = cursor.getLong(idIdx)
+            val threadId  = cursor.getLong(threadIdx)
+            val dateSec   = cursor.getLong(dateIdx)
+            val msgBox    = cursor.getInt(boxIdx)
+            val id        = MMS_ID_OFFSET + rawId
+            // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
+            val isSent    = msgBox != Telephony.Mms.MESSAGE_BOX_INBOX
+            val timestamp = dateSec * 1000L          // seconds → millis
+            val parts     = getMmsBody(rawId)
+            val address   = getMmsAddress(rawId, isSent)
+            debugLog("processMmsCursor: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
+
+            val existing = threads[threadId]
+            if (existing == null || timestamp > existing.lastMessageAt) {
+                val displayName = lookupContactName(address) ?: address
+                threads[threadId] = Thread(
+                    id = threadId,
+                    displayName = displayName,
+                    address = address,
+                    lastMessageAt = timestamp,
+                    // Use emoji label for media-only messages in the preview.
+                    lastMessagePreview = parts.previewText(),
+                    backupPolicy = BackupPolicy.GLOBAL
+                )
+            }
+
+            messages += Message(
+                id = id,
+                threadId = threadId,
+                address = address,
+                body = parts.body,
+                timestamp = timestamp,
+                isSent = isSent,
+                type = msgBox,
+                isMms = true,
+                attachmentUri = parts.attachmentUri,
+                mimeType = parts.mimeType
+            )
+        }
     }
 
     // Reads all parts of an MMS message and returns the text body plus the content URI

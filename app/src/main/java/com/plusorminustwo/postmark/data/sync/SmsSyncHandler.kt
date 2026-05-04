@@ -167,12 +167,17 @@ class SmsSyncHandler @Inject constructor(
     // giving the raw MMS _id to use in the WHERE clause.
     private suspend fun syncLatestMms(@Suppress("UNUSED_PARAMETER") uri: Uri) {
         val maxStoredId = messageRepository.getMaxMmsId() ?: 0L
-        // If nothing in DB yet, full sync hasn't run — bail out.
-        if (maxStoredId <= 0L) {
-            debugLog("syncLatestMms: no MMS in DB yet — skipping incremental pass")
+        // Bail only when the initial full sync hasn't run at all (both tables empty).
+        // If SMS is populated but MMS count is 0 — which happens when Samsung's
+        // content://mms returned empty during the first sync — we must proceed so
+        // that incoming MMS can still be picked up incrementally.
+        if (maxStoredId <= 0L && messageRepository.getMaxId() == null) {
+            debugLog("syncLatestMms: initial sync not yet complete — skipping incremental pass")
             return
         }
-        val maxRawId = maxStoredId - MMS_ID_OFFSET
+        // coerceAtLeast(0) prevents a negative bound when no MMS has been stored yet;
+        // "_id > 0" correctly returns all rows because MMS IDs start at 1.
+        val maxRawId = (maxStoredId - MMS_ID_OFFSET).coerceAtLeast(0L)
         debugLog("syncLatestMms: maxStoredId=$maxStoredId  maxRawId=$maxRawId")
 
         val cursor = context.contentResolver.query(
