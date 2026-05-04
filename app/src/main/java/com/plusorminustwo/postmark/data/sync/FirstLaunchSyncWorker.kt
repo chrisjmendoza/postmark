@@ -12,6 +12,7 @@ import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.search.parser.AndroidReactionParser
 import com.plusorminustwo.postmark.search.parser.AppleReactionParser
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -22,7 +23,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val reactionParser: AppleReactionParser,
+    private val appleReactionParser: AppleReactionParser,
+    private val androidReactionParser: AndroidReactionParser,
     private val statsUpdater: StatsUpdater
 ) : CoroutineWorker(context, params) {
 
@@ -130,11 +132,16 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         threads.keys.forEach { threadId ->
             val threadMsgs = messageRepository.getByThread(threadId)
             threadMsgs.forEach { msg ->
-                val parsed = reactionParser.parse(msg.body) ?: return@forEach
-                if (!parsed.isRemoval) {
-                    val reaction = reactionParser.processIncomingMessage(msg, threadMsgs, msg.address)
-                    if (reaction != null) messageRepository.insertReaction(reaction)
+                val appleParsed = appleReactionParser.parse(msg.body)
+                val androidParsed = if (appleParsed == null) androidReactionParser.parse(msg.body) else null
+                val reaction = when {
+                    appleParsed != null && !appleParsed.isRemoval ->
+                        appleReactionParser.processIncomingMessage(msg, threadMsgs, msg.address)
+                    androidParsed != null && !androidParsed.isRemoval ->
+                        androidReactionParser.processIncomingMessage(msg, threadMsgs, msg.address)
+                    else -> null
                 }
+                if (reaction != null) messageRepository.insertReaction(reaction)
             }
         }
 

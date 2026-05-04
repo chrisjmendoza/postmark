@@ -4,12 +4,11 @@ import android.content.Context
 import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Telephony
-import com.plusorminustwo.postmark.data.db.entity.MessageEntity
-import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.search.parser.AndroidReactionParser
 import com.plusorminustwo.postmark.search.parser.AppleReactionParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -24,7 +23,8 @@ class SmsSyncHandler @Inject constructor(
     @ApplicationContext private val context: Context,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val reactionParser: AppleReactionParser,
+    private val appleReactionParser: AppleReactionParser,
+    private val androidReactionParser: AndroidReactionParser,
     private val statsUpdater: StatsUpdater
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -71,11 +71,14 @@ class SmsSyncHandler @Inject constructor(
             threadRepository.updateLastMessagePreview(threadId, body)
             statsUpdater.recomputeAll()
 
-            // Check if this is an Apple reaction fallback
-            val parsed = reactionParser.parse(body)
-            if (parsed != null && !parsed.isRemoval) {
+            // Check if this is a reaction fallback (Apple or Android format)
+            val appleParsed = appleReactionParser.parse(body)
+            val androidParsed = if (appleParsed == null) androidReactionParser.parse(body) else null
+            if ((appleParsed != null && !appleParsed.isRemoval) ||
+                (androidParsed != null && !androidParsed.isRemoval)) {
                 val threadMessages = messageRepository.getByThread(threadId)
-                val reaction = reactionParser.processIncomingMessage(message, threadMessages, address)
+                val reaction = appleParsed?.let { appleReactionParser.processIncomingMessage(message, threadMessages, address) }
+                    ?: androidReactionParser.processIncomingMessage(message, threadMessages, address)
                 if (reaction != null) messageRepository.insertReaction(reaction)
             }
         }
