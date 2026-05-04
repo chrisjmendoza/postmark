@@ -202,6 +202,18 @@ WHAT IS WORKING (tested on device)
    - MMS image loading fixed: SubcomposeAsyncImage + explicit context
      so Coil's ContentUriFetcher binds the correct ContentResolver
      for content://mms/part/ URIs; error slot shows "📷 Photo" label
+✅ MMS sending — images, audio, video:
+   - Attach button in ReplyBar (📎 dropdown: "Photo or video" / "Audio file")
+   - Attachment preview chip with ✕ clear button
+   - MmsManagerWrapper builds WAP Binary M-Send.req PDU, sends via
+     SmsManager.sendMultimediaMessage(); temp PDU via FileProvider cacheDir
+   - MmsSentReceiver updates Room + content://mms on SENT/FAILED
+   - SMS/MMS type label dimmed next to timestamp in each bubble
+✅ Stats screen — Heatmap month/year jump picker:
+   - Tap month/year label → MonthYearPickerDialog
+   - Year nav (← year →, right disabled at current year)
+   - 4×3 month grid; future months at 30% alpha + non-clickable
+   - Selected month highlighted with primary color
 ✅ Privacy mode — Settings → Notifications toggle; SmsReceiver
    shows "New message" with no sender/body when enabled
 ✅ ThemePreference persisted in SharedPreferences

@@ -1,5 +1,5 @@
 # Android SMS/MMS API Reference for Postmark
-> Compiled: May 3, 2026
+> Compiled: May 3, 2026 — Last audited: May 3, 2026
 > Sources: developer.android.com official API reference + project briefing audit
 > Purpose: Single reference doc for all Android APIs touching this app — use this
 >          before implementing any feature that reads/writes SMS, MMS, Contacts,
@@ -104,8 +104,8 @@ These columns exist on every SMS table (`content://sms`, `content://sms/inbox`,
 | `STATUS_PENDING` | 32 | Sent but no delivery report yet ← set this on insert |
 | `STATUS_FAILED` | 64 | Delivery failed |
 
-> ⚠️ **Bug:** Postmark currently inserts `STATUS_NONE (-1)` as the pending placeholder.
-> Should be `STATUS_PENDING (32)`. Low impact but technically wrong per the official API.
+> ✅ **Fixed (May 3, 2026):** `SmsManagerWrapper` correctly inserts `STATUS_PENDING (32)` via
+> `put(Telephony.Sms.STATUS, Telephony.Sms.STATUS_PENDING)`. Doc was written before this was implemented.
 
 ---
 
@@ -521,6 +521,7 @@ AsyncImage(
 ## 11. Postmark Gap Analysis — What Still Needs Doing
 
 Cross-referenced against the project BRIEFING.md and TODO.md. Items are ordered by tier.
+Last audited: May 3, 2026.
 
 ### 🔴 TIER 1 — Critical
 
@@ -536,9 +537,9 @@ Cross-referenced against the project BRIEFING.md and TODO.md. Items are ordered 
   register a `BroadcastReceiver` for `ConnectivityManager.CONNECTIVITY_ACTION`,
   retry on reconnect. Update bubble state to "Queued".
 
-#### STATUS_PENDING correction
-- Current code sets `STATUS_NONE (-1)` at insert. Should be `STATUS_PENDING (32)`.
-- Minor but technically wrong per the official API.
+#### ~~STATUS_PENDING correction~~ ✅ DONE (May 3, 2026)
+- ~~Current code sets `STATUS_NONE (-1)` at insert. Should be `STATUS_PENDING (32)`.~~
+- `SmsManagerWrapper` correctly sets `STATUS_PENDING (32)`. Closed.
 
 ### 🟡 TIER 2 — Feature Complete
 
@@ -557,6 +558,12 @@ Cross-referenced against the project BRIEFING.md and TODO.md. Items are ordered 
 - `Telephony.Threads.getOrCreateThreadId(context, recipientSet: Set<String>)` handles multi-recipient thread IDs.
 - `displayName` in `ThreadEntity` becomes comma-joined names.
 - Per-bubble sender display requires `address` column from `Mms.Addr` type=FROM.
+
+#### MMS fallback coverage
+- `syncAllMms()` in `FirstLaunchSyncWorker` currently falls back to `content://mms/inbox` +
+  `content://mms/sent` only. The SMS fallback correctly covers inbox / sent / draft / outbox / failed.
+- Add `content://mms/draft` and `content://mms/outbox` to the MMS fallback list for symmetry.
+  Draft/outbox MMS are rare but can exist after a send failure.
 
 #### Tap contact name → contact viewer
 - `ContactsContract.QuickContact.showQuickContact()` or `Intent(ACTION_VIEW, contactUri)`.
@@ -578,14 +585,14 @@ Cross-referenced against the project BRIEFING.md and TODO.md. Items are ordered 
 
 ### 🟢 TIER 3 — Polish
 
-#### Delivery timestamps in content://sms
-- `SmsSentDeliveryReceiver` currently updates Room `DeliveryStatus` but does NOT update `content://sms`.
-- Other apps (Google Messages) won't show delivery state if we don't write back.
-- Fix: call `ContentResolver.update()` on the matching row (`STATUS → STATUS_COMPLETE/STATUS_FAILED`).
+#### ~~Delivery timestamps in content://sms~~ ✅ DONE (May 3, 2026)
+- ~~`SmsSentDeliveryReceiver` currently updates Room `DeliveryStatus` but does NOT update `content://sms`.~~
+- `SmsSentDeliveryReceiver` writes `STATUS_FAILED` on send failure and `STATUS_COMPLETE` on delivery
+  receipt using `ContentResolver.update()` on the matching `content://sms` row. Closed.
 
-#### DATE_SENT / SEEN fields
-- Currently not written on `content://sms/sent` insert.
-- Low impact but good practice; both documented in §4 above.
+#### ~~DATE_SENT / SEEN fields~~ ✅ DONE (May 3, 2026)
+- ~~Currently not written on `content://sms/sent` insert.~~
+- `SmsManagerWrapper` writes both `DATE_SENT` and `SEEN = 1` at insert time. Closed.
 
 #### Multi-SIM robustness
 - Current: `context.getSystemService(SmsManager::class.java)` with no sub ID.

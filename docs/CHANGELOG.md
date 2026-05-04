@@ -6,6 +6,77 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### MMS sending (images, audio, video)
+- **`MmsManagerWrapper`** — new `@Singleton` that builds a WAP Binary M-Send.req PDU and
+  calls `SmsManager.sendMultimediaMessage()`. Supports one media attachment (image, video,
+  audio) plus optional text body. Well-known MIME types use short-integer encoding per the
+  OMA MMS 1.2 / WSP spec; unknown types (audio/amr, audio/mpeg, etc.) are encoded as
+  null-terminated ASCII text. PDU is written to `cacheDir` via FileProvider and deleted
+  after sending (60 s delayed cleanup).
+- **`MmsSentReceiver`** — new `@AndroidEntryPoint` broadcast receiver that handles the
+  `MMS_SENT` sent-intent from `sendMultimediaMessage()`. Updates Room and the system
+  `content://mms` row to SENT or FAILED.
+- **`ThreadViewModel`** — new `pendingAttachmentUri` / `pendingMimeType` state flows;
+  `sendMessage()` now routes through the MMS path when an attachment is pending (or falls
+  back to SMS for text-only); `onAttachmentSelected()` / `clearAttachment()` manage the
+  pending state.
+- **`ReplyBar`** — new attach button with dropdown menu ("Photo or video" → image/* picker,
+  "Audio file" → audio/* picker); attachment preview chip (📷 Photo / 🎥 Video / 🎵 Audio /
+  📎 Attachment) with ✕ clear button; send button now enabled when attachment is pending
+  (even with no text).
+- **`AndroidManifest.xml`** — registered `MmsSentReceiver`.
+
+### Thread view — SMS/MMS type label
+- In `MessageBubble`, a dimmed "SMS" or "MMS" label is shown next to the timestamp whenever
+  the timestamp row is visible, using `labelSmall` style at 55% alpha.
+
+### Stats — heatmap month/year jump picker
+- Tapping the month/year label in `HeatmapView` now opens `MonthYearPickerDialog`: a year
+  navigation row (← year →, right disabled for current/future years) and a 4×3 month grid
+  (Jan–Dec). Future months are shown at 30% alpha and are not selectable. Selected month is
+  highlighted with `MaterialTheme.colorScheme.primary` background.
+
+### Historical sync — foreground service crash fix (Android 14)
+- **`AndroidManifest.xml`** — added explicit `<service>` entry for
+  `androidx.work.impl.foreground.SystemForegroundService` with
+  `android:foregroundServiceType="dataSync"` and `tools:node="merge"`.
+  Android 14 (API 34) enforces that the declared `foregroundServiceType` of a service
+  is a subset of the type requested at runtime. Without this declaration WorkManager's
+  `setForeground()` call threw `IllegalArgumentException` and killed
+  `FirstLaunchSyncWorker` on every launch — preventing MMS data from ever being
+  persisted. SMS had been synced in an earlier app version before the foreground
+  service requirement was added; MMS never completed successfully until now.
+
+### Historical sync — sync progress notification
+- **`FirstLaunchSyncWorker`** — foreground notification now shows a determinate
+  progress bar and counts: `"Syncing SMS — 12,500 / 51,234"` and
+  `"Syncing MMS — 5,000 / 108,592"`. Updates every 500 rows. Phase labels:
+  "Syncing SMS…" (indeterminate spinner at start) → counted SMS persist batches →
+  "Syncing MMS…" → counted MMS per-row sub-query phase → "Wrapping up…"
+  (indeterminate) for the final catch-up pass.
+- **`ConversationsScreen`** — `LinearProgressIndicator` below the top bar while a
+  sync is in flight, visible on the conversation list during the initial import.
+
+### Search — SMS/MMS protocol filter chips
+- **`SearchScreen`** — two new filter chips ("SMS" and "MMS") at the start of the
+  filter chip row. Tapping one filters results to that protocol; tapping again clears.
+- **`SearchViewModel`** — `SearchFilters` gains `isMms: Boolean?`;
+  `setProtocolFilter(isMms: Boolean?)` toggles/clears; blank query is now allowed
+  when a protocol filter is active (browse mode without search text).
+- **`SearchRepository`** — protocol-only queries (blank text + protocol filter) route
+  to new `browseFiltered()` DAO query (no FTS required); FTS queries pass `isMmsInt`
+  sentinel parameter.
+- **`SearchDao`** — `isMmsInt: Int = -1` added to both `searchMessagesFiltered` and
+  `searchMessagesFilteredWithReaction`; new `browseFiltered()` query.
+- Empty state updated: "Type to search, or pick SMS / MMS to browse".
+
+### Historical sync — case-insensitive MIME type matching
+- `FirstLaunchSyncWorker.getMmsBody()` and `SmsSyncHandler.getMmsBodyIncremental()` now
+  use `equals(ignoreCase = true)` for `text/plain` / `application/smil` and
+  `startsWith(..., ignoreCase = true)` for `image/`, `video/`, `audio/`. Fixes missing
+  images and voice memos from Samsung and other OEMs that store MIME types with mixed case
+  (e.g., `audio/AMR`, `image/JPEG`).
+
 ### Thread view — auto-scroll to bottom on send
 - **`ThreadViewModel.scrollToBottomEvent`** — new `SharedFlow<Unit>` that fires once per
   `sendMessage()` call, before the coroutine inserts the optimistic message. The scroll is

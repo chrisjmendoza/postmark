@@ -83,7 +83,13 @@ Build order follows the spec. Each phase depends on the previous.
 - [ ] Tap image → full-screen pinch-to-zoom viewer
 - [ ] Tap video → `ExoPlayer` dialog
 - [ ] Audio chip → `MediaPlayer` / `ExoPlayer` playback controls
-- [ ] Rich media in reply bar (attachment picker, camera, `READ_MEDIA_IMAGES`)
+- [x] **Rich media in reply bar** — attach button + dropdown (photo/video, audio file), `GetContent` launcher, attachment preview chip, MMS send path (`MmsManagerWrapper` + WAP Binary PDU, `MmsSentReceiver`). Camera capture still pending.
+- [x] **SMS/MMS type label** — dimmed label next to timestamp in `MessageBubble`
+- [x] **Heatmap month/year jump picker** — tap label → `MonthYearPickerDialog`, year navigation, 4×3 month grid, future months disabled
+- [x] **MIME type case fix** — `ignoreCase = true` in both sync handlers for Samsung mixed-case MIME types
+- [x] **Foreground service crash fix** — `SystemForegroundService` declared in manifest with `foregroundServiceType=dataSync`; fixes Android 14 `IllegalArgumentException` that killed every MMS sync attempt
+- [x] **Sync progress notification** — determinate progress bar + counted label ("Syncing MMS — 5,000 / 108,592") updating every 500 rows; `ConversationsScreen` shows inline `LinearProgressIndicator` while sync is in flight
+- [ ] Camera capture in attach menu
 - [ ] Group MMS — multi-recipient threads, per-bubble sender display
 
 ---

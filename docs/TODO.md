@@ -90,8 +90,11 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Tap image → full-screen viewer** — `Dialog` or separate screen, pinch-to-zoom.
 - [ ] **Tap video → player dialog** — `ExoPlayer` / `VideoView` in a `Dialog`.
 - [ ] **Audio playback controls** — `MediaPlayer` or `ExoPlayer` play/pause on audio chip.
-- [ ] **Rich media in reply bar** — attachment button left of text field. Image picker
-      (`PickVisualMedia`), camera capture. Requires `READ_MEDIA_IMAGES` / `CAMERA`.
+- [ ] **Rich media in reply bar** — ~~attachment button left of text field. Image picker
+      (`PickVisualMedia`), camera capture. Requires `READ_MEDIA_IMAGES` / `CAMERA`.~~
+      **Done (different approach):** `GetContent` launcher with `image/*` / `audio/*` MIME
+      filter, attach button with dropdown, attachment preview chip, MMS send path via
+      `MmsManagerWrapper` + WAP Binary PDU. Camera capture still pending.
 - [ ] **Group MMS** — multiple recipient addresses → single thread with comma-joined
       display name. Show sender name/avatar per bubble within group thread.
 
@@ -122,6 +125,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       to the phone's contact editor.
 
 ### Conversation list polish
+- [ ] **Unread filter button** — a toggle button (e.g. envelope icon or
+      "Unread" chip) in the conversation list top bar that, when active,
+      filters the list to only threads that have at least one unread message.
+      Tap again to clear the filter. Requires `isRead` flag already tracked
+      per message; derive `hasUnread` on `ThreadEntity` (or compute from
+      `MessageDao`) and expose a `showUnreadOnly: Boolean` toggle in
+      `ConversationsViewModel`. Badge the button with the current unread
+      thread count so the user knows at a glance how many are waiting.
 - [ ] **Unread count badge** — unread message count pill on each
       thread row. Requires `isRead` flag on `MessageEntity`.
 - [ ] **Swipe actions on conversation list** — swipe left: delete/archive with undo
@@ -164,6 +175,9 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `searchMessagesFilteredWithReaction()` subquery on `reactions`.
 - [x] **Reaction emoji list data-driven** — `ReactionDao.observeDistinctEmojis()`
       wired into `SearchScreen` via `SearchViewModel`; hardcoded list removed.
+- [x] **SMS/MMS protocol filter chips** — "SMS" and "MMS" chips in `SearchScreen`;
+      browse mode (protocol filter + blank query) supported via new `browseFiltered()`
+      DAO query. Empty state updated to prompt usage.
 - [ ] **Sort order toggle** — default is most-recent first; add a toggle
       (sort icon button in top bar or a chip) to switch between:
       - **Most recent** — `ORDER BY timestamp DESC` (default, already natural for FTS)
