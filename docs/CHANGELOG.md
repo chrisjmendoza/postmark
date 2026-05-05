@@ -4,9 +4,9 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
-## [Unreleased]
+## 2026-05-05
 
-### UI polish — page scrollability audit (May 5, 2026)
+### UI polish — page scrollability audit
 - **DevOptionsScreen** — added `verticalScroll(rememberScrollState())` to the content
   `Column` so the developer options page scrolls on small screens or when content grows.
   Matches the pattern already used in `SettingsScreen` and `BackupSettingsScreen`.
@@ -14,7 +14,50 @@ Newest entries on top. Each day is a journal of work completed.
   view), `ConversationsScreen` (LazyColumn), `SearchScreen` (LazyColumn + LazyRow), and
   `OnboardingScreen` (single centered layout — no scroll needed) are all correct.
 
-### MMS import — newest-first order + checkpoint resume (May 4, 2026)
+### Fix — emoji reaction pipeline (reactions silently dropped)
+
+Four root causes fixed across the parsing and sync pipeline:
+
+1. **Self-match via `contains` (`ReactionFallbackParser`)** — `processIncomingMessage`
+   was passing the raw `threadMessages` list (including the reaction message itself) to
+   `findOriginalMessage`. The fuzzy `.contains()` strategy matched the reaction body
+   against itself (the body literally contains the quoted text), so the produced
+   `Reaction.messageId` pointed at the message being deleted → dangling reaction, never
+   displayed. Fix: filter `it.id != message.id && !isReactionFallback(it.body)` before
+   searching.
+
+2. **Fuzzy `.contains()` match removed from both parsers** — replaced with a
+   newest-to-oldest search (sort by `timestamp` DESC, `take(100)`) using exact →
+   normalized → prefix strategies only. Messages beyond 100 positions are treated as
+   unresolvable (per UX spec: "more than 100 messages away — just render as normal").
+
+3. **Unicode normalization added** — `normalize()` maps U+2019/2018 → `'`, U+201C/201D
+   → `"`, U+2026 → `...`, U+2014/2013 → `-`. This handles apostrophe/quote mismatches
+   between Apple (smart quotes) and Android (straight quotes) keyboards.
+
+4. **Unresolved reactions preserved as normal bubbles** — `DevOptionsViewModel
+   .reprocessReactions()`, `FirstLaunchSyncWorker`, and `SmsSyncHandler` previously
+   deleted/discarded every reaction fallback message regardless of whether the original
+   was found. Now: only delete (or convert to reaction entity) when resolution succeeds.
+   If the original is not found, the fallback SMS stays visible as a normal text bubble.
+   `SmsSyncHandler` additionally re-inserts unresolved reactions into Room since they
+   were partitioned out before initial insertion.
+
+5. **Sent reactions attributed to `SELF_ADDRESS`** — for a sent reaction fallback SMS,
+   `msg.address` is the contact's number (the recipient), not the local user. The UI
+   uses `senderAddress == SELF_ADDRESS` to highlight reaction chips as "yours" and for
+   dedup/stats queries. Fixed in `FirstLaunchSyncWorker`, `SmsSyncHandler`, and
+   `DevOptionsViewModel.reprocessReactions()` to pass `SELF_ADDRESS` when `msg.isSent`.
+
+**Tests:** `AndroidReactionParserTest` extended with 15 new cases covering newest-first
+ordering, the 100-message cap, normalized apostrophe/quote/ellipsis/dash matching, and
+the self-match regression. The old `fuzzy containment used as fallback` test removed.
+
+---
+
+## 2026-05-04
+
+### MMS import — newest-first order + checkpoint resume
 - **Sort order changed to `_id DESC`** — MMS cursor now walks newest→oldest so recent
   conversations appear in Room within the first few hundred rows, rather than after the
   entire historical backlog is processed.
@@ -29,7 +72,7 @@ Newest entries on top. Each day is a journal of work completed.
 - **`MessageRepository.getMinMmsId()`** — thin delegator.
 - All 322 unit tests passing.
 
-### MMS import — streaming with ETA + in-app progress banner (May 4, 2026)
+### MMS import — streaming with ETA + in-app progress banner
 - **`FirstLaunchSyncWorker`** — MMS sync no longer accumulates all rows in memory before
   writing. `processMmsCursor()` now flushes every 500 rows via `flushMmsBatch()`, making
   messages visible in the thread view progressively during the hour-long import rather than
@@ -84,7 +127,11 @@ Newest entries on top. Each day is a journal of work completed.
 - **`DevOptionsScreen`** — new "Reactions (debug)" section with description and a
   refresh button (shows `CircularProgressIndicator` while processing).
 
+---
 
+## 2026-05-03
+
+### MMS send — outgoing MMS pipeline
 - **`MmsManagerWrapper`** — new `@Singleton` that builds a WAP Binary M-Send.req PDU and
   calls `SmsManager.sendMultimediaMessage()`. Supports one media attachment (image, video,
   audio) plus optional text body. Well-known MIME types use short-integer encoding per the

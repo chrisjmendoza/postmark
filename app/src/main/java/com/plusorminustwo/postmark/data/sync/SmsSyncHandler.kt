@@ -16,6 +16,7 @@ import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.previewText
+import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -158,15 +159,26 @@ class SmsSyncHandler @Inject constructor(
         statsUpdater.recomputeAll()
 
         // Resolve reaction fallback messages into Reaction entities (deduped).
+        // If the original message cannot be found within 100 messages, insert the
+        // fallback as a normal visible bubble rather than silently dropping it.
+        val unresolvedReactionMsgs = mutableListOf<Message>()
         reactionMsgs.forEach { message ->
             val parsed = reactionParser.parse(message.body) ?: return@forEach
             if (!parsed.isRemoval) {
                 val threadMessages = messageRepository.getByThread(message.threadId)
-                val reaction = reactionParser.processIncomingMessage(message, threadMessages, message.address)
+                val senderAddress = if (message.isSent) SELF_ADDRESS else message.address
+                val reaction = reactionParser.processIncomingMessage(message, threadMessages, senderAddress)
                 if (reaction != null && !messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
                     messageRepository.insertReaction(reaction)
+                } else if (reaction == null) {
+                    // Original not found — preserve as a normal visible bubble.
+                    unresolvedReactionMsgs += message
                 }
             }
+            // Removal reactions: message was never inserted; nothing to do.
+        }
+        if (unresolvedReactionMsgs.isNotEmpty()) {
+            messageRepository.insertAll(unresolvedReactionMsgs)
         }
     }
 

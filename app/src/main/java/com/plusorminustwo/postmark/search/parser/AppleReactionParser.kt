@@ -45,16 +45,32 @@ class AppleReactionParser @Inject constructor(
         return null
     }
 
-    // Finds the original message that a reaction refers to using:
-    // 1. Exact match
-    // 2. Prefix match (original starts with quoted text)
-    // 3. Fuzzy containment
+    // Finds the original message that a reaction refers to.
+    // Searches newest-to-oldest, capped at 100 candidates.
+    // Strategy: exact → normalized (handles Apple/Android apostrophe mismatches) → prefix.
     fun findOriginalMessage(quotedText: String, candidates: List<Message>): Message? {
-        val lower = quotedText.lowercase()
-        return candidates.firstOrNull { it.body.equals(quotedText, ignoreCase = true) }
-            ?: candidates.firstOrNull { it.body.startsWith(quotedText, ignoreCase = true) }
-            ?: candidates.firstOrNull { it.body.lowercase().contains(lower) }
+        val searchWindow = candidates
+            .sortedByDescending { it.timestamp }
+            .take(100)
+
+        searchWindow.firstOrNull { it.body.equals(quotedText, ignoreCase = true) }
+            ?.let { return it }
+
+        val normalizedQuery = normalize(quotedText)
+        searchWindow.firstOrNull { normalize(it.body).equals(normalizedQuery, ignoreCase = true) }
+            ?.let { return it }
+
+        return searchWindow.firstOrNull {
+            it.body.startsWith(quotedText, ignoreCase = true) ||
+            normalize(it.body).startsWith(normalizedQuery, ignoreCase = true)
+        }
     }
+
+    private fun normalize(text: String): String = text
+        .replace('\u2019', '\'').replace('\u2018', '\'')
+        .replace('\u201C', '"').replace('\u201D', '"')
+        .replace("\u2026", "...")
+        .replace('\u2014', '-').replace('\u2013', '-')
 
     fun processIncomingMessage(
         message: Message,

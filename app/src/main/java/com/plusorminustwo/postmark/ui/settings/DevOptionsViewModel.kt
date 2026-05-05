@@ -13,6 +13,7 @@ import com.plusorminustwo.postmark.data.sync.FirstLaunchSyncWorker
 import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -239,18 +240,30 @@ class DevOptionsViewModel @Inject constructor(
                 val toDelete = mutableListOf<Long>()
 
                 byThread.forEach { (_, msgs) ->
-                    msgs.forEach { msg ->
+                    // Pre-partition so reaction fallbacks are never candidates for matching.
+                    val reactionMsgs = msgs.filter { reactionParser.isReactionFallback(it.body) }
+                    val normalMsgs = msgs.filter { !reactionParser.isReactionFallback(it.body) }
+
+                    reactionMsgs.forEach { msg ->
                         val parsed = reactionParser.parse(msg.body) ?: return@forEach
                         if (!parsed.isRemoval) {
-                            val reaction = reactionParser.processIncomingMessage(msg, msgs, msg.address)
+                            val senderAddress = if (msg.isSent) SELF_ADDRESS else msg.address
+                            val reaction = reactionParser.processIncomingMessage(msg, normalMsgs, senderAddress)
                             if (reaction != null && !messageRepository.reactionExists(
                                     reaction.messageId, reaction.senderAddress, reaction.emoji)) {
                                 messageRepository.insertReaction(reaction)
                                 inserted++
+                                // Only remove the fallback message when the reaction resolved.
+                                toDelete += msg.id
+                                removed++
                             }
+                            // If reaction == null (original not found or > 100 messages away),
+                            // leave the message in Room as a normal visible bubble.
+                        } else {
+                            // Removal: discard the fallback without inserting a reaction entity.
+                            toDelete += msg.id
+                            removed++
                         }
-                        toDelete += msg.id
-                        removed++
                     }
                 }
 

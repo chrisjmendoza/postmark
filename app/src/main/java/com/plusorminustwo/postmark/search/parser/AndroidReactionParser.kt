@@ -42,11 +42,43 @@ class AndroidReactionParser @Inject constructor() {
     }
 
     fun findOriginalMessage(quotedText: String, candidates: List<Message>): Message? {
-        val lower = quotedText.lowercase()
-        return candidates.firstOrNull { it.body.equals(quotedText, ignoreCase = true) }
-            ?: candidates.firstOrNull { it.body.startsWith(quotedText, ignoreCase = true) }
-            ?: candidates.firstOrNull { it.body.lowercase().contains(lower) }
+        // Search newest-to-oldest, capped at 100 messages — reactions referring to older
+        // messages are treated as unresolvable and rendered as normal bubbles.
+        val searchWindow = candidates
+            .sortedByDescending { it.timestamp }
+            .take(100)
+
+        // 1. Exact match (case-insensitive)
+        searchWindow.firstOrNull { it.body.equals(quotedText, ignoreCase = true) }
+            ?.let { return it }
+
+        // 2. Normalized match — handles apostrophe/quote mismatches between
+        //    Apple (U+2019 right single quote) and Android (U+0027 straight apostrophe)
+        //    and other common Unicode substitutions between platforms.
+        val normalizedQuery = normalize(quotedText)
+        searchWindow.firstOrNull { normalize(it.body).equals(normalizedQuery, ignoreCase = true) }
+            ?.let { return it }
+
+        // 3. Prefix match — reaction may quote only the start of a long message
+        searchWindow.firstOrNull {
+            it.body.startsWith(quotedText, ignoreCase = true) ||
+            normalize(it.body).startsWith(normalizedQuery, ignoreCase = true)
+        }?.let { return it }
+
+        // Deliberately no .contains() match — too broad and causes self-matching
+        // where the reaction message body contains the quoted text literally.
+        return null
     }
+
+    /**
+     * Normalizes known Unicode substitutions that differ between Apple and Android keyboards:
+     * smart quotes → straight quotes, ellipsis → "...", em/en dash → "-".
+     */
+    internal fun normalize(text: String): String = text
+        .replace('\u2019', '\'').replace('\u2018', '\'')
+        .replace('\u201C', '"').replace('\u201D', '"')
+        .replace("\u2026", "...")
+        .replace('\u2014', '-').replace('\u2013', '-')
 
     fun processIncomingMessage(
         message: Message,

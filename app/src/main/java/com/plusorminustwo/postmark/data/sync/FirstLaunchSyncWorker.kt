@@ -24,6 +24,7 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.model.previewText
+import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -202,17 +203,25 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         val reactionMsgIds = mutableListOf<Long>()
         threads.keys.forEach { threadId ->
             val threadMsgs = messageRepository.getByThread(threadId)
-            threadMsgs.forEach { msg ->
+            // Pre-partition so reaction fallbacks are never candidates for matching.
+            val reactionMsgsInThread = threadMsgs.filter { reactionParser.isReactionFallback(it.body) }
+            val normalMsgs = threadMsgs.filter { !reactionParser.isReactionFallback(it.body) }
+            reactionMsgsInThread.forEach { msg ->
                 val parsed = reactionParser.parse(msg.body) ?: return@forEach
                 if (!parsed.isRemoval) {
-                    val reaction = reactionParser.processIncomingMessage(msg, threadMsgs, msg.address)
+                    val senderAddress = if (msg.isSent) SELF_ADDRESS else msg.address
+                    val reaction = reactionParser.processIncomingMessage(msg, normalMsgs, senderAddress)
                     if (reaction != null && !messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
                         messageRepository.insertReaction(reaction)
+                        // Only delete the fallback when the reaction was successfully resolved.
+                        reactionMsgIds += msg.id
                     }
+                    // If reaction is null (original not found or > 100 messages away),
+                    // leave the message in Room as a normal visible bubble.
+                } else {
+                    // Removal: delete without inserting a reaction entity.
+                    reactionMsgIds += msg.id
                 }
-                // Regardless of whether the reaction resolved, the fallback message itself
-                // should not appear as a visible bubble — delete it from the message table.
-                reactionMsgIds += msg.id
             }
         }
         if (reactionMsgIds.isNotEmpty()) {

@@ -39,6 +39,8 @@ The app stores its own copy of SMS data in a Room database. This allows fast, of
 
 ## Database Schema
 
+Current Room schema **version 9** (`PostmarkDatabase.kt`).
+
 ### Tables
 
 | Table | Purpose |
@@ -83,16 +85,24 @@ JOIN messages_fts ON m.id = messages_fts.rowid
 | `DatabaseModule` | `PostmarkDatabase`, all 5 DAOs |
 | `RepositoryModule` | `ThreadRepository`, `MessageRepository`, `SearchRepository` |
 
-`AppleReactionParser`, `SmsContentObserver`, `SmsSyncHandler`, `BackupScheduler` are `@Singleton` Hilt bindings injected directly.
+`AndroidReactionParser`, `AppleReactionParser`, `ReactionFallbackParser`,
+`SmsContentObserver`, `SmsSyncHandler`, `BackupScheduler` are `@Singleton` Hilt
+bindings injected directly.
 
-`FirstLaunchSyncWorker` and `BackupWorker` use `@HiltWorker` + `HiltWorkerFactory` (configured in `PostmarkApplication`).
+`FirstLaunchSyncWorker` and `BackupWorker` use `@HiltWorker` + `HiltWorkerFactory`
+(configured in `PostmarkApplication`).
 
 ---
 
 ## SMS Sync Strategy
 
 ### On first launch
-`FirstLaunchSyncWorker` (WorkManager `OneTimeWorkRequest`) reads the full `content://sms` cursor, hydrates threads + messages into Room in 500-row chunks, runs `AppleReactionParser` over every message, then sets a flag in SharedPreferences so it never repeats.
+`FirstLaunchSyncWorker` (WorkManager `OneTimeWorkRequest`) reads the full `content://sms`
+and `content://mms` cursors newest-first (`_id DESC`), hydrates threads + messages into
+Room in 500-row chunks, runs `ReactionFallbackParser` over every message, then sets a
+flag in SharedPreferences so it never repeats. Supports checkpoint resume: on WorkManager
+retry the worker fast-skips rows already in Room via `getMinMmsId()` without re-reading
+parts or addresses.
 
 ### On incoming messages
 `SmsReceiver` (BroadcastReceiver, `android.permission.BROADCAST_SMS`) is triggered by the system and calls `SmsSyncHandler.onSmsContentChanged()` on a background coroutine. This reads the latest message from the content provider, deduplicates against Room by ID, inserts if new, and runs the reaction parser.
@@ -123,11 +133,42 @@ Apple devices send SMS reaction fallbacks in the form:
 Loved 'original message text'
 ```
 
-`AppleReactionParser`:
+Android/Google Messages devices send:
+```
+👍 to "original message text"
+👍 to "original message text" removed
+```
+
+**`ReactionFallbackParser`** is the unified entry point used by all sync workers. It
+tries `AndroidReactionParser` first, then falls back to `AppleReactionParser`.
+
+**`AndroidReactionParser`**:
+1. Matches the `emoji to "quoted text" [removed]` format with multiple quote-variant regexes
+2. Finds the original message via a three-tier strategy (see below)
+3. Excludes the reaction message itself and other reaction fallbacks from the candidate pool
+4. Inserts a `ReactionEntity` (or handles removal)
+
+**`AppleReactionParser`**:
 1. Loads verb→emoji mappings from `assets/apple_reaction_patterns.json` (lazy, cached)
-2. Matches each incoming message body against the reaction pattern
-3. Finds the original message using a three-tier strategy: exact → prefix → fuzzy containment
-4. Inserts a `ReactionEntity` (or deletes one for removal phrases)
+2. Supports English, Dutch, French, German, Spanish
+3. Same match strategy and candidate filtering as AndroidReactionParser
+
+**`findOriginalMessage` strategy** (both parsers):
+- Search window: all candidates sorted newest-to-oldest, capped at 100 messages.
+  Reactions to messages more than 100 positions back are treated as unresolvable.
+- **Tier 1**: Exact match (case-insensitive)
+- **Tier 2**: Normalized match — maps U+2019/2018 → `'`, U+201C/201D → `"`,
+  U+2026 → `...`, U+2014/2013 → `-`. Handles apostrophe/quote mismatches between
+  Apple (smart quotes) and Android (straight apostrophe) keyboards.
+- **Tier 3**: Prefix match — reaction may quote only the start of a long message.
+- **No `.contains()` match** — deliberately removed; it caused self-matching where
+  the reaction body (which contains the quoted text literally) resolved to itself.
+
+If resolution fails (original not found within 100 messages), the fallback SMS is
+preserved as a normal visible bubble rather than being silently deleted.
+
+**Sender attribution**: sent reaction fallbacks use `SELF_ADDRESS` as `senderAddress`
+(not the contact's address) so the UI's own-reaction highlighting works correctly.
 
 The JSON asset makes it easy to add new languages without a code change.
 
@@ -145,9 +186,16 @@ The JSON asset makes it easy to add new languages without a code change.
 
 ## Stats
 
-Stats are **always read from `ThreadStatsEntity`**, never computed on demand. This is a hard requirement — stats queries run in O(1) regardless of message count.
+Stats are **always read from `ThreadStatsEntity`**, never computed on demand. This is a
+hard requirement — stats queries run in O(1) regardless of message count.
 
-`ThreadStatsEntity` is updated incrementally when messages are inserted or deleted. A future `StatsUpdater` service handles the increment/decrement logic. Global stats are derived by aggregating `SUM()` over `thread_stats`.
+`StatsUpdater` computes stats incrementally when messages are inserted or deleted, and
+is also called by `DevOptionsViewModel.reprocessReactions()` for full recomputation.
+Global stats are derived by aggregating `SUM()` over `thread_stats`.
+
+**Two emoji stat categories are tracked separately** (users use them differently):
+- **Top emoji (messages)** — emoji extracted from message body text
+- **Top emoji (reactions)** — emoji stored in the `reactions` table
 
 ---
 

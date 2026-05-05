@@ -33,7 +33,13 @@ class ReactionFallbackParser @Inject constructor(
         senderAddress: String
     ): Reaction? {
         val parsed = parse(message.body) ?: return null
-        val original = findOriginalMessage(parsed.quotedText, threadMessages) ?: return null
+        // Exclude the reaction message itself and any other reaction fallbacks from the
+        // candidate pool. Reaction bodies contain the quoted text literally, which would
+        // cause a self-match or cross-match via the prefix/normalized strategies.
+        val candidates = threadMessages.filter {
+            it.id != message.id && !isReactionFallback(it.body)
+        }
+        val original = findOriginalMessage(parsed.quotedText, candidates) ?: return null
         if (parsed.isRemoval) return null
         return Reaction(
             id = 0,

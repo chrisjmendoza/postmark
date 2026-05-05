@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: May 4, 2026
+Last updated: May 5, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -9,12 +9,13 @@ Package: com.plusorminustwo.postmark
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 6
+- Room (database) — currently on schema version 9
 - Hilt (dependency injection)
 - WorkManager (scheduled backup)
 - Kotlin Coroutines + Flow
-- SQLite FTS5 (full-text search — scaffolded,
-  not yet fully wired)
+- SQLite FTS4 (full-text search — fully wired,
+  word-start prefix via `^"term"*`, triggers sync
+  messages_fts virtual table with messages table)
 - Material3 dark theme with custom extended colors
 
 ═══════════════════════════════════════════════════════
@@ -242,7 +243,29 @@ WHAT IS WORKING (tested on device)
    back returns directly to the thread (not the
    contact list) — controlled by directThreadNavigation
    StateFlow flag on StatsViewModel
-✅ Emoji reactions on message bubbles:
+✅ Emoji reaction pipeline — fully fixed (May 5, 2026):
+   All 5 root causes corrected:
+   1. Self-match bug: ReactionFallbackParser now filters
+      the reaction message itself + other fallbacks from
+      the candidate pool before searching.
+   2. Fuzzy .contains() removed from findOriginalMessage
+      in both AndroidReactionParser and AppleReactionParser.
+      Replaced with newest-to-oldest sort + take(100) cap
+      + exact → normalized → prefix strategy.
+   3. Unicode normalization: normalize() maps smart
+      apostrophes/quotes (U+2019/2018/201C/201D), ellipsis
+      (U+2026), em/en dashes to ASCII equivalents; handles
+      Apple↔Android keyboard mismatches.
+   4. Unresolved reactions (original >100 messages away or
+      not found) preserved as normal visible bubbles in
+      all three code paths (FirstLaunchSyncWorker,
+      SmsSyncHandler, DevOptionsViewModel).
+   5. Sent reactions use SELF_ADDRESS not contact’s address
+      so own-reaction highlighting and dedup work correctly.
+   AndroidReactionParserTest extended with 15 new cases.
+   ReactionFallbackParser is the unified entry point used
+   by all sync workers (tries Android parser first, then
+   Apple).
    REVISED UX (April 28):
    - Long-press → highlights message + replaces top
      bar with MessageActionTopBar (Cancel / Copy /
@@ -349,18 +372,7 @@ IN PROGRESS / NEXT UP
 ACTIVE BRANCH: feat/ui-improvements
 
 TIER 1 — REMAINING (in priority order)
-1. MMS SEND BUG — IMAGE FAILS WITH RED ⚠ (May 4, 2026)
-   Tapping send with an image attachment produces a red !
-   (failed send state) and no message is sent. SMS text-only
-   send works fine. Likely candidates:
-   - MmsManagerWrapper PDU build or FileProvider URI issue
-   - SmsManager.sendMultimediaMessage() permission or
-     MMSC connectivity failure
-   - MmsSentReceiver not receiving the sent-intent callback
-   Start debug by checking logcat for MmsManagerWrapper tag
-   and verifying the PDU temp file is written + readable.
-
-2. MULTIPART MESSAGE HANDLING
+1. MULTIPART MESSAGE HANDLING
    Verify all parts arrive before marking delivered;
    handle out-of-order part delivery.
 
@@ -377,7 +389,10 @@ TIER 1 — REMAINING (in priority order)
    Tap image → full-screen viewer, tap video → ExoPlayer dialog.
    (Audio chip play/pause is now done.)
 
-COMPLETED THIS SPRINT (May 4, 2026)
+COMPLETED THIS SPRINT (May 5, 2026)
+✅ Emoji reaction pipeline — all 5 root causes fixed (see WHAT IS WORKING above)
+   AndroidReactionParserTest +15 cases; stale fuzzy-contains test removed.
+
 ✅ MMS import — newest-first order (_id DESC)
    Messages appear in Room from most recent backwards;
    users see current conversations populate first.
@@ -551,21 +566,27 @@ BACKUP (Settings → Backup)
 ✅ WorkManager status indicator — DONE (April 27)
 ✅ Per-thread backup policy dialog — DONE (April 27)
 
-APPLE REACTION PARSER
-- Detects Apple SMS reaction fallback format
-- Supports EN, NL, FR, DE, ES
-- Maps verbs to emoji:
-  Loved/Vond geweldig → ❤️
-  Laughed at/Lacte om → 😂
-  Liked/Vond leuk     → 👍
-  Disliked            → 👎
-  Emphasized          → ‼️
-  Questioned          → ❓
-- Handles "Removed a [reaction]" un-react
-- Quoted text matched back to original message
-- Stored as Reaction entity not Message
-- Pattern list loaded from JSON asset for easy
-  language additions without code changes
+REACTION FALLBACK PARSER (Android + Apple)
+- ReactionFallbackParser is the unified entry point (tries
+  Android format first, then Apple).
+- AndroidReactionParser: `👍 to "quoted text" [removed]`
+  (Google Messages / Samsung format). All quote variants.
+- AppleReactionParser: `Liked 'quoted text'` via JSON patterns.
+  Supports EN, NL, FR, DE, ES.
+  Maps verbs to emoji:
+    Loved/Vond geweldig → ❤️
+    Laughed at/Lacte om → 😂
+    Liked/Vond leuk     → 👍
+    Disliked            → 👎
+    Emphasized          → ‼️
+    Questioned          → ❓
+- Both handle removal phrases ("removed" / "Removed a [reaction]")
+- findOriginalMessage: newest-to-oldest, take(100), exact →
+  normalized (smart quotes/apostrophes/ellipsis/dashes) → prefix.
+  No fuzzy contains. Unresolved reactions stay as normal bubbles.
+- Sent reactions use SELF_ADDRESS not contact's address.
+- Stored as Reaction entity, not Message.
+- Pattern list in JSON asset — new languages without code changes.
 
 ═══════════════════════════════════════════════════════
 KEY DECISIONS LOCKED IN
@@ -636,10 +657,8 @@ HEATMAP / STATS ARCHITECTURE
 - groupMessagesByDay() in StatsAlgorithms.kt uses
   SimpleDateFormat("yyyy-MM-dd", Locale.US) with
   TimeZone.getDefault() for local-time day grouping.
-- heatmapTierForCount() is `internal` in
-  StatsAlgorithms.kt (testable) AND has a private
-  duplicate in StatsScreen.kt (not directly testable).
-  The two must be kept in sync manually.
+- heatmapTierForCount() is `internal` in `StatsAlgorithms.kt` and imported
+  from there into `StatsScreen.kt` (no private duplicate).
 
 NAVIGATION (Stats optional threadId arg)
 - Stats route: "stats?threadId={threadId}"
@@ -668,20 +687,31 @@ TESTING CONVENTIONS
   for helper factories: thread(id), msg(id, threadId, ts).
 - Gradle build + unit tests run after every implementation
   session.
-- Test files (220 passing as of 2026-04-27):
+- Test files (26 passing test classes, all tests green as of 2026-05-05):
     src/test/.../data/sync/StatsAlgorithmsTest.kt
     src/test/.../data/sync/StatsComputationTest.kt
+    src/test/.../data/sync/ComputeEtaTest.kt
+    src/test/.../data/sync/StatsUpdaterReactionTest.kt
     src/test/.../ui/stats/StatsViewModelHeatmapTest.kt
     src/test/.../ui/stats/StatsViewModelActionsTest.kt
     src/test/.../ui/thread/MessageGroupingTest.kt
     src/test/.../ui/thread/DateNavigationTest.kt
+    src/test/.../ui/thread/DateRangeSelectionTest.kt
     src/test/.../ui/thread/ThreadViewModelReactionLogicTest.kt
     src/test/.../ui/thread/ReactionPillPositionTest.kt
     src/test/.../ui/thread/BackupPolicyTest.kt
+    src/test/.../ui/thread/PinnedThreadTest.kt
+    src/test/.../ui/thread/MuteThreadTest.kt
     src/test/.../ui/search/SearchJumpTest.kt
+    src/test/.../ui/search/SearchDateRangeTest.kt
+    src/test/.../ui/search/SearchReactionFilterTest.kt
     src/test/.../ui/settings/BackupHistoryTest.kt
     src/test/.../ui/settings/BackupStatusTest.kt
     src/test/.../data/repository/MessageRepositoryReactionTest.kt
+    src/test/.../data/repository/FailedSendRetryTest.kt
+    src/test/.../search/parser/AndroidReactionParserTest.kt
+    src/test/.../search/parser/AppleReactionParserLogicTest.kt
+    src/test/.../search/FtsQueryBuilderTest.kt
     src/androidTest/.../data/db/PostmarkDatabaseTest.kt
     src/androidTest/.../data/sync/StatsUpdaterIntegrationTest.kt
 
