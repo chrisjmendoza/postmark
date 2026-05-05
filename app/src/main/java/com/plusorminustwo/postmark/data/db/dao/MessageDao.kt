@@ -4,6 +4,9 @@ import androidx.room.*
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import kotlinx.coroutines.flow.Flow
 
+/** Projection returned by [MessageDao.observeUnreadCounts]. */
+data class UnreadCount(val threadId: Long, val count: Int)
+
 @Dao
 interface MessageDao {
 
@@ -55,6 +58,12 @@ interface MessageDao {
 
     @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :messageId")
     suspend fun updateDeliveryStatus(messageId: Long, status: Int)
+
+    @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId")
+    suspend fun markAllRead(threadId: Long)
+
+    @Query("SELECT threadId, COUNT(*) as count FROM messages WHERE isRead = 0 GROUP BY threadId")
+    fun observeUnreadCounts(): Flow<List<UnreadCount>>
 
     @Query("DELETE FROM messages WHERE threadId = :threadId AND id < 0")
     suspend fun deleteOptimisticMessages(threadId: Long)

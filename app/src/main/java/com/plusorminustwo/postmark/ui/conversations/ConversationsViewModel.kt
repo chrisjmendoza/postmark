@@ -35,6 +35,9 @@ class ConversationsViewModel @Inject constructor(
     val threads: StateFlow<List<Thread>?> = threadRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    val unreadCounts: StateFlow<Map<Long, Int>> = messageRepository.observeUnreadCounts()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     val isSyncing: StateFlow<Boolean> = workManager
         .getWorkInfosForUniqueWorkFlow(FirstLaunchSyncWorker.WORK_NAME)
         .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED } }

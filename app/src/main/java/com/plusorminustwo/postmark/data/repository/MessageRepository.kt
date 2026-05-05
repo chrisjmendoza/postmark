@@ -62,6 +62,12 @@ class MessageRepository @Inject constructor(
     suspend fun updateDeliveryStatus(messageId: Long, status: Int) =
         messageDao.updateDeliveryStatus(messageId, status)
 
+    suspend fun markAllRead(threadId: Long) =
+        messageDao.markAllRead(threadId)
+
+    fun observeUnreadCounts(): Flow<Map<Long, Int>> =
+        messageDao.observeUnreadCounts().map { list -> list.associate { it.threadId to it.count } }
+
     suspend fun deleteOptimisticMessages(threadId: Long) =
         messageDao.deleteOptimisticMessages(threadId)
 

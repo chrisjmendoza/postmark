@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.NotificationsOff
@@ -16,9 +17,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.model.Thread
@@ -39,6 +42,7 @@ fun ConversationsScreen(
     val threads by viewModel.threads.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncStatus by viewModel.syncStatus.collectAsState()
+    val unreadCounts by viewModel.unreadCounts.collectAsState()
     val threadList = threads  // local val so Kotlin can smart-cast the nullable
 
     Scaffold(
@@ -96,7 +100,11 @@ fun ConversationsScreen(
                 Column(modifier = Modifier.fillMaxSize().padding(padding)) {
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         items(threadList, key = { it.id }) { thread ->
-                            ThreadRow(thread = thread, onClick = { onThreadClick(thread.id) })
+                            ThreadRow(
+                                thread = thread,
+                                unreadCount = unreadCounts[thread.id] ?: 0,
+                                onClick = { onThreadClick(thread.id) }
+                            )
                             HorizontalDivider()
                         }
                     }
@@ -117,7 +125,7 @@ fun ConversationsScreen(
 }
 
 @Composable
-private fun ThreadRow(thread: Thread, onClick: () -> Unit) {
+private fun ThreadRow(thread: Thread, unreadCount: Int, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -128,13 +136,25 @@ private fun ThreadRow(thread: Thread, onClick: () -> Unit) {
     ) {
         LetterAvatar(name = thread.displayName, colorSeed = thread.address)
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = formatPhoneNumber(thread.displayName),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = formatPhoneNumber(thread.displayName),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (thread.isMuted) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.NotificationsOff,
+                        contentDescription = "Muted",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f)
+                    )
+                }
+            }
             if (thread.lastMessagePreview.isNotEmpty()) {
                 Text(
                     text = thread.lastMessagePreview,
@@ -145,27 +165,47 @@ private fun ThreadRow(thread: Thread, onClick: () -> Unit) {
                 )
             }
         }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = formatDate(thread.lastMessageAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (thread.isPinned) {
+                Icon(
+                    imageVector = Icons.Default.PushPin,
+                    contentDescription = "Pinned",
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (unreadCount > 0) {
+                UnreadBadge(count = unreadCount)
+            }
+        }
+    }
+}
+
+@Composable
+private fun UnreadBadge(count: Int) {
+    val label = if (count > 99) "99+" else count.toString()
+    Box(
+        modifier = Modifier
+            .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
+            .background(
+                color = MaterialTheme.colorScheme.primary,
+                shape = RoundedCornerShape(50)
+            )
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center
+    ) {
         Text(
-            text = formatDate(thread.lastMessageAt),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            text = label,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 1
         )
-        if (thread.isPinned) {
-            Icon(
-                imageVector = Icons.Default.PushPin,
-                contentDescription = "Pinned",
-                modifier = Modifier.size(14.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-        }
-        if (thread.isMuted) {
-            Icon(
-                imageVector = Icons.Default.NotificationsOff,
-                contentDescription = "Muted",
-                modifier = Modifier.size(14.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }
 

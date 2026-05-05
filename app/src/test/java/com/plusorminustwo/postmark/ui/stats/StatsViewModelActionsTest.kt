@@ -522,6 +522,8 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun getLatestNForThread(threadId: Long, n: Int): List<MessageEntity> = emptyList()
     override suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity? = null
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
+    override suspend fun markAllRead(threadId: Long) = Unit
+    override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
     override suspend fun deleteOptimisticMessages(threadId: Long) = Unit
     override suspend fun deleteAll() = Unit
 }

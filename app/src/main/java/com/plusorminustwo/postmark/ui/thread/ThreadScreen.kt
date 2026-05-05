@@ -90,6 +90,7 @@ fun ThreadScreen(
     onBack: () -> Unit,
     onViewStats: () -> Unit = {},
     onBackupSettingsClick: () -> Unit = {},
+    onSearchInThread: (Long) -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -107,6 +108,7 @@ fun ThreadScreen(
         onBack = onBack,
         onViewStats = onViewStats,
         onBackupSettingsClick = onBackupSettingsClick,
+        onSearchInThread = { onSearchInThread(threadId) },
         onHighlightMessage = { viewModel.highlightMessage(it) },
         onDismissDefaultSmsDialog = { viewModel.dismissDefaultSmsDialog() },
         onUpdateBackupPolicy = { viewModel.updateBackupPolicy(it) },
@@ -120,6 +122,8 @@ fun ThreadScreen(
         onEnterSelectionMode = { viewModel.enterSelectionMode() },
         onReplyTextChanged = { viewModel.onReplyTextChanged(it) },
         onSendMessage = { viewModel.sendMessage() },
+        onSetAttachment = { viewModel.setAttachment(it) },
+        onClearAttachment = { viewModel.clearAttachment() },
         onToggleSelection = { viewModel.toggleSelection(it) },
         onShowReactionPicker = { id, y -> viewModel.showReactionPicker(id, y) },
         onToggleReaction = { id, emoji -> viewModel.toggleReaction(id, emoji) },
@@ -140,6 +144,7 @@ private fun ThreadContent(
     onBack: () -> Unit,
     onViewStats: () -> Unit,
     onBackupSettingsClick: () -> Unit,
+    onSearchInThread: () -> Unit,
     onHighlightMessage: (Long) -> Unit,
     onDismissDefaultSmsDialog: () -> Unit,
     onUpdateBackupPolicy: (BackupPolicy) -> Unit,
@@ -153,6 +158,8 @@ private fun ThreadContent(
     onEnterSelectionMode: () -> Unit,
     onReplyTextChanged: (String) -> Unit,
     onSendMessage: () -> Unit,
+    onSetAttachment: (android.net.Uri) -> Unit,
+    onClearAttachment: () -> Unit,
     onToggleSelection: (Long) -> Unit,
     onShowReactionPicker: (Long, Float) -> Unit,
     onToggleReaction: (Long, String) -> Unit,
@@ -415,7 +422,7 @@ private fun ThreadContent(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Search in thread") },
-                                    onClick = { menuExpanded = false }
+                                    onClick = { menuExpanded = false; onSearchInThread() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },
@@ -445,8 +452,11 @@ private fun ThreadContent(
             if (!uiState.isSelectionMode) {
                 ReplyBar(
                     text = uiState.replyText,
+                    pendingAttachmentUri = uiState.pendingAttachmentUri,
                     onTextChange = { onReplyTextChanged(it) },
                     onSend = { onSendMessage() },
+                    onSetAttachment = onSetAttachment,
+                    onClearAttachment = onClearAttachment,
                     modifier = if (uiState.reactionPickerMessageId != null)
                         Modifier.alpha(0f) else Modifier
                 )
@@ -940,60 +950,103 @@ private fun DeliveryStatusIndicator(status: Int, modifier: Modifier = Modifier) 
 @Composable
 private fun ReplyBar(
     text: String,
+    pendingAttachmentUri: android.net.Uri?,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
+    onSetAttachment: (android.net.Uri) -> Unit,
+    onClearAttachment: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val counterText = remember(text.length) { smsCounter(text.length) }
+    val attachmentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri -> if (uri != null) onSetAttachment(uri) }
+
     Column(modifier = modifier) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                TextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message") },
-                    maxLines = 4,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        focusedIndicatorColor   = androidx.compose.ui.graphics.Color.Transparent,
-                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                        disabledIndicatorColor  = androidx.compose.ui.graphics.Color.Transparent,
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                    trailingIcon = counterText?.let { ct ->
-                        {
-                            Text(
-                                text = ct,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (text.length > 160) MaterialTheme.colorScheme.error
-                                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
+            Column(modifier = Modifier.navigationBarsPadding()) {
+                // Attachment chip shown above the text field when an image is pending.
+                if (pendingAttachmentUri != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Image,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Image attached",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = onClearAttachment, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Clear, contentDescription = "Remove attachment",
+                                modifier = Modifier.size(16.dp))
                         }
                     }
-                )
-                Spacer(Modifier.width(4.dp))
-                IconButton(
-                    onClick = onSend,
-                    enabled = text.isNotBlank(),
-                    colors = IconButtonDefaults.iconButtonColors(
-                        containerColor         = MaterialTheme.colorScheme.primary,
-                        contentColor           = MaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    IconButton(
+                        onClick = { attachmentLauncher.launch("image/*") },
+                        colors = IconButtonDefaults.iconButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    ) {
+                        Icon(Icons.Default.AttachFile, contentDescription = "Attach image")
+                    }
+                    TextField(
+                        value = text,
+                        onValueChange = onTextChange,
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Message") },
+                        maxLines = 4,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            focusedIndicatorColor   = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            disabledIndicatorColor  = androidx.compose.ui.graphics.Color.Transparent,
+                        ),
+                        shape = RoundedCornerShape(24.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        trailingIcon = counterText?.let { ct ->
+                            {
+                                Text(
+                                    text = ct,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (text.length > 160) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                            }
+                        }
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(
+                        onClick = onSend,
+                        enabled = text.isNotBlank() || pendingAttachmentUri != null,
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor         = MaterialTheme.colorScheme.primary,
+                            contentColor           = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    }
                 }
             }
         }

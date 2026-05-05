@@ -12,5 +12,6 @@ data class Message(
     val isSent: Boolean,
     val type: Int,
     val deliveryStatus: Int = 0,
-    val reactions: List<Reaction> = emptyList()
+    val reactions: List<Reaction> = emptyList(),
+    val isRead: Boolean = true
 )

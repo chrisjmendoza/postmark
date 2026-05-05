@@ -63,7 +63,8 @@ class SmsSyncHandler @Inject constructor(
             val existing = messageRepository.getById(id)
             if (existing != null) return
 
-            val message = Message(id, threadId, address, body, date, isSent, type)
+            val message = Message(id, threadId, address, body, date, isSent, type,
+                isRead = isSent)
             messageRepository.insert(message)
             // Remove any optimistic sent message that this real message replaces
             messageRepository.deleteOptimisticMessages(threadId)

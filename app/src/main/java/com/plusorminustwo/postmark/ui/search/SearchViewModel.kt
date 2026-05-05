@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.ui.search
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.repository.SearchRepository
@@ -34,6 +35,7 @@ data class SearchUiState(
 @OptIn(FlowPreview::class)
 @HiltViewModel
 class SearchViewModel @Inject constructor(
+    savedStateHandle: SavedStateHandle,
     private val searchRepository: SearchRepository,
     private val threadRepository: ThreadRepository
 ) : ViewModel() {
@@ -68,6 +70,17 @@ class SearchViewModel @Inject constructor(
             .combine(_filters) { q, f -> q to f }
             .onEach { (query, filters) -> search(query, filters) }
             .launchIn(viewModelScope)
+
+        val prefilterThreadId = savedStateHandle.get<Long>("threadId") ?: -1L
+        if (prefilterThreadId != -1L) preSelectThread(prefilterThreadId)
+    }
+
+    /** Looks up thread by id and pre-applies it as a filter (called from nav argument). */
+    fun preSelectThread(threadId: Long) {
+        viewModelScope.launch {
+            val thread = threadRepository.getById(threadId)
+            if (thread != null) setThreadFilter(thread)
+        }
     }
 
     fun onQueryChange(query: String) { _query.value = query }

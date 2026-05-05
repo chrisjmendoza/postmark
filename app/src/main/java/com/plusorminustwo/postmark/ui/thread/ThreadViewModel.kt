@@ -1,6 +1,7 @@
 ﻿package com.plusorminustwo.postmark.ui.thread
 
 import android.content.Context
+import android.net.Uri
 import android.provider.Telephony
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -15,12 +16,15 @@ import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -38,7 +42,8 @@ data class ThreadUiState(
     val expandedTimestampIds: Set<Long> = emptySet(),
     val reactionPickerMessageId: Long? = null,
     val reactionPickerBubbleY: Float = 0f,
-    val highlightedMessageId: Long? = null
+    val highlightedMessageId: Long? = null,
+    val pendingAttachmentUri: Uri? = null
 )
 
 @HiltViewModel
@@ -48,6 +53,7 @@ class ThreadViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val smsManagerWrapper: SmsManagerWrapper,
+    private val mmsManagerWrapper: MmsManagerWrapper,
     private val timestampPrefRepo: TimestampPreferenceRepository
 ) : ViewModel() {
 
@@ -63,6 +69,7 @@ class ThreadViewModel @Inject constructor(
     private val _reactionPickerMessageId  = MutableStateFlow<Long?>(null)
     private val _reactionPickerBubbleY    = MutableStateFlow(0f)
     private val _highlightedMessageId     = MutableStateFlow<Long?>(null)
+    private val _pendingAttachmentUri     = MutableStateFlow<Uri?>(null)
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
@@ -91,7 +98,8 @@ class ThreadViewModel @Inject constructor(
         val selectionScope: SelectionScope,
         val reactionPickerMessageId: Long?,
         val reactionPickerBubbleY: Float,
-        val highlightedMessageId: Long?
+        val highlightedMessageId: Long?,
+        val pendingAttachmentUri: Uri?
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -108,7 +116,8 @@ class ThreadViewModel @Inject constructor(
             _selectionScope,
             _reactionPickerMessageId,
             _reactionPickerBubbleY,
-            _highlightedMessageId
+            _highlightedMessageId,
+            _pendingAttachmentUri
         ) { arr ->
             InnerState(
                 replyText               = arr[0] as String,
@@ -118,7 +127,8 @@ class ThreadViewModel @Inject constructor(
                 selectionScope          = arr[4] as SelectionScope,
                 reactionPickerMessageId = arr[5] as Long?,
                 reactionPickerBubbleY   = arr[6] as Float,
-                highlightedMessageId    = arr[7] as Long?
+                highlightedMessageId    = arr[7] as Long?,
+                pendingAttachmentUri    = arr[8] as Uri?
             )
         }
     ) { thread, messages, selected, selectionMode, inner ->
@@ -134,9 +144,22 @@ class ThreadViewModel @Inject constructor(
             expandedTimestampIds = inner.expandedTimestampIds,
             reactionPickerMessageId = inner.reactionPickerMessageId,
             reactionPickerBubbleY   = inner.reactionPickerBubbleY,
-            highlightedMessageId    = inner.highlightedMessageId
+            highlightedMessageId    = inner.highlightedMessageId,
+            pendingAttachmentUri    = inner.pendingAttachmentUri
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
+
+    init {
+        // Mark all messages in this thread as read when the thread is opened.
+        viewModelScope.launch { messageRepository.markAllRead(threadId) }
+    }
+
+    // ── Attachment ────────────────────────────────────────────────────────────
+
+    /** Called immediately when the user picks an image from the gallery. */
+    fun setAttachment(uri: Uri) { _pendingAttachmentUri.value = uri }
+
+    fun clearAttachment() { _pendingAttachmentUri.value = null }
 
     // ── Selection ─────────────────────────────────────────────────────────────
 
@@ -277,8 +300,9 @@ class ThreadViewModel @Inject constructor(
     fun dismissDefaultSmsDialog() { _showDefaultSmsDialog.value = false }
 
     fun sendMessage() {
-        val text = _replyText.value.trim()
-        if (text.isEmpty() || _isSending.value) return
+        val text           = _replyText.value.trim()
+        val attachmentUri  = _pendingAttachmentUri.value
+        if ((text.isEmpty() && attachmentUri == null) || _isSending.value) return
 
         if (!isDefaultSmsApp()) {
             _showDefaultSmsDialog.value = true
@@ -287,23 +311,44 @@ class ThreadViewModel @Inject constructor(
 
         val thread = uiState.value.thread ?: return
         _replyText.value = ""
+        _pendingAttachmentUri.value = null
 
         viewModelScope.launch {
             _isSending.value = true
             val now    = System.currentTimeMillis()
             val tempId = -now
-            val optimistic = Message(
-                id = tempId,
-                threadId = threadId,
-                address = thread.address,
-                body = text,
-                timestamp = now,
-                isSent = true,
-                type = Telephony.Sms.MESSAGE_TYPE_SENT,
-                deliveryStatus = DELIVERY_STATUS_PENDING
-            )
-            messageRepository.insert(optimistic)
-            smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
+
+            if (attachmentUri != null) {
+                // Determine MIME type from ContentResolver — fall back to image/jpeg.
+                val mimeType = context.contentResolver.getType(attachmentUri) ?: "image/jpeg"
+                val optimistic = Message(
+                    id = tempId,
+                    threadId = threadId,
+                    address = thread.address,
+                    body = "",
+                    timestamp = now,
+                    isSent = true,
+                    type = Telephony.Sms.MESSAGE_TYPE_SENT,
+                    deliveryStatus = DELIVERY_STATUS_PENDING
+                )
+                messageRepository.insert(optimistic)
+                withContext(Dispatchers.IO) {
+                    mmsManagerWrapper.sendImageMessage(thread.address, attachmentUri, mimeType, tempId)
+                }
+            } else {
+                val optimistic = Message(
+                    id = tempId,
+                    threadId = threadId,
+                    address = thread.address,
+                    body = text,
+                    timestamp = now,
+                    isSent = true,
+                    type = Telephony.Sms.MESSAGE_TYPE_SENT,
+                    deliveryStatus = DELIVERY_STATUS_PENDING
+                )
+                messageRepository.insert(optimistic)
+                smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
+            }
             _isSending.value = false
         }
     }

@@ -32,7 +32,8 @@ data class MessageEntity(
     val timestamp: Long,
     val isSent: Boolean,
     val type: Int = 1,
-    val deliveryStatus: Int = DELIVERY_STATUS_NONE
+    val deliveryStatus: Int = DELIVERY_STATUS_NONE,
+    val isRead: Boolean = true
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -54,5 +55,6 @@ fun Message.toEntity() = MessageEntity(
     timestamp = timestamp,
     isSent = isSent,
     type = type,
-    deliveryStatus = deliveryStatus
+    deliveryStatus = deliveryStatus,
+    isRead = isRead
 )
