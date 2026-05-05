@@ -6,6 +6,14 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### UI polish — page scrollability audit (May 5, 2026)
+- **DevOptionsScreen** — added `verticalScroll(rememberScrollState())` to the content
+  `Column` so the developer options page scrolls on small screens or when content grows.
+  Matches the pattern already used in `SettingsScreen` and `BackupSettingsScreen`.
+- All other screens audited: `ThreadScreen` (LazyColumn), `StatsScreen` (LazyColumn per
+  view), `ConversationsScreen` (LazyColumn), `SearchScreen` (LazyColumn + LazyRow), and
+  `OnboardingScreen` (single centered layout — no scroll needed) are all correct.
+
 ### MMS import — newest-first order + checkpoint resume (May 4, 2026)
 - **Sort order changed to `_id DESC`** — MMS cursor now walks newest→oldest so recent
   conversations appear in Room within the first few hundred rows, rather than after the

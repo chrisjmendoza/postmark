@@ -218,6 +218,25 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `Thread.displayName` / `Thread.address` so users can find a contact
       by name without scrolling through the full conversations list.
 
+### Performance & optimization
+- [ ] **Heatmap query performance** — with 150k+ messages the heatmap is slow to load and
+      unresponsive on month navigation. The `byDayOfWeekJson` / `byMonthJson` stats are
+      pre-aggregated in `ThreadStats`, but the heatmap still does per-day message counts
+      at query time. Profile the `StatsViewModel` heatmap flow and either: (a) pre-compute
+      per-day counts into `ThreadStatsEntity` during `StatsUpdater` so month navigation is
+      an in-memory lookup, or (b) add a dedicated index on `messages(threadId, timestamp)`
+      and limit the query window to the displayed month. Target: month switch feels instant.
+- [ ] **`StatsUpdater` incremental updates** — currently recomputes all stats from scratch
+      on every sync. For large message sets this is slow. Only recompute stats for threads
+      whose messages changed since `lastUpdatedAt`. Track a `dirtyThreadIds` set in
+      `SyncWorker` and pass it to `StatsUpdater.updateStats(dirtyThreadIds)`.
+- [ ] **LazyColumn key stability** — verify all `LazyColumn` item keys are stable IDs
+      (not list positions). Unstable keys cause unnecessary recompositions as list data
+      updates after sync.
+- [ ] **Thread view initial load** — profile cold-open of a large thread (1000+ messages).
+      `LazyColumn reverseLayout` with that many items may have a first-frame hitch;
+      consider paging with `Pager` / `PagingSource` if the frame time is > 16ms.
+
 ### Export — image rendering
 - [ ] **Image export** — render selected messages to `Canvas`,
       convert to `Bitmap`, compress to PNG, write to
