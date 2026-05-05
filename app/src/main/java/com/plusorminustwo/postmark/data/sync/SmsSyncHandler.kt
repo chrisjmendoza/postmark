@@ -64,6 +64,8 @@ class SmsSyncHandler @Inject constructor(
             if (existing != null) return
 
             val message = Message(id, threadId, address, body, date, isSent, type,
+                // New messages from sync are always new (we returned early above if the id
+                // already existed). Incoming messages (isSent=false) start as unread.
                 isRead = isSent)
             messageRepository.insert(message)
             // Remove any optimistic sent message that this real message replaces

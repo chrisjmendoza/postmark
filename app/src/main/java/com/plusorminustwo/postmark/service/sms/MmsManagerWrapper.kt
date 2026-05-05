@@ -72,6 +72,8 @@ class MmsManagerWrapper @Inject constructor(
 
         val sentIntent = PendingIntent.getBroadcast(
             context,
+            // PendingIntent requestCode must be a positive Int. Mask messageId to 30 bits
+            // so negative optimistic IDs (which use -timestamp) map to a unique positive code.
             (messageId and 0x3FFF_FFFFL).toInt(),
             Intent(context, MmsSentReceiver::class.java).apply {
                 action = MmsSentReceiver.ACTION_MMS_SENT
