@@ -220,8 +220,13 @@ WHAT IS WORKING (tested on device)
    - MmsManagerWrapper builds WAP Binary M-Send.req PDU, sends via
      SmsManager.sendMultimediaMessage(); temp PDU via FileProvider cacheDir;
      returns Boolean (true = dispatched, false = local failure)
-   - Images > 1.2 MB are auto-compressed (iterative JPEG, 85→40% quality) before
-     PDU build — prevents MMS_ERROR_IO_ERROR carrier rejection for large photos
+   - Images > 1.2 MB are auto-compressed before PDU build: pass 1 = iterative
+     JPEG quality reduction (85→40%); pass 2 = dimension halving up to 3× at
+     quality=70% if quality-only still exceeds 1.2 MB. Prevents MMS_ERROR_IO_ERROR
+     carrier rejection for large (12 MP+) photos.
+   - grantUriPermission covers all known MMS service packages: "android" (system UID
+     for Samsung OneUI), com.samsung.android.messaging, com.sec.mms, com.android.phone,
+     com.android.mms.service, com.google.android.apps.messaging
    - MmsSentReceiver carries EXTRA_SENT_AT_MS; finds real content://mms row
      by timestamp window even if sync replaced the optimistic row first
    - SmsSyncHandler.syncLatestMms() transfers DELIVERY_STATUS_FAILED from
@@ -423,6 +428,12 @@ COMPLETED THIS SPRINT (May 6, 2026)
    MMS gate flag, MIGRATION_8_9 delivery fields.
 ✅ SyncLogger injected into SmsSyncHandler; DevOptions sync log viewer
    with Share button (FileProvider content:// URI).
+
+COMPLETED THIS SPRINT (May 6, 2026)
+✅ MMS send fix — resultCode=5 on Samsung (see WHAT IS WORKING above)
+   Two fixes in MmsManagerWrapper: expanded grantUriPermission to include
+   Samsung/system-UID packages; added dimension-halving compression pass
+   so large 12MP JPEGs compress below the 1.2MB carrier cap.
 
 COMPLETED THIS SPRINT (May 5, 2026)
 ✅ Emoji reaction pipeline — all 5 root causes fixed (see WHAT IS WORKING above)

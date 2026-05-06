@@ -4,6 +4,36 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-05-06 (3)
+
+### Fix: MMS send fails with `MMS_ERROR_IO_ERROR` (resultCode=5) on Samsung
+
+Two root causes fixed in `MmsManagerWrapper`:
+
+1. **FileProvider URI permissions too narrow** — `grantUriPermission` only covered
+   `com.android.phone` and `com.android.mms.service`. Samsung OneUI's MMS stack runs
+   under the system UID (`"android"`) and `com.samsung.android.messaging` /
+   `com.sec.mms`, neither of which received the read grant, causing an immediate
+   `IO_ERROR` from the radio layer. The grant list now includes:
+   `android`, `com.android.phone`, `com.android.mms.service`,
+   `com.samsung.android.messaging`, `com.sec.mms`,
+   `com.google.android.apps.messaging`.
+
+2. **Compression quality-only loop cannot shrink large images enough** — A 6.6 MB
+   JPEG from a 12 MP camera still produced a 1.69 MB PDU after 4 quality reduction
+   passes (85 → 70 → 55 → 40 %), exceeding the 1.2 MB carrier cap. A second
+   compression pass now halves the image dimensions up to 3× (stopping if either
+   dimension would fall below 200 px) and re-encodes at quality=70 % per step. For
+   the reported image, a single 50 % scale brings the PDU well under 1.2 MB.
+   The final fallback (minimum quality at smallest achieved scale) is returned if
+   all steps exceed `MAX_MMS_BYTES * 2`, preventing a silent send of an oversized PDU.
+
+No new pure-JVM tests: both changes touch Android `Bitmap`/`grantUriPermission` APIs
+that cannot be exercised in JVM unit tests without a framework (which this project
+avoids). Covered by on-device testing.
+
+---
+
 ## 2026-05-06 (2)
 
 ### Fix: tap red ! on MMS crash

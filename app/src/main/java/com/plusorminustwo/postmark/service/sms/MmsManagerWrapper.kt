@@ -130,7 +130,16 @@ class MmsManagerWrapper @Inject constructor(
         }
 
         // ── 4. Grant read permission to known telephony service packages ───────
-        listOf("com.android.phone", "com.android.mms.service").forEach { pkg ->
+        // "android" covers the system UID (1000) used by Samsung OneUI's custom MMS
+        // stack. The other entries cover AOSP, Pixel, and common OEM variants.
+        listOf(
+            "android",
+            "com.android.phone",
+            "com.android.mms.service",
+            "com.samsung.android.messaging",
+            "com.sec.mms",
+            "com.google.android.apps.messaging"
+        ).forEach { pkg ->
             try {
                 context.grantUriPermission(pkg, pduUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (_: Exception) { /* package may not exist on this device */ }
@@ -168,8 +177,9 @@ class MmsManagerWrapper @Inject constructor(
     }
 
     // ── Image compression helper ──────────────────────────────────────────────
-    /* Iteratively re-encodes the image as JPEG at decreasing quality steps until
-     * the byte count fits within [MAX_MMS_BYTES], stopping at 40% quality minimum.
+    /* Pass 1: iteratively re-encodes as JPEG at decreasing quality (85→70→55→40%).
+     * Pass 2: if still over MAX_MMS_BYTES, halves image dimensions up to 3×
+     *         and retries at quality=70% per step.
      * Returns null only if the image is corrupt or in an unsupported format. */
     private fun compressImage(originalBytes: ByteArray, mimeType: String, messageId: Long): ByteArray? {
         val bitmap = BitmapFactory.decodeByteArray(originalBytes, 0, originalBytes.size)
@@ -178,6 +188,7 @@ class MmsManagerWrapper @Inject constructor(
         // For non-JPEG images (PNG, WEBP…) we re-encode as JPEG so the quality slider works.
         val compressFormat = Bitmap.CompressFormat.JPEG
 
+        // Pass 1: quality reduction at full resolution
         var quality = 85
         var attempt = 0
         while (quality >= 40) {
@@ -192,12 +203,32 @@ class MmsManagerWrapper @Inject constructor(
             }
             quality -= 15
         }
-        // Even at minimum quality the image is still too large — return best attempt.
+
+        // Pass 2: dimension halving — for very large images that can't compress enough via
+        // quality alone (e.g. 6+ MB 12MP JPEGs). Halve width×height up to 3 times.
+        var scaledBitmap = bitmap
+        repeat(3) { scaleStep ->
+            val newW = scaledBitmap.width / 2
+            val newH = scaledBitmap.height / 2
+            if (newW < 200 || newH < 200) return@repeat  // don't go below 200px
+            scaledBitmap = Bitmap.createScaledBitmap(scaledBitmap, newW, newH, true)
+            val out = ByteArrayOutputStream()
+            scaledBitmap.compress(compressFormat, 70, out)
+            val bytes = out.toByteArray()
+            attempt++
+            syncLogger.log(TAG, "compressImage scale-down step ${scaleStep + 1}: ${newW}×${newH} quality=70% → ${bytes.size} bytes (messageId=$messageId)")
+            if (bytes.size <= MAX_MMS_BYTES) {
+                syncLogger.log(TAG, "compressImage success via scale-down: ${originalBytes.size} → ${bytes.size} bytes (messageId=$messageId)")
+                return bytes
+            }
+        }
+
+        // Last resort: best result from final scaled bitmap at minimum quality.
         val out = ByteArrayOutputStream()
-        bitmap.compress(compressFormat, 40, out)
+        scaledBitmap.compress(compressFormat, 40, out)
         val bytes = out.toByteArray()
-        syncLogger.log(TAG, "compressImage: final attempt at quality=40% → ${bytes.size} bytes (messageId=$messageId)")
-        return if (bytes.size <= MAX_MMS_BYTES * 2) bytes else null  // give up if still wildly over
+        syncLogger.log(TAG, "compressImage: exhausted all strategies → ${bytes.size} bytes (messageId=$messageId)")
+        return if (bytes.size <= MAX_MMS_BYTES * 2) bytes else null
     }
 }
 
