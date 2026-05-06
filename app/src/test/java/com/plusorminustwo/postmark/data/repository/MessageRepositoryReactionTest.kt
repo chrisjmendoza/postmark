@@ -179,6 +179,7 @@ private class StubMessageDao : MessageDao {
     override suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity? = null
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long) = Unit
+    override suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int? = null
     override suspend fun deleteAll() = Unit
     override suspend fun getAllThreadIds(): List<Long> = emptyList()
     override suspend fun getAll(): List<MessageEntity> = emptyList()

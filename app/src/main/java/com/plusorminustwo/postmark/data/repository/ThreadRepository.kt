@@ -71,4 +71,9 @@ class ThreadRepository @Inject constructor(
 
     suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) =
         dao.updateNotificationsEnabled(threadId, enabled)
+
+    // Looks up a stored display name by raw phone address; returns null when the thread
+    // isn't in Room yet (e.g. before first sync completes).
+    suspend fun getDisplayNameByAddress(address: String): String? =
+        dao.getDisplayNameByAddress(address)
 }

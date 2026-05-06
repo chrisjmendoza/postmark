@@ -6,6 +6,51 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-06
 
+### Fix: failed MMS persists with red error icon (race condition fix)
+
+- `MmsManagerWrapper.sendMms()` now returns `Boolean` (true = dispatched to system, false =
+  local failure). `ThreadViewModel` immediately marks the optimistic row as `DELIVERY_STATUS_FAILED`
+  when `false` is returned, so the message stays visible with a red error icon.
+- `MmsSentReceiver` now carries `EXTRA_SENT_AT_MS` (epoch ms from send time) so it can find
+  the real content://mms row by timestamp window even when sync has already replaced the
+  temp negative-ID row. Both the real row (`MMS_ID_OFFSET + rawId`) and the temp row are updated.
+- `SmsSyncHandler.syncLatestMms()` transfers `DELIVERY_STATUS_FAILED` from the optimistic row
+  to the newly-inserted real row before calling `deleteOptimisticMessages()`, closing the race
+  where MmsSentReceiver fires between sync insert and delete.
+
+### Fix: notifications now show contact display name instead of phone number
+
+- `SmsReceiver.onReceive()` now queries `threadRepository.getDisplayNameByAddress(rawSender)`
+  before posting the notification. Falls back to the raw phone number only if the thread
+  is not yet in Room (e.g. first message ever from this contact, received during initial sync).
+
+### Logging: MMS send pipeline now fully captured in sync log
+
+- `MmsManagerWrapper`: logs send start, bytes read from attachment, PDU build error, file-write
+  error, FileProvider error, successful dispatch, and every failure path.
+- `MmsSentReceiver`: logs MMSC result ("SENT" or "FAILED (resultCode=X)"), whether real row was
+  found by timestamp lookup, and which row IDs were updated.
+- `SmsSentDeliveryReceiver`: now injects `SyncLogger`; logs SMS_SENT (SENT/FAILED) and
+  SMS_DELIVERED events with roomId and smsRowId.
+- `SmsReceiver`: logs the address-to-displayName resolution for every incoming notification.
+- `SmsSyncHandler.syncLatestMms()`: logs sent vs received counts in the incremental sync
+  summary, and logs when FAILED status is transferred from optimistic to real row.
+
+---
+
+### Contact profile pictures
+
+- Added `ContactAvatar` composable (`ui/components/ContactAvatar.kt`) that resolves a
+  phone number to a system Contacts photo URI via `ContactsContract.PhoneLookup` on
+  `Dispatchers.IO`, then loads it with Coil.
+- Three-level fallback: LetterAvatar while loading → LetterAvatar if no contact match →
+  LetterAvatar on Coil error. No visible flash between states.
+- No DB change, no migration, no new permission (`READ_CONTACTS` was already declared).
+- `ConversationsScreen.ThreadRow` and `ThreadScreen` top-bar both swapped from
+  `LetterAvatar` to `ContactAvatar`.
+
+---
+
 ### Cherry-pick: unread badges + search-in-thread (from copilot/fix-mms-image-sending)
 
 Surgically imported the new-feature additions from the Copilot branch while keeping all

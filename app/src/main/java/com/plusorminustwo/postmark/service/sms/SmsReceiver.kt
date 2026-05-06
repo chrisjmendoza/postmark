@@ -76,10 +76,15 @@ class SmsReceiver : BroadcastReceiver() {
 
                         // Check mute/notifications before posting the notification banner.
                         val notificationsEnabled =
-                            threadRepository.isNotificationsEnabledByAddress(sender)
-                        if (notificationsEnabled && !threadRepository.isMutedByAddress(sender)) {
+                            threadRepository.isNotificationsEnabledByAddress(rawSender)
+                        if (notificationsEnabled && !threadRepository.isMutedByAddress(rawSender)) {
+                            // Prefer the stored display name (contact name resolved during sync)
+                            // over the raw phone number so the notification title is human-readable.
+                            val displayName = threadRepository.getDisplayNameByAddress(rawSender)
+                                ?: sender  // fallback: formatted phone number
+                            syncLogger.log("SmsReceiver", "notification: address=$rawSender displayName=$displayName")
                             postIncomingNotification(
-                                context, sender, body,
+                                context, displayName, body,
                                 privacyMode = privacyModeRepository.isEnabled()
                             )
                         }

@@ -218,9 +218,22 @@ WHAT IS WORKING (tested on device)
    - Attach button in ReplyBar (📎 dropdown: "Photo or video" / "Audio file")
    - Attachment preview chip with ✕ clear button
    - MmsManagerWrapper builds WAP Binary M-Send.req PDU, sends via
-     SmsManager.sendMultimediaMessage(); temp PDU via FileProvider cacheDir
-   - MmsSentReceiver updates Room + content://mms on SENT/FAILED
+     SmsManager.sendMultimediaMessage(); temp PDU via FileProvider cacheDir;
+     returns Boolean (true = dispatched, false = local failure)
+   - MmsSentReceiver carries EXTRA_SENT_AT_MS; finds real content://mms row
+     by timestamp window even if sync replaced the optimistic row first
+   - SmsSyncHandler.syncLatestMms() transfers DELIVERY_STATUS_FAILED from
+     optimistic row to real row before deleting it (race condition fix)
+   - ThreadViewModel marks optimistic row as FAILED immediately on local send failure
    - SMS/MMS type label dimmed next to timestamp in each bubble
+✅ Notifications show contact display name (not raw phone number):
+   - SmsReceiver queries threadRepository.getDisplayNameByAddress(rawSender)
+     before posting notification; falls back to raw number if thread not in Room
+✅ SyncLogger coverage for full MMS send pipeline:
+   - MmsManagerWrapper: send start, bytes read, PDU build/write, dispatch, all failures
+   - MmsSentReceiver: MMSC result, real-row timestamp lookup, row IDs updated
+   - SmsSentDeliveryReceiver: SMS_SENT / SMS_DELIVERED events with roomId + smsRowId
+   - SmsReceiver: address-to-displayName resolution per notification
 ✅ Stats screen — Heatmap month/year jump picker:
    - Tap month/year label → MonthYearPickerDialog
    - Year nav (← year →, right disabled at current year)
@@ -735,17 +748,25 @@ TESTING CONVENTIONS
     src/androidTest/.../data/db/PostmarkDatabaseTest.kt
     src/androidTest/.../data/sync/StatsUpdaterIntegrationTest.kt
 
-CONTACT COLORS
+CONTACT COLORS / AVATARS
 - avatarColor(name) hashes displayName into an
   index across an 8-color palette
 - Deterministic — same name always yields same color
-- Used in LetterAvatar (circle background) and
-  ContactDayRow (proportional bar color) via the
-  same avatarColor() call
-- Seed is displayName not phone number — color will
-  change if an unsaved number later gets a contact
-  name saved. Low priority fix: swap seed to
-  thread.address for cross-install identity stability.
+- LetterAvatar composable: colored circle + first letter
+  of displayName. Falls back to "?" when name is empty.
+- ContactAvatar composable (NEW): wraps LetterAvatar,
+  queries ContactsContract.PhoneLookup on Dispatchers.IO
+  to resolve the phone number to a contact photo URI,
+  then loads it with Coil. Three fallback levels:
+  LetterAvatar while loading, LetterAvatar if no contact,
+  LetterAvatar if Coil fails. No DB change required.
+  READ_CONTACTS already declared in AndroidManifest.
+- ConversationsScreen ThreadRow and ThreadScreen top bar
+  both use ContactAvatar (showing real photos when available).
+- ContactDayRow in StatsScreen still uses LetterAvatar
+  (only needs a color/letter, no photo context).
+- avatarColor() seed is thread.address (phone number) for
+  cross-install color stability.
 
 APP ICON
 - Adaptive icon: ic_launcher.xml in mipmap-anydpi-v26

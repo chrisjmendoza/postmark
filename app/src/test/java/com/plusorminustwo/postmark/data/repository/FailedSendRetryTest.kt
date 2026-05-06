@@ -101,6 +101,7 @@ class FailedSendRetryTest {
         override suspend fun getLatestNForThread(threadId: Long, n: Int): List<MessageEntity> = emptyList()
         override suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity? = null
         override suspend fun deleteOptimisticMessages(threadId: Long) = Unit
+        override suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int? = null
         override suspend fun deleteAll() = Unit
         override suspend fun getAllThreadIds(): List<Long> = emptyList()
         override suspend fun getAll(): List<MessageEntity> = emptyList()

@@ -62,6 +62,12 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE threadId = :threadId AND id < 0")
     suspend fun deleteOptimisticMessages(threadId: Long)
 
+    // Returns the deliveryStatus of the most recent optimistic (negative-ID) sent message in
+    // a thread. Used by syncLatestMms() to transfer a FAILED status from the temp row to the
+    // real row before the temp row is deleted.
+    @Query("SELECT deliveryStatus FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
+    suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int?
+
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteById(messageId: Long)
 

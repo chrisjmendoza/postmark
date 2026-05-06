@@ -68,6 +68,9 @@ interface ThreadDao {
     @Query("SELECT isMuted FROM threads WHERE address = :address LIMIT 1")
     suspend fun isMutedByAddress(address: String): Boolean?
 
+    @Query("SELECT displayName FROM threads WHERE address = :address LIMIT 1")
+    suspend fun getDisplayNameByAddress(address: String): String?
+
     @Query("DELETE FROM threads")
     suspend fun deleteAll()
 

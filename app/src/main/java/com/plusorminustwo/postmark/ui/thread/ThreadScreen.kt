@@ -46,6 +46,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
+import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -506,7 +507,11 @@ private fun ThreadContent(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            LetterAvatar(name = name, colorSeed = uiState.thread?.address ?: name, size = 36.dp)
+                            ContactAvatar(
+                                address = uiState.thread?.address ?: "",
+                                name = name,
+                                size = 36.dp
+                            )
                             Text(name)
                         }
                     },

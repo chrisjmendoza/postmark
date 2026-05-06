@@ -6,6 +6,7 @@ import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
 import com.plusorminustwo.postmark.BuildConfig
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.repository.MessageRepository
@@ -306,12 +307,29 @@ class SmsSyncHandler @Inject constructor(
         if (newMessages.isEmpty()) return
 
         debugLog("syncLatestMms: ${newMessages.size} new MMS message(s)")
-        syncLogger.log("IncrementalMms", "${newMessages.size} new MMS after rawId=$maxRawId")
+        val sentCount     = newMessages.count { it.isSent }
+        val receivedCount = newMessages.count { !it.isSent }
+        syncLogger.log("IncrementalMms", "${newMessages.size} new MMS after rawId=$maxRawId (sent=$sentCount received=$receivedCount)")
 
         messageRepository.insertAll(newMessages)
 
         newMessages.groupBy { it.threadId }.forEach { (threadId, msgs) ->
             val latest = msgs.last()
+
+            // ── Transfer FAILED status from optimistic row to real row ───────────
+            // Race scenario: MmsSentReceiver fired and marked the temp row FAILED
+            // before this sync ran. Transfer that status to the just-inserted real row
+            // (DELIVERY_STATUS_FAILED = 4) before we delete the optimistic row below.
+            // If the MMSC hasn't replied yet, the status here is PENDING — no transfer needed.
+            val optStatus = messageRepository.getOptimisticSentDeliveryStatus(threadId)
+            if (optStatus == DELIVERY_STATUS_FAILED) {
+                val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
+                if (sentMsg != null) {
+                    messageRepository.updateDeliveryStatus(sentMsg.id, DELIVERY_STATUS_FAILED)
+                    syncLogger.log("IncrementalMms", "transferred FAILED status to real row id=${sentMsg.id} threadId=$threadId")
+                }
+            }
+
             messageRepository.deleteOptimisticMessages(threadId)
             threadRepository.updateLastMessageAt(threadId, latest.timestamp)
             // Use emoji label for media-only MMS in the thread preview.

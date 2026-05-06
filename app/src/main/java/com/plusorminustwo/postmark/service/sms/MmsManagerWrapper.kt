@@ -5,6 +5,7 @@ import android.net.Uri
 import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.FileProvider
+import com.plusorminustwo.postmark.data.sync.SyncLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -25,7 +26,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class MmsManagerWrapper @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val syncLogger: SyncLogger
 ) {
     private val smsManager: SmsManager
         get() = context.getSystemService(SmsManager::class.java)
@@ -36,12 +38,17 @@ class MmsManagerWrapper @Inject constructor(
      * Reads [attachmentUri] from the content resolver, builds an M-Send.req PDU,
      * and sends it via the telephony stack.
      *
+     * Returns `true` if the message was dispatched to the radio (MMSC result arrives
+     * asynchronously via [MmsSentReceiver]). Returns `false` on any local failure
+     * (unreadable attachment, PDU build error, file I/O, or telephony exception) so
+     * the caller can immediately mark the optimistic message as FAILED.
+     *
      * @param toAddress     Recipient phone number (E.164 or local format).
      * @param textBody      Optional caption / text body to include alongside the media.
      * @param attachmentUri Content URI of the media to send (image, audio, or video).
      * @param mimeType      MIME type of the media (e.g. "image/jpeg", "audio/mpeg").
-     * @param messageId     Optimistic Room ID; used to name the temp PDU file.
-     * @param sentIntent    [android.app.PendingIntent] fired when the MMSC accepts the message.
+     * @param messageId     Optimistic Room ID; used to name the temp PDU file and in logs.
+     * @param sentIntent    [android.app.PendingIntent] fired when the MMSC accepts/rejects the message.
      */
     suspend fun sendMms(
         toAddress: String,
@@ -50,27 +57,37 @@ class MmsManagerWrapper @Inject constructor(
         mimeType: String,
         messageId: Long,
         sentIntent: android.app.PendingIntent?
-    ) = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(Dispatchers.IO) {
+        syncLogger.log(TAG, "sendMms start: to=$toAddress mimeType=$mimeType messageId=$messageId")
+
         // ── 1. Read attachment bytes ──────────────────────────────────────────
         val mediaBytes = try {
             context.contentResolver.openInputStream(attachmentUri)?.use { it.readBytes() }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to read attachment uri=$attachmentUri", e)
-            null
+            syncLogger.logError(TAG, "sendMms FAILED — could not read attachment uri=$attachmentUri messageId=$messageId", e)
+            return@withContext false
         }
         if (mediaBytes == null) {
             Log.e(TAG, "sendMms: null media bytes — aborting")
-            return@withContext
+            syncLogger.logError(TAG, "sendMms FAILED — null media bytes for messageId=$messageId")
+            return@withContext false
         }
-        Log.d(TAG, "sendMms: toAddress=$toAddress  mimeType=$mimeType  bytes=${mediaBytes.size}")
+        syncLogger.log(TAG, "sendMms: read ${mediaBytes.size} bytes for messageId=$messageId")
 
         // ── 2. Build the MMS PDU ──────────────────────────────────────────────
-        val pdu = MmsPduBuilder.buildPdu(
-            toAddress  = toAddress,
-            mediaBytes = mediaBytes,
-            mimeType   = mimeType,
-            textBody   = textBody
-        )
+        val pdu = try {
+            MmsPduBuilder.buildPdu(
+                toAddress  = toAddress,
+                mediaBytes = mediaBytes,
+                mimeType   = mimeType,
+                textBody   = textBody
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to build MMS PDU", e)
+            syncLogger.logError(TAG, "sendMms FAILED — PDU build error for messageId=$messageId", e)
+            return@withContext false
+        }
 
         // ── 3. Write PDU to cache dir + expose via FileProvider ───────────────
         val pduFile = File(context.cacheDir, "mms_out_$messageId.pdu")
@@ -78,13 +95,21 @@ class MmsManagerWrapper @Inject constructor(
             pduFile.writeBytes(pdu)
         } catch (e: IOException) {
             Log.e(TAG, "Failed to write PDU to cache", e)
-            return@withContext
+            syncLogger.logError(TAG, "sendMms FAILED — could not write PDU file for messageId=$messageId", e)
+            return@withContext false
         }
-        val pduUri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            pduFile
-        )
+        val pduUri = try {
+            FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                pduFile
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "FileProvider.getUriForFile failed", e)
+            syncLogger.logError(TAG, "sendMms FAILED — FileProvider error for messageId=$messageId", e)
+            pduFile.delete()
+            return@withContext false
+        }
 
         // ── 4. Grant read permission to known telephony service packages ───────
         listOf("com.android.phone", "com.android.mms.service").forEach { pkg ->
@@ -97,8 +122,12 @@ class MmsManagerWrapper @Inject constructor(
         try {
             smsManager.sendMultimediaMessage(context, pduUri, null, null, sentIntent)
             Log.i(TAG, "sendMms: sendMultimediaMessage dispatched for messageId=$messageId")
+            syncLogger.log(TAG, "sendMms dispatched to radio: to=$toAddress messageId=$messageId pduBytes=${pdu.size}")
         } catch (e: Exception) {
             Log.e(TAG, "sendMultimediaMessage failed", e)
+            syncLogger.logError(TAG, "sendMms FAILED — sendMultimediaMessage threw for messageId=$messageId", e)
+            pduFile.delete()
+            return@withContext false
         }
 
         // ── 6. Schedule PDU file cleanup (best-effort, after telephony reads it) ─
@@ -109,6 +138,8 @@ class MmsManagerWrapper @Inject constructor(
             kotlinx.coroutines.delay(60_000)
             pduFile.delete()
         } catch (_: Exception) {}
+
+        return@withContext true
     }
 
     companion object {

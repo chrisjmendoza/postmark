@@ -11,6 +11,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.data.repository.MessageRepository
+import com.plusorminustwo.postmark.data.sync.SyncLogger
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +23,7 @@ import javax.inject.Inject
 class SmsSentDeliveryReceiver : BroadcastReceiver() {
 
     @Inject lateinit var messageRepository: MessageRepository
+    @Inject lateinit var syncLogger: SyncLogger
 
     override fun onReceive(context: Context, intent: Intent) {
         val messageId  = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
@@ -40,6 +42,8 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                     ACTION_SMS_SENT -> {
                         val isSendOk = resultCode == Activity.RESULT_OK
                         val status = if (isSendOk) DELIVERY_STATUS_SENT else DELIVERY_STATUS_FAILED
+                        val label  = if (isSendOk) "SENT" else "FAILED (resultCode=$resultCode)"
+                        syncLogger.log("SmsSentDelivery", "SMS_SENT roomId=$roomId smsRowId=$smsRowId result=$label")
                         messageRepository.updateDeliveryStatus(roomId, status)
 
                         // Mirror the failure into content://sms so third-party apps
@@ -55,6 +59,7 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                         }
                     }
                     ACTION_SMS_DELIVERED -> {
+                        syncLogger.log("SmsSentDelivery", "SMS_DELIVERED roomId=$roomId smsRowId=$smsRowId")
                         messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_DELIVERED)
 
                         // Mark delivery confirmed in the content provider.

@@ -400,16 +400,19 @@ class ThreadViewModel @Inject constructor(
                 )
                 messageRepository.insert(optimistic)
                 // PendingIntent for MmsSentReceiver — updates Room when MMSC responds.
+                // EXTRA_SENT_AT_MS lets the receiver find the real content-provider row
+                // even if sync already replaced the temp row before the MMSC replied.
                 val reqCode   = (tempId and 0x3FFF_FFFFL).toInt()
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
                         action = MmsSentReceiver.ACTION_MMS_SENT
                         putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, tempId)
+                        putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, now)
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )
-                mmsManagerWrapper.sendMms(
+                val dispatched = mmsManagerWrapper.sendMms(
                     toAddress     = thread.address,
                     textBody      = text,
                     attachmentUri = Uri.parse(attachmentUri),
@@ -417,6 +420,11 @@ class ThreadViewModel @Inject constructor(
                     messageId     = tempId,
                     sentIntent    = sentIntent
                 )
+                // Local failure (bad URI, IO error, telephony exception) — mark immediately
+                // so the message persists as FAILED rather than staying PENDING forever.
+                if (!dispatched) {
+                    messageRepository.updateDeliveryStatus(tempId, DELIVERY_STATUS_FAILED)
+                }
             } else {
                 // ── SMS path (existing behaviour) ─────────────────────────────
                 val optimistic = Message(

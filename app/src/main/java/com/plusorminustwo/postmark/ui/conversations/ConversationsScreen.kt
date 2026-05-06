@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
@@ -348,7 +349,7 @@ private fun ThreadRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        LetterAvatar(name = thread.displayName, colorSeed = thread.address)
+        ContactAvatar(address = thread.address, name = thread.displayName)
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = formatPhoneNumber(thread.displayName),
