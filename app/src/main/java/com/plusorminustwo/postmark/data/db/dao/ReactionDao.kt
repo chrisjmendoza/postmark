@@ -76,4 +76,5 @@ interface ReactionDao {
     suspend fun deleteAll()
 }
 
+/** Aggregated emoji usage: the [emoji] character and its [count] across a result set. */
 data class EmojiCount(val emoji: String, val count: Int)

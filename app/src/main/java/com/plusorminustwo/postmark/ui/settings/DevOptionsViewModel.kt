@@ -25,6 +25,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * ViewModel for the Developer Options screen.
+ *
+ * Exposes debug-only actions: force-reprocess reactions, clear and re-run the
+ * first-launch sync, export sync logs, and inspect raw thread data. All actions
+ * are gated behind the Dev Options screen which is only reachable via a hidden
+ * tap in Settings.
+ */
 @HiltViewModel
 class DevOptionsViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,

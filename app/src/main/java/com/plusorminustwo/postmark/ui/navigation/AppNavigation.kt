@@ -27,6 +27,13 @@ import com.plusorminustwo.postmark.ui.settings.SettingsScreen
 import com.plusorminustwo.postmark.ui.stats.StatsScreen
 import com.plusorminustwo.postmark.ui.thread.ThreadScreen
 
+/**
+ * Sealed class representing every navigation destination in the app.
+ *
+ * Each object carries its [route] template string. Objects with required or
+ * optional arguments expose a typed `route(...)` / `navRoute(...)` helper so
+ * callers never hand-code route strings.
+ */
 sealed class Screen(val route: String) {
     data object Onboarding : Screen("onboarding")
     data object Conversations : Screen("conversations")
@@ -40,17 +47,22 @@ sealed class Screen(val route: String) {
             if (params.isNotEmpty()) append("?${params.joinToString("&")}")
         }
     }
+    /** Search screen; optionally pre-filtered to a single thread via [navRoute]. */
     data object Search : Screen("search?threadId={threadId}") {
         // If threadId is provided, the search screen pre-filters to that conversation.
         fun navRoute(threadId: Long = -1L) =
             if (threadId != -1L) "search?threadId=$threadId" else "search"
     }
+    /** Statistics screen; optionally pre-selected to a single thread via [navRoute]. */
     data object Stats : Screen("stats?threadId={threadId}") {
         fun navRoute(threadId: Long? = null) =
             if (threadId != null) "stats?threadId=$threadId" else "stats"
     }
+    /** Top-level Settings screen. */
     data object Settings : Screen("settings")
+    /** Backup & restore settings screen. */
     data object BackupSettings : Screen("settings/backup")
+    /** Developer options screen (hidden). */
     data object DevOptions : Screen("settings/dev")
 }
 

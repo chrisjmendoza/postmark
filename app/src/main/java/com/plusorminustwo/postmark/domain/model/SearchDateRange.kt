@@ -2,6 +2,7 @@ package com.plusorminustwo.postmark.domain.model
 
 import java.util.Calendar
 
+/** Date-range filter options available on the Search screen. */
 enum class SearchDateRange { ALL_TIME, TODAY, LAST_7_DAYS, LAST_30_DAYS }
 
 /**

@@ -91,6 +91,7 @@ private val LightColorScheme = lightColorScheme(
 
 // ── Extended brand colors ─────────────────────────────────────────────────────
 
+/** Brand-specific colour tokens that extend Material3's colour scheme. */
 data class PostmarkColors(
     val sentBubble: Color,
     val receivedBubble: Color,

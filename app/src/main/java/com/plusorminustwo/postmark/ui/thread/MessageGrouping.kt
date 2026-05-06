@@ -5,6 +5,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Describes where a message bubble sits within a run of consecutive same-sender messages. */
 enum class ClusterPosition { SINGLE, TOP, MIDDLE, BOTTOM }
 
 internal val DAY_FORMATTER = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).also {

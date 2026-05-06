@@ -18,6 +18,14 @@ import com.plusorminustwo.postmark.ui.navigation.AppNavigation
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import dagger.hilt.android.AndroidEntryPoint
 
+/**
+ * The single [ComponentActivity] that hosts the entire Compose UI.
+ *
+ * Handles runtime permission requests (SMS read/send and notifications), then
+ * enqueues [FirstLaunchSyncWorker] once permissions are granted. The role-request
+ * flow (prompting the user to set Postmark as the default SMS app) is managed by
+ * the Conversations screen once the UI is displayed.
+ */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
