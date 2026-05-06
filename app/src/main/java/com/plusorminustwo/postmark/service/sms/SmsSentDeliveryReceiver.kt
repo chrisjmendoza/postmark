@@ -19,6 +19,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * [BroadcastReceiver] that handles SMS sent and delivery confirmations.
+ *
+ * Receives the [PendingIntent]s registered by [SmsManagerWrapper.sendTextMessage]:
+ *  - **Sent intent** (`ACTION_SMS_SENT`): updates the Room delivery status to
+ *    [DELIVERY_STATUS_SENT] or [DELIVERY_STATUS_FAILED] and mirrors the result to
+ *    the system telephony content provider.
+ *  - **Delivery intent** (`ACTION_SMS_DELIVERED`): updates Room to
+ *    [DELIVERY_STATUS_DELIVERED] when the SMSC acknowledges the handset receipt.
+ *
+ * Uses [smsRowId] (the positive content-provider row ID captured at send time) as
+ * the canonical Room key, falling back to the optimistic `messageId` only if the
+ * extra is absent.
+ */
 @AndroidEntryPoint
 class SmsSentDeliveryReceiver : BroadcastReceiver() {
 

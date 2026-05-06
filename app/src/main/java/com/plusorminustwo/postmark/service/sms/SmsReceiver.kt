@@ -26,6 +26,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * [BroadcastReceiver] that handles incoming SMS messages.
+ *
+ * Receives both [Telephony.Sms.Intents.SMS_DELIVER_ACTION] (when Postmark is the
+ * default SMS app — the OS will NOT persist the row, so we must write it) and
+ * [Telephony.Sms.Intents.SMS_RECEIVED_ACTION] (when another app is default — the row
+ * is already written, so we only trigger a Room sync).
+ *
+ * Uses [goAsync] to extend the receiver lifetime for IO work without ANR risk.
+ * After persisting the row and syncing Room, posts an incoming-message notification
+ * unless the thread is muted or notifications are disabled for that address.
+ */
 @AndroidEntryPoint
 class SmsReceiver : BroadcastReceiver() {
 
