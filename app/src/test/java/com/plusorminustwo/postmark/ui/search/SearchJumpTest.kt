@@ -133,6 +133,8 @@ class SearchJumpTest {
         override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(threads.find { it.id == threadId })
         override suspend fun insert(thread: ThreadEntity) {}
         override suspend fun insertAll(threads: List<ThreadEntity>) {}
+        override suspend fun insertIgnore(thread: ThreadEntity) {}
+        override suspend fun insertAllIgnore(threads: List<ThreadEntity>) {}
         override suspend fun update(thread: ThreadEntity) {}
         override suspend fun delete(thread: ThreadEntity) {}
         override suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy) {}

@@ -37,7 +37,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     private val messageRepository: MessageRepository,
     private val reactionParser: ReactionFallbackParser,
     private val statsUpdater: StatsUpdater,
-    private val smsSyncHandler: SmsSyncHandler  // for post-sync catch-up of race-window messages
+    private val smsSyncHandler: SmsSyncHandler,  // for post-sync catch-up of race-window messages
+    private val syncLogger: SyncLogger
 ) : CoroutineWorker(context, params) {
 
     // Verbose debug logs only appear in debug builds; warnings and errors always fire.
@@ -100,31 +101,37 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         // Samsung OneUI battery optimisation) from killing the worker mid-sync.
         setForeground(getForegroundInfo())
         debugLog("doWork() started — attempt ${runAttemptCount + 1}")
+        syncLogger.log("Sync", "doWork() started — attempt ${runAttemptCount + 1}")
         return try {
             postProgress("Syncing SMS\u2026", 0, 0)
             val smsResult = syncAllSms { done, total -> postProgress("Syncing SMS", done, total) }
             if (smsResult.threadCount < 0) {
                 val msg = "SMS cursor was null — provider unavailable or permission denied"
                 Log.w(TAG, msg)
+                syncLogger.logError("Sync", msg)
                 writeStatus("Failed: $msg")
                 return if (runAttemptCount < 3) Result.retry()
                 else Result.failure(workDataOf(KEY_ERROR to msg))
             }
+            syncLogger.log("Sync", "SMS done: ${smsResult.threadCount} threads, ${smsResult.messageCount} messages")
             postProgress("Syncing MMS\u2026", 0, 0)
             val mmsCount = syncAllMms { done, total, eta -> postProgress("Syncing MMS", done, total, eta) }
             postProgress("Wrapping up\u2026", 0, 0)
             val status = "OK: ${smsResult.threadCount} threads, ${smsResult.messageCount} SMS + $mmsCount MMS"
             Log.i(TAG, "Sync complete — $status")
+            syncLogger.log("Sync", "Complete: $status")
             writeStatus(status)
             applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putBoolean("first_sync_completed", true).apply()
             // One final incremental pass catches any SMS/MMS that arrived during the sync window
             // (i.e. after the cursor was opened but before the first DB commit).
             smsSyncHandler.triggerCatchUp()
+            syncLogger.log("Sync", "Catch-up pass complete")
             Result.success(workDataOf(KEY_STATUS to status))
         } catch (e: Exception) {
             val msg = "${e.javaClass.simpleName}: ${e.message}"
             Log.e(TAG, "Sync exception — $msg", e)
+            syncLogger.logError("Sync", "Exception during sync: $msg", e)
             writeStatus("Error: $msg")
             if (runAttemptCount < 3) Result.retry()
             else Result.failure(workDataOf(KEY_ERROR to msg))
@@ -189,7 +196,15 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         if (threads.isEmpty()) {
             Log.w(TAG, "0 threads collected — DB will remain empty. Check READ_SMS permission and default SMS role.")
         }
-        threadRepository.upsertAll(threads.values.toList())
+        // Create any threads that don't yet exist in Room. IGNORE conflict means we never
+        // overwrite an existing row — user settings (isPinned, isMuted, notificationsEnabled)
+        // are preserved across re-syncs. Metadata (lastMessageAt / preview) is then updated
+        // via targeted UPDATE queries below, which also fire for threads that already existed.
+        threadRepository.insertIgnoreAll(threads.values.toList())
+        threads.values.forEach { thread ->
+            threadRepository.updateLastMessageAt(thread.id, thread.lastMessageAt)
+            threadRepository.updateLastMessagePreview(thread.id, thread.lastMessagePreview)
+        }
         val smsTotal = messages.size
         messages.chunked(500).forEachIndexed { idx, chunk ->
             messageRepository.insertAll(chunk)

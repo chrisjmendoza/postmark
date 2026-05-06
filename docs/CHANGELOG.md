@@ -4,6 +4,64 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-05-06
+
+### SMS pipeline — bulletproof reliability hardening
+
+Five systematic bugs across the SMS receive / sync pipeline fixed in a single session.
+
+1. **SmsReceiver: missing `content://sms/inbox` write (critical — SMS loss)**
+   As the default SMS app, Postmark is solely responsible for writing incoming SMS rows to
+   `content://sms/inbox`. The previous `SmsReceiver` skipped this on `SMS_DELIVER_ACTION`,
+   causing every received message to silently vanish from both Room and the system store.
+   Fix: insert a `ContentValues` row on `DELIVER_ACTION` only (not on `RECEIVED_ACTION`,
+   which would create duplicates if another app is default).
+
+2. **SmsReceiver: ContentResolver insert on main thread (ANR risk)**
+   The `content://sms/inbox` insert ran synchronously before `goAsync()`, blocking the
+   main thread for a potentially slow IO operation. Fix: extracted `persistToSystemStore()`
+   helper; all ContentResolver work now runs inside the `goAsync()` coroutine on
+   `Dispatchers.IO`. PDU fields (`rawSender`, `body`, `timestampMs`) captured before
+   `goAsync()` — safe, no IO.
+
+3. **SmsReceiver: no explicit `THREAD_ID`**
+   Some OEM ROMs do not automatically assign `thread_id` on insert. Fix: call
+   `Telephony.Threads.getOrCreateThreadId(context, rawSender)` in `persistToSystemStore()`
+   and include `THREAD_ID` + `PROTOCOL=0` (SMS) in the `ContentValues`.
+
+4. **SmsSyncHandler: no concurrency control (burst/race)**
+   Each `ContentObserver` notification launched a new `scope.launch { syncLatestSms() }`
+   coroutine. A burst of 50 notifications (common during MMS import) could produce 50
+   concurrent sync coroutines all reading/writing the same Room rows. Fix: replaced with
+   a `Channel<Unit>(Channel.CONFLATED)` per sync type — at most one follow-up run is
+   queued while a sync is in progress. A `Mutex` per sync type serializes execution
+   between the channel consumer and `triggerCatchUp()`.
+
+5. **SmsSyncHandler: MMS gate wrong during first sync (historical MMS duplication)**
+   The old guard `if (maxStoredId <= 0L && messageRepository.getMaxId() == null)` only
+   bailed when BOTH tables were empty. When SMS was populated but no MMS existed yet
+   (normal mid-import state), the incremental handler ran `_id > 0` — scanning all
+   historical MMS concurrently with the worker. Fix: check the `first_sync_completed`
+   SharedPrefs flag instead; defer to the worker while it's running.
+
+6. **FirstLaunchSyncWorker: thread upsert with REPLACE overwrites user settings**
+   `threadRepository.upsertAll()` used `OnConflictStrategy.REPLACE`, which deletes the
+   existing row and inserts a new one — resetting `isPinned`, `isMuted`, and
+   `notificationsEnabled` to defaults on every re-sync. Fix: new `insertIgnoreAll()` +
+   `insertAllIgnore()` DAO methods use `OnConflictStrategy.IGNORE` for thread creation,
+   followed by targeted `updateLastMessageAt/updateLastMessagePreview` UPDATE queries so
+   only metadata changes.
+
+**Supporting changes:**
+- `SyncLogger` now injected into `SmsSyncHandler`; logs incremental SMS/MMS sync events
+  with counts for post-hoc diagnosis.
+- `SyncStatusBar` composable on `ConversationsScreen` shows red error banner on failure.
+- `DevOptionsScreen` sync log viewer for reviewing `SyncLogger` output on device.
+- All 322 unit tests pass. All 8 fake `ThreadDao` implementations in tests updated with
+  the two new interface methods (`insertIgnore`, `insertAllIgnore`).
+
+---
+
 ## 2026-05-05
 
 ### UI polish — page scrollability audit

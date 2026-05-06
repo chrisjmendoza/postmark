@@ -23,6 +23,15 @@ interface ThreadDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(threads: List<ThreadEntity>)
 
+    // ── Sync-safe insert: creates the thread if it does not exist, leaves it
+    // untouched if it does. Preserves user settings (isPinned, isMuted,
+    // notificationsEnabled) that a REPLACE strategy would silently destroy.
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(thread: ThreadEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAllIgnore(threads: List<ThreadEntity>)
+
     @Update
     suspend fun update(thread: ThreadEntity)
 

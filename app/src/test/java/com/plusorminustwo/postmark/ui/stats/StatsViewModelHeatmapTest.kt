@@ -289,6 +289,8 @@ private class FakeThreadDao : ThreadDao {
     override suspend fun getById(threadId: Long): ThreadEntity? = null
     override suspend fun insert(thread: ThreadEntity) = Unit
     override suspend fun insertAll(threads: List<ThreadEntity>) = Unit
+    override suspend fun insertIgnore(thread: ThreadEntity) = Unit
+    override suspend fun insertAllIgnore(threads: List<ThreadEntity>) = Unit
     override suspend fun update(thread: ThreadEntity) = Unit
     override suspend fun delete(thread: ThreadEntity) = Unit
     override suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy) = Unit

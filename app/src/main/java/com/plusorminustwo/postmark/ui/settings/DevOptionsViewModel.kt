@@ -11,6 +11,7 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.FirstLaunchSyncWorker
 import com.plusorminustwo.postmark.data.sync.StatsUpdater
+import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
@@ -30,6 +31,7 @@ class DevOptionsViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val statsUpdater: StatsUpdater,
     private val reactionParser: ReactionFallbackParser,
+    private val syncLogger: SyncLogger,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -41,6 +43,11 @@ class DevOptionsViewModel @Inject constructor(
 
     private val _isReprocessing = MutableStateFlow(false)
     val isReprocessing: StateFlow<Boolean> = _isReprocessing.asStateFlow()
+
+    // ── Sync log ──────────────────────────────────────────────────────────────
+    // Loaded on demand (refreshLog()) and after clearLog() to reflect the change.
+    private val _logContent = MutableStateFlow<String?>(null)
+    val logContent: StateFlow<String?> = _logContent.asStateFlow()
 
     fun clearFeedback() { _feedback.value = null }
 
@@ -278,4 +285,21 @@ class DevOptionsViewModel @Inject constructor(
 
     private fun msg(id: Long, threadId: Long, address: String, body: String, ts: Long, isSent: Boolean, type: Int) =
         Message(id, threadId, address, body, ts, isSent, type)
+
+    // ── Sync log ──────────────────────────────────────────────────────────────
+
+    /** Reads the log from disk and posts it to [logContent]. */
+    fun refreshLog() {
+        viewModelScope.launch {
+            _logContent.value = syncLogger.readLog()
+        }
+    }
+
+    /** Clears the log file and resets [logContent] to empty state. */
+    fun clearSyncLog() {
+        viewModelScope.launch {
+            syncLogger.clearLog()
+            _logContent.value = "(log cleared)"
+        }
+    }
 }

@@ -1,8 +1,5 @@
 # Postmark — Active TODOs
-Last updated: May 2, 2026
-> **Known issue (investigate):** SMS sync is incomplete — some conversation
-> threads are missing entirely and some existing threads have gaps in their
-> message history. Needs investigation once Tier 1 UI items are done.
+Last updated: May 6, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---

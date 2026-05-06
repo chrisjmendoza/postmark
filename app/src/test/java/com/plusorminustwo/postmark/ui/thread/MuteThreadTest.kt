@@ -108,6 +108,8 @@ class MuteThreadTest {
         override suspend fun getById(threadId: Long): ThreadEntity? = null
         override suspend fun insert(t: ThreadEntity) {}
         override suspend fun insertAll(ts: List<ThreadEntity>) {}
+        override suspend fun insertIgnore(t: ThreadEntity) {}
+        override suspend fun insertAllIgnore(ts: List<ThreadEntity>) {}
         override suspend fun update(t: ThreadEntity) {}
         override suspend fun delete(t: ThreadEntity) {}
         override suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy) {}

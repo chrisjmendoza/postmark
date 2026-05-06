@@ -28,6 +28,11 @@ class ThreadRepository @Inject constructor(
     suspend fun upsertAll(threads: List<Thread>) =
         dao.insertAll(threads.map { it.toEntity() })
 
+    // ── Sync-safe variants: create thread if absent, preserve user settings if present.
+    suspend fun insertIgnore(thread: Thread) = dao.insertIgnore(thread.toEntity())
+    suspend fun insertIgnoreAll(threads: List<Thread>) =
+        dao.insertAllIgnore(threads.map { it.toEntity() })
+
     suspend fun delete(thread: Thread) = dao.delete(thread.toEntity())
 
     suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy) =

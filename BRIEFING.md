@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: May 5, 2026
+Last updated: May 6, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -144,6 +144,9 @@ WHAT IS WORKING (tested on device)
    - Multi-part SMS body reassembled before display
    - Sync triggered once (not once-per-part)
    - Tap opens MainActivity (Conversations list)
+   - Writes to content://sms/inbox on DELIVER_ACTION (default SMS app only)
+   - All ContentResolver IO on Dispatchers.IO inside goAsync()
+   - Explicit THREAD_ID via Telephony.Threads.getOrCreateThreadId()
 ✅ Dark theme applied correctly
 ✅ Navigation between screens
 ✅ App icon: postmark logo (no background) over

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -151,12 +152,7 @@ fun ConversationsScreen(
                                     Text("Load sample data")
                                 }
                                 syncStatus?.let {
-                                    Text(
-                                        text = "Last sync: $it",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(horizontal = 32.dp)
-                                    )
+                                    SyncStatusBar(it)
                                 }
                             }
                         }
@@ -179,18 +175,58 @@ fun ConversationsScreen(
                         }
                     }
                     syncStatus?.let {
-                        Text(
-                            text = "Last sync: $it",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 4.dp)
-                        )
+                        SyncStatusBar(it, modifier = Modifier.fillMaxWidth())
                     }
                 }
             }
         }
+    }
+}
+
+// ── Sync status bar ───────────────────────────────────────────────────────────
+/** Shows a subtle one-line status for success/info states, or a red warning
+ *  banner with a warning icon for error states (status starts with "Error:").
+ *  Only rendered when [status] is non-null. */
+@Composable
+private fun SyncStatusBar(status: String, modifier: Modifier = Modifier) {
+    val isError = status.startsWith("Error:")
+    if (isError) {
+        // ── Error: prominent red banner so the user can't miss it ────────────
+        Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            modifier = modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = "Sync error",
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    } else {
+        // ── Success / info: quiet one-liner ──────────────────────────────────
+        Text(
+            text = "Last sync: $status",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        )
     }
 }
 

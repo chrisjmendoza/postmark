@@ -6,8 +6,6 @@ import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
 import com.plusorminustwo.postmark.BuildConfig
-import com.plusorminustwo.postmark.data.db.entity.MessageEntity
-import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.repository.MessageRepository
@@ -22,7 +20,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -32,40 +33,73 @@ class SmsSyncHandler @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val reactionParser: ReactionFallbackParser,
-    private val statsUpdater: StatsUpdater
+    private val statsUpdater: StatsUpdater,
+    private val syncLogger: SyncLogger
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // Debug-only logs — filter logcat by tag "SmsSyncHandler" to follow incremental SMS/MMS sync.
+    // ── Concurrency control ───────────────────────────────────────────────────
+    // CONFLATED channel: if a sync is running when a new notification arrives,
+    // at most one follow-up run is queued. Additional notifications while that
+    // queued run waits are silently dropped (they're all equivalent — "something
+    // changed, go look"). This prevents O(N) queued coroutines during burst
+    // delivery (e.g. the content observer firing 50 times during MMS import).
+    private val smsWorkChannel = Channel<Unit>(Channel.CONFLATED)
+    private val mmsWorkChannel = Channel<Unit>(Channel.CONFLATED)
+
+    // Mutex ensures only one SMS sync and one MMS sync run at a time.
+    // triggerCatchUp() and the channel consumer both contend on the same lock,
+    // so they can never run the same sync path concurrently.
+    private val smsMutex = Mutex()
+    private val mmsMutex = Mutex()
+
+    init {
+        // Long-lived coroutines consume channel signals one at a time.
+        scope.launch { for (unit in smsWorkChannel) smsMutex.withLock { syncLatestSms() } }
+        scope.launch { for (unit in mmsWorkChannel) mmsMutex.withLock { syncLatestMms() } }
+        // Startup marker — visible in end-of-day log review as a process restart boundary.
+        syncLogger.log(TAG, "SmsSyncHandler initialized (process start)")
+    }
+
     private fun debugLog(msg: String) { if (BuildConfig.DEBUG) Log.d(TAG, msg) }
 
-    companion object { private const val TAG = "SmsSyncHandler" }
-
-    fun onSmsContentChanged(uri: Uri) {
-        scope.launch { syncLatestSms(uri) }
+    companion object {
+        private const val TAG = "SmsSyncHandler"
+        // Must match the key used by FirstLaunchSyncWorker.
+        private const val PREFS_NAME = "postmark_prefs"
+        private const val KEY_FIRST_SYNC_DONE = "first_sync_completed"
     }
 
-    fun onMmsContentChanged(uri: Uri) {
-        scope.launch { syncLatestMms(uri) }
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /** Signal from SmsReceiver or SmsContentObserver — coalesced into the channel. */
+    fun onSmsContentChanged(@Suppress("UNUSED_PARAMETER") uri: Uri) {
+        smsWorkChannel.trySend(Unit)
     }
+
+    /** Signal from MmsReceiver or SmsContentObserver — coalesced into the channel. */
+    fun onMmsContentChanged(@Suppress("UNUSED_PARAMETER") uri: Uri) {
+        mmsWorkChannel.trySend(Unit)
+    }
+
     /**
-     * Performs one incremental SMS + MMS pass on the caller's coroutine.
-     * Called by [FirstLaunchSyncWorker] after the initial full sync completes to capture
-     * any messages that arrived in the race window before the first DB commit.
+     * Awaitable catch-up pass, called by [FirstLaunchSyncWorker] after the full
+     * historical sync completes to pick up any messages that arrived during the
+     * sync window. Waits for any in-flight channel-triggered sync to finish first
+     * (via the same Mutex), then runs synchronously on the caller's coroutine.
      */
     suspend fun triggerCatchUp() {
-        syncLatestSms(Telephony.Sms.CONTENT_URI)
-        syncLatestMms(Uri.parse("content://mms"))
+        smsMutex.withLock { syncLatestSms() }
+        mmsMutex.withLock { syncLatestMms() }
     }
-    // ── Incremental sync ─────────────────────────────────────────────────────
+    // ── Incremental SMS sync ──────────────────────────────────────────────────
     // Fetches every SMS row whose _id is greater than the highest id already
     // stored in Room.  This correctly handles burst delivery (multiple messages
     // arriving in a single ContentObserver notification) and is idempotent
     // (re-running when there are no new messages returns 0 rows instantly).
     //
-    // When the local DB is empty (initial sync not yet complete) we bail out
-    // immediately — FirstLaunchSyncWorker owns the full historical load.
-    private suspend fun syncLatestSms(@Suppress("UNUSED_PARAMETER") uri: Uri) {
+    // Bails when DB is empty (initial sync not yet done) — the worker owns that pass.
+    private suspend fun syncLatestSms() {
         // Nothing in DB yet → full sync not done; do not interfere with worker.
         val maxKnownId = messageRepository.getMaxId() ?: 0L
         if (maxKnownId <= 0L) return
@@ -135,6 +169,9 @@ class SmsSyncHandler @Inject constructor(
 
         if (newMessages.isEmpty()) return
 
+        debugLog("syncLatestSms: ${newMessages.size} new message(s)")
+        syncLogger.log("IncrementalSms", "${newMessages.size} new message(s) after id=$maxKnownId")
+
         // Separate reaction-fallback messages from real messages before persisting.
         // Reaction fallbacks (Android: "👍 to \"text\"", Apple: "Liked 'text'") must be
         // resolved to Reaction entities and never stored as visible message bubbles.
@@ -186,15 +223,22 @@ class SmsSyncHandler @Inject constructor(
     // Mirrors syncLatestSms() but for content://mms. Bound is derived from the
     // highest stored MMS id (which is offset by MMS_ID_OFFSET) minus the offset,
     // giving the raw MMS _id to use in the WHERE clause.
-    private suspend fun syncLatestMms(@Suppress("UNUSED_PARAMETER") uri: Uri) {
+    private suspend fun syncLatestMms() {
         val maxStoredId = messageRepository.getMaxMmsId() ?: 0L
-        // Bail only when the initial full sync hasn't run at all (both tables empty).
-        // If SMS is populated but MMS count is 0 — which happens when Samsung's
-        // content://mms returned empty during the first sync — we must proceed so
-        // that incoming MMS can still be picked up incrementally.
-        if (maxStoredId <= 0L && messageRepository.getMaxId() == null) {
-            debugLog("syncLatestMms: initial sync not yet complete — skipping incremental pass")
-            return
+        if (maxStoredId <= 0L) {
+            // No MMS in Room yet. Only proceed if the full historical sync has
+            // already completed — otherwise we'd run "_id > 0" concurrently with
+            // the worker, fetching all historical MMS and racing on thread metadata.
+            // Incoming MMS will be captured by the worker's catch-up pass at end of run,
+            // or by the next incremental sync after the first MMS batch is flushed.
+            val firstSyncDone = context
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_FIRST_SYNC_DONE, false)
+            if (!firstSyncDone) {
+                debugLog("syncLatestMms: no MMS in Room and first sync not complete — deferring to worker")
+                syncLogger.log("IncrementalMms", "deferred — first sync not yet complete, worker owns MMS import")
+                return
+            }
         }
         // coerceAtLeast(0) prevents a negative bound when no MMS has been stored yet;
         // "_id > 0" correctly returns all rows because MMS IDs start at 1.
@@ -256,6 +300,9 @@ class SmsSyncHandler @Inject constructor(
         }
 
         if (newMessages.isEmpty()) return
+
+        debugLog("syncLatestMms: ${newMessages.size} new MMS message(s)")
+        syncLogger.log("IncrementalMms", "${newMessages.size} new MMS after rawId=$maxRawId")
 
         messageRepository.insertAll(newMessages)
 

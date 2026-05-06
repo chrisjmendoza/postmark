@@ -4,9 +4,11 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import com.plusorminustwo.postmark.PostmarkApplication
@@ -14,6 +16,7 @@ import com.plusorminustwo.postmark.R
 import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
+import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.ui.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -24,14 +27,10 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class SmsReceiver : BroadcastReceiver() {
 
-    @Inject
-    lateinit var syncHandler: SmsSyncHandler
-
-    @Inject
-    lateinit var threadRepository: ThreadRepository
-
-    @Inject
-    lateinit var privacyModeRepository: PrivacyModeRepository
+    @Inject lateinit var syncHandler: SmsSyncHandler
+    @Inject lateinit var threadRepository: ThreadRepository
+    @Inject lateinit var privacyModeRepository: PrivacyModeRepository
+    @Inject lateinit var syncLogger: SyncLogger
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -40,20 +39,42 @@ class SmsReceiver : BroadcastReceiver() {
                 val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
                     ?.takeIf { it.isNotEmpty() } ?: return
 
-                // Sync once — multi-part messages share the same thread entry
-                syncHandler.onSmsContentChanged(Telephony.Sms.CONTENT_URI)
+                // Parse PDU fields on the main thread — no IO, always fast.
+                val isDeliver   = intent.action == Telephony.Sms.Intents.SMS_DELIVER_ACTION
+                val rawSender   = messages[0].originatingAddress ?: ""
+                // Human-readable fallback used for notification display only.
+                val sender      = rawSender.ifEmpty { "Unknown" }
+                // Reconstruct full body from all PDU parts (multi-part SMS arrives as array).
+                val body        = messages.joinToString("") { it.messageBody ?: "" }
+                val timestampMs = messages[0].timestampMillis
 
-                // Reconstruct full body from all parts (multi-part SMS arrives as array)
-                val sender = messages[0].originatingAddress ?: "Unknown"
-                val body = messages.joinToString("") { it.messageBody ?: "" }
+                // Log broadcast receipt synchronously before goAsync() — if the process
+                // is killed mid-async we still have a "broadcast arrived" entry in the log.
+                syncLogger.log("SmsReceiver", if (isDeliver) "DELIVER_ACTION from=$rawSender" else "RECEIVED_ACTION from=$rawSender")
 
-                // Check mute asynchronously before posting. goAsync() keeps the receiver
-                // alive until finish() is called so the OS does not reclaim the process.
+                // goAsync() extends the BroadcastReceiver lifetime so the OS does not
+                // reclaim the process before our IO and notification work is done.
                 val pendingResult = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
-                        // Skip notification entirely if the user has disabled notifications for
-                        // this number (stronger than mute — no badge, no sound, no banner).
+                        // ── Persist to system SMS store (default SMS app only) ─────────
+                        // SMS_DELIVER_ACTION fires exclusively for the default SMS app.
+                        // We are solely responsible for writing the row to
+                        // content://sms/inbox — the OS will NOT do it for us.
+                        // All ContentResolver calls are done on Dispatchers.IO to avoid
+                        // blocking the main thread (potential ANR).
+                        if (isDeliver) {
+                            persistToSystemStore(context, rawSender, body, timestampMs)
+                        }
+                        // SMS_RECEIVED_ACTION: another app is default and has already written
+                        // the row. Do not insert again — would create a duplicate.
+
+                        // Trigger Room incremental sync. The content observer will also fire
+                        // once the row is written, but this explicit call guarantees Room
+                        // is updated even if the observer notification is delayed or lost.
+                        syncHandler.onSmsContentChanged(Telephony.Sms.CONTENT_URI)
+
+                        // Check mute/notifications before posting the notification banner.
                         val notificationsEnabled =
                             threadRepository.isNotificationsEnabledByAddress(sender)
                         if (notificationsEnabled && !threadRepository.isMutedByAddress(sender)) {
@@ -67,6 +88,54 @@ class SmsReceiver : BroadcastReceiver() {
                     }
                 }
             }
+        }
+    }
+
+    // ── Persist to content://sms/inbox ────────────────────────────────────────
+    // Writes one row for a newly received SMS. Sets THREAD_ID explicitly via
+    // Telephony.Threads.getOrCreateThreadId() so OEM ROMs that don't auto-assign
+    // it correctly don't end up creating duplicate threads for the same contact.
+    // PROTOCOL = 0 distinguishes SMS from WAP push (= 1) for apps that filter by it.
+    private fun persistToSystemStore(
+        context: Context,
+        rawSender: String,
+        body: String,
+        timestampMs: Long
+    ) {
+        // Resolve or create the canonical thread ID for this address.
+        // Wrapped in try/catch because some OEMs throw on malformed addresses.
+        val threadId: Long = try {
+            if (rawSender.isNotEmpty())
+                Telephony.Threads.getOrCreateThreadId(context, rawSender)
+            else 0L
+        } catch (e: Exception) {
+            Log.w(TAG, "getOrCreateThreadId failed for sender=$rawSender", e)
+            0L
+        }
+
+        val cv = ContentValues().apply {
+            put(Telephony.Sms.Inbox.ADDRESS,   rawSender)
+            put(Telephony.Sms.Inbox.BODY,      body)
+            put(Telephony.Sms.Inbox.DATE,      System.currentTimeMillis())
+            put(Telephony.Sms.Inbox.DATE_SENT, timestampMs)
+            put(Telephony.Sms.Inbox.READ,      0)
+            put(Telephony.Sms.Inbox.SEEN,      0)
+            put(Telephony.Sms.PROTOCOL,        0)  // 0 = SMS, 1 = WAP push
+            if (threadId > 0L) put(Telephony.Sms.THREAD_ID, threadId)
+        }
+
+        try {
+            val uri = context.contentResolver.insert(Telephony.Sms.Inbox.CONTENT_URI, cv)
+            if (uri != null) {
+                Log.d(TAG, "Wrote incoming SMS from=$rawSender → $uri")
+                syncLogger.log("SmsReceiver", "wrote inbox row: from=$rawSender threadId=$threadId uri=$uri")
+            } else {
+                Log.e(TAG, "Insert to content://sms/inbox returned null for sender=$rawSender")
+                syncLogger.logError("SmsReceiver", "Insert returned null for sender=$rawSender — message may be lost")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to write incoming SMS to content://sms/inbox", e)
+            syncLogger.logError("SmsReceiver", "Write to content://sms/inbox FAILED for sender=$rawSender", e)
         }
     }
 
@@ -216,5 +285,9 @@ class SmsReceiver : BroadcastReceiver() {
             .build()
 
         nm.notify(PostmarkApplication.NOTIF_ID_SMS_SUMMARY, summary)
+    }
+
+    companion object {
+        private const val TAG = "SmsReceiver"
     }
 }

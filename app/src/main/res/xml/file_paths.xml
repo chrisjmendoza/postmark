@@ -3,4 +3,8 @@
     <external-files-path name="exports" path="exports/" />
     <external-files-path name="backups" path="backups/" />
     <cache-path name="cache" path="." />
+    <!-- sync_log.txt lives in filesDir (app-private internal storage).
+         Exposing it here lets FileProvider serve it via a content:// URI
+         so the share sheet can attach it to an email, Drive upload, etc. -->
+    <files-path name="logs" path="." />
 </paths>

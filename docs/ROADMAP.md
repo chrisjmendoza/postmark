@@ -13,8 +13,10 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] `SmsReceiver` + `MmsReceiver` broadcast receivers
 - [x] `SmsManagerWrapper` for sending
 - [x] `SmsContentObserver` watching `content://sms`
-- [x] `SmsSyncHandler` — incremental sync from content provider to Room
-- [x] `FirstLaunchSyncWorker` — full historical sync with retry; Logcat tag `PostmarkSync`; last-sync status written to SharedPrefs; WorkManager Hilt init fixed (disabled `WorkManagerInitializer` in AndroidManifest)
+- [x] `SmsSyncHandler` — incremental sync from content provider to Room; Channel+Mutex concurrency control; correct MMS gate using `first_sync_completed` flag
+- [x] `FirstLaunchSyncWorker` — full historical sync with retry; Logcat tag `PostmarkSync`; last-sync status written to SharedPrefs; WorkManager Hilt init fixed (disabled `WorkManagerInitializer` in AndroidManifest); thread upsert uses IGNORE + targeted UPDATE to preserve user settings
+- [x] `SmsReceiver` — writes `content://sms/inbox` on `SMS_DELIVER_ACTION`; all ContentResolver IO on `Dispatchers.IO` inside `goAsync()`; explicit `THREAD_ID` via `Telephony.Threads.getOrCreateThreadId()`
+- [x] `SyncLogger` — persistent append-only log for sync/receive events; viewable in DevOptions screen
 - [x] `AppleReactionParser` — 6 emoji × 5 languages, loaded from JSON asset; unified with `AndroidReactionParser` via `ReactionFallbackParser`
 - [x] Room schema: Thread, Message, Reaction, ThreadStats; migrations 1→2 (lastMessagePreview), 2→3 (deliveryStatus), 4→5 (isMuted, topReactionEmojisJson), 5→6 (isPinned)
 - [x] FTS4 virtual table with INSERT/UPDATE/DELETE sync triggers
