@@ -9,12 +9,27 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Represents a successfully parsed reaction fallback message.
+ *
+ * @property emoji The emoji character that was reacted.
+ * @property quotedText The body of the message being reacted to (used for lookup).
+ * @property isRemoval `true` when the reaction was removed (e.g. "Removed a heart from…").
+ */
 data class ParsedReaction(
     val emoji: String,
     val quotedText: String,
     val isRemoval: Boolean
 )
 
+/**
+ * Parses Apple iMessage reaction fallback SMS messages.
+ *
+ * Apple format: `<Verb> "<quoted text>"` e.g. `Loved "Hello!"` or
+ * `Removed a heart from "Hello!"`.
+ *
+ * Verb-to-emoji mappings are loaded from `assets/apple_reaction_patterns.json`
+ * at first use so new verbs can be added without code changes.
+ */
 @Singleton
 class AppleReactionParser @Inject constructor(
     @ApplicationContext private val context: Context
@@ -28,6 +43,11 @@ class AppleReactionParser @Inject constructor(
         RegexOption.DOT_MATCHES_ALL
     )
 
+    /**
+     * Attempts to parse [messageBody] as an Apple reaction fallback SMS.
+     *
+     * @return A [ParsedReaction] if the body matches and the verb is recognised, or `null`.
+     */
     fun parse(messageBody: String): ParsedReaction? {
         val trimmed = messageBody.trim()
         val match = reactionRegex.find(trimmed) ?: return null
@@ -45,9 +65,12 @@ class AppleReactionParser @Inject constructor(
         return null
     }
 
-    // Finds the original message that a reaction refers to.
-    // Searches newest-to-oldest, capped at 100 candidates.
-    // Strategy: exact → normalized (handles Apple/Android apostrophe mismatches) → prefix.
+    /**
+     * Searches [candidates] for the message that [quotedText] refers to.
+     *
+     * Strategy: exact match → Unicode-normalised match → prefix match.
+     * Searches the 100 most-recent candidates newest-first.
+     */
     fun findOriginalMessage(quotedText: String, candidates: List<Message>): Message? {
         val searchWindow = candidates
             .sortedByDescending { it.timestamp }

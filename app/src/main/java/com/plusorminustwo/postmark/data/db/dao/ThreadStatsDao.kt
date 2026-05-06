@@ -4,6 +4,12 @@ import androidx.room.*
 import com.plusorminustwo.postmark.data.db.entity.ThreadStatsEntity
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * DAO for the `thread_stats` table.
+ *
+ * One row per thread, inserted or replaced by [StatsUpdater] after each sync.
+ * Stats are read by [StatsViewModel] for display on the Stats screen.
+ */
 @Dao
 interface ThreadStatsDao {
 
@@ -32,6 +38,7 @@ interface ThreadStatsDao {
     suspend fun getGlobalCounts(): GlobalCounts?
 }
 
+/** Aggregate message counts across all threads, used for the global stats display. */
 data class GlobalCounts(
     val totalMessages: Int,
     val sentCount: Int,

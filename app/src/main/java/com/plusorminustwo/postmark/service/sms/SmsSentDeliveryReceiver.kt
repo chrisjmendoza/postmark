@@ -27,10 +27,10 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val messageId  = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
-        // smsRowId is the positive content-provider _id captured at insert time in
-        // SmsManagerWrapper.  By the time this fires, SmsSyncHandler has already
-        // replaced the optimistic negative-ID row with a Room row keyed by smsRowId.
-        // Fall back to messageId only if the extra is absent (e.g. legacy PendingIntent).
+        /* smsRowId is the positive content-provider _id captured at insert time in
+         * SmsManagerWrapper. By the time this fires, SmsSyncHandler has already replaced
+         * the optimistic negative-ID row with a real Room row keyed by smsRowId.
+         * Fall back to messageId only if the extra is absent (legacy PendingIntent). */
         val smsRowId   = intent.getLongExtra(EXTRA_SMS_ROW_ID, -1L)
         val roomId     = if (smsRowId > 0L) smsRowId else messageId
         if (roomId == -1L) return
@@ -41,10 +41,13 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                 when (intent.action) {
                     ACTION_SMS_SENT -> {
                         val isSendOk = resultCode == Activity.RESULT_OK   // -1 = success
-                        // RESULT_CANCELED (0) is ambiguous: it fires when the PendingIntent is
-                        // canceled by the OS (e.g. process restart) rather than an actual send
-                        // failure. Real SmsManager error codes are all ≥ 1. Treating 0 as FAILED
-                        // produces a red ! flash even when messages successfully deliver.
+                        /*
+                         * RESULT_CANCELED (0) is ambiguous — it fires when the PendingIntent
+                         * is cancelled by the OS (e.g. process restart) rather than being a
+                         * real send failure. Actual SmsManager error codes are all ≥ 1.
+                         * Treating 0 as FAILED would cause a red-! flash even when the
+                         * message goes through successfully.
+                         */
                         val isKnownFailure = resultCode > 0
                         val label = when {
                             isSendOk      -> "SENT"
@@ -57,8 +60,8 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                             isSendOk -> messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_SENT)
                             isKnownFailure -> {
                                 messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
-                                // Mirror the failure into content://sms so third-party apps
-                                // (e.g. Google Messages) don't keep showing the message as pending.
+                                /* Mirror failure status into content://sms so third-party apps
+                                 * (e.g. Google Messages) don't keep showing the message as pending. */
                                 if (smsRowId > 0L) {
                                     val cv = ContentValues().apply {
                                         put(Telephony.Sms.STATUS, Telephony.Sms.STATUS_FAILED)
@@ -69,8 +72,8 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                                     )
                                 }
                             }
-                            // resultCode == 0: leave status as PENDING; the delivery receipt or
-                            // a future sync will update it if the message went through.
+                            /* resultCode == 0: ambiguous — leave as PENDING so the delivery
+                             * receipt or a future sync can confirm whether it went through. */
                         }
                     }
                     ACTION_SMS_DELIVERED -> {

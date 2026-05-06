@@ -1,9 +1,18 @@
 package com.plusorminustwo.postmark.search.parser
 
+/**
+ * Builds FTS5 query strings for use with [SearchDao].
+ *
+ * Queries use word-start anchored prefix matching (`^"term"*`) so that a search for
+ * "he" matches "hello" but not "the" or "where".
+ */
 object FtsQueryBuilder {
 
-    // Produces FTS5 word-start queries: ^"term"* matches words that start with "term"
-    // but not words that merely contain it (e.g. "he" → "hello", NOT "the" or "when")
+    /**
+     * Builds a single-term FTS5 query from [rawInput].
+     *
+     * Returns an empty string if [rawInput] is blank (caller should skip the FTS path).
+     */
     fun build(rawInput: String): String {
         val term = rawInput.trim()
         if (term.isBlank()) return ""
@@ -14,7 +23,10 @@ object FtsQueryBuilder {
         return "^\"$escaped\"*"
     }
 
-    // For multi-word queries, each word becomes its own prefix phrase
+    /**
+     * Builds a multi-term FTS5 query where each whitespace-separated word becomes
+     * its own word-start prefix term. All terms must match (AND semantics).
+     */
     fun buildMultiWord(rawInput: String): String {
         val terms = rawInput.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (terms.isEmpty()) return ""

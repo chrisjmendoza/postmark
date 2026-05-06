@@ -7,6 +7,17 @@ import kotlinx.coroutines.flow.Flow
 /** Projection returned by [MessageDao.observeUnreadCounts]. */
 data class UnreadCount(val threadId: Long, val count: Int)
 
+/**
+ * DAO for the `messages` table.
+ *
+ * Provides queries for reading and writing [MessageEntity] rows. All observable queries
+ * return [Flow] so Room automatically re-emits when the underlying data changes.
+ *
+ * ID conventions:
+ *  - Positive IDs ≥ 1 are real content-provider rows (SMS or MMS offset).
+ *  - Negative IDs are optimistic rows inserted before telephony confirms the send.
+ *  - MMS rows use `id = rawMmsId + MMS_ID_OFFSET` to avoid collisions with SMS IDs.
+ */
 @Dao
 interface MessageDao {
 
@@ -62,9 +73,9 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE threadId = :threadId AND id < 0")
     suspend fun deleteOptimisticMessages(threadId: Long)
 
-    // Returns the deliveryStatus of the most recent optimistic (negative-ID) sent message in
-    // a thread. Used by syncLatestMms() to transfer a FAILED status from the temp row to the
-    // real row before the temp row is deleted.
+    /** Returns the [MessageEntity.deliveryStatus] of the most recent optimistic (negative-ID)
+     *  sent message in a thread. Used by [SmsSyncHandler.syncLatestMms] to transfer a FAILED
+     *  status to the real row before the temp row is deleted. */
     @Query("SELECT deliveryStatus FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int?
 
@@ -83,28 +94,28 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
     suspend fun getAll(): List<MessageEntity>
 
-    // Marks every message in the given thread as read (called when the user opens the thread).
+    /** Marks every message in the given thread as read; called when the user opens the thread. */
     @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId")
     suspend fun markAllRead(threadId: Long)
 
-    // Returns a live list of (threadId, unread-count) pairs — used by ConversationsViewModel
-    // to drive real-time unread badges in the conversation list.
+    /** Live (threadId → unread count) pairs used by [ConversationsViewModel] for unread badges. */
     @Query("SELECT threadId, COUNT(*) as count FROM messages WHERE isRead = 0 GROUP BY threadId")
     fun observeUnreadCounts(): Flow<List<UnreadCount>>
 
-    // Returns the highest SMS provider _id stored in Room (SMS rows only, excluding
-    // MMS rows whose IDs are offset by MMS_ID_OFFSET). Used by SmsSyncHandler to
-    // bound incremental SMS queries to only rows we haven't seen yet.
+    /** Highest SMS provider _id stored in Room (SMS only, excluding MMS offset rows).
+     *  Used by [SmsSyncHandler] to bound incremental queries to rows not yet imported. */
     @Query("SELECT MAX(id) FROM messages WHERE isMms = 0")
     suspend fun getMaxId(): Long?
 
-    // Returns the highest stored MMS row id (already offset). Used by SmsSyncHandler
-    // to bound incremental MMS queries — subtract MMS_ID_OFFSET to get raw MMS _id.
+    /** Highest stored MMS row id (already offset by MMS_ID_OFFSET).
+     *  Subtract MMS_ID_OFFSET to get the raw content-provider `_id`.
+     *  Used by [SmsSyncHandler] to bound incremental MMS queries. */
     @Query("SELECT MAX(id) FROM messages WHERE isMms = 1")
     suspend fun getMaxMmsId(): Long?
 
-    // Returns the lowest stored MMS row id (already offset). Used by FirstLaunchSyncWorker
-    // to resume a newest-first import — subtract MMS_ID_OFFSET to get raw MMS _id.
+    /** Lowest stored MMS row id (already offset by MMS_ID_OFFSET).
+     *  Subtract MMS_ID_OFFSET to get the raw content-provider `_id`.
+     *  Used by [FirstLaunchSyncWorker] to resume a newest-first MMS import. */
     @Query("SELECT MIN(id) FROM messages WHERE isMms = 1")
     suspend fun getMinMmsId(): Long?
 

@@ -13,6 +13,12 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
+/**
+ * Hilt module that wires DAOs into the repository layer.
+ *
+ * All repositories are singletons so the same [StateFlow] / [Flow] instances
+ * are shared across the entire process lifetime.
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object RepositoryModule {

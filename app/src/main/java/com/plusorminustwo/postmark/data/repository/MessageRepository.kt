@@ -14,6 +14,13 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Repository that assembles domain [Message] objects by combining [MessageDao] rows
+ * with their associated [ReactionDao] rows.
+ *
+ * All reactive paths use [Flow] so callers automatically receive updated data
+ * whenever messages or reactions change in the database.
+ */
 @Singleton
 class MessageRepository @Inject constructor(
     private val messageDao: MessageDao,

@@ -4,6 +4,12 @@ import androidx.room.*
 import com.plusorminustwo.postmark.data.db.entity.GlobalStatsEntity
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * DAO for the `global_stats` table.
+ *
+ * Single-row table (id = 1) holding aggregated stats across all threads.
+ * Written by [StatsUpdater.recomputeAll] and read by [StatsViewModel].
+ */
 @Dao
 interface GlobalStatsDao {
 

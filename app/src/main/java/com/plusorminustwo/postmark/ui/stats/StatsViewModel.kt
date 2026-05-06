@@ -28,7 +28,10 @@ import java.util.Locale
 import java.util.TimeZone
 import javax.inject.Inject
 
+/** Controls how statistics are rendered: as numbers, bar charts, or a heatmap grid. */
 enum class StatsDisplayStyle { NUMBERS, CHARTS, HEATMAP }
+
+/** Whether the Stats screen is showing aggregate data or data for a single thread. */
 enum class StatsScope { GLOBAL, PER_THREAD }
 
 /**
@@ -65,6 +68,18 @@ data class HeatmapData(
     val countByDay: Map<String, Int>
 )
 
+/**
+ * ViewModel for the Stats screen.
+ *
+ * Drives both the global aggregate view and the per-thread drilldown view from a
+ * single reactive Room query, re-computing [ParsedStats] and [HeatmapData] whenever
+ * the underlying messages or reactions change.
+ *
+ * The [selectedScope] / [selectedThreadId] pair controls which data is displayed.
+ * When launched with a `threadId` in [SavedStateHandle] (from a thread overflow menu),
+ * [directThreadNavigation] is `true` so the back button returns to the thread instead
+ * of the thread-selection list.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class StatsViewModel @Inject constructor(

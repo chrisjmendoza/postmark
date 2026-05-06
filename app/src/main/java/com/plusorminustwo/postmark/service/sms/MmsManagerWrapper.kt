@@ -78,10 +78,10 @@ class MmsManagerWrapper @Inject constructor(
         syncLogger.log(TAG, "sendMms: read ${mediaBytes.size} bytes for messageId=$messageId")
 
         // ── 1b. Compress images that exceed the carrier size limit ────────────
-        // Most carriers cap MMS at 300 KB–1.5 MB. A 6+ MB JPEG will be rejected
-        // by the MMSC with MMS_ERROR_IO_ERROR (resultCode=5). We iteratively
-        // reduce JPEG quality until the bytes fit within MAX_MMS_BYTES, stopping
-        // at 40% quality to preserve some fidelity. Non-image MIME types skip this.
+        /* Most carriers cap MMS at 300 KB–1.5 MB; a 6+ MB JPEG will be rejected
+         * by the MMSC with MMS_ERROR_IO_ERROR (resultCode=5). We iteratively
+         * reduce JPEG quality until the bytes fit within MAX_MMS_BYTES, stopping
+         * at 40% quality to preserve some fidelity. Non-image types skip this. */
         val finalMediaBytes = if (mimeType.startsWith("image/") && mediaBytes.size > MAX_MMS_BYTES) {
             val compressed = compressImage(mediaBytes, mimeType, messageId)
             if (compressed == null) {
@@ -148,11 +148,11 @@ class MmsManagerWrapper @Inject constructor(
             return@withContext false
         }
 
-        // ── 6. Schedule PDU file cleanup (best-effort, after telephony reads it) ─
-        // The file is small and in cache so the OS may clean it; we also delete
-        // it after a generous delay so the telephony service has time to read it.
+        /* ── 6. Schedule PDU file cleanup ──────────────────────────────────────────
+         * The OS may garbage-collect cache files on its own, but we also delete
+         * explicitly after a 60 s delay — ample time for any carrier MMSC timeout —
+         * so the telephony service is guaranteed to have read the file first. */
         try {
-            // 60 s should be ample for any carrier timeout.
             kotlinx.coroutines.delay(60_000)
             pduFile.delete()
         } catch (_: Exception) {}
@@ -162,15 +162,15 @@ class MmsManagerWrapper @Inject constructor(
 
     companion object {
         private const val TAG = "MmsManagerWrapper"
-        // Carrier-safe MMS size limit: 1 200 KB leaves headroom for PDU overhead and
-        // multi-part boundaries while staying under the common 1.2–1.5 MB carrier cap.
+        /* 1 200 KB is a conservative carrier-safe ceiling. Most MMSCs cap at 1–1.5 MB;
+         * staying under 1.2 MB leaves headroom for PDU framing and multipart headers. */
         private const val MAX_MMS_BYTES = 1_200_000
     }
 
     // ── Image compression helper ──────────────────────────────────────────────
-    // Iteratively re-encodes as JPEG at decreasing quality until the byte count fits
-    // within [MAX_MMS_BYTES], stopping at 40% quality. Returns null if the image
-    // can't be decoded at all (corrupt / unsupported format).
+    /* Iteratively re-encodes the image as JPEG at decreasing quality steps until
+     * the byte count fits within [MAX_MMS_BYTES], stopping at 40% quality minimum.
+     * Returns null only if the image is corrupt or in an unsupported format. */
     private fun compressImage(originalBytes: ByteArray, mimeType: String, messageId: Long): ByteArray? {
         val bitmap = BitmapFactory.decodeByteArray(originalBytes, 0, originalBytes.size)
             ?: return null
@@ -202,16 +202,18 @@ class MmsManagerWrapper @Inject constructor(
 }
 
 // ── MmsPduBuilder ─────────────────────────────────────────────────────────────
-// Encodes a minimal M-Send.req PDU in WAP Binary format (OMA MMS 1.2 / WSP spec).
-//
-// Supports:  one media attachment (image/audio/video)  +  optional text caption.
-// Content-Type: application/vnd.wap.multipart.mixed  (no SMIL required).
-//
-// WAP Binary encoding notes:
-//   Short-integer : (value | 0x80).toByte()   — for well-known field values ≤ 127
-//   Text-string   : ASCII bytes + 0x00         — for string values
-//   Long-integer  : [length byte] [big-endian bytes]
-//   UintVar       : variable-length unsigned int (MSB continuation bit 0x80)
+/*
+ * Encodes a minimal M-Send.req PDU in WAP Binary format (OMA MMS 1.2 / WSP spec).
+ *
+ * Supports:  one media attachment (image/audio/video)  +  optional text caption.
+ * Content-Type: application/vnd.wap.multipart.mixed  (no SMIL required).
+ *
+ * WAP Binary encoding cheat-sheet:
+ *   Short-integer : (value | 0x80).toByte()   — for well-known field values ≤ 127
+ *   Text-string   : ASCII bytes + 0x00         — for string values
+ *   Long-integer  : [length byte] [big-endian bytes]
+ *   UintVar       : variable-length unsigned int (MSB continuation bit 0x80)
+ */
 
 private object MmsPduBuilder {
 
@@ -235,8 +237,8 @@ private object MmsPduBuilder {
     private const val VALUE_MULTIPART_MIXED = 0xA3  // application/vnd.wap.multipart.mixed (WAP 0x23 | 0x80)
 
     // ── WAP well-known MIME content type short codes ──────────────────────────
-    // Types with assigned short codes use a single short-integer byte (code | 0x80).
-    // Unknown types are encoded as a null-terminated text string.
+    /* Types with an assigned WAP short code are encoded as a single-byte
+     * short-integer (code | 0x80). Everything else is a null-terminated text string. */
     private val WELL_KNOWN_CT: Map<String, Byte> = mapOf(
         "text/plain"  to 0x83.toByte(),   // 0x03 | 0x80
         "text/html"   to 0x82.toByte(),   // 0x02 | 0x80
@@ -349,9 +351,9 @@ private object MmsPduBuilder {
         if (knownByte != null) {
             ct.write(knownByte.toInt())
         } else {
-            // Extension-Media: printable ASCII string + null terminator.
-            // Characters 0x20–0x7E are recognised as text in WSP, so this is
-            // unambiguous as long as the first byte of mimeType is printable ASCII.
+            /* Extension-Media: printable ASCII (0x20–7E) + null terminator.
+             * WSP recognises this range as text so the encoding is unambiguous
+             * as long as the first byte of [mimeType] is a printable ASCII char. */
             ct.write(mimeType.toByteArray(Charsets.US_ASCII))
             ct.write(0x00)
         }

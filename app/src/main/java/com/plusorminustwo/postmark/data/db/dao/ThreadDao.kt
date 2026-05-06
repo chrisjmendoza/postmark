@@ -5,6 +5,15 @@ import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * DAO for the `threads` table.
+ *
+ * Provides CRUD operations and targeted update queries for [ThreadEntity] rows.
+ * Key design note: use [insertIgnore] / [insertAllIgnore] when syncing from the
+ * content provider to preserve user-set fields ([ThreadEntity.isMuted],
+ * [ThreadEntity.isPinned], [ThreadEntity.notificationsEnabled]) that a full
+ * REPLACE strategy would silently overwrite.
+ */
 @Dao
 interface ThreadDao {
 
@@ -23,9 +32,9 @@ interface ThreadDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(threads: List<ThreadEntity>)
 
-    // ── Sync-safe insert: creates the thread if it does not exist, leaves it
-    // untouched if it does. Preserves user settings (isPinned, isMuted,
-    // notificationsEnabled) that a REPLACE strategy would silently destroy.
+    /* Sync-safe insert: creates the thread if it does not exist, leaves it
+     * untouched if it does. Preserves user settings (isPinned, isMuted,
+     * notificationsEnabled) that a REPLACE strategy would silently overwrite. */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIgnore(thread: ThreadEntity)
 

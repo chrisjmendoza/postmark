@@ -9,6 +9,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Persists and exposes the user's timestamp display preference (always / on tap / never)
+ * via a [StateFlow]. Backed by [SharedPreferences] so the value survives app restarts.
+ *
+ * Call [set] to update both the persisted value and the live [preference] flow.
+ */
 @Singleton
 class TimestampPreferenceRepository @Inject constructor(
     @ApplicationContext context: Context
@@ -18,6 +24,7 @@ class TimestampPreferenceRepository @Inject constructor(
     private val _preference = MutableStateFlow(read())
     val preference: StateFlow<TimestampPreference> = _preference.asStateFlow()
 
+    /** Updates the stored timestamp display preference and emits the new value on [preference]. */
     fun set(pref: TimestampPreference) {
         prefs.edit().putString(KEY, pref.name).apply()
         _preference.value = pref

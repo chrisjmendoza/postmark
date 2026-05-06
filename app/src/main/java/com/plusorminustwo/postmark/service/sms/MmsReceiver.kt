@@ -8,8 +8,13 @@ import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
-// Receives WAP_PUSH_DELIVER broadcasts when a new MMS arrives. Delegates to
-// SmsSyncHandler which queries content://mms for rows we haven't seen yet.
+/**
+ * [BroadcastReceiver] that handles incoming MMS messages.
+ *
+ * Receives `WAP_PUSH_DELIVER` broadcasts when a new MMS arrives, then delegates
+ * to [SmsSyncHandler.onMmsContentChanged] which queries `content://mms` for
+ * rows not yet stored in Room.
+ */
 @AndroidEntryPoint
 class MmsReceiver : BroadcastReceiver() {
 

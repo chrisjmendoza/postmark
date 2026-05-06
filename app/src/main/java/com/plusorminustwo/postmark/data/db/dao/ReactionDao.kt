@@ -4,6 +4,13 @@ import androidx.room.*
 import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * DAO for the `reactions` table.
+ *
+ * Provides queries for reading and writing [ReactionEntity] rows. Reactions are
+ * created either by parsing Apple/Android reaction fallback SMS messages during
+ * sync, or directly when the local user taps an emoji in the reaction picker.
+ */
 @Dao
 interface ReactionDao {
 

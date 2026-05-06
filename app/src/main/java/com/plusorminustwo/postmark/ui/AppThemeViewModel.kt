@@ -7,6 +7,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 
+/**
+ * Exposes the current [ThemePreference] as a [StateFlow] for consumption by the
+ * root Compose tree. Backed by [ThemePreferenceRepository].
+ */
 @HiltViewModel
 class AppThemeViewModel @Inject constructor(
     repo: ThemePreferenceRepository

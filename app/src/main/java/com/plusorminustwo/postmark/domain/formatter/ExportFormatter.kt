@@ -5,11 +5,27 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * Formats a list of messages as human-readable plain text for clipboard export.
+ *
+ * Produces a header with the thread display name followed by each message body
+ * in chronological order. Reaction summaries are appended inline if present.
+ * Day separator lines are inserted between messages on different days when the
+ * conversation spans more than one calendar day.
+ */
 object ExportFormatter {
 
     private val dayFormatter = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault())
     private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault())
 
+    /**
+     * Renders [messages] as a plain-text transcript suitable for sharing.
+     *
+     * @param messages The messages to include, in chronological order.
+     * @param threadDisplayName Display name of the other party (contact or phone number).
+     * @param ownAddress The user's own phone number (used to label sent messages as "You").
+     * @return A formatted string, or an empty string if [messages] is empty.
+     */
     fun formatForCopy(
         messages: List<Message>,
         threadDisplayName: String,

@@ -2,6 +2,7 @@ package com.plusorminustwo.postmark.ui.settings
 
 import androidx.work.WorkInfo
 
+/** Represents the current state of the periodic backup job for display in the UI. */
 sealed class BackupStatus {
     data object Idle : BackupStatus()
     data object Running : BackupStatus()

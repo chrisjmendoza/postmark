@@ -28,6 +28,11 @@ class AndroidReactionParser @Inject constructor() {
         RegexOption.DOT_MATCHES_ALL
     )
 
+    /**
+     * Attempts to parse [messageBody] as an Android reaction fallback SMS.
+     *
+     * @return A [ParsedReaction] if the body matches the expected format, or `null`.
+     */
     fun parse(messageBody: String): ParsedReaction? {
         val trimmed = messageBody.trim()
         val match = reactionRegex.find(trimmed) ?: return null
@@ -41,6 +46,13 @@ class AndroidReactionParser @Inject constructor() {
         return ParsedReaction(emoji, quotedText, isRemoval)
     }
 
+    /**
+     * Searches [candidates] for the message that [quotedText] refers to.
+     *
+     * Tries exact match, then Unicode-normalized match (handling Apple/Android
+     * quote variants), then prefix match. Searches the 100 most-recent candidates
+     * newest-first. Returns `null` if no match is found in that window.
+     */
     fun findOriginalMessage(quotedText: String, candidates: List<Message>): Message? {
         // Search newest-to-oldest, capped at 100 messages — reactions referring to older
         // messages are treated as unresolvable and rendered as normal bubbles.

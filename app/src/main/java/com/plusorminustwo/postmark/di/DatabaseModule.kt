@@ -11,6 +11,13 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
+/**
+ * Hilt module that provides the singleton [PostmarkDatabase] and all its DAO accessors.
+ *
+ * Registers every manual migration (v1 → v10) so Room never needs to resort to
+ * a destructive rebuild. Also installs [PostmarkDatabase.FTS_CALLBACK] to populate
+ * the `messages_fts` virtual table after every fresh database creation.
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {

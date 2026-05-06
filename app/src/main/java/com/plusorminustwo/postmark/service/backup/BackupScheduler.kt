@@ -8,12 +8,23 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** How often automatic backups run. The interval is approximate — WorkManager
+ *  may run the job up to 5 minutes late on battery-optimised devices. */
 enum class BackupFrequency { DAILY, WEEKLY, MONTHLY }
 
+/**
+ * Schedules and cancels the recurring [BackupWorker] via WorkManager.
+ *
+ * Call [schedule] from the Settings screen whenever the user changes backup
+ * preferences; call [cancel] when the user disables automatic backups entirely.
+ * [runNow] enqueues a one-off backup regardless of the periodic schedule.
+ */
 @Singleton
 class BackupScheduler @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
+    /** Cancels any existing periodic backup work and re-schedules with the given [frequency]
+     *  and optional timing/constraint parameters. */
     fun schedule(
         frequency: BackupFrequency,
         hourOfDay: Int = 2,
@@ -54,10 +65,12 @@ class BackupScheduler @Inject constructor(
         )
     }
 
+    /** Cancels the periodic backup work. The next [schedule] call re-enables it. */
     fun cancel() {
         WorkManager.getInstance(context).cancelUniqueWork(BackupWorker.WORK_NAME)
     }
 
+    /** Enqueues a one-off backup immediately, independent of the periodic schedule. */
     fun runNow() {
         val request = OneTimeWorkRequestBuilder<BackupWorker>().build()
         WorkManager.getInstance(context).enqueue(request)

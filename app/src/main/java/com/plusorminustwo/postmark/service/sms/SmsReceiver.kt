@@ -50,40 +50,40 @@ class SmsReceiver : BroadcastReceiver() {
                 val body        = messages.joinToString("") { it.messageBody ?: "" }
                 val timestampMs = messages[0].timestampMillis
 
-                // Log broadcast receipt synchronously before goAsync() — if the process
-                // is killed mid-async we still have a "broadcast arrived" entry in the log.
+                /* Log broadcast receipt synchronously before goAsync() — if the process
+                 * is killed mid-async we still have a "broadcast arrived" entry in the log. */
                 syncLogger.log("SmsReceiver", if (isDeliver) "DELIVER_ACTION from=$rawSender" else "RECEIVED_ACTION from=$rawSender")
 
-                // goAsync() extends the BroadcastReceiver lifetime so the OS does not
-                // reclaim the process before our IO and notification work is done.
+                /* goAsync() extends the BroadcastReceiver lifetime so the OS does not
+                 * reclaim the process before our IO and notification work is done. */
                 val pendingResult = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
-                        // ── Persist to system SMS store (default SMS app only) ─────────
-                        // SMS_DELIVER_ACTION fires exclusively for the default SMS app.
-                        // We are solely responsible for writing the row to
-                        // content://sms/inbox — the OS will NOT do it for us.
-                        // All ContentResolver calls are done on Dispatchers.IO to avoid
-                        // blocking the main thread (potential ANR).
+                        /* ── Persist to system SMS store (default SMS app only) ─────────
+                         * SMS_DELIVER_ACTION fires exclusively for the default SMS app.
+                         * We are solely responsible for writing the row to
+                         * content://sms/inbox — the OS will NOT do it for us.
+                         * All ContentResolver calls are on Dispatchers.IO to avoid
+                         * blocking the main thread (potential ANR). */
                         if (isDeliver) {
                             persistToSystemStore(context, rawSender, body, timestampMs)
                         }
-                        // SMS_RECEIVED_ACTION: another app is default and has already written
-                        // the row. Do not insert again — would create a duplicate.
+                        /* SMS_RECEIVED_ACTION: another app is default, it already wrote the row.
+                         * Do not insert again — that would create a duplicate. */
 
-                        // Trigger Room incremental sync. The content observer will also fire
-                        // once the row is written, but this explicit call guarantees Room
-                        // is updated even if the observer notification is delayed or lost.
+                        /* Trigger Room incremental sync. The content observer will also fire
+                         * once the row lands, but this explicit call guarantees Room is updated
+                         * even if the observer notification is delayed or lost. */
                         syncHandler.onSmsContentChanged(Telephony.Sms.CONTENT_URI)
 
                         // Check mute/notifications before posting the notification banner.
                         val notificationsEnabled =
                             threadRepository.isNotificationsEnabledByAddress(rawSender)
                         if (notificationsEnabled && !threadRepository.isMutedByAddress(rawSender)) {
-                            // Look up the display name from ContactsContract first — it is
-                            // always up-to-date even if the contact was added after the initial
-                            // sync (which can leave a stale phone-number in Room's displayName).
-                            // Fall back to the Room display name, then to the raw phone number.
+                            /* Look up the display name from ContactsContract first — it is
+                             * always current even for contacts added after the initial sync
+                             * (which can leave a stale phone number in Room's displayName).
+                             * Falls back to Room's stored name, then to the raw number. */
                             val displayName = lookupContactName(context, rawSender)
                                 ?: threadRepository.getDisplayNameByAddress(rawSender)
                                 ?: sender
@@ -102,18 +102,20 @@ class SmsReceiver : BroadcastReceiver() {
     }
 
     // ── Persist to content://sms/inbox ────────────────────────────────────────
-    // Writes one row for a newly received SMS. Sets THREAD_ID explicitly via
-    // Telephony.Threads.getOrCreateThreadId() so OEM ROMs that don't auto-assign
-    // it correctly don't end up creating duplicate threads for the same contact.
-    // PROTOCOL = 0 distinguishes SMS from WAP push (= 1) for apps that filter by it.
+    /**
+     * Writes one inbox row to the system SMS store for a newly received message.
+     * Sets THREAD_ID explicitly via [Telephony.Threads.getOrCreateThreadId] so that
+     * OEM ROMs that don't auto-assign it can't create duplicate threads for the same
+     * contact. PROTOCOL = 0 distinguishes SMS from WAP push (= 1).
+     */
     private fun persistToSystemStore(
         context: Context,
         rawSender: String,
         body: String,
         timestampMs: Long
     ) {
-        // Resolve or create the canonical thread ID for this address.
-        // Wrapped in try/catch because some OEMs throw on malformed addresses.
+        /* Resolve or create the canonical thread ID for this address.
+         * Wrapped in try/catch because some OEMs throw on malformed addresses. */
         val threadId: Long = try {
             if (rawSender.isNotEmpty())
                 Telephony.Threads.getOrCreateThreadId(context, rawSender)
@@ -168,9 +170,9 @@ class SmsReceiver : BroadcastReceiver() {
         )
 
         // ── Reply action ──────────────────────────────────────────────────────────
-        // RemoteInput lets the user type a reply directly in the notification shade.
-        // FLAG_MUTABLE is required so the system can inject the typed text into the
-        // PendingIntent extras before delivering it to DirectReplyReceiver.
+        /* RemoteInput lets the user type a reply directly in the notification shade.
+         * FLAG_MUTABLE is required so the system can inject the typed text into the
+         * PendingIntent extras before delivering it to DirectReplyReceiver. */
         val remoteInput = RemoteInput.Builder(DirectReplyReceiver.KEY_TEXT_REPLY)
             .setLabel(context.getString(R.string.reply))
             .build()
@@ -192,9 +194,9 @@ class SmsReceiver : BroadcastReceiver() {
         ).addRemoteInput(remoteInput).build()
 
         // ── Mark as read action ───────────────────────────────────────────────────
-        // A distinct request code (xor 0x0200_0000) avoids colliding with the reply
-        // PendingIntent that uses 0x0100_0000. FLAG_IMMUTABLE is safe here because
-        // no dynamic data needs to be injected into this intent by the system.
+        /* A distinct request code (xor 0x0200_0000) avoids colliding with the reply
+         * PendingIntent that uses 0x0100_0000. FLAG_IMMUTABLE is safe here because
+         * no dynamic data needs to be injected into this intent by the system. */
         val markReadPendingIntent = PendingIntent.getBroadcast(
             context,
             notifId xor 0x0200_0000,
@@ -212,10 +214,10 @@ class SmsReceiver : BroadcastReceiver() {
         ).build()
 
         // ── Individual per-thread notification ────────────────────────────────────
-        // setGroup() registers this notification with the shared SMS bundle so
-        // Android can collapse multiple thread notifications in the shade.
-        // When privacy mode is on, actions are omitted so the reply RemoteInput
-        // can't be used to discover who the sender was.
+        /* setGroup() registers this notification with the shared SMS bundle so Android
+         * can collapse multiple per-thread notifications in the shade into one group row.
+         * When privacy mode is on, actions are omitted so the reply RemoteInput
+         * can't be used to reveal who the sender is. */
         val builder = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(displayTitle)
@@ -233,8 +235,8 @@ class SmsReceiver : BroadcastReceiver() {
         nm.notify(notifId, builder.build())
 
         // ── Summary notification ──────────────────────────────────────────────────
-        // Must be posted (or refreshed) after every individual notification so
-        // Android can display the collapsed group row on API 24+ devices.
+        /* Must be posted (or refreshed) after every per-thread notification so
+         * Android can display the collapsed group row on API 24+ devices. */
         updateSummaryNotification(context, nm)
     }
 
@@ -248,8 +250,8 @@ class SmsReceiver : BroadcastReceiver() {
      * If no group members remain (e.g. all were dismissed), the summary is cancelled.
      */
     private fun updateSummaryNotification(context: Context, nm: NotificationManager) {
-        // ── Count active group members ────────────────────────────────────────────
-        // activeNotifications is available from API 23; minSdk = 26 so always safe.
+        /* ── Count active group members ──────────────────────────────────────────
+         * activeNotifications is available from API 23; minSdk = 26 so always safe. */
         val groupNotifs = nm.activeNotifications.filter { sbn ->
             sbn.notification.group == PostmarkApplication.GROUP_KEY_SMS &&
                 sbn.id != PostmarkApplication.NOTIF_ID_SMS_SUMMARY
@@ -265,7 +267,7 @@ class SmsReceiver : BroadcastReceiver() {
             R.plurals.notification_summary_new_messages, count, count
         )
 
-        // ── Build InboxStyle lines: "Sender  preview" per thread ─────────────────
+        // ── Build InboxStyle lines: one "Sender  preview" per thread ──────────────────
         val inboxStyle = NotificationCompat.InboxStyle()
             .setSummaryText(context.getString(R.string.app_name))
         groupNotifs.forEach { sbn ->
@@ -301,10 +303,12 @@ class SmsReceiver : BroadcastReceiver() {
         private const val TAG = "SmsReceiver"
     }
 
-    // Queries ContactsContract.PhoneLookup for the display name of [address].
-    // Returns null when the number has no matching contact. Uses the system's
-    // built-in phone-number normalisation so "+12065550100" and "2065550100"
-    // both resolve to the same contact entry.
+    /**
+     * Queries [ContactsContract.PhoneLookup] for the display name of [address].
+     * Returns null when the number has no matching contact. Uses the system's
+     * built-in phone-number normalisation so "+12065550100" and "2065550100"
+     * both resolve to the same contact entry.
+     */
     private fun lookupContactName(context: Context, address: String): String? {
         if (address.isEmpty()) return null
         val uri = Uri.withAppendedPath(

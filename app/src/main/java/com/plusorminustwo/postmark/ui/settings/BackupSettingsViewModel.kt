@@ -17,6 +17,15 @@ import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
+/**
+ * ViewModel for the Backup Settings screen.
+ *
+ * Observes [WorkManager] state to expose the current [BackupStatus] and manages
+ * the list of backup files in the app's external `backups/` directory.
+ *
+ * Delegates scheduling to [BackupScheduler]; file I/O is performed on
+ * [viewModelScope] so the UI never blocks on disk operations.
+ */
 @HiltViewModel
 class BackupSettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -41,12 +50,14 @@ class BackupSettingsViewModel @Inject constructor(
         refreshBackupFiles()
     }
 
+    /** Rescans the external backups directory and updates [backupFiles]. */
     fun refreshBackupFiles() {
         viewModelScope.launch {
             _backupFiles.value = loadBackupFiles()
         }
     }
 
+    /** Deletes the backup file with the given [name] and refreshes the list. */
     fun deleteBackupFile(name: String) {
         viewModelScope.launch {
             val dir = context.getExternalFilesDir("backups") ?: return@launch
@@ -55,6 +66,7 @@ class BackupSettingsViewModel @Inject constructor(
         }
     }
 
+    /** Deletes every file in the backups directory and clears [backupFiles]. */
     fun deleteAllBackupFiles() {
         viewModelScope.launch {
             val dir = context.getExternalFilesDir("backups") ?: return@launch
@@ -63,6 +75,7 @@ class BackupSettingsViewModel @Inject constructor(
         }
     }
 
+    /** Enqueues an immediate one-off backup via [BackupScheduler.runNow]. */
     fun runNow() {
         backupScheduler.runNow()
     }

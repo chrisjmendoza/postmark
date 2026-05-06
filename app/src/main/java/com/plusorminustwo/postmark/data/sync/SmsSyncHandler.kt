@@ -28,6 +28,21 @@ import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Handles incremental SMS and MMS sync whenever the system content provider changes.
+ *
+ * Architecture — conflated channels + mutexes:
+ *  - Each transport (SMS and MMS) has its own [Channel.CONFLATED] work channel.
+ *    If a sync is already running when a new content-observer notification arrives,
+ *    at most one follow-up run is queued; additional notifications are dropped.
+ *    This prevents O(N) coroutines piling up during burst MMS delivery.
+ *  - A per-transport [Mutex] ensures only one sync path runs at a time, and that
+ *    [triggerCatchUp] cannot race with the channel consumer on the same path.
+ *
+ * Call [onSmsContentChanged] / [onMmsContentChanged] from [SmsContentObserver].
+ * Call [triggerCatchUp] after [FirstLaunchSyncWorker] completes to pick up any
+ * messages that arrived during the bulk import.
+ */
 @Singleton
 class SmsSyncHandler @Inject constructor(
     @ApplicationContext private val context: Context,

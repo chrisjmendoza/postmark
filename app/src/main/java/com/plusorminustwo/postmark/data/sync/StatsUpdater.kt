@@ -11,6 +11,13 @@ import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Recomputes and persists per-thread and global message statistics.
+ *
+ * Called by [FirstLaunchSyncWorker] after the bulk import and by [SmsSyncHandler]
+ * after each incremental sync. All heavy lifting is delegated to the pure functions
+ * in [StatsAlgorithms] (`buildThreadStatsData`, `buildGlobalStatsData`).
+ */
 @Singleton
 class StatsUpdater @Inject constructor(
     private val messageDao: MessageDao,

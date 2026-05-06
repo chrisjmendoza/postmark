@@ -9,6 +9,12 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
+/**
+ * Hilt module that provides the singleton [WorkManager] instance.
+ *
+ * Centralising [WorkManager] here means ViewModels and schedulers can inject it
+ * without coupling themselves to [Context].
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object BackupModule {

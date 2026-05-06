@@ -9,6 +9,14 @@ import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Repository that delegates full-text search to [SearchDao] and distinct-emoji
+ * observation to [ReactionDao].
+ *
+ * The [search] function translates optional Kotlin-typed parameters to the sentinel
+ * integer values expected by the DAO. When there is no text query but an MMS filter
+ * is present it falls through to the non-FTS [SearchDao.browseFiltered] path.
+ */
 @Singleton
 class SearchRepository @Inject constructor(
     private val searchDao: SearchDao,

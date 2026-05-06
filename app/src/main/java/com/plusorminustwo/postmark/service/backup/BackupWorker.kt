@@ -16,6 +16,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * [CoroutineWorker] that serialises all threads (with their messages) that have
+ * [BackupPolicy.ENABLED] to a JSON file in the app's external `backups/` directory.
+ *
+ * Retries up to 3 times on failure, recording success or failure via
+ * `SharedPreferences` so [BackupSettingsViewModel] can show the last run status.
+ * Scheduled and cancelled by [BackupScheduler]; triggered on-demand by
+ * [BackupSettingsViewModel.runNow].
+ */
 @HiltWorker
 class BackupWorker @AssistedInject constructor(
     @Assisted context: Context,

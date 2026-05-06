@@ -12,6 +12,15 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Wraps [SmsManager] to send SMS messages and write the resulting sent row to the
+ * system telephony content provider.
+ *
+ * As the default SMS app, Postmark is responsible for persisting sent messages so
+ * other apps and the OS can see them. After writing the row [SmsContentObserver]
+ * picks it up, syncs it to Room, and removes the optimistic entry created by
+ * [ThreadViewModel].
+ */
 @Singleton
 class SmsManagerWrapper @Inject constructor(
     @ApplicationContext private val context: Context
@@ -19,6 +28,14 @@ class SmsManagerWrapper @Inject constructor(
     private val smsManager: SmsManager
         get() = context.getSystemService(SmsManager::class.java)
 
+    /**
+     * Sends [text] to [destinationAddress] over the radio, writes the sent row to
+     * `content://sms/sent`, and registers PendingIntent callbacks so that
+     * [SmsSentDeliveryReceiver] can update the Room delivery status.
+     *
+     * @param messageId The optimistic Room row ID; used as the request code for
+     *   PendingIntents so the receiver can identify which message to update.
+     */
     fun sendTextMessage(destinationAddress: String, text: String, messageId: Long) {
         // ── Write to content://sms/sent ───────────────────────────────────────────
         // SmsManager only transmits over the radio; the default SMS app is

@@ -26,6 +26,16 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * ViewModel for the Conversations (thread list) screen.
+ *
+ * Responsibilities:
+ *  - Exposes the full ordered [threads] list and per-thread [unreadCounts] as reactive
+ *    [StateFlow]s for the UI.
+ *  - Monitors [FirstLaunchSyncWorker] state to surface the [isSyncing] banner.
+ *  - Performs sync recovery on startup: if threads exist but messages are missing (or
+ *    vice-versa), it re-enqueues the first-launch sync worker to repair the database.
+ */
 @HiltViewModel
 class ConversationsViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,

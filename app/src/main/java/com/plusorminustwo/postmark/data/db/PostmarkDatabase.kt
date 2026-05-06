@@ -8,6 +8,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.plusorminustwo.postmark.data.db.dao.*
 import com.plusorminustwo.postmark.data.db.entity.*
 
+/**
+ * Room database for Postmark.
+ *
+ * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity],
+ * [ThreadStatsEntity], [GlobalStatsEntity], [MessageFtsEntity].
+ *
+ * Current schema version: 10.
+ * All upgrades are handled by explicit [Migration] objects — never by destructive
+ * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
+ */
 @Database(
     entities = [
         ThreadEntity::class,

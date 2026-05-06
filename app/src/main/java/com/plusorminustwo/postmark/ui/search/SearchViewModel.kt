@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/** Immutable snapshot of all active search filter values. */
 data class SearchFilters(
     val threadId: Long? = null,
     val isSentOnly: Boolean? = null,
@@ -23,6 +24,7 @@ data class SearchFilters(
     val dateRange: SearchDateRange = SearchDateRange.ALL_TIME
 )
 
+/** Full UI state for the Search screen, derived from several combined [StateFlow]s. */
 data class SearchUiState(
     val query: String = "",
     val filters: SearchFilters = SearchFilters(),
@@ -33,6 +35,16 @@ data class SearchUiState(
     val reactionEmojis: List<String> = emptyList()
 )
 
+/**
+ * ViewModel for the Search screen.
+ *
+ * Combines a debounced text query with a set of structured filters ([SearchFilters])
+ * and delegates to [SearchRepository] for FTS-backed results. Results update
+ * automatically whenever the query or any filter changes.
+ *
+ * When launched with a `threadId` in [SavedStateHandle] (from "Search in thread"),
+ * the thread filter is pre-applied in `init`.
+ */
 @OptIn(FlowPreview::class)
 @HiltViewModel
 class SearchViewModel @Inject constructor(

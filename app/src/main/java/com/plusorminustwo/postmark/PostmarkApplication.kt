@@ -9,6 +9,16 @@ import com.plusorminustwo.postmark.data.sync.SmsContentObserver
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
+/**
+ * Application class for Postmark.
+ *
+ * Responsibilities on startup:
+ *  - Configures WorkManager with Hilt's [HiltWorkerFactory] so injected workers resolve.
+ *  - Registers [SmsContentObserver] to receive incremental SMS/MMS change callbacks
+ *    while the app process is alive.
+ *  - Creates the two notification channels required by Android O+: one for incoming
+ *    SMS alerts and one for the background sync progress notification.
+ */
 @HiltAndroidApp
 class PostmarkApplication : Application(), Configuration.Provider {
 

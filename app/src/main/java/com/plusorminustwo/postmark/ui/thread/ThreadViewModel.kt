@@ -110,8 +110,9 @@ class ThreadViewModel @Inject constructor(
     private val _pendingAttachmentUri = MutableStateFlow<String?>(null)
     private val _pendingMimeType      = MutableStateFlow<String?>(null)
 
-    // Fires once each time the user sends a message so the UI can unconditionally
-    // scroll to the bottom regardless of the current scroll position.
+    /* Fires once per send so the UI unconditionally scrolls to the bottom
+     * regardless of the current scroll position. extraBufferCapacity=1 means
+     * the emit never suspends even if the collector hasn't consumed yet. */
     private val _scrollToBottomEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val scrollToBottomEvent: SharedFlow<Unit> = _scrollToBottomEvent.asSharedFlow()
 
@@ -345,19 +346,31 @@ class ThreadViewModel @Inject constructor(
 
     fun dismissDefaultSmsDialog() { _showDefaultSmsDialog.value = false }
 
-    // Stores the selected media attachment for the next outgoing MMS.
-    // Triggers: user taps attach button and picks a photo/audio file.
+    /**
+     * Stores the URI and MIME type of a media file the user has chosen to attach.
+     * Clears automatically after [sendMessage] picks it up, or via [clearAttachment].
+     *
+     * Triggers: user taps the attach button and picks a photo/audio/video file.
+     */
     fun onAttachmentSelected(uri: Uri, mimeType: String) {
         _pendingAttachmentUri.value = uri.toString()
         _pendingMimeType.value      = mimeType
     }
 
-    // Clears any pending attachment (user taps the × on the preview chip).
+    /** Clears any pending attachment (user taps the × on the preview chip). */
     fun clearAttachment() {
         _pendingAttachmentUri.value = null
         _pendingMimeType.value      = null
     }
 
+    /**
+     * Sends the current reply text and/or pending attachment.
+     *
+     * Chooses the MMS or SMS path automatically. Inserts an optimistic [Message]
+     * (negative ID) so the UI shows the message immediately, then dispatches it
+     * to the radio. On local failure the optimistic message is marked FAILED so
+     * the user sees the red-! retry indicator.
+     */
     fun sendMessage() {
         val text             = _replyText.value.trim()
         val attachmentUri    = _pendingAttachmentUri.value
@@ -373,8 +386,8 @@ class ThreadViewModel @Inject constructor(
         val thread = uiState.value.thread ?: return
         _replyText.value = ""
         clearAttachment()
-        // Signal the UI to scroll to bottom before the insert so the optimistic
-        // message is visible as soon as it lands in the list.
+        /* Signal the UI to scroll to bottom before inserting the optimistic message
+         * so it's visible the moment it lands in the list, not after the next scroll. */
         _scrollToBottomEvent.tryEmit(Unit)
 
         viewModelScope.launch {
@@ -399,9 +412,9 @@ class ThreadViewModel @Inject constructor(
                     mimeType       = mimeType
                 )
                 messageRepository.insert(optimistic)
-                // PendingIntent for MmsSentReceiver — updates Room when MMSC responds.
-                // EXTRA_SENT_AT_MS lets the receiver find the real content-provider row
-                // even if sync already replaced the temp row before the MMSC replied.
+                /* PendingIntent for MmsSentReceiver — updates Room when the MMSC
+                 * responds. EXTRA_SENT_AT_MS lets the receiver find the real content-
+                 * provider row even if sync replaced the temp row before MMSC replied. */
                 val reqCode   = (tempId and 0x3FFF_FFFFL).toInt()
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
@@ -420,8 +433,8 @@ class ThreadViewModel @Inject constructor(
                     messageId     = tempId,
                     sentIntent    = sentIntent
                 )
-                // Local failure (bad URI, IO error, telephony exception) — mark immediately
-                // so the message persists as FAILED rather than staying PENDING forever.
+                /* Local failure (bad URI, IO error, telephony exception): mark FAILED
+                 * immediately so the message doesn't stay stuck as PENDING forever. */
                 if (!dispatched) {
                     messageRepository.updateDeliveryStatus(tempId, DELIVERY_STATUS_FAILED)
                 }
@@ -444,14 +457,22 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Re-sends a message whose [deliveryStatus] is [DELIVERY_STATUS_FAILED].
+     *
+     * For MMS: rebuilds the PendingIntent (the original FLAG_ONE_SHOT was consumed)
+     * and re-invokes [MmsManagerWrapper] with the same attachment URI.
+     * For SMS: calls [SmsManagerWrapper.sendTextMessage] directly.
+     */
     fun retrySend(messageId: Long) {
         val message = uiState.value.messages.find { it.id == messageId } ?: return
         if (message.deliveryStatus != DELIVERY_STATUS_FAILED) return
         viewModelScope.launch {
             messageRepository.updateDeliveryStatus(messageId, DELIVERY_STATUS_PENDING)
             if (message.isMms && message.attachmentUri != null) {
-                // MMS retry: rebuild the sentIntent (original was FLAG_ONE_SHOT, already consumed)
-                // and re-invoke MmsManagerWrapper with the same attachment URI.
+                /* MMS retry: rebuild the sentIntent (the original was FLAG_ONE_SHOT and
+                 * has already been consumed) then re-invoke MmsManagerWrapper with the
+                 * same attachment URI. */
                 val reqCode = (messageId and 0x3FFF_FFFFL).toInt()
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
@@ -481,8 +502,8 @@ class ThreadViewModel @Inject constructor(
     }
 
     private fun isDefaultSmsApp(): Boolean {
-        // On Android 10+ the RoleManager is the authoritative source — getDefaultSmsPackage
-        // can lag behind after the role is granted via the system dialog.
+        /* On Android 10+ the RoleManager is the authoritative source —
+         * getDefaultSmsPackage can lag after the role is granted via the system dialog. */
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val rm = context.getSystemService(RoleManager::class.java)
             if (rm.isRoleHeld(RoleManager.ROLE_SMS)) return true

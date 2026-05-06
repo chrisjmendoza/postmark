@@ -29,6 +29,17 @@ import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
+/**
+ * One-time [CoroutineWorker] that performs the full historical SMS/MMS import on
+ * first launch (or after a sync-recovery reset).
+ *
+ * Reads every thread and message from the system content providers, writes them to
+ * Room, re-parses reaction fallback messages, and triggers a stats recompute.
+ * After the bulk import completes it calls [SmsSyncHandler.triggerCatchUp] to pick
+ * up any messages that arrived during the import window.
+ *
+ * Runs as a foreground worker (shows a persistent notification with progress).
+ */
 @HiltWorker
 class FirstLaunchSyncWorker @AssistedInject constructor(
     @Assisted context: Context,

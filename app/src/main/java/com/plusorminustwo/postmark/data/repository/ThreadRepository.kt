@@ -10,6 +10,14 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Repository for [Thread] domain objects backed by [ThreadDao].
+ *
+ * Provides both reactive [Flow] observers for live UI and one-shot suspend functions
+ * for writes. The [insertIgnore] / [insertIgnoreAll] variants are used during sync
+ * to preserve user-set fields (pinned, muted, notifications) that a full REPLACE
+ * would overwrite.
+ */
 @Singleton
 class ThreadRepository @Inject constructor(
     private val dao: ThreadDao
@@ -28,7 +36,7 @@ class ThreadRepository @Inject constructor(
     suspend fun upsertAll(threads: List<Thread>) =
         dao.insertAll(threads.map { it.toEntity() })
 
-    // ── Sync-safe variants: create thread if absent, preserve user settings if present.
+    /* Sync-safe variants: create thread if absent, preserve user settings if present. */
     suspend fun insertIgnore(thread: Thread) = dao.insertIgnore(thread.toEntity())
     suspend fun insertIgnoreAll(threads: List<Thread>) =
         dao.insertAllIgnore(threads.map { it.toEntity() })

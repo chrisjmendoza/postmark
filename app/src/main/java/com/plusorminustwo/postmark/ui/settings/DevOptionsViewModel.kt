@@ -232,18 +232,26 @@ class DevOptionsViewModel @Inject constructor(
         }
     }
 
-    // ── Reprocess reactions (DEBUG) ────────────────────────────────────────
-    // Scans every stored message, converts any reaction fallback to a Reaction entity
-    // (deduped), and deletes the original message so it no longer shows as a bubble.
+    // ── Reprocess reactions (DEBUG) ────────────────────────────────────────────
+    /* Scans every stored message, converts any reaction fallback to a Reaction
+     * entity (deduped), and deletes the original so it no longer shows as a bubble. */
 
+    /**
+     * Scans every stored message across all threads, converts reaction fallback
+     * messages to proper [Reaction] entities (deduped), and deletes the original
+     * fallback message so it no longer appears as a chat bubble.
+     *
+     * Processes one thread at a time to cap peak RAM usage (avoids an OOM that
+     * would occur from loading all ~160 K messages at once).
+     */
     fun reprocessReactions() {
         viewModelScope.launch {
             _isReprocessing.value = true
             syncLogger.log("ReprocessReactions", "start")
             try {
-                // ── Process one thread at a time to avoid loading ~160K messages into RAM ──
-                // getAll() would OOM on large databases; getAllThreadIds() + getByThread()
-                // keeps peak heap to a single thread's worth of messages.
+                /* Process one thread at a time to avoid loading ~160 K messages into RAM.
+                 * getAll() would OOM on large databases; getAllThreadIds() + getByThread()
+                 * keeps peak heap down to a single thread's worth of messages at once. */
                 val allThreadIds = messageRepository.getAllThreadIds()
                 syncLogger.log("ReprocessReactions", "${allThreadIds.size} threads to scan")
                 var inserted = 0
