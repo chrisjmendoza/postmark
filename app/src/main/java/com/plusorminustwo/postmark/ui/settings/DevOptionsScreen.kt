@@ -1,11 +1,14 @@
 package com.plusorminustwo.postmark.ui.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
@@ -159,7 +162,6 @@ fun DevOptionsScreen(
                     onClick = {
                         val logFile = File(context.filesDir, "sync_log.txt")
                         if (!logFile.exists()) {
-                            // Nothing to share yet — load first so the user gets feedback.
                             viewModel.refreshLog()
                             return@OutlinedButton
                         }
@@ -183,10 +185,38 @@ fun DevOptionsScreen(
                     Icon(
                         Icons.Default.Share,
                         contentDescription = "Share log",
-                        modifier = Modifier.size(16.dp).padding(end = 0.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                     Spacer(Modifier.width(4.dp))
                     Text("Share")
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Copy log text to clipboard so it can be pasted anywhere instantly.
+                OutlinedButton(
+                    onClick = {
+                        val content = logContent
+                        if (content != null) {
+                            val clipboard = context.getSystemService(ClipboardManager::class.java)
+                            clipboard?.setPrimaryClip(
+                                ClipData.newPlainText("Postmark sync log", content)
+                            )
+                        } else {
+                            viewModel.refreshLog()
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = "Copy log",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("Copy")
                 }
                 OutlinedButton(
                     onClick = viewModel::clearSyncLog,

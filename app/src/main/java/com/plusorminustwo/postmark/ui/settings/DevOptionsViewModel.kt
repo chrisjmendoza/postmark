@@ -239,11 +239,13 @@ class DevOptionsViewModel @Inject constructor(
     fun reprocessReactions() {
         viewModelScope.launch {
             _isReprocessing.value = true
+            syncLogger.log("ReprocessReactions", "start")
             try {
                 // ── Process one thread at a time to avoid loading ~160K messages into RAM ──
                 // getAll() would OOM on large databases; getAllThreadIds() + getByThread()
                 // keeps peak heap to a single thread's worth of messages.
                 val allThreadIds = messageRepository.getAllThreadIds()
+                syncLogger.log("ReprocessReactions", "${allThreadIds.size} threads to scan")
                 var inserted = 0
                 var removed = 0
                 val toDelete = mutableListOf<Long>()
@@ -253,7 +255,12 @@ class DevOptionsViewModel @Inject constructor(
 
                     // Pre-partition so reaction fallbacks are never candidates for matching.
                     val reactionMsgs = msgs.filter { reactionParser.isReactionFallback(it.body) }
-                    val normalMsgs = msgs.filter { !reactionParser.isReactionFallback(it.body) }
+                    val normalMsgs   = msgs.filter { !reactionParser.isReactionFallback(it.body) }
+
+                    if (reactionMsgs.isNotEmpty()) {
+                        syncLogger.log("ReprocessReactions",
+                            "thread=$threadId: ${msgs.size} msgs, ${reactionMsgs.size} reaction fallbacks, ${normalMsgs.size} normal")
+                    }
 
                     reactionMsgs.forEach { msg ->
                         val parsed = reactionParser.parse(msg.body) ?: return@forEach
@@ -264,23 +271,33 @@ class DevOptionsViewModel @Inject constructor(
                                     reaction.messageId, reaction.senderAddress, reaction.emoji)) {
                                 messageRepository.insertReaction(reaction)
                                 inserted++
-                                // Only remove the fallback message when the reaction resolved.
                                 toDelete += msg.id
                                 removed++
+                                syncLogger.log("ReprocessReactions",
+                                    "matched: id=${msg.id} emoji=${parsed.emoji} quote='${parsed.quotedText.take(40)}' → targetId=${reaction.messageId}")
+                            } else {
+                                // Original not found in 100-message window, or duplicate — leave as bubble.
+                                syncLogger.log("ReprocessReactions",
+                                    "no-match: id=${msg.id} emoji=${parsed.emoji} quote='${parsed.quotedText.take(40)}' (${if (reaction == null) "original not found" else "already exists"})")
                             }
-                            // If reaction == null (original not found or > 100 messages away),
-                            // leave the message in Room as a normal visible bubble.
                         } else {
                             // Removal: discard the fallback without inserting a reaction entity.
                             toDelete += msg.id
                             removed++
+                            syncLogger.log("ReprocessReactions",
+                                "removal: id=${msg.id} emoji=${parsed.emoji} deleted")
                         }
                     }
                 }
 
                 toDelete.forEach { messageRepository.deleteById(it) }
                 statsUpdater.recomputeAll()
+                syncLogger.log("ReprocessReactions",
+                    "done: inserted=$inserted removed=$removed (${toDelete.size} fallback messages deleted)")
                 _feedback.value = "Reactions reprocessed: $inserted inserted, $removed fallbacks removed"
+            } catch (e: Exception) {
+                syncLogger.logError("ReprocessReactions", "CRASH during reprocessReactions", e)
+                throw e
             } finally {
                 _isReprocessing.value = false
             }

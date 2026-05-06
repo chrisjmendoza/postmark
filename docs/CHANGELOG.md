@@ -4,6 +4,37 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-05-06 (2)
+
+### Fix: tap red ! on MMS crash
+
+- `ThreadViewModel.retrySend()` was calling `smsManagerWrapper.sendTextMessage()` for
+  all failed messages including MMS. `SmsManager.divideMessage("")` throws on an
+  empty body, crashing the app. Now checks `message.isMms` and rebuilds a
+  fresh `PendingIntent` + calls `mmsManagerWrapper.sendMms()` for MMS retries.
+
+### Fix: notification sender name shows phone number instead of contact name
+
+- `SmsReceiver` now queries `ContactsContract.PhoneLookup` directly for the display
+  name before posting each notification. This is always up-to-date, even if the
+  contact was added after the initial sync (which left a stale phone number in
+  Room's `displayName` column). Falls back to Room → raw phone number if no contact.
+
+### Feature: Copy button in sync log panel
+
+- Dev Options > Sync log now has a "Copy" button that puts the loaded log text
+  directly on the clipboard for quick pasting. Buttons reorganised into two rows:
+  row 1 = Load + Share; row 2 = Copy + Clear.
+
+### Improvement: verbose logging in reprocess reactions
+
+- `DevOptionsViewModel.reprocessReactions()` now writes per-thread and per-message
+  log entries to the sync log: thread scan summary, each matched/unmatched reaction
+  fallback with emoji + quoted-text snippet, and a completion summary. Helpful for
+  diagnosing why a reaction fallback didn't resolve.
+
+---
+
 ## 2026-05-06
 
 ### Fix: SMS red ! flash before green checkmarks

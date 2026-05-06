@@ -449,7 +449,34 @@ class ThreadViewModel @Inject constructor(
         if (message.deliveryStatus != DELIVERY_STATUS_FAILED) return
         viewModelScope.launch {
             messageRepository.updateDeliveryStatus(messageId, DELIVERY_STATUS_PENDING)
-            smsManagerWrapper.sendTextMessage(message.address, message.body, messageId)
+            if (message.isMms && message.attachmentUri != null) {
+                // MMS retry: rebuild the sentIntent (original was FLAG_ONE_SHOT, already consumed)
+                // and re-invoke MmsManagerWrapper with the same attachment URI.
+                val reqCode = (messageId and 0x3FFF_FFFFL).toInt()
+                val sentIntent = PendingIntent.getBroadcast(
+                    context, reqCode,
+                    Intent(context, MmsSentReceiver::class.java).apply {
+                        action = MmsSentReceiver.ACTION_MMS_SENT
+                        putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, messageId)
+                        putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, System.currentTimeMillis())
+                    },
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
+                )
+                val dispatched = mmsManagerWrapper.sendMms(
+                    toAddress     = message.address,
+                    textBody      = message.body,
+                    attachmentUri = Uri.parse(message.attachmentUri),
+                    mimeType      = message.mimeType ?: "image/jpeg",
+                    messageId     = messageId,
+                    sentIntent    = sentIntent
+                )
+                if (!dispatched) {
+                    messageRepository.updateDeliveryStatus(messageId, DELIVERY_STATUS_FAILED)
+                }
+            } else {
+                // SMS retry: re-send as plain text.
+                smsManagerWrapper.sendTextMessage(message.address, message.body, messageId)
+            }
         }
     }
 

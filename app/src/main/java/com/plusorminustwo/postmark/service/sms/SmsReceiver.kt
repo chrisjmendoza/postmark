@@ -7,6 +7,8 @@ import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -78,10 +80,13 @@ class SmsReceiver : BroadcastReceiver() {
                         val notificationsEnabled =
                             threadRepository.isNotificationsEnabledByAddress(rawSender)
                         if (notificationsEnabled && !threadRepository.isMutedByAddress(rawSender)) {
-                            // Prefer the stored display name (contact name resolved during sync)
-                            // over the raw phone number so the notification title is human-readable.
-                            val displayName = threadRepository.getDisplayNameByAddress(rawSender)
-                                ?: sender  // fallback: formatted phone number
+                            // Look up the display name from ContactsContract first — it is
+                            // always up-to-date even if the contact was added after the initial
+                            // sync (which can leave a stale phone-number in Room's displayName).
+                            // Fall back to the Room display name, then to the raw phone number.
+                            val displayName = lookupContactName(context, rawSender)
+                                ?: threadRepository.getDisplayNameByAddress(rawSender)
+                                ?: sender
                             syncLogger.log("SmsReceiver", "notification: address=$rawSender displayName=$displayName")
                             postIncomingNotification(
                                 context, displayName, body,
@@ -294,5 +299,28 @@ class SmsReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "SmsReceiver"
+    }
+
+    // Queries ContactsContract.PhoneLookup for the display name of [address].
+    // Returns null when the number has no matching contact. Uses the system's
+    // built-in phone-number normalisation so "+12065550100" and "2065550100"
+    // both resolve to the same contact entry.
+    private fun lookupContactName(context: Context, address: String): String? {
+        if (address.isEmpty()) return null
+        val uri = Uri.withAppendedPath(
+            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+            Uri.encode(address)
+        )
+        return try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst())
+                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
+                else null
+            }
+        } catch (_: Exception) { null }
     }
 }
