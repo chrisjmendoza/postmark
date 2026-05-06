@@ -7,6 +7,7 @@ import com.plusorminustwo.postmark.data.db.entity.toEntity
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
+import com.plusorminustwo.postmark.data.db.dao.UnreadCount
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -61,6 +62,13 @@ class MessageRepository @Inject constructor(
 
     suspend fun updateDeliveryStatus(messageId: Long, status: Int) =
         messageDao.updateDeliveryStatus(messageId, status)
+
+    // Marks all messages in a thread as read; called when the user opens the thread.
+    suspend fun markAllRead(threadId: Long) = messageDao.markAllRead(threadId)
+
+    // Emits a live Map<threadId, unreadCount> for driving unread badges.
+    fun observeUnreadCounts(): Flow<Map<Long, Int>> =
+        messageDao.observeUnreadCounts().map { list -> list.associate { it.threadId to it.count } }
 
     suspend fun deleteOptimisticMessages(threadId: Long) =
         messageDao.deleteOptimisticMessages(threadId)

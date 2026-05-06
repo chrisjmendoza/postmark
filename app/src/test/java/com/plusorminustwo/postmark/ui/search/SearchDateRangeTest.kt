@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.ui.search
 
+import androidx.lifecycle.SavedStateHandle
 import com.plusorminustwo.postmark.data.db.dao.EmojiCount
 import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.SearchDao
@@ -165,6 +166,7 @@ class SearchDateRangeTest {
     private fun buildViewModel(
         dao: SearchDao = SpySearchDao(emptyList())
     ): SearchViewModel = SearchViewModel(
+        savedStateHandle = SavedStateHandle(),
         searchRepository = SearchRepository(dao, FakeReactionDao()),
         threadRepository = ThreadRepository(FakeThreadDao())
     )

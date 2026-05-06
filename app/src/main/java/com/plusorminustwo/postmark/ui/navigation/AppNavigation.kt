@@ -40,7 +40,11 @@ sealed class Screen(val route: String) {
             if (params.isNotEmpty()) append("?${params.joinToString("&")}")
         }
     }
-    data object Search : Screen("search")
+    data object Search : Screen("search?threadId={threadId}") {
+        // If threadId is provided, the search screen pre-filters to that conversation.
+        fun navRoute(threadId: Long = -1L) =
+            if (threadId != -1L) "search?threadId=$threadId" else "search"
+    }
     data object Stats : Screen("stats?threadId={threadId}") {
         fun navRoute(threadId: Long? = null) =
             if (threadId != null) "stats?threadId=$threadId" else "stats"
@@ -87,7 +91,7 @@ fun AppNavigation(showOnboarding: Boolean) {
                 onThreadClick = { threadId ->
                     navController.navigate(Screen.Thread.route(threadId))
                 },
-                onSearchClick = { navController.navigate(Screen.Search.route) },
+                onSearchClick = { navController.navigate(Screen.Search.navRoute()) },
                 onStatsClick = { navController.navigate(Screen.Stats.navRoute()) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) }
             )
@@ -110,11 +114,18 @@ fun AppNavigation(showOnboarding: Boolean) {
                 scrollToDate      = scrollToDate,
                 onBack            = { navController.popBackStack() },
                 onViewStats       = { navController.navigate(Screen.Stats.navRoute(threadId)) },
-                onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) }
+                onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) },
+                onSearchInThread  = { id -> navController.navigate(Screen.Search.navRoute(id)) }
             )
         }
 
-        composable(Screen.Search.route) {
+        composable(
+            route = Screen.Search.route,
+            arguments = listOf(navArgument("threadId") {
+                type = NavType.LongType
+                defaultValue = -1L
+            })
+        ) { backStackEntry ->
             SearchScreen(
                 onMessageClick = { threadId, messageId ->
                     navController.navigate(Screen.Thread.route(threadId, messageId))

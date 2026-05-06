@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.ui.search
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.repository.SearchRepository
@@ -35,6 +36,7 @@ data class SearchUiState(
 @OptIn(FlowPreview::class)
 @HiltViewModel
 class SearchViewModel @Inject constructor(
+    private val savedStateHandle: SavedStateHandle,
     private val searchRepository: SearchRepository,
     private val threadRepository: ThreadRepository
 ) : ViewModel() {
@@ -65,6 +67,16 @@ class SearchViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SearchUiState())
 
     init {
+        // Pre-filter to a specific thread if launched from "Search in thread" overflow menu.
+        val prefilterThreadId = savedStateHandle.get<Long>("threadId") ?: -1L
+        if (prefilterThreadId != -1L) {
+            viewModelScope.launch {
+                val thread = threadRepository.observeAll().first()
+                    .find { it.id == prefilterThreadId }
+                if (thread != null) setThreadFilter(thread)
+            }
+        }
+
         _query.debounce(300)
             .combine(_filters) { q, f -> q to f }
             .onEach { (query, filters) -> search(query, filters) }

@@ -91,6 +91,11 @@ class ThreadViewModel @Inject constructor(
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
 
+    init {
+        // Mark all messages in this thread as read as soon as the thread is opened.
+        viewModelScope.launch { messageRepository.markAllRead(threadId) }
+    }
+
     private val _selectionState  = MutableStateFlow(emptySet<Long>())
     private val _isSelectionMode = MutableStateFlow(false)
     private val _selectionScope  = MutableStateFlow(SelectionScope.MESSAGES)

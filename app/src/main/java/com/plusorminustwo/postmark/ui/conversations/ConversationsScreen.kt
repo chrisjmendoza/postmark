@@ -61,6 +61,8 @@ fun ConversationsScreen(
     val syncProgress by viewModel.syncProgress.collectAsState()
     val isDefaultSmsApp by viewModel.isDefaultSmsApp.collectAsState()
     val roleBannerDismissed by viewModel.roleBannerDismissed.collectAsState()
+    // Live unread-message counts keyed by threadId — drives the badge in ThreadRow.
+    val unreadCounts by viewModel.unreadCounts.collectAsState()
     val threadList = threads  // local val so Kotlin can smart-cast the nullable
 
     // Re-check whether we hold the default SMS role every time this screen resumes
@@ -167,6 +169,7 @@ fun ConversationsScreen(
                         items(threadList, key = { it.id }) { thread ->
                             ThreadRow(
                                 thread = thread,
+                                unreadCount = unreadCounts[thread.id] ?: 0,
                                 onClick = { onThreadClick(thread.id) },
                                 onTogglePin = { viewModel.togglePin(thread.id, thread.isPinned) },
                                 onToggleMute = { viewModel.toggleMute(thread.id, thread.isMuted) }
@@ -325,6 +328,7 @@ private fun RoleDenialBanner(onDismiss: () -> Unit, onSetDefault: () -> Unit) {
 @Composable
 private fun ThreadRow(
     thread: Thread,
+    unreadCount: Int,
     onClick: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleMute: () -> Unit,
@@ -368,6 +372,10 @@ private fun ThreadRow(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        // Unread-message badge — shown when there is at least one unread message.
+        if (unreadCount > 0) {
+            Badge { Text(unreadCount.coerceAtMost(99).toString()) }
+        }
         if (thread.isPinned) {
             Icon(
                 imageVector = Icons.Default.PushPin,

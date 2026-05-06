@@ -9,7 +9,7 @@ Package: com.plusorminustwo.postmark
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 9
+- Room (database) — currently on schema version 10
 - Hilt (dependency injection)
 - WorkManager (scheduled backup)
 - Kotlin Coroutines + Flow
@@ -48,7 +48,7 @@ com.plusorminustwo.postmark
     └── parser              ← AppleReactionParser (scaffolded)
 
 ═══════════════════════════════════════════════════════
-DATABASE — ROOM SCHEMA v9
+DATABASE — ROOM SCHEMA v10
 ═══════════════════════════════════════════════════════
 Thread
 - id, displayName, address, lastMessageAt,
@@ -65,7 +65,8 @@ Message
   isSent, type,
   isMms BOOLEAN (added v7),
   attachmentUri TEXT nullable (added v9),
-  mimeType TEXT nullable (added v9)
+  mimeType TEXT nullable (added v9),
+  isRead BOOLEAN DEFAULT true (added v10)
 
 Reaction
 - id, messageId, senderAddress, emoji,
@@ -99,6 +100,7 @@ Migration 5→6: isPinned on threads
 Migration 6→7: isMms on messages
 Migration 7→8: notificationsEnabled on threads
 Migration 8→9: attachmentUri + mimeType on messages
+Migration 9→10: isRead on messages
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -231,7 +233,7 @@ WHAT IS WORKING (tested on device)
    - View stats → navigates to StatsScreen with
      that thread pre-selected (skips contact list)
    - Select messages → enters selection mode
-   - Search in thread (stub)
+   - Search in thread (now wired → opens SearchScreen pre-filtered)
    - Mute / Unmute — toggles isMuted on ThreadEntity
      via ThreadRepository.updateMuted(). DB flag is
      stored; notification enforcement is a follow-up.
@@ -391,6 +393,21 @@ TIER 1 — REMAINING (in priority order)
 4. MMS MEDIA — remaining playback
    Tap image → full-screen viewer, tap video → ExoPlayer dialog.
    (Audio chip play/pause is now done.)
+
+COMPLETED THIS SPRINT (May 6, 2026)
+✅ Unread badges in conversation list (schema v10)
+   isRead field on messages; markAllRead on thread open;
+   observeUnreadCounts() Flow drives Badge in ThreadRow;
+   SmsSyncHandler sets isRead=isSent for new rows.
+✅ Search-in-thread — overflow menu item now navigates to
+   SearchScreen pre-filtered to the current thread.
+   Screen.Search route updated to support ?threadId= arg;
+   SearchViewModel reads threadId from SavedStateHandle.
+✅ 6 SMS pipeline reliability fixes (see 2026-05-06 CHANGELOG)
+   SmsReceiver inbox write, goAsync IO, THREAD_ID, Channel/Mutex,
+   MMS gate flag, MIGRATION_8_9 delivery fields.
+✅ SyncLogger injected into SmsSyncHandler; DevOptions sync log viewer
+   with Share button (FileProvider content:// URI).
 
 COMPLETED THIS SPRINT (May 5, 2026)
 ✅ Emoji reaction pipeline — all 5 root causes fixed (see WHAT IS WORKING above)

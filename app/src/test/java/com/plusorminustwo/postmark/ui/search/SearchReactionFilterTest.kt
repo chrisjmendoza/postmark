@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.ui.search
 
+import androidx.lifecycle.SavedStateHandle
 import com.plusorminustwo.postmark.data.db.dao.EmojiCount
 import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.SearchDao
@@ -139,6 +140,7 @@ class SearchReactionFilterTest {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun buildViewModel(dao: SearchDao) = SearchViewModel(
+        savedStateHandle = SavedStateHandle(),
         searchRepository = SearchRepository(dao, FakeReactionDao()),
         threadRepository = ThreadRepository(FakeThreadDao())
     )

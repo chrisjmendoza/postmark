@@ -119,6 +119,7 @@ fun ThreadScreen(
     onBack: () -> Unit,
     onViewStats: () -> Unit = {},
     onBackupSettingsClick: () -> Unit = {},
+    onSearchInThread: (Long) -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -159,7 +160,8 @@ fun ThreadScreen(
         onRetry = { viewModel.retrySend(it) },
         onSelectByDateRange = { start, end -> viewModel.selectByDateRange(start, end) },
         onAttachmentSelected = { uri, mimeType -> viewModel.onAttachmentSelected(uri, mimeType) },
-        onClearAttachment = { viewModel.clearAttachment() }
+        onClearAttachment = { viewModel.clearAttachment() },
+        onSearchInThread = { onSearchInThread(threadId) }
     )
 }
 
@@ -212,6 +214,7 @@ private fun ThreadContent(
     onSelectByDateRange: (LocalDate, LocalDate) -> Unit = { _, _ -> },
     onAttachmentSelected: (Uri, String) -> Unit = { _, _ -> },
     onClearAttachment: () -> Unit = {},
+    onSearchInThread: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -532,7 +535,7 @@ private fun ThreadContent(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Search in thread") },
-                                    onClick = { menuExpanded = false }
+                                    onClick = { menuExpanded = false; onSearchInThread() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },

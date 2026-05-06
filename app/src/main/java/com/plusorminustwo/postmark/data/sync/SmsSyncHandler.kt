@@ -162,7 +162,9 @@ class SmsSyncHandler @Inject constructor(
                     // Sent messages arriving via incremental sync are waiting for the
                     // SmsSentDeliveryReceiver callback; start them as PENDING so the UI
                     // shows the clock icon.  Received messages have no delivery tracking.
-                    deliveryStatus = if (isSent) DELIVERY_STATUS_PENDING else DELIVERY_STATUS_NONE
+                    deliveryStatus = if (isSent) DELIVERY_STATUS_PENDING else DELIVERY_STATUS_NONE,
+                    // Incoming messages start as unread; sent messages are always read.
+                    isRead = isSent
                 )
             }
         }
@@ -294,7 +296,9 @@ class SmsSyncHandler @Inject constructor(
                     type = msgBox,
                     isMms = true,
                     attachmentUri = parts.attachmentUri,
-                    mimeType = parts.mimeType
+                    mimeType = parts.mimeType,
+                    // Incoming MMS messages start as unread; sent ones are already read.
+                    isRead = isSent
                 )
             }
         }

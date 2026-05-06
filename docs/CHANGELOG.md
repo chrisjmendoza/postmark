@@ -6,6 +6,37 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-06
 
+### Cherry-pick: unread badges + search-in-thread (from copilot/fix-mms-image-sending)
+
+Surgically imported the new-feature additions from the Copilot branch while keeping all
+6 SMS pipeline fixes, SyncLogger, and our superior `MmsManagerWrapper` untouched.
+
+1. **Unread badge in conversation list**
+   - Added `isRead: Boolean = true` field to `MessageEntity` and `Message` domain model.
+   - Room DB bumped to **version 10**; `MIGRATION_9_10` adds `isRead INTEGER NOT NULL DEFAULT 1`
+     so all existing synced rows start as read after upgrade.
+   - `MessageDao` gains `markAllRead(threadId)` and `observeUnreadCounts(): Flow<List<UnreadCount>>`.
+   - `MessageRepository` exposes `markAllRead()` and `observeUnreadCounts(): Flow<Map<Long,Int>>`.
+   - `SmsSyncHandler` sets `isRead = isSent` for every incremental SMS and MMS row
+     (received messages start unread; sent messages are always read).
+   - `ThreadViewModel.init` calls `messageRepository.markAllRead(threadId)` so the thread's
+     unread count drops to zero as soon as the user opens a conversation.
+   - `ConversationsViewModel` exposes `unreadCounts: StateFlow<Map<Long,Int>>`.
+   - `ConversationsScreen.ThreadRow` renders a `Badge` when the thread has unread messages
+     (capped display at 99).
+
+2. **Search-in-thread from the overflow menu**
+   - `ThreadScreen` / `ThreadContent` gain an `onSearchInThread: () -> Unit` callback.
+   - The previously inert "Search in thread" menu item now fires `onSearchInThread`.
+   - `Screen.Search` route updated to `search?threadId={threadId}` with a `navRoute(id)` helper.
+   - `AppNavigation` wires `onSearchInThread` in the `ThreadScreen` composable call and
+     adds the `navArgument("threadId")` to the Search composable.
+   - `SearchViewModel` receives `SavedStateHandle`; on launch it reads `threadId`, looks up
+     the thread, and calls `setThreadFilter()` so the search opens pre-filtered.
+
+**All unit tests pass** (5 fake `MessageDao` implementations in tests updated with the
+two new interface methods).
+
 ### SMS pipeline — bulletproof reliability hardening
 
 Five systematic bugs across the SMS receive / sync pipeline fixed in a single session.
@@ -57,7 +88,8 @@ Five systematic bugs across the SMS receive / sync pipeline fixed in a single se
   with counts for post-hoc diagnosis.
 - `SyncStatusBar` composable on `ConversationsScreen` shows red error banner on failure.
 - `DevOptionsScreen` sync log viewer for reviewing `SyncLogger` output on device.
-- All 322 unit tests pass. All 8 fake `ThreadDao` implementations in tests updated with
+- `DevOptionsScreen` Share log button via FileProvider content:// URI.
+- All unit tests pass. All 8 fake `ThreadDao` implementations in tests updated with
   the two new interface methods (`insertIgnore`, `insertAllIgnore`).
 
 ---

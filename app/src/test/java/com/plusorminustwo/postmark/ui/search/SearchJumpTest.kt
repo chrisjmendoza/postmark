@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.ui.search
 
+import androidx.lifecycle.SavedStateHandle
 import com.plusorminustwo.postmark.data.db.dao.SearchDao
 import com.plusorminustwo.postmark.data.db.dao.EmojiCount
 import com.plusorminustwo.postmark.data.db.dao.ReactionDao
@@ -102,6 +103,7 @@ class SearchJumpTest {
         messages: List<MessageEntity> = emptyList(),
         threads: List<ThreadEntity> = emptyList()
     ): SearchViewModel = SearchViewModel(
+        savedStateHandle = SavedStateHandle(),
         searchRepository = SearchRepository(FakeSearchDao(messages), FakeReactionDao()),
         threadRepository = ThreadRepository(FakeThreadDao(threads))
     )

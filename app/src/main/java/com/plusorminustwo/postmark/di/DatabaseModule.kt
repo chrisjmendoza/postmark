@@ -27,7 +27,8 @@ object DatabaseModule {
                 PostmarkDatabase.MIGRATION_5_6,
                 PostmarkDatabase.MIGRATION_6_7,
                 PostmarkDatabase.MIGRATION_7_8,
-                PostmarkDatabase.MIGRATION_8_9
+                PostmarkDatabase.MIGRATION_8_9,
+                PostmarkDatabase.MIGRATION_9_10
             )
             .addCallback(PostmarkDatabase.FTS_CALLBACK)
             .build()

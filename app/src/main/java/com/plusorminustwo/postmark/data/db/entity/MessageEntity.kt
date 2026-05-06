@@ -51,7 +51,10 @@ data class MessageEntity(
     // Null for SMS rows and text-only MMS. Readable by the default SMS app role.
     val attachmentUri: String? = null,
     // MIME type of the attachment part (e.g. "image/jpeg", "audio/mpeg"). Null when no attachment.
-    val mimeType: String? = null
+    val mimeType: String? = null,
+    // False for received messages that have not yet been viewed (drives unread badge).
+    // Defaults to true so existing synced rows never appear as unread after an upgrade.
+    val isRead: Boolean = true
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -65,7 +68,8 @@ fun MessageEntity.toDomain() = Message(
     deliveryStatus = deliveryStatus,
     isMms = isMms,
     attachmentUri = attachmentUri,
-    mimeType = mimeType
+    mimeType = mimeType,
+    isRead = isRead
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -79,5 +83,6 @@ fun Message.toEntity() = MessageEntity(
     deliveryStatus = deliveryStatus,
     isMms = isMms,
     attachmentUri = attachmentUri,
-    mimeType = mimeType
+    mimeType = mimeType,
+    isRead = isRead
 )

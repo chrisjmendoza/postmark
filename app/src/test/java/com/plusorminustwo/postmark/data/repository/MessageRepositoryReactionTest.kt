@@ -187,4 +187,6 @@ private class StubMessageDao : MessageDao {
     override suspend fun getMinMmsId(): Long? = null
     override suspend fun deleteById(messageId: Long) = Unit
     override suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity? = null
+    override suspend fun markAllRead(threadId: Long) = Unit
+    override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
 }

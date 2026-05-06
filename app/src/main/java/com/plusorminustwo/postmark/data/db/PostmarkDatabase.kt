@@ -17,7 +17,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -117,6 +117,16 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // ALTER TABLE per column; both default to NULL for existing SMS rows.
                 db.execSQL("ALTER TABLE messages ADD COLUMN attachmentUri TEXT")
                 db.execSQL("ALTER TABLE messages ADD COLUMN mimeType TEXT")
+            }
+        }
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add isRead flag for unread-badge support. DEFAULT 1 so all existing
+                // synced rows are treated as already read after the upgrade.
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN isRead INTEGER NOT NULL DEFAULT 1"
+                )
             }
         }
 

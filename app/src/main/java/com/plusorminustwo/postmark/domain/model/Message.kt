@@ -36,7 +36,9 @@ data class Message(
     val isMms: Boolean = false,
     // MMS media attachment — null for SMS and text-only MMS.
     val attachmentUri: String? = null,
-    val mimeType: String? = null
+    val mimeType: String? = null,
+    // False for incoming messages not yet viewed; drives the unread badge.
+    val isRead: Boolean = true
 )
 
 /** Offset added to raw MMS `_id` values before storing in Room, preventing

@@ -4,6 +4,9 @@ import androidx.room.*
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import kotlinx.coroutines.flow.Flow
 
+/** Projection returned by [MessageDao.observeUnreadCounts]. */
+data class UnreadCount(val threadId: Long, val count: Int)
+
 @Dao
 interface MessageDao {
 
@@ -73,6 +76,15 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
     suspend fun getAll(): List<MessageEntity>
+
+    // Marks every message in the given thread as read (called when the user opens the thread).
+    @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId")
+    suspend fun markAllRead(threadId: Long)
+
+    // Returns a live list of (threadId, unread-count) pairs — used by ConversationsViewModel
+    // to drive real-time unread badges in the conversation list.
+    @Query("SELECT threadId, COUNT(*) as count FROM messages WHERE isRead = 0 GROUP BY threadId")
+    fun observeUnreadCounts(): Flow<List<UnreadCount>>
 
     // Returns the highest SMS provider _id stored in Room (SMS rows only, excluding
     // MMS rows whose IDs are offset by MMS_ID_OFFSET). Used by SmsSyncHandler to
