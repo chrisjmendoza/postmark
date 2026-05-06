@@ -6,6 +6,31 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-06
 
+### Fix: SMS red ! flash before green checkmarks
+
+- `SmsSentDeliveryReceiver` no longer treats `RESULT_CANCELED (0)` as a definitive
+  send failure. Only `SmsManager` error codes ≥ 1 are treated as real failures.
+  `RESULT_CANCELED` (which some OEM telephony stacks fire before confirming send status)
+  now leaves the message as PENDING so the delivery receipt can update it cleanly.
+
+### Fix: reprocess reactions crash (OOM)
+
+- `DevOptionsViewModel.reprocessReactions()` replaced `messageRepository.getAll()`
+  (which loaded ~160 K messages into RAM) with per-thread iteration via
+  `getAllThreadIds()` + `getByThread(threadId)`. Peak heap is now one thread's
+  worth of messages regardless of database size.
+- `MessageRepository.getAllThreadIds()` added as a thin wrapper over the existing DAO query.
+
+### Fix: MMS images auto-compressed before send
+
+- `MmsManagerWrapper` now compresses `image/*` attachments that exceed 1.2 MB
+  before building the PDU. Uses iterative JPEG re-encoding (85 → 70 → 55 → 40 %
+  quality) until the bytes fit. The 6+ MB image that caused `MMS_ERROR_IO_ERROR`
+  will now be compressed to carrier-safe size automatically. Non-image MIME types
+  (audio, video) are passed through unchanged.
+
+---
+
 ### Fix: failed MMS persists with red error icon (race condition fix)
 
 - `MmsManagerWrapper.sendMms()` now returns `Boolean` (true = dispatched to system, false =

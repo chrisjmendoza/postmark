@@ -40,22 +40,37 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
             try {
                 when (intent.action) {
                     ACTION_SMS_SENT -> {
-                        val isSendOk = resultCode == Activity.RESULT_OK
-                        val status = if (isSendOk) DELIVERY_STATUS_SENT else DELIVERY_STATUS_FAILED
-                        val label  = if (isSendOk) "SENT" else "FAILED (resultCode=$resultCode)"
+                        val isSendOk = resultCode == Activity.RESULT_OK   // -1 = success
+                        // RESULT_CANCELED (0) is ambiguous: it fires when the PendingIntent is
+                        // canceled by the OS (e.g. process restart) rather than an actual send
+                        // failure. Real SmsManager error codes are all ≥ 1. Treating 0 as FAILED
+                        // produces a red ! flash even when messages successfully deliver.
+                        val isKnownFailure = resultCode > 0
+                        val label = when {
+                            isSendOk      -> "SENT"
+                            isKnownFailure -> "FAILED (resultCode=$resultCode)"
+                            else           -> "AMBIGUOUS (resultCode=$resultCode) — leaving as PENDING"
+                        }
                         syncLogger.log("SmsSentDelivery", "SMS_SENT roomId=$roomId smsRowId=$smsRowId result=$label")
-                        messageRepository.updateDeliveryStatus(roomId, status)
 
-                        // Mirror the failure into content://sms so third-party apps
-                        // (e.g. Google Messages) don't keep showing the message as pending.
-                        if (!isSendOk && smsRowId > 0L) {
-                            val cv = ContentValues().apply {
-                                put(Telephony.Sms.STATUS, Telephony.Sms.STATUS_FAILED)
+                        when {
+                            isSendOk -> messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_SENT)
+                            isKnownFailure -> {
+                                messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
+                                // Mirror the failure into content://sms so third-party apps
+                                // (e.g. Google Messages) don't keep showing the message as pending.
+                                if (smsRowId > 0L) {
+                                    val cv = ContentValues().apply {
+                                        put(Telephony.Sms.STATUS, Telephony.Sms.STATUS_FAILED)
+                                    }
+                                    context.contentResolver.update(
+                                        ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, smsRowId),
+                                        cv, null, null
+                                    )
+                                }
                             }
-                            context.contentResolver.update(
-                                ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, smsRowId),
-                                cv, null, null
-                            )
+                            // resultCode == 0: leave status as PENDING; the delivery receipt or
+                            // a future sync will update it if the message went through.
                         }
                     }
                     ACTION_SMS_DELIVERED -> {

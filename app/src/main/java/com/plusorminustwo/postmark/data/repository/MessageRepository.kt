@@ -88,6 +88,9 @@ class MessageRepository @Inject constructor(
     /** Returns all messages ordered by timestamp (used by reprocessReactions debug tool). */
     suspend fun getAll(): List<Message> = messageDao.getAll().map { it.toDomain() }
 
+    /** Returns all distinct thread IDs in the messages table; used for batched iteration. */
+    suspend fun getAllThreadIds(): List<Long> = messageDao.getAllThreadIds()
+
     /** Returns true if a reaction with the same messageId + senderAddress + emoji already exists. */
     suspend fun reactionExists(messageId: Long, senderAddress: String, emoji: String): Boolean =
         reactionDao.countByMessageSenderAndEmoji(messageId, senderAddress, emoji) > 0

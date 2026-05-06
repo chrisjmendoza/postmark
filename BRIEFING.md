@@ -220,6 +220,8 @@ WHAT IS WORKING (tested on device)
    - MmsManagerWrapper builds WAP Binary M-Send.req PDU, sends via
      SmsManager.sendMultimediaMessage(); temp PDU via FileProvider cacheDir;
      returns Boolean (true = dispatched, false = local failure)
+   - Images > 1.2 MB are auto-compressed (iterative JPEG, 85→40% quality) before
+     PDU build — prevents MMS_ERROR_IO_ERROR carrier rejection for large photos
    - MmsSentReceiver carries EXTRA_SENT_AT_MS; finds real content://mms row
      by timestamp window even if sync replaced the optimistic row first
    - SmsSyncHandler.syncLatestMms() transfers DELIVERY_STATUS_FAILED from

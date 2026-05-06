@@ -1,6 +1,8 @@
 package com.plusorminustwo.postmark.service.sms
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.telephony.SmsManager
 import android.util.Log
@@ -75,11 +77,27 @@ class MmsManagerWrapper @Inject constructor(
         }
         syncLogger.log(TAG, "sendMms: read ${mediaBytes.size} bytes for messageId=$messageId")
 
+        // ── 1b. Compress images that exceed the carrier size limit ────────────
+        // Most carriers cap MMS at 300 KB–1.5 MB. A 6+ MB JPEG will be rejected
+        // by the MMSC with MMS_ERROR_IO_ERROR (resultCode=5). We iteratively
+        // reduce JPEG quality until the bytes fit within MAX_MMS_BYTES, stopping
+        // at 40% quality to preserve some fidelity. Non-image MIME types skip this.
+        val finalMediaBytes = if (mimeType.startsWith("image/") && mediaBytes.size > MAX_MMS_BYTES) {
+            val compressed = compressImage(mediaBytes, mimeType, messageId)
+            if (compressed == null) {
+                syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit for messageId=$messageId")
+                return@withContext false
+            }
+            compressed
+        } else {
+            mediaBytes
+        }
+
         // ── 2. Build the MMS PDU ──────────────────────────────────────────────
         val pdu = try {
             MmsPduBuilder.buildPdu(
                 toAddress  = toAddress,
-                mediaBytes = mediaBytes,
+                mediaBytes = finalMediaBytes,
                 mimeType   = mimeType,
                 textBody   = textBody
             )
@@ -144,6 +162,42 @@ class MmsManagerWrapper @Inject constructor(
 
     companion object {
         private const val TAG = "MmsManagerWrapper"
+        // Carrier-safe MMS size limit: 1 200 KB leaves headroom for PDU overhead and
+        // multi-part boundaries while staying under the common 1.2–1.5 MB carrier cap.
+        private const val MAX_MMS_BYTES = 1_200_000
+    }
+
+    // ── Image compression helper ──────────────────────────────────────────────
+    // Iteratively re-encodes as JPEG at decreasing quality until the byte count fits
+    // within [MAX_MMS_BYTES], stopping at 40% quality. Returns null if the image
+    // can't be decoded at all (corrupt / unsupported format).
+    private fun compressImage(originalBytes: ByteArray, mimeType: String, messageId: Long): ByteArray? {
+        val bitmap = BitmapFactory.decodeByteArray(originalBytes, 0, originalBytes.size)
+            ?: return null
+
+        // For non-JPEG images (PNG, WEBP…) we re-encode as JPEG so the quality slider works.
+        val compressFormat = Bitmap.CompressFormat.JPEG
+
+        var quality = 85
+        var attempt = 0
+        while (quality >= 40) {
+            val out = ByteArrayOutputStream()
+            bitmap.compress(compressFormat, quality, out)
+            val bytes = out.toByteArray()
+            attempt++
+            syncLogger.log(TAG, "compressImage attempt $attempt: quality=$quality% → ${bytes.size} bytes (messageId=$messageId)")
+            if (bytes.size <= MAX_MMS_BYTES) {
+                syncLogger.log(TAG, "compressImage success: ${originalBytes.size} → ${bytes.size} bytes at quality=$quality% (messageId=$messageId)")
+                return bytes
+            }
+            quality -= 15
+        }
+        // Even at minimum quality the image is still too large — return best attempt.
+        val out = ByteArrayOutputStream()
+        bitmap.compress(compressFormat, 40, out)
+        val bytes = out.toByteArray()
+        syncLogger.log(TAG, "compressImage: final attempt at quality=40% → ${bytes.size} bytes (messageId=$messageId)")
+        return if (bytes.size <= MAX_MMS_BYTES * 2) bytes else null  // give up if still wildly over
     }
 }
 

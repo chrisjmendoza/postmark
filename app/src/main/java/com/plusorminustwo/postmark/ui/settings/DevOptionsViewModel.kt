@@ -240,13 +240,17 @@ class DevOptionsViewModel @Inject constructor(
         viewModelScope.launch {
             _isReprocessing.value = true
             try {
-                val allMessages = messageRepository.getAll()
-                val byThread = allMessages.groupBy { it.threadId }
+                // ── Process one thread at a time to avoid loading ~160K messages into RAM ──
+                // getAll() would OOM on large databases; getAllThreadIds() + getByThread()
+                // keeps peak heap to a single thread's worth of messages.
+                val allThreadIds = messageRepository.getAllThreadIds()
                 var inserted = 0
                 var removed = 0
                 val toDelete = mutableListOf<Long>()
 
-                byThread.forEach { (_, msgs) ->
+                allThreadIds.forEach { threadId ->
+                    val msgs = messageRepository.getByThread(threadId)
+
                     // Pre-partition so reaction fallbacks are never candidates for matching.
                     val reactionMsgs = msgs.filter { reactionParser.isReactionFallback(it.body) }
                     val normalMsgs = msgs.filter { !reactionParser.isReactionFallback(it.body) }
