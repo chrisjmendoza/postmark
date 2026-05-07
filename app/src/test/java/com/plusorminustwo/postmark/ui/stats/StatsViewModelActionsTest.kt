@@ -524,6 +524,8 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long) = Unit
     override suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int? = null
+    override suspend fun getOptimisticSentAttachmentUri(threadId: Long): String? = null
+    override suspend fun updateAttachmentUri(messageId: Long, uri: String) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun getMaxId(): Long? = null
     override suspend fun getMaxMmsId(): Long? = null

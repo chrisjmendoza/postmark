@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.net.Uri
 import android.os.Build
 import android.provider.Telephony
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -386,9 +388,6 @@ class ThreadViewModel @Inject constructor(
         val thread = uiState.value.thread ?: return
         _replyText.value = ""
         clearAttachment()
-        /* Signal the UI to scroll to bottom before inserting the optimistic message
-         * so it's visible the moment it lands in the list, not after the next scroll. */
-        _scrollToBottomEvent.tryEmit(Unit)
 
         viewModelScope.launch {
             _isSending.value = true
@@ -412,16 +411,30 @@ class ThreadViewModel @Inject constructor(
                     mimeType       = mimeType
                 )
                 messageRepository.insert(optimistic)
+                /* Signal scroll AFTER the insert so the message is already in the list
+                 * when the UI receives the event — avoids a frame where the scroll lands
+                 * on the old last message instead of the new one. */
+                _scrollToBottomEvent.tryEmit(Unit)
                 /* PendingIntent for MmsSentReceiver — updates Room when the MMSC
                  * responds. EXTRA_SENT_AT_MS lets the receiver find the real content-
                  * provider row even if sync replaced the temp row before MMSC replied. */
                 val reqCode   = (tempId and 0x3FFF_FFFFL).toInt()
+                /* Snapshot the max MMS _id before sending so MmsSentReceiver can find
+                 * the real content://mms row without relying on the date field format
+                 * (seconds vs milliseconds varies by device/OEM). */
+                val beforeSendMaxId = try {
+                    context.contentResolver.query(
+                        android.net.Uri.parse("content://mms"),
+                        arrayOf("_id"), null, null, "_id DESC LIMIT 1"
+                    )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
+                } catch (_: Exception) { 0L }
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
                         action = MmsSentReceiver.ACTION_MMS_SENT
                         putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, tempId)
                         putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, now)
+                        putExtra(MmsSentReceiver.EXTRA_BEFORE_SEND_MAX_ID, beforeSendMaxId)
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )
@@ -437,6 +450,20 @@ class ThreadViewModel @Inject constructor(
                  * immediately so the message doesn't stay stuck as PENDING forever. */
                 if (!dispatched) {
                     messageRepository.updateDeliveryStatus(tempId, DELIVERY_STATUS_FAILED)
+                } else {
+                    /* Pin the optimistic row's attachmentUri to the stable filesDir cache
+                     * file written by MmsManagerWrapper. Samsung's content://mms/part/ data
+                     * for sent messages is often empty — using our own cached bytes ensures
+                     * the image stays visible after SmsSyncHandler swaps the real row in. */
+                    try {
+                        val cacheFile = File(context.filesDir, "mms_attach_$tempId.bin")
+                        if (cacheFile.exists()) {
+                            val stableUri = FileProvider.getUriForFile(
+                                context, "${context.packageName}.fileprovider", cacheFile
+                            ).toString()
+                            messageRepository.updateAttachmentUri(tempId, stableUri)
+                        }
+                    } catch (_: Exception) { /* keep original picker URI on error */ }
                 }
             } else {
                 // ── SMS path (existing behaviour) ─────────────────────────────
@@ -451,6 +478,8 @@ class ThreadViewModel @Inject constructor(
                     deliveryStatus = DELIVERY_STATUS_PENDING
                 )
                 messageRepository.insert(optimistic)
+                /* Signal scroll AFTER the insert — same rationale as the MMS path above. */
+                _scrollToBottomEvent.tryEmit(Unit)
                 smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
             }
             _isSending.value = false
@@ -474,12 +503,19 @@ class ThreadViewModel @Inject constructor(
                  * has already been consumed) then re-invoke MmsManagerWrapper with the
                  * same attachment URI. */
                 val reqCode = (messageId and 0x3FFF_FFFFL).toInt()
+                val beforeSendMaxId = try {
+                    context.contentResolver.query(
+                        android.net.Uri.parse("content://mms"),
+                        arrayOf("_id"), null, null, "_id DESC LIMIT 1"
+                    )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
+                } catch (_: Exception) { 0L }
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
                         action = MmsSentReceiver.ACTION_MMS_SENT
                         putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, messageId)
                         putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, System.currentTimeMillis())
+                        putExtra(MmsSentReceiver.EXTRA_BEFORE_SEND_MAX_ID, beforeSendMaxId)
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )

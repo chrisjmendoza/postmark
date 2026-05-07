@@ -102,6 +102,8 @@ class FailedSendRetryTest {
         override suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity? = null
         override suspend fun deleteOptimisticMessages(threadId: Long) = Unit
         override suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int? = null
+        override suspend fun getOptimisticSentAttachmentUri(threadId: Long): String? = null
+        override suspend fun updateAttachmentUri(messageId: Long, uri: String) = Unit
         override suspend fun deleteAll() = Unit
         override suspend fun getAllThreadIds(): List<Long> = emptyList()
         override suspend fun getAll(): List<MessageEntity> = emptyList()

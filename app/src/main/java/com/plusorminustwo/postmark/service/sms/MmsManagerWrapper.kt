@@ -9,7 +9,11 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -62,30 +66,54 @@ class MmsManagerWrapper @Inject constructor(
     ): Boolean = withContext(Dispatchers.IO) {
         syncLogger.log(TAG, "sendMms start: to=$toAddress mimeType=$mimeType messageId=$messageId")
 
-        // ── 1. Read attachment bytes ──────────────────────────────────────────
-        val mediaBytes = try {
-            context.contentResolver.openInputStream(attachmentUri)?.use { it.readBytes() }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to read attachment uri=$attachmentUri", e)
-            syncLogger.logError(TAG, "sendMms FAILED — could not read attachment uri=$attachmentUri messageId=$messageId", e)
-            return@withContext false
+        // ── 1. Read attachment bytes (with filesDir cache for retry resilience) ─
+        /* Photo-picker URIs (content://media/picker_get_content/…) are only valid
+         * within the originating Activity's lifecycle; a process restart revokes
+         * the grant. We persist the raw bytes to filesDir after the first successful
+         * read so that retries after process death still work.
+         * MmsSentReceiver deletes the file when the MMSC confirms delivery (SENT). */
+        val attachmentCacheFile = File(context.filesDir, "mms_attach_$messageId.bin")
+        val mediaBytes: ByteArray = if (attachmentCacheFile.exists()) {
+            val cachedBytes = attachmentCacheFile.readBytes()
+            syncLogger.log(TAG, "sendMms: read ${cachedBytes.size} bytes from attachment cache for messageId=$messageId")
+            cachedBytes
+        } else {
+            val bytes = try {
+                context.contentResolver.openInputStream(attachmentUri)?.use { it.readBytes() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to read attachment uri=$attachmentUri", e)
+                syncLogger.logError(TAG, "sendMms FAILED — could not read attachment uri=$attachmentUri messageId=$messageId", e)
+                return@withContext false
+            }
+            if (bytes == null) {
+                Log.e(TAG, "sendMms: null media bytes — aborting")
+                syncLogger.logError(TAG, "sendMms FAILED — null media bytes for messageId=$messageId")
+                return@withContext false
+            }
+            syncLogger.log(TAG, "sendMms: read ${bytes.size} bytes for messageId=$messageId")
+            // Persist to filesDir so the next retry can read bytes even after a process restart.
+            try { attachmentCacheFile.writeBytes(bytes) } catch (_: IOException) { }
+            bytes
         }
-        if (mediaBytes == null) {
-            Log.e(TAG, "sendMms: null media bytes — aborting")
-            syncLogger.logError(TAG, "sendMms FAILED — null media bytes for messageId=$messageId")
-            return@withContext false
-        }
-        syncLogger.log(TAG, "sendMms: read ${mediaBytes.size} bytes for messageId=$messageId")
 
-        // ── 1b. Compress images that exceed the carrier size limit ────────────
-        /* Most carriers cap MMS at 300 KB–1.5 MB; a 6+ MB JPEG will be rejected
-         * by the MMSC with MMS_ERROR_IO_ERROR (resultCode=5). We iteratively
-         * reduce JPEG quality until the bytes fit within MAX_MMS_BYTES, stopping
-         * at 40% quality to preserve some fidelity. Non-image types skip this. */
-        val finalMediaBytes = if (mimeType.startsWith("image/") && mediaBytes.size > MAX_MMS_BYTES) {
-            val compressed = compressImage(mediaBytes, mimeType, messageId)
+        // ── 1b. Determine carrier size limit and compress if needed ─────────
+        /* Read the carrier's actual MMS message size cap from CarrierConfig so we
+         * compress to a limit that's right for this SIM / carrier. If the config
+         * is unavailable we fall back to DEFAULT_MAX_MMS_BYTES (860 KB), which is
+         * Signal's proven-safe ceiling and fits within AT&T, Verizon, and T-Mobile
+         * hard limits. Historically we used 1,200,000 bytes which silently exceeded
+         * the AT&T/Verizon 1 MB cap and caused MMS_ERROR_IO_ERROR (resultCode=5). */
+        val carrierMaxBytes: Int = try {
+            val cfg = smsManager.getCarrierConfigValues()
+            cfg.getInt(SmsManager.MMS_CONFIG_MAX_MESSAGE_SIZE, DEFAULT_MAX_MMS_BYTES)
+                .coerceIn(300_000, 2_000_000)  // sanity-clamp: 300 KB – 2 MB
+        } catch (_: Exception) { DEFAULT_MAX_MMS_BYTES }
+        syncLogger.log(TAG, "sendMms: carrierMaxBytes=$carrierMaxBytes messageId=$messageId")
+
+        val finalMediaBytes = if (mimeType.startsWith("image/") && mediaBytes.size > carrierMaxBytes) {
+            val compressed = compressImage(mediaBytes, mimeType, messageId, carrierMaxBytes)
             if (compressed == null) {
-                syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit for messageId=$messageId")
+                syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit (carrierMaxBytes=$carrierMaxBytes) for messageId=$messageId")
                 return@withContext false
             }
             compressed
@@ -157,38 +185,48 @@ class MmsManagerWrapper @Inject constructor(
             return@withContext false
         }
 
-        /* ── 6. Schedule PDU file cleanup ──────────────────────────────────────────
-         * The OS may garbage-collect cache files on its own, but we also delete
-         * explicitly after a 60 s delay — ample time for any carrier MMSC timeout —
-         * so the telephony service is guaranteed to have read the file first. */
-        try {
-            kotlinx.coroutines.delay(60_000)
-            pduFile.delete()
-        } catch (_: Exception) {}
+        /* ── 6. Schedule PDU file cleanup (fire-and-forget) ──────────────────────
+         * Delete the temp PDU file after a 60 s delay — ample time for any carrier
+         * MMSC timeout — so the telephony service is guaranteed to have read the
+         * file first. Launched in a detached scope so sendMms() returns immediately
+         * rather than blocking the caller's coroutine for a full minute. */
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                delay(60_000)
+                pduFile.delete()
+            } catch (_: Exception) {}
+        }
 
         return@withContext true
     }
 
     companion object {
         private const val TAG = "MmsManagerWrapper"
-        /* 1 200 KB is a conservative carrier-safe ceiling. Most MMSCs cap at 1–1.5 MB;
-         * staying under 1.2 MB leaves headroom for PDU framing and multipart headers. */
-        private const val MAX_MMS_BYTES = 1_200_000
+        /* 860 KB (860,160 bytes) is Signal's proven-safe default ceiling.
+         * AT&T and Verizon hard-cap at 1,048,576 bytes (1 MB). Our previous
+         * value of 1,200,000 bytes silently exceeded this, causing images just
+         * over 1 MB to fail with MMS_ERROR_IO_ERROR (resultCode=5) because the
+         * MMSC closed the HTTP connection mid-transfer.
+         * When carrier config is available, carrierMaxBytes takes precedence. */
+        private const val DEFAULT_MAX_MMS_BYTES = 860_160
     }
 
     // ── Image compression helper ──────────────────────────────────────────────
-    /* Pass 1: iteratively re-encodes as JPEG at decreasing quality (85→70→55→40%).
-     * Pass 2: if still over MAX_MMS_BYTES, halves image dimensions up to 3×
-     *         and retries at quality=70% per step.
-     * Returns null only if the image is corrupt or in an unsupported format. */
-    private fun compressImage(originalBytes: ByteArray, mimeType: String, messageId: Long): ByteArray? {
+    /* Two-phase compression to guarantee the image fits within [MAX_MMS_BYTES]:
+     *   Phase 1 — reduce JPEG quality in steps (85 → 70 → 55 → 40 %).
+     *   Phase 2 — if quality reduction isn't enough, shrink pixel dimensions
+     *             progressively (2000 → 1600 → 1280 → 960 → 800 px max side)
+     *             and re-encode at quality=70.
+     * Returns null only if the image cannot be decoded or is still too large
+     * at the smallest scale step (genuinely unusable). */
+    private fun compressImage(originalBytes: ByteArray, mimeType: String, messageId: Long, maxBytes: Int = DEFAULT_MAX_MMS_BYTES): ByteArray? {
         val bitmap = BitmapFactory.decodeByteArray(originalBytes, 0, originalBytes.size)
             ?: return null
 
         // For non-JPEG images (PNG, WEBP…) we re-encode as JPEG so the quality slider works.
         val compressFormat = Bitmap.CompressFormat.JPEG
 
-        // Pass 1: quality reduction at full resolution
+        /* ── Phase 1: reduce JPEG quality ───────────────────────────────────── */
         var quality = 85
         var attempt = 0
         while (quality >= 40) {
@@ -196,39 +234,45 @@ class MmsManagerWrapper @Inject constructor(
             bitmap.compress(compressFormat, quality, out)
             val bytes = out.toByteArray()
             attempt++
-            syncLogger.log(TAG, "compressImage attempt $attempt: quality=$quality% → ${bytes.size} bytes (messageId=$messageId)")
-            if (bytes.size <= MAX_MMS_BYTES) {
+            syncLogger.log(TAG, "compressImage attempt $attempt: quality=$quality% → ${bytes.size} bytes (limit=$maxBytes messageId=$messageId)")
+            if (bytes.size <= maxBytes) {
                 syncLogger.log(TAG, "compressImage success: ${originalBytes.size} → ${bytes.size} bytes at quality=$quality% (messageId=$messageId)")
+                bitmap.recycle()
                 return bytes
             }
             quality -= 15
         }
 
-        // Pass 2: dimension halving — for very large images that can't compress enough via
-        // quality alone (e.g. 6+ MB 12MP JPEGs). Halve width×height up to 3 times.
-        var scaledBitmap = bitmap
-        repeat(3) { scaleStep ->
-            val newW = scaledBitmap.width / 2
-            val newH = scaledBitmap.height / 2
-            if (newW < 200 || newH < 200) return@repeat  // don't go below 200px
-            scaledBitmap = Bitmap.createScaledBitmap(scaledBitmap, newW, newH, true)
+        /* ── Phase 2: scale down pixel dimensions ────────────────────────────── */
+        val scaleSteps = listOf(2000, 1600, 1280, 960, 800)
+        for ((stepIdx, maxDim) in scaleSteps.withIndex()) {
+            val scaled = scaleBitmapToFit(bitmap, maxDim)
             val out = ByteArrayOutputStream()
-            scaledBitmap.compress(compressFormat, 70, out)
+            scaled.compress(compressFormat, 70, out)
             val bytes = out.toByteArray()
-            attempt++
-            syncLogger.log(TAG, "compressImage scale-down step ${scaleStep + 1}: ${newW}×${newH} quality=70% → ${bytes.size} bytes (messageId=$messageId)")
-            if (bytes.size <= MAX_MMS_BYTES) {
+            syncLogger.log(TAG, "compressImage scale-down step ${stepIdx + 1}: ${scaled.width}×${scaled.height} quality=70% → ${bytes.size} bytes (messageId=$messageId)")
+            if (bytes.size <= maxBytes) {
                 syncLogger.log(TAG, "compressImage success via scale-down: ${originalBytes.size} → ${bytes.size} bytes (messageId=$messageId)")
+                if (scaled !== bitmap) scaled.recycle()
+                bitmap.recycle()
                 return bytes
             }
+            if (scaled !== bitmap) scaled.recycle()
         }
 
-        // Last resort: best result from final scaled bitmap at minimum quality.
-        val out = ByteArrayOutputStream()
-        scaledBitmap.compress(compressFormat, 40, out)
-        val bytes = out.toByteArray()
-        syncLogger.log(TAG, "compressImage: exhausted all strategies → ${bytes.size} bytes (messageId=$messageId)")
-        return if (bytes.size <= MAX_MMS_BYTES * 2) bytes else null
+        // Image is still too large at the smallest scale — cannot send.
+        bitmap.recycle()
+        return null
+    }
+
+    /** Scales [bitmap] down so its longest edge fits within [maxDim] px. Returns the
+     *  original bitmap unchanged if it already fits. */
+    private fun scaleBitmapToFit(bitmap: Bitmap, maxDim: Int): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= maxDim && h <= maxDim) return bitmap
+        val scale = maxDim.toFloat() / maxOf(w, h)
+        return Bitmap.createScaledBitmap(bitmap, (w * scale).toInt(), (h * scale).toInt(), true)
     }
 }
 

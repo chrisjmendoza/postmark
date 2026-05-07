@@ -81,9 +81,16 @@ class MessageRepository @Inject constructor(
         messageDao.deleteOptimisticMessages(threadId)
 
     // Returns the delivery status of the most recent temp sent row for a thread.
-    // Used by syncLatestMms() to carry a FAILED status over to the real row.
+    // Used by syncLatestMms() to carry a FAILED/SENT status over to the real row.
     suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int? =
         messageDao.getOptimisticSentDeliveryStatus(threadId)
+
+    /** Returns the attachmentUri of the most recent temp sent row for a thread. */
+    suspend fun getOptimisticSentAttachmentUri(threadId: Long): String? =
+        messageDao.getOptimisticSentAttachmentUri(threadId)
+
+    suspend fun updateAttachmentUri(messageId: Long, uri: String) =
+        messageDao.updateAttachmentUri(messageId, uri)
 
     /** Deletes a single message by id (used to remove reaction fallback messages after parsing). */
     suspend fun deleteById(messageId: Long) = messageDao.deleteById(messageId)

@@ -70,6 +70,9 @@ interface MessageDao {
     @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :messageId")
     suspend fun updateDeliveryStatus(messageId: Long, status: Int)
 
+    @Query("UPDATE messages SET attachmentUri = :uri WHERE id = :messageId")
+    suspend fun updateAttachmentUri(messageId: Long, uri: String)
+
     @Query("DELETE FROM messages WHERE threadId = :threadId AND id < 0")
     suspend fun deleteOptimisticMessages(threadId: Long)
 
@@ -78,6 +81,12 @@ interface MessageDao {
      *  status to the real row before the temp row is deleted. */
     @Query("SELECT deliveryStatus FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int?
+
+    /** Returns the attachmentUri of the most recent optimistic sent message in a thread.
+     *  Used by [SmsSyncHandler.syncLatestMms] to transfer the locally-cached image URI
+     *  to the real row, since Samsung's content://mms/part/ data may be empty for sent rows. */
+    @Query("SELECT attachmentUri FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
+    suspend fun getOptimisticSentAttachmentUri(threadId: Long): String?
 
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteById(messageId: Long)
