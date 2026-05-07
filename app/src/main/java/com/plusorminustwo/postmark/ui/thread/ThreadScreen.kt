@@ -3,6 +3,11 @@ package com.plusorminustwo.postmark.ui.thread
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.graphics.Bitmap
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
@@ -60,6 +65,8 @@ import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -82,6 +89,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as lazyGridItems
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -1099,14 +1108,67 @@ private fun MmsAttachment(uri: String, mimeType: String?) {
         // ── Audio ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("audio/") == true -> {
             val ctx = LocalContext.current
-            var isPlaying by remember { mutableStateOf(false) }
-            val playerRef = remember { mutableStateOf<MediaPlayer?>(null) }
+            /* Explicit state objects so the AudioFocusRequest listener lambda can
+             * read/write them safely from inside the remember {} block. */
+            val isPlayingState = remember { mutableStateOf(false) }
+            var isPlaying by isPlayingState
+            var isScrubbing by remember { mutableStateOf(false) }
+            /* Normalised playback position 0f..1f, and total duration in ms.
+             * durationMs stays 0 until the player is prepared for the first time. */
+            var position   by remember { mutableStateOf(0f) }
+            var durationMs by remember { mutableStateOf(0) }
+            val playerRef  = remember { mutableStateOf<MediaPlayer?>(null) }
+
+            val audioManager = remember { ctx.getSystemService(AudioManager::class.java) }
+            /* Request audio focus when playback starts. Only react to full AUDIOFOCUS_LOSS
+             * (e.g. incoming phone call). AUDIOFOCUS_LOSS_TRANSIENT and _CAN_DUCK are
+             * intentionally ignored so notification sounds (new SMS, alarm) do not
+             * interrupt a voice memo the user is actively listening to. */
+            val focusRequest = remember {
+                AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setOnAudioFocusChangeListener { focusChange ->
+                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+                            if (isPlayingState.value) {
+                                playerRef.value?.pause()
+                                isPlayingState.value = false
+                            }
+                        }
+                        // AUDIOFOCUS_LOSS_TRANSIENT / _CAN_DUCK not handled on purpose.
+                    }
+                    .build()
+            }
+
+            /* Poll currentPosition every 200 ms while playing so the slider tracks
+             * progress. The poll is skipped while the user is dragging (isScrubbing)
+             * so the thumb doesn't jump back under their finger. */
+            LaunchedEffect(isPlaying) {
+                while (isPlaying) {
+                    val mp = playerRef.value
+                    if (mp != null && !isScrubbing && durationMs > 0) {
+                        position = mp.currentPosition.toFloat() / durationMs
+                    }
+                    delay(200)
+                }
+            }
 
             DisposableEffect(uri) {
                 onDispose {
                     playerRef.value?.release()
                     playerRef.value = null
+                    audioManager.abandonAudioFocusRequest(focusRequest)
                 }
+            }
+
+            /* Format milliseconds as "m:ss". */
+            fun fmtMs(ms: Int): String {
+                val s = ms / 1000
+                return "%d:%02d".format(s / 60, s % 60)
             }
 
             Surface(
@@ -1115,29 +1177,53 @@ private fun MmsAttachment(uri: String, mimeType: String?) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    /* Play / Pause button.
+                     * First press: creates and prepares a new MediaPlayer then starts it.
+                     * Subsequent presses toggle pause/resume on the same instance.
+                     * On completion the player is released and position resets to 0. */
                     IconButton(
                         onClick = {
                             if (isPlaying) {
                                 playerRef.value?.pause()
                                 isPlaying = false
+                                audioManager.abandonAudioFocusRequest(focusRequest)
                             } else {
-                                playerRef.value?.release()
-                                val mp = MediaPlayer()
-                                playerRef.value = mp
-                                try {
-                                    mp.setDataSource(ctx, Uri.parse(uri))
-                                    mp.prepare()
-                                    mp.setOnCompletionListener { isPlaying = false }
-                                    mp.start()
+                                val existing = playerRef.value
+                                if (existing != null) {
+                                    // Resume from paused position.
+                                    audioManager.requestAudioFocus(focusRequest)
+                                    existing.start()
                                     isPlaying = true
-                                } catch (e: Exception) {
-                                    android.util.Log.e("AudioPlayer", "Playback failed for $uri", e)
-                                    mp.release()
-                                    playerRef.value = null
+                                } else {
+                                    val mp = MediaPlayer()
+                                    playerRef.value = mp
+                                    try {
+                                        mp.setDataSource(ctx, Uri.parse(uri))
+                                        mp.prepare()
+                                        durationMs = mp.duration
+                                        // Honour any position the user scrubbed to before pressing play.
+                                        if (position > 0f && durationMs > 0) {
+                                            mp.seekTo((position * durationMs).toInt())
+                                        }
+                                        mp.setOnCompletionListener {
+                                            isPlayingState.value = false
+                                            position  = 0f
+                                            playerRef.value?.release()
+                                            playerRef.value = null
+                                            audioManager.abandonAudioFocusRequest(focusRequest)
+                                        }
+                                        audioManager.requestAudioFocus(focusRequest)
+                                        mp.start()
+                                        isPlaying = true
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("AudioPlayer", "Playback failed for $uri", e)
+                                        mp.release()
+                                        playerRef.value = null
+                                    }
                                 }
                             }
                         },
@@ -1149,13 +1235,49 @@ private fun MmsAttachment(uri: String, mimeType: String?) {
                             modifier = Modifier.size(24.dp)
                         )
                     }
-                    Column {
-                        Text("Voice memo", style = MaterialTheme.typography.bodySmall)
-                        if (isPlaying) {
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        /* Progress slider — draggable even while paused.
+                         * onValueChange sets isScrubbing=true so the poll loop won't
+                         * overwrite the thumb position during the drag gesture.
+                         * onValueChangeFinished commits the seek to the player. */
+                        Slider(
+                            value    = position,
+                            onValueChange = { newVal ->
+                                isScrubbing = true
+                                position    = newVal
+                            },
+                            onValueChangeFinished = {
+                                val mp = playerRef.value
+                                if (mp != null && durationMs > 0) {
+                                    mp.seekTo((position * durationMs).toInt())
+                                }
+                                isScrubbing = false
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(20.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor        = MaterialTheme.colorScheme.onSecondaryContainer,
+                                activeTrackColor  = MaterialTheme.colorScheme.onSecondaryContainer,
+                                inactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f)
+                            )
+                        )
+                        // Elapsed time (left) and total duration (right).
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
                             Text(
-                                "Playing…",
+                                text  = if (durationMs > 0) fmtMs((position * durationMs).toInt()) else "0:00",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                            )
+                            Text(
+                                // Show total duration once known; "Voice memo" until first play.
+                                text  = if (durationMs > 0) fmtMs(durationMs) else "Voice memo",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
                             )
                         }
                     }
@@ -1399,10 +1521,10 @@ private fun ReplyBar(
         }
     }
 
-    // Friendly label for the attachment preview chip.
+    // Friendly label for the attachment preview chip (used for audio/other only).
     val attachLabel: String? = when {
-        pendingMimeType?.startsWith("image/") == true  -> "📷 Photo"
-        pendingMimeType?.startsWith("video/") == true  -> "🎥 Video"
+        pendingMimeType?.startsWith("image/") == true  -> null  // replaced by thumbnail
+        pendingMimeType?.startsWith("video/") == true  -> null  // replaced by thumbnail
         pendingMimeType?.startsWith("audio/") == true  -> "🎵 Audio"
         pendingAttachmentUri != null                    -> "📎 Attachment"
         else                                            -> null
@@ -1422,8 +1544,128 @@ private fun ReplyBar(
                     .navigationBarsPadding()
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                // Attachment preview chip — shown while media is queued for sending.
-                if (attachLabel != null) {
+                // Attachment preview — thumbnail for images/video, chip for audio/other.
+                if (pendingAttachmentUri != null && pendingMimeType?.startsWith("image/") == true) {
+                    /* Show a real thumbnail so the user can confirm which photo is attached
+                     * before hitting send. The × badge sits at the top-right corner. */
+                    Box(
+                        modifier = Modifier
+                            .padding(bottom = 6.dp)
+                            .size(80.dp)
+                    ) {
+                        SubcomposeAsyncImage(
+                            model               = Uri.parse(pendingAttachmentUri),
+                            contentDescription  = "Attachment preview",
+                            contentScale        = ContentScale.Crop,
+                            modifier            = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(10.dp))
+                        )
+                        // Close button overlaid at the top-right corner.
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(x = 4.dp, y = (-4).dp)
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .clickable(onClick = onClearAttachment),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Remove attachment",
+                                modifier = Modifier.size(12.dp),
+                                tint     = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                } else if (pendingAttachmentUri != null && pendingMimeType?.startsWith("video/") == true) {
+                    /* Extract the first frame via MediaMetadataRetriever so the user can
+                     * see which video is attached. Runs on IO thread; shows a play-icon
+                     * placeholder while loading (or if extraction fails). */
+                    val videoThumb by produceState<Bitmap?>(null, pendingAttachmentUri) {
+                        value = withContext(Dispatchers.IO) {
+                            val retriever = MediaMetadataRetriever()
+                            var frame: Bitmap? = null
+                            try {
+                                retriever.setDataSource(context, Uri.parse(pendingAttachmentUri))
+                                frame = retriever.getFrameAtTime(0)
+                            } catch (e: Exception) {
+                                android.util.Log.w("VideoThumb", "Frame extraction failed", e)
+                            } finally {
+                                retriever.release()
+                            }
+                            frame
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .padding(bottom = 6.dp)
+                            .size(80.dp)
+                    ) {
+                        if (videoThumb != null) {
+                            Image(
+                                bitmap             = videoThumb!!.asImageBitmap(),
+                                contentDescription = "Video preview",
+                                contentScale       = ContentScale.Crop,
+                                modifier           = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(10.dp))
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector        = Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    modifier           = Modifier.size(32.dp),
+                                    tint               = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        // Semi-transparent play badge overlaid at centre to signal it's a video.
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.5f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector        = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier           = Modifier.size(16.dp),
+                                tint               = Color.White
+                            )
+                        }
+                        // Close button at top-right.
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(x = 4.dp, y = (-4).dp)
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .clickable(onClick = onClearAttachment),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Remove attachment",
+                                modifier           = Modifier.size(12.dp),
+                                tint               = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                } else if (attachLabel != null) {
+                    // Non-image, non-video attachment (audio, generic file) — keep chip.
                     InputChip(
                         selected     = false,
                         onClick      = {},
