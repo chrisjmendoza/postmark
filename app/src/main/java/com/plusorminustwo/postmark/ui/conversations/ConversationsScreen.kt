@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
@@ -54,6 +55,7 @@ fun ConversationsScreen(
     onSearchClick: () -> Unit,
     onStatsClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onNewConversationClick: () -> Unit,
     viewModel: ConversationsViewModel = hiltViewModel()
 ) {
     val threads by viewModel.threads.collectAsState()
@@ -101,6 +103,12 @@ fun ConversationsScreen(
                     }
                 }
             )
+        },
+        // FAB: compose a new message to any contact or number.
+        floatingActionButton = {
+            FloatingActionButton(onClick = onNewConversationClick) {
+                Icon(Icons.Default.Edit, contentDescription = "New message")
+            }
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {

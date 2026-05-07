@@ -19,11 +19,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.plusorminustwo.postmark.ui.conversations.ConversationsScreen
+import com.plusorminustwo.postmark.ui.conversations.NewConversationScreen
 import com.plusorminustwo.postmark.ui.onboarding.OnboardingScreen
 import com.plusorminustwo.postmark.ui.search.SearchScreen
 import com.plusorminustwo.postmark.ui.settings.BackupSettingsScreen
 import com.plusorminustwo.postmark.ui.settings.DevOptionsScreen
 import com.plusorminustwo.postmark.ui.settings.SettingsScreen
+import com.plusorminustwo.postmark.ui.settings.SyncLogScreen
 import com.plusorminustwo.postmark.ui.stats.StatsScreen
 import com.plusorminustwo.postmark.ui.thread.ThreadScreen
 
@@ -64,6 +66,10 @@ sealed class Screen(val route: String) {
     data object BackupSettings : Screen("settings/backup")
     /** Developer options screen (hidden). */
     data object DevOptions : Screen("settings/dev")
+    /** Full-screen sync log viewer. */
+    data object SyncLog : Screen("settings/dev/synclog")
+    /** Compose a new message — recipient picker / phone number entry. */
+    data object NewConversation : Screen("new_conversation")
 }
 
 private val SLIDE_IN  = tween<IntOffset>(280)
@@ -103,9 +109,10 @@ fun AppNavigation(showOnboarding: Boolean) {
                 onThreadClick = { threadId ->
                     navController.navigate(Screen.Thread.route(threadId))
                 },
-                onSearchClick = { navController.navigate(Screen.Search.navRoute()) },
-                onStatsClick = { navController.navigate(Screen.Stats.navRoute()) },
-                onSettingsClick = { navController.navigate(Screen.Settings.route) }
+                onSearchClick  = { navController.navigate(Screen.Search.navRoute()) },
+                onStatsClick   = { navController.navigate(Screen.Stats.navRoute()) },
+                onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onNewConversationClick = { navController.navigate(Screen.NewConversation.route) }
             )
         }
 
@@ -177,6 +184,26 @@ fun AppNavigation(showOnboarding: Boolean) {
 
         composable(Screen.DevOptions.route) {
             DevOptionsScreen(
+                onViewSyncLog = { navController.navigate(Screen.SyncLog.route) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.SyncLog.route) {
+            SyncLogScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.NewConversation.route) {
+            NewConversationScreen(
+                onNavigateToThread = { threadId ->
+                    // Pop the new-conversation screen so back from the thread
+                    // returns to the conversations list, not the picker.
+                    navController.navigate(Screen.Thread.route(threadId)) {
+                        popUpTo(Screen.NewConversation.route) { inclusive = true }
+                    }
+                },
                 onBack = { navController.popBackStack() }
             )
         }

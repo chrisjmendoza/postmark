@@ -8,9 +8,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,13 +24,14 @@ import java.io.File
 @Composable
 fun DevOptionsScreen(
     onBack: () -> Unit,
+    onViewSyncLog: () -> Unit,
     viewModel: DevOptionsViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
     val feedback by viewModel.feedback.collectAsState()
     val isRecomputing by viewModel.isRecomputing.collectAsState()
     val isReprocessing by viewModel.isReprocessing.collectAsState()
     val logContent by viewModel.logContent.collectAsState()
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(feedback) {
@@ -140,111 +139,74 @@ fun DevOptionsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-            // ── Sync log ──────────────────────────────────────────────────────
-            // Displays the persistent append-only log written by SyncLogger.
-            // Useful for diagnosing SMS loss, worker cancellations, and other
-            // events that happened in the background and are otherwise invisible.
             DevSectionHeader("Sync log")
+            DevButton(
+                "Open sync log",
+                "Full-screen view of the in-app sync event log"
+            ) { onViewSyncLog() }
+
+            // ── Inline log controls ──────────────────────────────────────────
+            // Lets you quickly load, copy, share, or clear the log without leaving
+            // the dev-options screen.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(
-                    onClick = viewModel::refreshLog,
-                    modifier = Modifier.weight(1f)
-                ) {
+                OutlinedButton(onClick = viewModel::refreshLog, modifier = Modifier.weight(1f)) {
                     Text("Load")
                 }
-                // Share fires the system share sheet (Gmail, Drive, Messages, etc.).
-                // FileProvider serves the log file as a content:// URI so no storage
-                // permission is required and the receiving app can't browse app storage.
+                OutlinedButton(
+                    onClick = {
+                        val text = logContent ?: return@OutlinedButton
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        clipboard?.setPrimaryClip(ClipData.newPlainText("Postmark sync log", text))
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Copy") }
                 OutlinedButton(
                     onClick = {
                         val logFile = File(context.filesDir, "sync_log.txt")
-                        if (!logFile.exists()) {
-                            viewModel.refreshLog()
-                            return@OutlinedButton
-                        }
+                        if (!logFile.exists()) return@OutlinedButton
                         val uri = FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            logFile
+                            context, "${context.packageName}.fileprovider", logFile
                         )
-                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            putExtra(Intent.EXTRA_SUBJECT, "Postmark sync log")
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(
-                            Intent.createChooser(shareIntent, "Share sync log")
-                        )
+                        context.startActivity(Intent.createChooser(
+                            Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                putExtra(Intent.EXTRA_SUBJECT, "Postmark sync log")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            },
+                            "Share sync log"
+                        ))
                     },
                     modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        Icons.Default.Share,
-                        contentDescription = "Share log",
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text("Share")
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Copy log text to clipboard so it can be pasted anywhere instantly.
-                OutlinedButton(
-                    onClick = {
-                        val content = logContent
-                        if (content != null) {
-                            val clipboard = context.getSystemService(ClipboardManager::class.java)
-                            clipboard?.setPrimaryClip(
-                                ClipData.newPlainText("Postmark sync log", content)
-                            )
-                        } else {
-                            viewModel.refreshLog()
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        Icons.Default.ContentCopy,
-                        contentDescription = "Copy log",
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text("Copy")
-                }
+                ) { Text("Share") }
                 OutlinedButton(
                     onClick = viewModel::clearSyncLog,
                     modifier = Modifier.weight(1f)
-                ) {
-                    Text("Clear")
-                }
+                ) { Text("Clear") }
             }
-            logContent?.let { content ->
+
+            // Show log text when loaded, scrollable up to 400dp.
+            logContent?.let { log ->
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 80.dp, max = 320.dp)
+                        .heightIn(max = 400.dp),
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    tonalElevation = 2.dp
                 ) {
-                    // Inner scroll so the log is independently scrollable while the
-                    // outer Column scroll still works for the rest of the screen.
-                    val logScrollState = rememberScrollState()
+                    val scrollState = rememberScrollState()
                     Text(
-                        text = content,
+                        text = log.ifBlank { "(empty)" },
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace
                         ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
-                            .verticalScroll(logScrollState)
                             .padding(8.dp)
+                            .verticalScroll(scrollState)
                     )
                 }
             }

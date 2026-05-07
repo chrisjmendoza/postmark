@@ -34,11 +34,11 @@ class SyncLogger @Inject constructor(
     fun log(tag: String, message: String) {
         val ts   = sdf.format(Date())
         val line = "$ts [$tag] $message\n"
+        Log.d("PostmarkSync", "[$tag] $message")
         try {
             logFile.appendText(line)
             trimIfNeeded()
         } catch (e: Exception) {
-            // Never let the logger crash the app.
             Log.w("SyncLogger", "Failed to write log entry", e)
         }
     }
@@ -50,6 +50,7 @@ class SyncLogger @Inject constructor(
         val stackTrace = throwable?.stackTraceToString()?.let { "\n$it" } ?: ""
         val ts   = sdf.format(Date())
         val line = "$ts [ERROR/$tag] $message$stackTrace\n"
+        Log.e("PostmarkSync", "[ERROR/$tag] $message", throwable)
         try {
             logFile.appendText(line)
             trimIfNeeded()
