@@ -9,6 +9,7 @@ import com.plusorminustwo.postmark.BuildConfig
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -54,18 +55,19 @@ class SmsSyncHandler @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // ── Concurrency control ───────────────────────────────────────────────────
-    // CONFLATED channel: if a sync is running when a new notification arrives,
-    // at most one follow-up run is queued. Additional notifications while that
-    // queued run waits are silently dropped (they're all equivalent — "something
-    // changed, go look"). This prevents O(N) queued coroutines during burst
-    // delivery (e.g. the content observer firing 50 times during MMS import).
+    /*
+     * CONFLATED channel: if a sync is running when a new notification arrives,
+     * at most one follow-up run is queued. Additional notifications while that
+     * queued run waits are silently dropped (they're all equivalent — "something
+     * changed, go look"). This prevents O(N) queued coroutines during burst
+     * delivery (e.g. the content observer firing 50 times during MMS import).
+     */
     private val smsWorkChannel = Channel<Unit>(Channel.CONFLATED)
     private val mmsWorkChannel = Channel<Unit>(Channel.CONFLATED)
 
-    // Mutex ensures only one SMS sync and one MMS sync run at a time.
-    // triggerCatchUp() and the channel consumer both contend on the same lock,
-    // so they can never run the same sync path concurrently.
+    /* Mutex ensures only one SMS sync and one MMS sync run at a time.
+     * triggerCatchUp() and the channel consumer both contend on the same lock,
+     * so they can never run the same sync path concurrently. */
     private val smsMutex = Mutex()
     private val mmsMutex = Mutex()
 
@@ -108,13 +110,13 @@ class SmsSyncHandler @Inject constructor(
         smsMutex.withLock { syncLatestSms() }
         mmsMutex.withLock { syncLatestMms() }
     }
-    // ── Incremental SMS sync ──────────────────────────────────────────────────
-    // Fetches every SMS row whose _id is greater than the highest id already
-    // stored in Room.  This correctly handles burst delivery (multiple messages
-    // arriving in a single ContentObserver notification) and is idempotent
-    // (re-running when there are no new messages returns 0 rows instantly).
-    //
-    // Bails when DB is empty (initial sync not yet done) — the worker owns that pass.
+    /*
+     * Fetches every SMS row whose _id is greater than the highest id already
+     * stored in Room. This correctly handles burst delivery (multiple messages
+     * arriving in a single ContentObserver notification) and is idempotent
+     * (re-running when there are no new messages returns 0 rows instantly).
+     * Bails when DB is empty (initial sync not yet done) — the worker owns that pass.
+     */
     private suspend fun syncLatestSms() {
         // Nothing in DB yet → full sync not done; do not interfere with worker.
         val maxKnownId = messageRepository.getMaxId() ?: 0L
@@ -154,8 +156,8 @@ class SmsSyncHandler @Inject constructor(
             while (it.moveToNext()) {
                 val id       = it.getLong(idIdx)
                 val threadId = it.getLong(threadIdx)
-                // Null address is valid for WAP push, carrier service, and some OEM ROMs.
-                // Preserve the row with an empty fallback — never skip based on missing address.
+                /* Null address is valid for WAP push, carrier service, and some OEM ROMs.
+                 * Preserve the row with an empty fallback — never skip based on missing address. */
                 val address  = it.getString(addressIdx) ?: ""
                 val body     = it.getString(bodyIdx) ?: ""
                 val date     = it.getLong(dateIdx)
@@ -175,9 +177,9 @@ class SmsSyncHandler @Inject constructor(
                     timestamp = date,
                     isSent = isSent,
                     type = type,
-                    // Sent messages arriving via incremental sync are waiting for the
-                    // SmsSentDeliveryReceiver callback; start them as PENDING so the UI
-                    // shows the clock icon.  Received messages have no delivery tracking.
+                    /* Sent messages arriving via incremental sync are waiting for the
+                     * SmsSentDeliveryReceiver callback; start them as PENDING so the UI
+                     * shows the clock icon. Received messages have no delivery tracking. */
                     deliveryStatus = if (isSent) DELIVERY_STATUS_PENDING else DELIVERY_STATUS_NONE,
                     // Incoming messages start as unread; sent messages are always read.
                     isRead = isSent
@@ -190,9 +192,9 @@ class SmsSyncHandler @Inject constructor(
         debugLog("syncLatestSms: ${newMessages.size} new message(s)")
         syncLogger.log("IncrementalSms", "${newMessages.size} new message(s) after id=$maxKnownId")
 
-        // Separate reaction-fallback messages from real messages before persisting.
-        // Reaction fallbacks (Android: "👍 to \"text\"", Apple: "Liked 'text'") must be
-        // resolved to Reaction entities and never stored as visible message bubbles.
+        /* Separate reaction-fallback messages from real messages before persisting.
+         * Reaction fallbacks (Android: "👍 to \"text\"", Apple: "Liked 'text'") must be
+         * resolved to Reaction entities and never stored as visible message bubbles. */
         val (reactionMsgs, normalMessages) = newMessages.partition { reactionParser.isReactionFallback(it.body) }
 
         if (normalMessages.isNotEmpty()) {
@@ -213,9 +215,9 @@ class SmsSyncHandler @Inject constructor(
         // One stats recompute covers all affected threads.
         statsUpdater.recomputeAll()
 
-        // Resolve reaction fallback messages into Reaction entities (deduped).
-        // If the original message cannot be found within 100 messages, insert the
-        // fallback as a normal visible bubble rather than silently dropping it.
+        /* Resolve reaction fallback messages into Reaction entities (deduped).
+         * If the original message cannot be found within 100 messages, insert the
+         * fallback as a normal visible bubble rather than silently dropping it. */
         val unresolvedReactionMsgs = mutableListOf<Message>()
         reactionMsgs.forEach { message ->
             val parsed = reactionParser.parse(message.body) ?: return@forEach
@@ -237,18 +239,19 @@ class SmsSyncHandler @Inject constructor(
         }
     }
 
-    // ── Incremental MMS sync ──────────────────────────────────────────────────
-    // Mirrors syncLatestSms() but for content://mms. Bound is derived from the
-    // highest stored MMS id (which is offset by MMS_ID_OFFSET) minus the offset,
-    // giving the raw MMS _id to use in the WHERE clause.
+    /*
+     * Mirrors syncLatestSms() but for content://mms. Bound is derived from the
+     * highest stored MMS id (which is offset by MMS_ID_OFFSET) minus the offset,
+     * giving the raw MMS _id to use in the WHERE clause.
+     */
     private suspend fun syncLatestMms() {
         val maxStoredId = messageRepository.getMaxMmsId() ?: 0L
         if (maxStoredId <= 0L) {
-            // No MMS in Room yet. Only proceed if the full historical sync has
-            // already completed — otherwise we'd run "_id > 0" concurrently with
-            // the worker, fetching all historical MMS and racing on thread metadata.
-            // Incoming MMS will be captured by the worker's catch-up pass at end of run,
-            // or by the next incremental sync after the first MMS batch is flushed.
+            /* No MMS in Room yet. Only proceed if the full historical sync has
+             * already completed — otherwise we'd run "_id > 0" concurrently with
+             * the worker, fetching all historical MMS and racing on thread metadata.
+             * Incoming MMS will be captured by the worker's catch-up pass at end of run,
+             * or by the next incremental sync after the first MMS batch is flushed. */
             val firstSyncDone = context
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getBoolean(KEY_FIRST_SYNC_DONE, false)
@@ -264,9 +267,17 @@ class SmsSyncHandler @Inject constructor(
         debugLog("syncLatestMms: maxStoredId=$maxStoredId  maxRawId=$maxRawId")
 
         val cursor = context.contentResolver.query(
-            Uri.parse("content://mms"),
+            Telephony.Mms.CONTENT_URI,
             arrayOf("_id", "thread_id", "date", "msg_box"),
-            "_id > ?", arrayOf(maxRawId.toString()),
+            /* Whitelist only inbox (1) and sent (2).
+             * Drafts (3), outbox (4), and failed (5) are excluded:
+             * - Drafts are not real messages.
+             * - Outbox is a transient state; the same _id flips to sent or failed.
+             *   Importing it now would leave a stale "sent" bubble if it fails.
+             * - Failed OS-level sends have no error UI here, so showing them as
+             *   sent bubbles would be misleading. */
+            "_id > ? AND ${Telephony.Mms.MESSAGE_BOX} IN (${Telephony.Mms.MESSAGE_BOX_INBOX}, ${Telephony.Mms.MESSAGE_BOX_SENT})",
+            arrayOf(maxRawId.toString()),
             "_id ASC"
         ) ?: run {
             Log.w(TAG, "syncLatestMms: cursor was null — provider unavailable or permission denied")
@@ -331,17 +342,37 @@ class SmsSyncHandler @Inject constructor(
         newMessages.groupBy { it.threadId }.forEach { (threadId, msgs) ->
             val latest = msgs.last()
 
-            // ── Transfer FAILED status from optimistic row to real row ───────────
-            // Race scenario: MmsSentReceiver fired and marked the temp row FAILED
-            // before this sync ran. Transfer that status to the just-inserted real row
-            // (DELIVERY_STATUS_FAILED = 4) before we delete the optimistic row below.
-            // If the MMSC hasn't replied yet, the status here is PENDING — no transfer needed.
+            /*
+             * Race scenario A: MmsSentReceiver fired and marked the temp row FAILED
+             * before this sync ran. Transfer that status to the just-inserted real row.
+             * Race scenario B: MmsSentReceiver marked the temp row SENT (MMSC confirmed)
+             * but the real content-provider row wasn't written yet when it queried.
+             * Without this transfer the real row would default to DELIVERY_STATUS_NONE
+             * and the UI would show no delivery indicator after sync deleted the temp row.
+             */
             val optStatus = messageRepository.getOptimisticSentDeliveryStatus(threadId)
-            if (optStatus == DELIVERY_STATUS_FAILED) {
+            if (optStatus == DELIVERY_STATUS_FAILED || optStatus == DELIVERY_STATUS_SENT) {
                 val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
                 if (sentMsg != null) {
-                    messageRepository.updateDeliveryStatus(sentMsg.id, DELIVERY_STATUS_FAILED)
-                    syncLogger.log("IncrementalMms", "transferred FAILED status to real row id=${sentMsg.id} threadId=$threadId")
+                    messageRepository.updateDeliveryStatus(sentMsg.id, optStatus)
+                    val statusName = if (optStatus == DELIVERY_STATUS_SENT) "SENT" else "FAILED"
+                    syncLogger.log("IncrementalMms", "transferred $statusName status to real row id=${sentMsg.id} threadId=$threadId")
+                }
+            }
+
+            /*
+             * Transfer the attachmentUri from the optimistic row to the real row.
+             * The optimistic row's URI points to the locally-cached compressed image
+             * (mms_attach_*.bin served via FileProvider). Samsung's content://mms/part/
+             * data for the SENT copy is typically empty, so using our own cached bytes
+             * keeps the image visible after the real row replaces the optimistic one.
+             */
+            val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
+            if (sentMsg != null) {
+                val optUri = messageRepository.getOptimisticSentAttachmentUri(threadId)
+                if (optUri != null) {
+                    messageRepository.updateAttachmentUri(sentMsg.id, optUri)
+                    syncLogger.log("IncrementalMms", "transferred attachmentUri to real row id=${sentMsg.id}")
                 }
             }
 
@@ -359,8 +390,9 @@ class SmsSyncHandler @Inject constructor(
     // Returns MmsParts with a stable content://mms/part/{id} URI for image/video/audio.
     private fun getMmsBodyIncremental(mmsId: Long): MmsParts {
         val cursor = context.contentResolver.query(
-            Uri.parse("content://mms/$mmsId/part"),
-            arrayOf("_id", "ct", "text"), null, null, null
+            Uri.withAppendedPath(Telephony.Mms.CONTENT_URI, "$mmsId/part"),
+            arrayOf("_id", Telephony.Mms.Part.CONTENT_TYPE, Telephony.Mms.Part.TEXT),
+            null, null, null
         ) ?: run {
             Log.w(TAG, "getMmsBodyIncremental: parts cursor null for mmsId=$mmsId")
             return MmsParts("[MMS]", null, null)
@@ -371,8 +403,8 @@ class SmsSyncHandler @Inject constructor(
         var mimeType: String? = null
         cursor.use {
             val idIdx   = it.getColumnIndexOrThrow("_id")
-            val ctIdx   = it.getColumnIndexOrThrow("ct")
-            val textIdx = it.getColumnIndexOrThrow("text")
+            val ctIdx   = it.getColumnIndexOrThrow(Telephony.Mms.Part.CONTENT_TYPE)
+            val textIdx = it.getColumnIndexOrThrow(Telephony.Mms.Part.TEXT)
             while (it.moveToNext()) {
                 val ct     = it.getString(ctIdx) ?: continue
                 val partId = it.getLong(idIdx)
@@ -397,6 +429,8 @@ class SmsSyncHandler @Inject constructor(
     }
 
     private fun getMmsAddressIncremental(mmsId: Long, isSent: Boolean): String {
+        // 137 = PduHeaders.FROM (sender of a received MMS)
+        // 151 = PduHeaders.TO   (recipient of a sent MMS)
         val addrType = if (isSent) 151 else 137
         val cursor = context.contentResolver.query(
             Uri.parse("content://mms/$mmsId/addr"),

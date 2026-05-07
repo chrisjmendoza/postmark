@@ -370,7 +370,16 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
 
         // ── Primary query ─────────────────────────────────────────────────────
         val primaryCursor = applicationContext.contentResolver.query(
-            Uri.parse("content://mms"), mmsProjection, null, null, sortOrder
+            Telephony.Mms.CONTENT_URI,
+            mmsProjection,
+            /* Whitelist only inbox (1) and sent (2).
+             * Drafts (3), outbox (4), and failed (5) are excluded:
+             * - Drafts are not real messages.
+             * - Outbox is transitional; same _id flips to sent or failed.
+             * - Failed sends have no error UI here — showing as sent is misleading. */
+            "${Telephony.Mms.MESSAGE_BOX} IN (${Telephony.Mms.MESSAGE_BOX_INBOX}, ${Telephony.Mms.MESSAGE_BOX_SENT})",
+            null,
+            sortOrder
         )
         val primaryRowCount = primaryCursor?.count ?: -1
         debugMmsLog("syncAllMms: primary cursor: ${if (primaryCursor == null) "NULL" else "$primaryRowCount rows"}")
@@ -558,8 +567,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
     // Returns MmsParts("[MMS]", null, null) when the cursor is unavailable.
     private fun getMmsBody(mmsId: Long): MmsParts {
         val cursor = applicationContext.contentResolver.query(
-            Uri.parse("content://mms/$mmsId/part"),
-            arrayOf("_id", "ct", "text"), null, null, null
+            Uri.withAppendedPath(Telephony.Mms.CONTENT_URI, "$mmsId/part"),
+            arrayOf("_id", Telephony.Mms.Part.CONTENT_TYPE, Telephony.Mms.Part.TEXT), null, null, null
         ) ?: run {
             Log.w(TAG_MMS, "getMmsBody: parts cursor null for mmsId=$mmsId")
             return MmsParts("[MMS]", null, null)
@@ -570,8 +579,8 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         var mimeType: String? = null
         cursor.use {
             val idIdx   = it.getColumnIndexOrThrow("_id")
-            val ctIdx   = it.getColumnIndexOrThrow("ct")
-            val textIdx = it.getColumnIndexOrThrow("text")
+            val ctIdx   = it.getColumnIndexOrThrow(Telephony.Mms.Part.CONTENT_TYPE)
+            val textIdx = it.getColumnIndexOrThrow(Telephony.Mms.Part.TEXT)
             while (it.moveToNext()) {
                 val ct     = it.getString(ctIdx) ?: continue
                 val partId = it.getLong(idIdx)
