@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.telephony.SmsManager
+import android.telephony.SubscriptionManager
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.plusorminustwo.postmark.data.sync.SyncLogger
@@ -36,7 +37,16 @@ class MmsManagerWrapper @Inject constructor(
     private val syncLogger: SyncLogger
 ) {
     private val smsManager: SmsManager
-        get() = context.getSystemService(SmsManager::class.java)
+        // Use the subscription-specific manager so MMS sends succeed on multi-SIM
+        // devices where the default SmsManager may not match the default SMS SIM.
+        get() {
+            val subId = SmsManager.getDefaultSmsSubscriptionId()
+            return if (subId != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                context.getSystemService(SmsManager::class.java).createForSubscriptionId(subId)
+            } else {
+                context.getSystemService(SmsManager::class.java)
+            }
+        }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -108,12 +118,15 @@ class MmsManagerWrapper @Inject constructor(
             cfg.getInt(SmsManager.MMS_CONFIG_MAX_MESSAGE_SIZE, DEFAULT_MAX_MMS_BYTES)
                 .coerceIn(300_000, 2_000_000)  // sanity-clamp: 300 KB – 2 MB
         } catch (_: Exception) { DEFAULT_MAX_MMS_BYTES }
-        syncLogger.log(TAG, "sendMms: carrierMaxBytes=$carrierMaxBytes messageId=$messageId")
+        // Reserve headroom for PDU framing + SMIL part so the total PDU stays under
+        // the carrier cap. The carrier limit applies to the full PDU, not just media bytes.
+        val effectiveMediaLimit = (carrierMaxBytes - PDU_OVERHEAD_BYTES).coerceAtLeast(300_000)
+        syncLogger.log(TAG, "sendMms: carrierMaxBytes=$carrierMaxBytes effectiveMediaLimit=$effectiveMediaLimit messageId=$messageId")
 
-        val finalMediaBytes = if (mimeType.startsWith("image/") && mediaBytes.size > carrierMaxBytes) {
-            val compressed = compressImage(mediaBytes, mimeType, messageId, carrierMaxBytes)
+        val finalMediaBytes = if (mimeType.startsWith("image/") && mediaBytes.size > effectiveMediaLimit) {
+            val compressed = compressImage(mediaBytes, mimeType, messageId, effectiveMediaLimit)
             if (compressed == null) {
-                syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit (carrierMaxBytes=$carrierMaxBytes) for messageId=$messageId")
+                syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit (effectiveMediaLimit=$effectiveMediaLimit) for messageId=$messageId")
                 return@withContext false
             }
             compressed
@@ -209,6 +222,10 @@ class MmsManagerWrapper @Inject constructor(
          * MMSC closed the HTTP connection mid-transfer.
          * When carrier config is available, carrierMaxBytes takes precedence. */
         private const val DEFAULT_MAX_MMS_BYTES = 860_160
+        /* Estimated overhead of MMS PDU headers + SMIL part on top of raw media bytes.
+         * Subtracted from the carrier limit before compression so the total PDU never
+         * exceeds what the MMSC accepts. 5 KB is generous; typical overhead is ~1 KB. */
+        private const val PDU_OVERHEAD_BYTES = 5_000
     }
 
     // ── Image compression helper ──────────────────────────────────────────────
@@ -278,42 +295,58 @@ class MmsManagerWrapper @Inject constructor(
 
 // ── MmsPduBuilder ─────────────────────────────────────────────────────────────
 /*
- * Encodes a minimal M-Send.req PDU in WAP Binary format (OMA MMS 1.2 / WSP spec).
+ * Encodes an M-Send.req PDU in WAP Binary format (OMA MMS 1.2 / WSP spec).
  *
- * Supports:  one media attachment (image/audio/video)  +  optional text caption.
- * Content-Type: application/vnd.wap.multipart.mixed  (no SMIL required).
+ * Format: multipart/related — SMIL presentation part first, then the media
+ * attachment, then an optional text caption. This matches the AOSP PduComposer
+ * output format and is required by most carrier MMSCs; multipart/mixed without
+ * SMIL is too minimal and frequently rejected.
  *
- * WAP Binary encoding cheat-sheet:
- *   Short-integer : (value | 0x80).toByte()   — for well-known field values ≤ 127
- *   Text-string   : ASCII bytes + 0x00         — for string values
- *   Long-integer  : [length byte] [big-endian bytes]
- *   UintVar       : variable-length unsigned int (MSB continuation bit 0x80)
+ * WAP Binary encoding quick-reference:
+ *   Short-integer  : (value | 0x80)              — well-known field values ≤ 127
+ *   Text-string    : ASCII bytes + 0x00           — string values (Extension-media)
+ *   Long-integer   : [length byte] [big-endian]
+ *   Value-length   : 0–30 as a single byte; >30 as 0x1F + UintVar
+ *   UintVar        : variable-length uint, MSB continuation bit 0x80
  */
 
 private object MmsPduBuilder {
 
-    // ── Header field IDs (WAP-230 MMS headers) ────────────────────────────────
-    private const val FIELD_MESSAGE_TYPE    = 0x8C  // X-Mms-Message-Type
-    private const val VALUE_M_SEND_REQ      = 0x80  // M-Send.req
-    private const val FIELD_TRANSACTION_ID  = 0x98  // X-Mms-Transaction-Id
-    private const val FIELD_MMS_VERSION     = 0x8D  // X-Mms-MMS-Version
-    private const val VALUE_MMS_12          = 0x92  // 1.2  (major=1, minor=2 → (1<<4)|2 = 0x12 → 0x12|0x80)
-    private const val FIELD_DATE            = 0x85  // X-Mms-Date
-    private const val FIELD_FROM            = 0x89  // X-Mms-From
-    private const val VALUE_INSERT_ADDR_TOKEN = 0x81 // insert-address-token
-    private const val FIELD_TO              = 0x97  // X-Mms-To
-    private const val FIELD_MESSAGE_CLASS   = 0x8A  // X-Mms-Message-Class
-    private const val VALUE_PERSONAL        = 0x80  // Personal
-    private const val FIELD_PRIORITY        = 0x8F  // X-Mms-Priority
-    private const val VALUE_NORMAL          = 0x81  // Normal
-    private const val FIELD_DELIVERY_REPORT = 0x86  // X-Mms-Delivery-Report
-    private const val VALUE_NO              = 0x81  // No
-    private const val FIELD_CONTENT_TYPE    = 0x84  // Content-Type
-    private const val VALUE_MULTIPART_MIXED = 0xA3  // application/vnd.wap.multipart.mixed (WAP 0x23 | 0x80)
+    // ── Message-level header field IDs (OMA MMS 1.1 Table D.1) ───────────────
+    private const val FIELD_MESSAGE_TYPE      = 0x8C  // X-Mms-Message-Type
+    private const val VALUE_M_SEND_REQ        = 0x80  // M-Send.req
+    private const val FIELD_TRANSACTION_ID    = 0x98  // X-Mms-Transaction-Id
+    private const val FIELD_MMS_VERSION       = 0x8D  // X-Mms-MMS-Version
+    private const val VALUE_MMS_12            = 0x92  // version 1.2
+    private const val FIELD_DATE              = 0x85  // X-Mms-Date
+    private const val FIELD_FROM              = 0x89  // X-Mms-From
+    private const val VALUE_INSERT_ADDR_TOKEN = 0x81  // insert-address-token
+    private const val FIELD_TO                = 0x97  // X-Mms-To
+    private const val FIELD_MESSAGE_CLASS     = 0x8A  // X-Mms-Message-Class
+    private const val VALUE_PERSONAL          = 0x80  // Personal
+    private const val FIELD_PRIORITY          = 0x8F  // X-Mms-Priority
+    private const val VALUE_NORMAL            = 0x81  // Normal
+    private const val FIELD_DELIVERY_REPORT   = 0x86  // X-Mms-Delivery-Report
+    private const val VALUE_NO                = 0x81  // No
+    private const val FIELD_CONTENT_TYPE      = 0x84  // Content-Type
 
-    // ── WAP well-known MIME content type short codes ──────────────────────────
-    /* Types with an assigned WAP short code are encoded as a single-byte
-     * short-integer (code | 0x80). Everything else is a null-terminated text string. */
+    // ── Part-level header field IDs (WSP WAP-230) ─────────────────────────────
+    private const val FIELD_CONTENT_ID        = 0xC0  // Content-Id       (0x40 | 0x80)
+    private const val FIELD_CONTENT_LOCATION  = 0x8E  // Content-Location (0x0E | 0x80)
+
+    // ── Content-Type values ────────────────────────────────────────────────────
+    // multipart/related (WAP 0x33 | 0x80) — required to carry a SMIL start part
+    private const val VALUE_MULTIPART_RELATED = 0xB3
+
+    // WAP well-known parameter tokens (WAP-230 Table B.4)
+    private const val PARAM_TYPE  = 0x89  // "type"  parameter (0x09 | 0x80)
+    private const val PARAM_START = 0x8A  // "start" parameter (0x0A | 0x80)
+
+    // Content-Id for the SMIL part; referenced in the multipart/related "start" param
+    private const val SMIL_CONTENT_ID = "<smil>"
+
+    // ── WAP well-known MIME content type short codes ───────────────────────────
+    // Types with an assigned WAP code are one byte; everything else is text-string.
     private val WELL_KNOWN_CT: Map<String, Byte> = mapOf(
         "text/plain"  to 0x83.toByte(),   // 0x03 | 0x80
         "text/html"   to 0x82.toByte(),   // 0x02 | 0x80
@@ -333,102 +366,153 @@ private object MmsPduBuilder {
         textBody: String
     ): ByteArray {
         val out = ByteArrayOutputStream()
+        val normalizedMime = mimeType.lowercase()
 
         // ── MMS headers ───────────────────────────────────────────────────────
-        // Message-Type: M-Send.req
-        out.write(FIELD_MESSAGE_TYPE)
-        out.write(VALUE_M_SEND_REQ)
+        out.write(FIELD_MESSAGE_TYPE); out.write(VALUE_M_SEND_REQ)
 
         // Transaction-ID: unique ASCII string (null-terminated)
         val txId = "T${System.currentTimeMillis()}"
         out.write(FIELD_TRANSACTION_ID)
-        out.write(txId.toByteArray(Charsets.US_ASCII))
-        out.write(0x00)
+        out.write(txId.toByteArray(Charsets.US_ASCII)); out.write(0x00)
 
-        // MMS-Version: 1.2
-        out.write(FIELD_MMS_VERSION)
-        out.write(VALUE_MMS_12)
+        out.write(FIELD_MMS_VERSION); out.write(VALUE_MMS_12)
 
         // Date: unix seconds as 4-byte big-endian long-integer
         val dateSec = System.currentTimeMillis() / 1000L
-        out.write(FIELD_DATE)
-        out.write(0x04)   // length = 4 bytes
+        out.write(FIELD_DATE); out.write(0x04)
         out.write(((dateSec shr 24) and 0xFF).toInt())
         out.write(((dateSec shr 16) and 0xFF).toInt())
         out.write(((dateSec shr  8) and 0xFF).toInt())
         out.write((dateSec          and 0xFF).toInt())
 
-        // From: insert-address-token (tells MMSC to fill in our number)
-        out.write(FIELD_FROM)
-        out.write(0x01)               // value-length = 1 byte
-        out.write(VALUE_INSERT_ADDR_TOKEN)
+        // From: insert-address-token (MMSC fills in the sender's number)
+        out.write(FIELD_FROM); out.write(0x01); out.write(VALUE_INSERT_ADDR_TOKEN)
 
-        // To: address (null-terminated text — /TYPE=PLMN suffix for PLMN routing)
+        // To: address with /TYPE=PLMN routing suffix (null-terminated)
         val addr = normalizeAddress(toAddress)
         out.write(FIELD_TO)
-        out.write(addr.toByteArray(Charsets.US_ASCII))
-        out.write(0x00)
+        out.write(addr.toByteArray(Charsets.US_ASCII)); out.write(0x00)
 
-        // Message-Class: Personal
-        out.write(FIELD_MESSAGE_CLASS)
-        out.write(VALUE_PERSONAL)
+        out.write(FIELD_MESSAGE_CLASS); out.write(VALUE_PERSONAL)
+        out.write(FIELD_PRIORITY);      out.write(VALUE_NORMAL)
+        out.write(FIELD_DELIVERY_REPORT); out.write(VALUE_NO)
 
-        // Priority: Normal
-        out.write(FIELD_PRIORITY)
-        out.write(VALUE_NORMAL)
-
-        // Delivery-Report: No
-        out.write(FIELD_DELIVERY_REPORT)
-        out.write(VALUE_NO)
-
-        // Content-Type: application/vnd.wap.multipart.mixed
+        // ── Content-Type: multipart/related; type=application/smil; start=<smil> ─
+        // Use Content-General-Form (Value-length + type + parameters) rather than a
+        // bare short-integer so we can include "type" and "start" parameters.
+        // Most carrier MMSCs require the "start" parameter to locate the SMIL part.
+        val ctBody = ByteArrayOutputStream().apply {
+            write(VALUE_MULTIPART_RELATED)                           // 0xB3
+            write(PARAM_TYPE)                                        // 0x89 — "type" param
+            write("application/smil".toByteArray(Charsets.US_ASCII)); write(0x00)
+            write(PARAM_START)                                       // 0x8A — "start" param
+            write(SMIL_CONTENT_ID.toByteArray(Charsets.US_ASCII)); write(0x00)
+        }.toByteArray()
         out.write(FIELD_CONTENT_TYPE)
-        out.write(VALUE_MULTIPART_MIXED)
+        writeValueLength(out, ctBody.size)
+        out.write(ctBody)
 
-        // ── Multipart body ────────────────────────────────────────────────────
-        // Build the list of parts first so we can write part-count up front.
+        // ── Multipart body: SMIL first, then media, then optional text ─────────
+        val mediaFilename = mediaFilenameForMime(normalizedMime)
+        val smilXml = buildSmil(mediaFilename, normalizedMime, textBody.isNotEmpty())
+
         val parts = mutableListOf<ByteArray>()
-        parts += encodePart(mimeType.lowercase(), mediaBytes)
+        // SMIL must be first (it's the "start" part referenced in Content-Type)
+        parts += encodePart("application/smil", smilXml.toByteArray(Charsets.UTF_8), SMIL_CONTENT_ID, "smil.xml")
+        parts += encodePart(normalizedMime,      mediaBytes,                           "<img>",         mediaFilename)
         if (textBody.isNotEmpty()) {
-            parts += encodePart("text/plain", textBody.toByteArray(Charsets.UTF_8))
+            parts += encodePart("text/plain", textBody.toByteArray(Charsets.UTF_8), "<txt>", "text.txt")
         }
 
-        // Part count as UintVar
         out.writeUintVar(parts.size)
         parts.forEach { out.write(it) }
 
         return out.toByteArray()
     }
 
+    // ── SMIL builder ──────────────────────────────────────────────────────────
+
+    /**
+     * Builds a minimal SMIL XML document that references [mediaFilename] via
+     * its Content-Location name. SMIL is what tells the MMSC — and the recipient's
+     * device — how to present the message; most MMSCs require it.
+     */
+    private fun buildSmil(mediaFilename: String, mimeType: String, hasText: Boolean): String {
+        // Only image and video need a visible region; audio is presentation-only.
+        val needsRegion = mimeType.startsWith("image/") || mimeType.startsWith("video/")
+        val regionId    = if (mimeType.startsWith("image/")) "Image" else "Video"
+        val mediaHeight = if (hasText) "80%" else "100%"
+
+        val layout = buildString {
+            append("""<root-layout width="320" height="480"/>""")
+            if (needsRegion) {
+                append("""<region id="$regionId" width="100%" height="$mediaHeight" fit="meet"/>""")
+            }
+            if (hasText) {
+                append("""<region id="Text" width="100%" height="20%" fit="scroll"/>""")
+            }
+        }
+
+        val parBody = buildString {
+            when {
+                mimeType.startsWith("image/") -> append("""<img src="$mediaFilename" region="$regionId"/>""")
+                mimeType.startsWith("video/") -> append("""<video src="$mediaFilename" region="$regionId"/>""")
+                mimeType.startsWith("audio/") -> append("""<audio src="$mediaFilename"/>""")
+                else                          -> append("""<ref src="$mediaFilename"/>""")
+            }
+            if (hasText) append("""<text src="text.txt" region="Text"/>""")
+        }
+
+        return """<smil><head><layout>$layout</layout></head><body><par dur="5000ms">$parBody</par></body></smil>"""
+    }
+
     // ── Part encoding ─────────────────────────────────────────────────────────
 
-    /** Encodes a single MIME part: [headersLen][dataLen][headers][data]. */
-    private fun encodePart(mimeType: String, data: ByteArray): ByteArray {
-        val headerBytes = encodeContentTypeHeader(mimeType)
+    /**
+     * Encodes a single MIME part: [headersLen][dataLen][headers][data].
+     *
+     * Part headers include Content-Type, Content-Id, and Content-Location.
+     * Content-Location provides the filename that SMIL src attributes reference.
+     * Content-Id is included so MMSC can locate the SMIL start part by CID.
+     */
+    private fun encodePart(
+        mimeType: String,
+        data: ByteArray,
+        contentId: String,
+        contentLocation: String
+    ): ByteArray {
+        val hdr = ByteArrayOutputStream()
+        hdr.write(encodeContentTypeHeader(mimeType))
+        // Content-Id (text-string, e.g. "<smil>")
+        hdr.write(FIELD_CONTENT_ID)
+        hdr.write(contentId.toByteArray(Charsets.US_ASCII)); hdr.write(0x00)
+        // Content-Location (filename; matched by SMIL src attributes)
+        hdr.write(FIELD_CONTENT_LOCATION)
+        hdr.write(contentLocation.toByteArray(Charsets.US_ASCII)); hdr.write(0x00)
+        val headerBytes = hdr.toByteArray()
+
         val part = ByteArrayOutputStream()
-        part.writeUintVar(headerBytes.size) // headers-length
-        part.writeUintVar(data.size)        // data-length
-        part.write(headerBytes)             // headers
-        part.write(data)                    // data
+        part.writeUintVar(headerBytes.size)
+        part.writeUintVar(data.size)
+        part.write(headerBytes)
+        part.write(data)
         return part.toByteArray()
     }
 
     /**
      * Encodes the Content-Type header for a part.
-     *
-     * Well-known types use a short-integer byte.
-     * Unknown types (audio/mpeg, audio/amr, etc.) use a null-terminated text string.
+     * Well-known types use a short-integer byte; unknown types (audio/mpeg,
+     * application/smil, etc.) use a null-terminated Extension-media text string.
      */
     private fun encodeContentTypeHeader(mimeType: String): ByteArray {
         val ct = ByteArrayOutputStream()
-        ct.write(FIELD_CONTENT_TYPE)  // 0x84
+        ct.write(FIELD_CONTENT_TYPE)
         val knownByte = WELL_KNOWN_CT[mimeType]
         if (knownByte != null) {
             ct.write(knownByte.toInt())
         } else {
-            /* Extension-Media: printable ASCII (0x20–7E) + null terminator.
-             * WSP recognises this range as text so the encoding is unambiguous
-             * as long as the first byte of [mimeType] is a printable ASCII char. */
+            // Extension-Media: printable ASCII (0x20–0x7E) + null terminator
             ct.write(mimeType.toByteArray(Charsets.US_ASCII))
             ct.write(0x00)
         }
@@ -436,6 +520,35 @@ private object MmsPduBuilder {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /** Returns a safe filename for this MIME type used in Content-Location and SMIL src. */
+    private fun mediaFilenameForMime(mimeType: String): String = when {
+        mimeType.startsWith("image/jpeg") || mimeType == "image/jpg" -> "image.jpg"
+        mimeType.startsWith("image/png")  -> "image.png"
+        mimeType.startsWith("image/gif")  -> "image.gif"
+        mimeType.startsWith("image/")     -> "image.jpg"
+        mimeType == "audio/mpeg" || mimeType == "audio/mp3" -> "audio.mp3"
+        mimeType.startsWith("audio/amr")  -> "audio.amr"
+        mimeType.startsWith("audio/")     -> "audio.mp4"
+        mimeType.startsWith("video/mp4")  -> "video.mp4"
+        mimeType.startsWith("video/3gpp") -> "video.3gp"
+        mimeType.startsWith("video/")     -> "video.mp4"
+        else                              -> "attachment.bin"
+    }
+
+    /**
+     * Writes a WAP Value-length (used in Content-General-Form):
+     *   0–30  → single byte (Short-length)
+     *   >30   → 0x1F (Length-quote) followed by a UintVar
+     */
+    private fun writeValueLength(out: ByteArrayOutputStream, length: Int) {
+        if (length <= 30) {
+            out.write(length)
+        } else {
+            out.write(0x1F)  // Length-quote
+            out.writeUintVar(length)
+        }
+    }
 
     /** Appends the /TYPE=PLMN routing suffix required by some MMSCs. */
     private fun normalizeAddress(address: String): String {
@@ -452,14 +565,13 @@ private fun ByteArrayOutputStream.writeUintVar(value: Int) {
         write(value)
         return
     }
-    // Build bytes LSB-first, then reverse.
+    // Build bytes LSB-first, then reverse and set continuation bits.
     val bytes = mutableListOf<Int>()
     var v = value
     while (v > 0) {
         bytes.add(v and 0x7F)
         v = v ushr 7
     }
-    // All but the last byte have the continuation bit set.
     for (i in bytes.indices.reversed()) {
         write(if (i > 0) (bytes[i] or 0x80) else bytes[i])
     }
