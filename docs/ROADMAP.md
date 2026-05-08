@@ -46,6 +46,9 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **Message action top bar** — long-press → Copy (toast) / Select / Forward; `ActionItem` tints corrected; scrim restricted to content area below action bar
 - [x] Per-thread backup policy UI — `⋮` overflow menu → 3-option radio dialog
 - [x] **Thread view performance** — flat `ThreadListItem` render model pre-computed in ViewModel (`buildRenderState()`); six `remember` blocks removed from `ThreadContent`; LazyColumn flattened to single `items()` with stable keys; Coil `.size(560, 480)` on `MmsAttachment`; `LaunchedEffect` blocks extracted to focused helper composables; all ~20 ViewModel callbacks stabilised with `remember(viewModel) { ... }`; `Trace` markers for Perfetto profiling
+- [x] **MMS PDU fix** — `multipart/related` + SMIL with regions, `Content-Id`/`Content-Location` per part, subscription-aware `SmsManager`, PDU overhead budget (`PDU_OVERHEAD_BYTES = 5_000`)
+- [x] **New conversation screen** — `NewConversationScreen` + `NewConversationViewModel`; live contact search; FAB on `ConversationsScreen`; `AppNavigation` destination
+- [x] **Shared debug keystore** — `app/debug.keystore` in repo; all dev machines produce same app signature, eliminating uninstall/reinstall cycle when switching machines
 
 ---
 

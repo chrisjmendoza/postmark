@@ -6,6 +6,38 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-08
 
+### Chore: shared debug keystore for consistent signing across dev machines
+
+- `app/debug.keystore` committed to the repo with standard Android debug credentials
+  (`android` / `androiddebugkey` / `android`, 10 000-day validity).
+- `app/build.gradle.kts` `signingConfigs.debug` block points to this file so every
+  developer machine builds with the same signature — eliminates the uninstall/reinstall
+  cycle when switching between laptop and desktop.
+
+### Fix: MMS PDU — `multipart/related` + SMIL, `Content-Id`, subscription-aware `SmsManager`, PDU size budget
+
+Four root causes of silent MMS send failure fixed in `MmsManagerWrapper` / `MmsPduBuilder`:
+
+1. **Wrong `SmsManager` instance** — was using the default shared instance, which ignores
+   dual-SIM subscriptions. Now calls `SmsManager.getDefaultSmsSubscriptionId()` +
+   `createForSubscriptionId()` so the correct SIM slot is used.
+
+2. **PDU overhead not accounted for** — carrier max size (e.g. 1.2 MB) applies to the
+   full PDU, not just the media bytes. Added `PDU_OVERHEAD_BYTES = 5_000`; compression
+   now targets `effectiveMediaLimit = carrierMaxBytes - PDU_OVERHEAD_BYTES`.
+
+3. **`multipart/mixed` rejected by most MMSCs** — replaced with `multipart/related`;
+   `Content-Type` now includes `type=application/smil; start=<smil>` parameters.
+
+4. **Missing SMIL presentation + `Content-Id` / `Content-Location` headers** — SMIL
+   part (with proper `<layout>` regions) is now always the first part in the PDU.
+   Every part carries `Content-Id` and `Content-Location` headers. `buildSmil()`
+   generates a valid SMIL with a `root-layout` region and per-media `<img>` or `<text>`
+   elements.
+
+No new unit tests: changes touch WAP Binary encoding and `SmsManager` API not
+exercisable in pure JVM tests. Verified on-device.
+
 ### Improvement: Thread view performance — flat render model, stable lambdas, Coil sizing
 
 Six performance improvements to `ThreadScreen` / `ThreadViewModel`:
@@ -46,6 +78,33 @@ Six performance improvements to `ThreadScreen` / `ThreadViewModel`:
 
 No new unit tests: changes are structural (render model pre-computation, lambda identity).
 `./gradlew test` → BUILD SUCCESSFUL.
+
+---
+
+## 2026-05-07
+
+### Feature: `SyncLogScreen` — dedicated settings screen for the sync log
+
+- New `SyncLogScreen.kt` + `SyncLogViewModel.kt` display the full `SyncLogger` history
+  in a scrollable monospace surface.
+- Toolbar actions: **Refresh** (reload from ViewModel), **Copy** (write entire log to
+  clipboard via `ClipboardManager`), **Share** (plain-text file via `FileProvider` +
+  `ACTION_SEND`), **Clear** (wipe log and update UI).
+- Accessible from Settings screen; hoisted into `AppNavigation` with back button.
+- `SyncLogger` also now emits `Log.d` / `Log.e` to Logcat under the `PostmarkSync` tag
+  so sync events are visible in Android Studio without opening the in-app screen.
+- `DevOptionsScreen` inline log panel restored: Load / Copy / Share / Clear buttons +
+  scrollable surface, driven by the existing `DevOptionsViewModel`.
+
+### Feature: `NewConversationScreen` — start a fresh conversation from the conversation list
+
+- New `NewConversationScreen.kt` + `NewConversationViewModel.kt` for starting a fresh
+  conversation.
+- Contact search field + live-filtered contact list from `ContactsProvider`; contact
+  lookup runs on `Dispatchers.IO`.
+- **Start** action opens `ThreadScreen` with the selected address.
+- `ConversationsScreen` gains a FAB that navigates to the new screen.
+- `AppNavigation` wired with `NewConversation` and `SyncLog` destinations.
 
 ---
 

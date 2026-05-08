@@ -415,6 +415,20 @@ TIER 1 — REMAINING (in priority order)
    (Audio chip play/pause is now done.)
 
 COMPLETED THIS SPRINT (May 8, 2026)
+✅ Shared debug keystore (feat/ui-improvements → master)
+   app/debug.keystore committed; all dev machines now use the same signature.
+   Eliminates the uninstall/reinstall cycle when building from a different machine.
+✅ MMS PDU rewrite (feat/ui-improvements → feat/thread-view)
+   MmsPduBuilder: multipart/related (was multipart/mixed); SMIL part first with
+   <layout> regions; Content-Id + Content-Location on every part; subscription-aware
+   SmsManager via getDefaultSmsSubscriptionId() + createForSubscriptionId(); PDU
+   overhead budget PDU_OVERHEAD_BYTES=5_000 so effectiveMediaLimit < carrier cap.
+✅ SyncLogScreen + NewConversationScreen (May 7, merged to master)
+   SyncLogScreen.kt + SyncLogViewModel.kt: dedicated settings screen for sync log
+   (Refresh / Copy / Share / Clear). SyncLogger now also logs to Logcat (PostmarkSync).
+   NewConversationScreen.kt + NewConversationViewModel.kt: contact search, filtered
+   list from ContactsProvider, Start action opens ThreadScreen. FAB on
+   ConversationsScreen. AppNavigation wired with both destinations.
 ✅ Thread view performance (feat/thread-view branch)
    ThreadListItem.kt: flat render model (Bubble|DateHeader), ThreadRenderState,
    buildRenderState() pure function — runs in ViewModel combine on Dispatchers.Default.
