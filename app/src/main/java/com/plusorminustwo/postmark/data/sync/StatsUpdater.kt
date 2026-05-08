@@ -14,7 +14,7 @@ import javax.inject.Singleton
 /**
  * Recomputes and persists per-thread and global message statistics.
  *
- * Called by [FirstLaunchSyncWorker] after the bulk import and by [SmsSyncHandler]
+ * Called by [SmsHistoryImportWorker] after the bulk import and by [SmsSyncHandler]
  * after each incremental sync. All heavy lifting is delegated to the pure functions
  * in [StatsAlgorithms] (`buildThreadStatsData`, `buildGlobalStatsData`).
  */

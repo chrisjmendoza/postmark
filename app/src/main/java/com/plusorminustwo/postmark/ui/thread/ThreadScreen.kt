@@ -942,29 +942,30 @@ private fun MessageBubble(
                     Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-            if (message.reactions.isNotEmpty()) {
-                ReactionPills(
-                    reactions = message.reactions,
-                    isSent = message.isSent,
-                    onReactionClick = onReactionClick,
-                    modifier = Modifier
-                        .align(if (message.isSent) Alignment.BottomStart else Alignment.BottomEnd)
-                        .offset(y = 16.dp)
-                        .padding(
-                            start = if (message.isSent) 4.dp else 0.dp,
-                            end = if (message.isSent) 0.dp else 4.dp
-                        )
-                        .then(
-                            if (bubbleWidthPx > 0) Modifier.widthIn(max = with(density) { bubbleWidthPx.toDp() })
-                            else Modifier
-                        )
-                )
-            }
+        }
+        if (message.reactions.isNotEmpty()) {
+            ReactionPills(
+                reactions = message.reactions,
+                isSent = message.isSent,
+                onReactionClick = onReactionClick,
+                modifier = Modifier
+                    // Offset upward so pills badge the bubble's bottom edge rather
+                    // than floating disconnected below it.
+                    .offset(y = (-12).dp)
+                    .align(if (message.isSent) Alignment.Start else Alignment.End)
+                    .padding(
+                        start = if (message.isSent) 4.dp else 0.dp,
+                        end = if (message.isSent) 0.dp else 4.dp
+                    )
+                    .then(
+                        if (bubbleWidthPx > 0) Modifier.widthIn(max = with(density) { bubbleWidthPx.toDp() })
+                        else Modifier
+                    )
+            )
         }
         if (showTimestamp || message.isSent) {
             Row(
                 modifier = Modifier
-                    .offset(y = if (message.reactions.isNotEmpty()) (-12).dp else 0.dp)
                     .padding(
                         start  = if (!message.isSent) 4.dp else 0.dp,
                         end    = if (message.isSent)  4.dp else 0.dp,

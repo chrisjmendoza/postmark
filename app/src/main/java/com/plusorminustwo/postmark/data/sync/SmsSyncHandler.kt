@@ -41,7 +41,7 @@ import javax.inject.Singleton
  *    [triggerCatchUp] cannot race with the channel consumer on the same path.
  *
  * Call [onSmsContentChanged] / [onMmsContentChanged] from [SmsContentObserver].
- * Call [triggerCatchUp] after [FirstLaunchSyncWorker] completes to pick up any
+ * Call [triggerCatchUp] after [SmsHistoryImportWorker] completes to pick up any
  * messages that arrived during the bulk import.
  */
 @Singleton
@@ -83,7 +83,7 @@ class SmsSyncHandler @Inject constructor(
 
     companion object {
         private const val TAG = "SmsSyncHandler"
-        // Must match the key used by FirstLaunchSyncWorker.
+        // Must match the key used by SmsHistoryImportWorker.
         private const val PREFS_NAME = "postmark_prefs"
         private const val KEY_FIRST_SYNC_DONE = "first_sync_completed"
     }
@@ -101,7 +101,7 @@ class SmsSyncHandler @Inject constructor(
     }
 
     /**
-     * Awaitable catch-up pass, called by [FirstLaunchSyncWorker] after the full
+     * Awaitable catch-up pass, called by [SmsHistoryImportWorker] after the full
      * historical sync completes to pick up any messages that arrived during the
      * sync window. Waits for any in-flight channel-triggered sync to finish first
      * (via the same Mutex), then runs synchronously on the caller's coroutine.
@@ -221,18 +221,22 @@ class SmsSyncHandler @Inject constructor(
         val unresolvedReactionMsgs = mutableListOf<Message>()
         reactionMsgs.forEach { message ->
             val parsed = reactionParser.parse(message.body) ?: return@forEach
-            if (!parsed.isRemoval) {
-                val threadMessages = messageRepository.getByThread(message.threadId)
-                val senderAddress = if (message.isSent) SELF_ADDRESS else message.address
-                val reaction = reactionParser.processIncomingMessage(message, threadMessages, senderAddress)
-                if (reaction != null && !messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
+            val threadMessages = messageRepository.getByThread(message.threadId)
+            val senderAddress = if (message.isSent) SELF_ADDRESS else message.address
+            val reaction = reactionParser.processIncomingMessage(message, threadMessages, senderAddress)
+
+            if (reaction != null) {
+                if (parsed.isRemoval) {
+                    messageRepository.deleteReaction(reaction.messageId, reaction.senderAddress, reaction.emoji)
+                } else if (!messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
                     messageRepository.insertReaction(reaction)
-                } else if (reaction == null) {
-                    // Original not found — preserve as a normal visible bubble.
+                }
+            } else {
+                // Original not found — preserve as a normal visible bubble (only for additions).
+                if (!parsed.isRemoval) {
                     unresolvedReactionMsgs += message
                 }
             }
-            // Removal reactions: message was never inserted; nothing to do.
         }
         if (unresolvedReactionMsgs.isNotEmpty()) {
             messageRepository.insertAll(unresolvedReactionMsgs)
@@ -337,9 +341,16 @@ class SmsSyncHandler @Inject constructor(
         val receivedCount = newMessages.count { !it.isSent }
         syncLogger.log("IncrementalMms", "${newMessages.size} new MMS after rawId=$maxRawId (sent=$sentCount received=$receivedCount)")
 
-        messageRepository.insertAll(newMessages)
+        /* Separate reaction-fallback MMS messages from real messages before persisting.
+         * Reaction fallbacks (Android: "👍 to \"text\"", Apple: "Liked 'text'") must be
+         * resolved to Reaction entities and never stored as visible message bubbles. */
+        val (reactionMsgs, normalMessages) = newMessages.partition { reactionParser.isReactionFallback(it.body) }
 
-        newMessages.groupBy { it.threadId }.forEach { (threadId, msgs) ->
+        if (normalMessages.isNotEmpty()) {
+            messageRepository.insertAll(normalMessages)
+        }
+
+        normalMessages.groupBy { it.threadId }.forEach { (threadId, msgs) ->
             val latest = msgs.last()
 
             /*
@@ -383,7 +394,40 @@ class SmsSyncHandler @Inject constructor(
             threadRepository.updateLastMessagePreview(threadId, preview)
         }
 
+        // Clean up optimistic messages for threads that only received MMS reaction fallbacks.
+        val normalThreadIds = normalMessages.map { it.threadId }.toSet()
+        reactionMsgs.map { it.threadId }.distinct()
+            .filter { it !in normalThreadIds }
+            .forEach { messageRepository.deleteOptimisticMessages(it) }
+
         statsUpdater.recomputeAll()
+
+        /* Resolve MMS reaction fallback messages into Reaction entities (deduped).
+         * Mirrors the same logic used in syncLatestSms(). If the original message
+         * cannot be found, insert the fallback as a normal visible bubble. */
+        val unresolvedReactionMsgs = mutableListOf<Message>()
+        reactionMsgs.forEach { message ->
+            val parsed = reactionParser.parse(message.body) ?: return@forEach
+            val threadMessages = messageRepository.getByThread(message.threadId)
+            val senderAddress = if (message.isSent) SELF_ADDRESS else message.address
+            val reaction = reactionParser.processIncomingMessage(message, threadMessages, senderAddress)
+
+            if (reaction != null) {
+                if (parsed.isRemoval) {
+                    messageRepository.deleteReaction(reaction.messageId, reaction.senderAddress, reaction.emoji)
+                } else if (!messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
+                    messageRepository.insertReaction(reaction)
+                }
+            } else {
+                // Original not found — preserve as a normal visible bubble (only for additions).
+                if (!parsed.isRemoval) {
+                    unresolvedReactionMsgs += message
+                }
+            }
+        }
+        if (unresolvedReactionMsgs.isNotEmpty()) {
+            messageRepository.insertAll(unresolvedReactionMsgs)
+        }
     }
 
     // Reads text body and first media attachment from the given MMS part table.

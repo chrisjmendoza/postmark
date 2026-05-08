@@ -560,7 +560,7 @@ Last audited: May 3, 2026.
 - Per-bubble sender display requires `address` column from `Mms.Addr` type=FROM.
 
 #### MMS fallback coverage
-- `syncAllMms()` in `FirstLaunchSyncWorker` currently falls back to `content://mms/inbox` +
+- `syncAllMms()` in `SmsHistoryImportWorker` currently falls back to `content://mms/inbox` +
   `content://mms/sent` only. The SMS fallback correctly covers inbox / sent / draft / outbox / failed.
 - Add `content://mms/draft` and `content://mms/outbox` to the MMS fallback list for symmetry.
   Draft/outbox MMS are rare but can exist after a send failure.

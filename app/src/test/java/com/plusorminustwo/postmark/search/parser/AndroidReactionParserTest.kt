@@ -125,10 +125,15 @@ class AndroidReactionParserTest {
         assertNull(parser.processIncomingMessage(incoming, listOf(incoming), "+15550001"))
     }
 
-    @Test fun `processIncomingMessage returns null for removal`() {
+    @Test fun `processIncomingMessage returns reaction for removal when original found`() {
+        // Removal reactions return a non-null Reaction so the caller can use messageId
+        // to call deleteReaction. The caller checks ParsedReaction.isRemoval to decide action.
         val original = message(id = 42, body = "Fine but you're cooking breakfast")
         val incoming = message(id = 99, body = """👍 to "Fine but you're cooking breakfast" removed""")
-        assertNull(parser.processIncomingMessage(incoming, listOf(original, incoming), "+15550001"))
+        val reaction = parser.processIncomingMessage(incoming, listOf(original, incoming), "+15550001")
+        assertNotNull(reaction)
+        assertEquals(42L, reaction!!.messageId)
+        assertEquals("👍", reaction.emoji)
     }
 
     // ── findOriginalMessage — newest-to-oldest search order ───────────────

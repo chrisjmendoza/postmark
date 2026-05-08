@@ -9,20 +9,24 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkManager
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
-import com.plusorminustwo.postmark.data.sync.FirstLaunchSyncWorker
+import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
 import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import javax.inject.Inject
 
 /**
@@ -51,6 +55,10 @@ class DevOptionsViewModel @Inject constructor(
 
     private val _isReprocessing = MutableStateFlow(false)
     val isReprocessing: StateFlow<Boolean> = _isReprocessing.asStateFlow()
+
+    // "Thread X / Y" progress label shown while reprocessing; null when idle.
+    private val _reprocessProgress = MutableStateFlow<String?>(null)
+    val reprocessProgress: StateFlow<String?> = _reprocessProgress.asStateFlow()
 
     // ── Sync log ──────────────────────────────────────────────────────────────
     // Loaded on demand (refreshLog()) and after clearLog() to reflect the change.
@@ -214,9 +222,9 @@ class DevOptionsViewModel @Inject constructor(
         context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
             .edit().remove("first_sync_completed").apply()
         WorkManager.getInstance(context).enqueueUniqueWork(
-            FirstLaunchSyncWorker.WORK_NAME,
+            SmsHistoryImportWorker.WORK_NAME,
             ExistingWorkPolicy.REPLACE,
-            FirstLaunchSyncWorker.buildRequest()
+            SmsHistoryImportWorker.buildRequest()
         )
         _feedback.value = "Sync worker enqueued"
     }
@@ -232,9 +240,9 @@ class DevOptionsViewModel @Inject constructor(
             context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
                 .edit().remove("first_sync_completed").apply()
             WorkManager.getInstance(context).enqueueUniqueWork(
-                FirstLaunchSyncWorker.WORK_NAME,
+                SmsHistoryImportWorker.WORK_NAME,
                 ExistingWorkPolicy.REPLACE,
-                FirstLaunchSyncWorker.buildRequest()
+                SmsHistoryImportWorker.buildRequest()
             )
             _feedback.value = "DB wiped — full re-import started"
         }
@@ -255,67 +263,93 @@ class DevOptionsViewModel @Inject constructor(
     fun reprocessReactions() {
         viewModelScope.launch {
             _isReprocessing.value = true
+            _reprocessProgress.value = "Loading threads…"
             syncLogger.log("ReprocessReactions", "start")
             try {
-                /* Process one thread at a time to avoid loading ~160 K messages into RAM.
-                 * getAll() would OOM on large databases; getAllThreadIds() + getByThread()
-                 * keeps peak heap down to a single thread's worth of messages at once. */
-                val allThreadIds = messageRepository.getAllThreadIds()
-                syncLogger.log("ReprocessReactions", "${allThreadIds.size} threads to scan")
-                var inserted = 0
-                var removed = 0
-                val toDelete = mutableListOf<Long>()
+                /* All DB work runs on Dispatchers.IO so the main thread stays free.
+                 * yield() between threads lets other coroutines (UI updates, etc.) run
+                 * and prevents ANR-style lock-up on large message databases. */
+                withContext(Dispatchers.IO) {
+                    val allThreadIds = messageRepository.getAllThreadIds()
+                    val total = allThreadIds.size
+                    syncLogger.log("ReprocessReactions", "$total threads to scan")
+                    var inserted = 0
+                    var removed  = 0
 
-                allThreadIds.forEach { threadId ->
-                    val msgs = messageRepository.getByThread(threadId)
+                    allThreadIds.forEachIndexed { index, threadId ->
+                        // Update the progress label on each thread so the UI stays responsive.
+                        _reprocessProgress.value = "Thread ${index + 1} / $total"
 
-                    // Pre-partition so reaction fallbacks are never candidates for matching.
-                    val reactionMsgs = msgs.filter { reactionParser.isReactionFallback(it.body) }
-                    val normalMsgs   = msgs.filter { !reactionParser.isReactionFallback(it.body) }
+                        val msgs = messageRepository.getByThread(threadId)
 
-                    if (reactionMsgs.isNotEmpty()) {
-                        syncLogger.log("ReprocessReactions",
-                            "thread=$threadId: ${msgs.size} msgs, ${reactionMsgs.size} reaction fallbacks, ${normalMsgs.size} normal")
-                    }
+                        // Pre-partition: reaction fallbacks must never be candidates for matching.
+                        val reactionMsgs = msgs.filter { reactionParser.isReactionFallback(it.body) }
+                        val normalMsgs   = msgs.filter { !reactionParser.isReactionFallback(it.body) }
 
-                    reactionMsgs.forEach { msg ->
-                        val parsed = reactionParser.parse(msg.body) ?: return@forEach
-                        if (!parsed.isRemoval) {
+                        if (reactionMsgs.isNotEmpty()) {
+                            syncLogger.log("ReprocessReactions",
+                                "thread=$threadId: ${msgs.size} msgs, ${reactionMsgs.size} reaction fallbacks")
+                        }
+
+                        val toDelete = mutableListOf<Long>()
+                        reactionMsgs.forEach { msg ->
+                            val parsed = reactionParser.parse(msg.body) ?: return@forEach
                             val senderAddress = if (msg.isSent) SELF_ADDRESS else msg.address
                             val reaction = reactionParser.processIncomingMessage(msg, normalMsgs, senderAddress)
-                            if (reaction != null && !messageRepository.reactionExists(
-                                    reaction.messageId, reaction.senderAddress, reaction.emoji)) {
-                                messageRepository.insertReaction(reaction)
-                                inserted++
-                                toDelete += msg.id
-                                removed++
-                                syncLogger.log("ReprocessReactions",
-                                    "matched: id=${msg.id} emoji=${parsed.emoji} quote='${parsed.quotedText.take(40)}' → targetId=${reaction.messageId}")
-                            } else {
-                                // Original not found in 100-message window, or duplicate — leave as bubble.
-                                syncLogger.log("ReprocessReactions",
-                                    "no-match: id=${msg.id} emoji=${parsed.emoji} quote='${parsed.quotedText.take(40)}' (${if (reaction == null) "original not found" else "already exists"})")
-                            }
-                        } else {
-                            // Removal: discard the fallback without inserting a reaction entity.
-                            toDelete += msg.id
-                            removed++
-                            syncLogger.log("ReprocessReactions",
-                                "removal: id=${msg.id} emoji=${parsed.emoji} deleted")
-                        }
-                    }
-                }
 
-                toDelete.forEach { messageRepository.deleteById(it) }
-                statsUpdater.recomputeAll()
-                syncLogger.log("ReprocessReactions",
-                    "done: inserted=$inserted removed=$removed (${toDelete.size} fallback messages deleted)")
-                _feedback.value = "Reactions reprocessed: $inserted inserted, $removed fallbacks removed"
+                            if (reaction != null) {
+                                if (parsed.isRemoval) {
+                                    // Remove the reaction entity and delete the fallback bubble.
+                                    messageRepository.deleteReaction(reaction.messageId, reaction.senderAddress, reaction.emoji)
+                                    toDelete += msg.id
+                                    removed++
+                                    syncLogger.log("ReprocessReactions",
+                                        "removal: id=${msg.id} emoji=${parsed.emoji} deleted")
+                                } else if (!messageRepository.reactionExists(
+                                        reaction.messageId, reaction.senderAddress, reaction.emoji)) {
+                                    messageRepository.insertReaction(reaction)
+                                    inserted++
+                                    toDelete += msg.id
+                                    removed++
+                                    syncLogger.log("ReprocessReactions",
+                                        "matched: id=${msg.id} emoji=${parsed.emoji} → targetId=${reaction.messageId}")
+                                } else {
+                                    syncLogger.log("ReprocessReactions",
+                                        "duplicate: id=${msg.id} emoji=${parsed.emoji} already exists")
+                                }
+                            } else {
+                                // Original not found within 100-message window — leave as visible bubble.
+                                syncLogger.log("ReprocessReactions",
+                                    "no-match: id=${msg.id} emoji=${parsed.emoji} quote='${parsed.quotedText.take(40)}'")
+                            }
+                        }
+
+                        // Delete and fix thread preview per-thread rather than in one final pass —
+                        // this flushes incrementally and keeps peak RAM low.
+                        if (toDelete.isNotEmpty()) {
+                            toDelete.forEach { messageRepository.deleteById(it) }
+                            val latest = messageRepository.getLatestForThread(threadId)
+                            if (latest != null) {
+                                threadRepository.updateLastMessageAt(threadId, latest.timestamp)
+                                threadRepository.updateLastMessagePreview(threadId, latest.previewText)
+                            }
+                        }
+
+                        // Yield after each thread so other coroutines (especially UI) get CPU time.
+                        yield()
+                    }
+
+                    statsUpdater.recomputeAll()
+                    syncLogger.log("ReprocessReactions",
+                        "done: inserted=$inserted removed=$removed")
+                    _feedback.value = "Reactions reprocessed: $inserted inserted, $removed fallbacks removed"
+                }
             } catch (e: Exception) {
                 syncLogger.logError("ReprocessReactions", "CRASH during reprocessReactions", e)
                 throw e
             } finally {
                 _isReprocessing.value = false
+                _reprocessProgress.value = null
             }
         }
     }

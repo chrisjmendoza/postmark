@@ -11,7 +11,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
-import com.plusorminustwo.postmark.data.sync.FirstLaunchSyncWorker
+import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
@@ -32,7 +32,7 @@ import javax.inject.Inject
  * Responsibilities:
  *  - Exposes the full ordered [threads] list and per-thread [unreadCounts] as reactive
  *    [StateFlow]s for the UI.
- *  - Monitors [FirstLaunchSyncWorker] state to surface the [isSyncing] banner.
+ *  - Monitors [SmsHistoryImportWorker] state to surface the [isSyncing] banner.
  *  - Performs sync recovery on startup: if threads exist but messages are missing (or
  *    vice-versa), it re-enqueues the first-launch sync worker to repair the database.
  */
@@ -70,9 +70,9 @@ class ConversationsViewModel @Inject constructor(
                 )
                 prefs.edit().remove("first_sync_completed").apply()
                 workManager.enqueueUniqueWork(
-                    FirstLaunchSyncWorker.WORK_NAME,
+                    SmsHistoryImportWorker.WORK_NAME,
                     ExistingWorkPolicy.KEEP,
-                    FirstLaunchSyncWorker.buildRequest()
+                    SmsHistoryImportWorker.buildRequest()
                 )
             }
         }
@@ -86,25 +86,25 @@ class ConversationsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     val isSyncing: StateFlow<Boolean> = workManager
-        .getWorkInfosForUniqueWorkFlow(FirstLaunchSyncWorker.WORK_NAME)
+        .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
         .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     // Live progress data emitted by the worker every 500 rows via setProgress().
     // Null when the worker is not running or hasn't emitted progress yet.
     val syncProgress: StateFlow<SyncProgress?> = workManager
-        .getWorkInfosForUniqueWorkFlow(FirstLaunchSyncWorker.WORK_NAME)
+        .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
         .map { infos ->
             val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
                 ?: return@map null
             val data = running.progress
-            val done = data.getInt(FirstLaunchSyncWorker.KEY_PROGRESS_DONE, -1)
+            val done = data.getInt(SmsHistoryImportWorker.KEY_PROGRESS_DONE, -1)
             if (done < 0) null
             else SyncProgress(
-                phase = data.getString(FirstLaunchSyncWorker.KEY_PROGRESS_PHASE) ?: "",
+                phase = data.getString(SmsHistoryImportWorker.KEY_PROGRESS_PHASE) ?: "",
                 done  = done,
-                total = data.getInt(FirstLaunchSyncWorker.KEY_PROGRESS_TOTAL, 0),
-                eta   = data.getString(FirstLaunchSyncWorker.KEY_PROGRESS_ETA) ?: ""
+                total = data.getInt(SmsHistoryImportWorker.KEY_PROGRESS_TOTAL, 0),
+                eta   = data.getString(SmsHistoryImportWorker.KEY_PROGRESS_ETA) ?: ""
             )
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -112,21 +112,21 @@ class ConversationsViewModel @Inject constructor(
     // Last known sync result — reads from SharedPreferences (written by the worker),
     // and updates live when a new work run completes.
     val syncStatus: StateFlow<String?> = workManager
-        .getWorkInfosForUniqueWorkFlow(FirstLaunchSyncWorker.WORK_NAME)
+        .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
         .map { infos ->
             val latest = infos.firstOrNull()
             when (latest?.state) {
                 WorkInfo.State.SUCCEEDED ->
-                    latest.outputData.getString(FirstLaunchSyncWorker.KEY_STATUS)
-                        ?: prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null)
+                    latest.outputData.getString(SmsHistoryImportWorker.KEY_STATUS)
+                        ?: prefs.getString(SmsHistoryImportWorker.KEY_STATUS, null)
                 WorkInfo.State.FAILED ->
-                    latest.outputData.getString(FirstLaunchSyncWorker.KEY_ERROR)
+                    latest.outputData.getString(SmsHistoryImportWorker.KEY_ERROR)
                         ?.let { "Error: $it" }
-                        ?: prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null)
-                else -> prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null)
+                        ?: prefs.getString(SmsHistoryImportWorker.KEY_STATUS, null)
+                else -> prefs.getString(SmsHistoryImportWorker.KEY_STATUS, null)
             }
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), prefs.getString(FirstLaunchSyncWorker.KEY_STATUS, null))
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), prefs.getString(SmsHistoryImportWorker.KEY_STATUS, null))
 
     // ── Default SMS role ──────────────────────────────────────────────────────
     // Re-checked on every screen resume via refreshDefaultSmsStatus() so the banner
@@ -161,9 +161,9 @@ class ConversationsViewModel @Inject constructor(
         android.util.Log.i("SyncTrigger", "ConversationsViewModel.triggerSync — enqueuing REPLACE")
         prefs.edit().remove("first_sync_completed").apply()
         workManager.enqueueUniqueWork(
-            FirstLaunchSyncWorker.WORK_NAME,
+            SmsHistoryImportWorker.WORK_NAME,
             ExistingWorkPolicy.REPLACE,
-            FirstLaunchSyncWorker.buildRequest()
+            SmsHistoryImportWorker.buildRequest()
         )
     }
 
@@ -307,7 +307,7 @@ class ConversationsViewModel @Inject constructor(
         Message(id, threadId, address, body, ts, isSent, type)
 }
 
-/** Snapshot of in-progress sync data emitted by [FirstLaunchSyncWorker] via setProgress(). */
+/** Snapshot of in-progress sync data emitted by [SmsHistoryImportWorker] via setProgress(). */
 data class SyncProgress(
     val phase: String,
     val done: Int,

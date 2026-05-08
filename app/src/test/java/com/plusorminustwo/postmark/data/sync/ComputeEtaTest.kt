@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Unit tests for [FirstLaunchSyncWorker.Companion.computeEta].
+ * Unit tests for [SmsHistoryImportWorker.Companion.computeEta].
  *
  * The function takes elapsed time and row counts (no clock access) so every
  * case is fully deterministic.
@@ -13,7 +13,7 @@ import org.junit.Test
 class ComputeEtaTest {
 
     private fun eta(elapsedMs: Long, done: Int, total: Int) =
-        FirstLaunchSyncWorker.computeEta(elapsedMs, done, total)
+        SmsHistoryImportWorker.computeEta(elapsedMs, done, total)
 
     // ── Guard cases: return "" ─────────────────────────────────────────────────
 

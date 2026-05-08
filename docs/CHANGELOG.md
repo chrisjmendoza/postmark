@@ -6,6 +6,59 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-05-08
 
+### Fix: MMS reaction fallbacks not resolved; reaction pill layout broken
+
+Two bugs surfaced from live device testing after the reaction system was first exercised:
+
+**Bug 1 — `syncLatestMms` had no reaction partitioning (Hanna conversation)**
+
+`syncLatestSms` already partitioned reaction fallback SMS before inserting, but
+`syncLatestMms` called `messageRepository.insertAll(newMessages)` unconditionally.
+After `reprocessReactions()` deleted an MMS reaction fallback its `maxMmsId` dropped,
+the ContentObserver fired, and `syncLatestMms` re-fetched and re-inserted the fallback
+as a plain message bubble.
+
+- Added `val (reactionMsgs, normalMessages) = newMessages.partition { reactionParser.isReactionFallback(it.body) }`
+  to `syncLatestMms`, identical to the `syncLatestSms` pattern.
+- All delivery-status / attachmentUri transfer and thread-preview update logic now uses
+  `normalMessages` instead of `newMessages`.
+- Added optimistic-message cleanup for threads that only received MMS reaction fallbacks
+  (mirrors the same `normalThreadIds` exclusion logic in `syncLatestSms`).
+- MMS reaction fallbacks are now resolved to `Reaction` entities; removals call
+  `deleteReaction`; unresolved fallbacks fall back to a normal visible bubble.
+
+**Bug 2 — Reaction pill rendered inside bubble box with incorrect offsets**
+
+`ReactionPills` was a child of the outer `Box(widthIn(max=280.dp))` with a visual-only
+`offset(y=16.dp)` (layout-invisible, so the Box height was unchanged). The timestamp Row
+then used `offset(y=(-12).dp)` which pulled it UP into the bubble area — both ended up
+overlapping the bubble content.
+
+- Moved `ReactionPills` out of the bubble `Box` to be a direct `Column` sibling placed
+  between the bubble and the timestamp Row.
+- Changed `.align(Alignment.BottomStart/End)` (Box scope) to `.align(Alignment.Start/End)`
+  (Column scope).
+- Changed offset to `(-12).dp` — pills badge the bubble's bottom edge (iMessage style)
+  rather than floating disconnected beneath it.
+- Removed the erroneous `offset(y=(-12).dp)` from the timestamp Row; it now appears
+  naturally in the Column flow below the pills.
+- `./gradlew --no-configuration-cache test` → BUILD SUCCESSFUL.
+
+### Fix: reaction fallback test suite broken by Gemini refactoring
+
+Gemini moved `findOriginalMessage`, `normalize`, and `processIncomingMessage` from
+`AndroidReactionParser` to `ReactionFallbackParser` but left the test file calling them
+on `AndroidReactionParser`, causing 23 compile errors.
+
+- Restored `findOriginalMessage`, `normalize`, and `processIncomingMessage` to
+  `AndroidReactionParser` as `internal` methods (mirroring `ReactionFallbackParser`
+  so unit tests can exercise them without a `Context`).
+- Updated the stale `processIncomingMessage returns null for removal` test to reflect the
+  new contract: the method returns a non-null `Reaction` for matched removals so the sync
+  handler has the `messageId` it needs to call `deleteReaction`. The caller checks
+  `ParsedReaction.isRemoval` to decide insert vs. delete.
+- `./gradlew test` → BUILD SUCCESSFUL.
+
 ### Chore: shared debug keystore for consistent signing across dev machines
 
 - `app/debug.keystore` committed to the repo with standard Android debug credentials
@@ -310,7 +363,7 @@ Five systematic bugs across the SMS receive / sync pipeline fixed in a single se
    historical MMS concurrently with the worker. Fix: check the `first_sync_completed`
    SharedPrefs flag instead; defer to the worker while it's running.
 
-6. **FirstLaunchSyncWorker: thread upsert with REPLACE overwrites user settings**
+6. **SmsHistoryImportWorker: thread upsert with REPLACE overwrites user settings**
    `threadRepository.upsertAll()` used `OnConflictStrategy.REPLACE`, which deletes the
    existing row and inserts a new one — resetting `isPinned`, `isMuted`, and
    `notificationsEnabled` to defaults on every re-sync. Fix: new `insertIgnoreAll()` +
@@ -361,7 +414,7 @@ Four root causes fixed across the parsing and sync pipeline:
    between Apple (smart quotes) and Android (straight quotes) keyboards.
 
 4. **Unresolved reactions preserved as normal bubbles** — `DevOptionsViewModel
-   .reprocessReactions()`, `FirstLaunchSyncWorker`, and `SmsSyncHandler` previously
+   .reprocessReactions()`, `SmsHistoryImportWorker`, and `SmsSyncHandler` previously
    deleted/discarded every reaction fallback message regardless of whether the original
    was found. Now: only delete (or convert to reaction entity) when resolution succeeds.
    If the original is not found, the fallback SMS stays visible as a normal text bubble.
@@ -371,7 +424,7 @@ Four root causes fixed across the parsing and sync pipeline:
 5. **Sent reactions attributed to `SELF_ADDRESS`** — for a sent reaction fallback SMS,
    `msg.address` is the contact's number (the recipient), not the local user. The UI
    uses `senderAddress == SELF_ADDRESS` to highlight reaction chips as "yours" and for
-   dedup/stats queries. Fixed in `FirstLaunchSyncWorker`, `SmsSyncHandler`, and
+   dedup/stats queries. Fixed in `SmsHistoryImportWorker`, `SmsSyncHandler`, and
    `DevOptionsViewModel.reprocessReactions()` to pass `SELF_ADDRESS` when `msg.isSent`.
 
 **Tests:** `AndroidReactionParserTest` extended with 15 new cases covering newest-first
@@ -398,7 +451,7 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
 - All 322 unit tests passing.
 
 ### MMS import — streaming with ETA + in-app progress banner
-- **`FirstLaunchSyncWorker`** — MMS sync no longer accumulates all rows in memory before
+- **`SmsHistoryImportWorker`** — MMS sync no longer accumulates all rows in memory before
   writing. `processMmsCursor()` now flushes every 500 rows via `flushMmsBatch()`, making
   messages visible in the thread view progressively during the hour-long import rather than
   only at the end.
@@ -423,7 +476,7 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
   exact → prefix → fuzzy `.contains()` match; excludes the reaction message itself from
   candidates. 15 unit tests in `AndroidReactionParserTest`.
 - **`ReactionFallbackParser`** — new `@Singleton` unified wrapper; tries Android format
-  first, then Apple. `SmsSyncHandler` and `FirstLaunchSyncWorker` now inject
+  first, then Apple. `SmsSyncHandler` and `SmsHistoryImportWorker` now inject
   `ReactionFallbackParser` instead of `AppleReactionParser` directly.
 - **`AppleReactionParser`** — updated quote-variant regex to use the same Unicode class as
   `AndroidReactionParser`, ensuring consistent handling of curly/guillemet quotes in both
@@ -431,7 +484,7 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
 - **`SmsSyncHandler`** — reaction fallback messages are now partitioned BEFORE insert:
   reaction messages are resolved to `Reaction` entities (with dedup check via
   `ReactionDao.countByMessageSenderAndEmoji`) and never written to the messages table.
-- **`FirstLaunchSyncWorker`** — same partition-and-resolve logic during initial historical
+- **`SmsHistoryImportWorker`** — same partition-and-resolve logic during initial historical
   sync; reaction fallback message IDs are deleted from Room after processing; thread
   previews are updated to the latest non-reaction message after cleanup.
 - **`ReactionDao`** — added `countByMessageSenderAndEmoji` for dedup guard.
@@ -493,12 +546,12 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
   Android 14 (API 34) enforces that the declared `foregroundServiceType` of a service
   is a subset of the type requested at runtime. Without this declaration WorkManager's
   `setForeground()` call threw `IllegalArgumentException` and killed
-  `FirstLaunchSyncWorker` on every launch — preventing MMS data from ever being
+  `SmsHistoryImportWorker` on every launch — preventing MMS data from ever being
   persisted. SMS had been synced in an earlier app version before the foreground
   service requirement was added; MMS never completed successfully until now.
 
 ### Historical sync — sync progress notification
-- **`FirstLaunchSyncWorker`** — foreground notification now shows a determinate
+- **`SmsHistoryImportWorker`** — foreground notification now shows a determinate
   progress bar and counts: `"Syncing SMS — 12,500 / 51,234"` and
   `"Syncing MMS — 5,000 / 108,592"`. Updates every 500 rows. Phase labels:
   "Syncing SMS…" (indeterminate spinner at start) → counted SMS persist batches →
@@ -521,7 +574,7 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
 - Empty state updated: "Type to search, or pick SMS / MMS to browse".
 
 ### Historical sync — case-insensitive MIME type matching
-- `FirstLaunchSyncWorker.getMmsBody()` and `SmsSyncHandler.getMmsBodyIncremental()` now
+- `SmsHistoryImportWorker.getMmsBody()` and `SmsSyncHandler.getMmsBodyIncremental()` now
   use `equals(ignoreCase = true)` for `text/plain` / `application/smil` and
   `startsWith(..., ignoreCase = true)` for `image/`, `video/`, `audio/`. Fixes missing
   images and voice memos from Samsung and other OEMs that store MIME types with mixed case
@@ -551,7 +604,7 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
 - **`ConversationsViewModel.init`** recovery guard extended: in addition to catching
   `syncDone && threadsEmpty`, it now also fires when `!threadsEmpty && messagesEmpty`
   (both `messageDao.getMaxId()` and `messageDao.getMaxMmsId()` return null). Fixes a state
-  where `FirstLaunchSyncWorker` was killed between the thread upsert and the message insert:
+  where `SmsHistoryImportWorker` was killed between the thread upsert and the message insert:
   thread list showed previews (from denormalized `lastMessagePreview` on `ThreadEntity`) but
   every thread view was empty because no `Message` rows had been written.
 
@@ -620,7 +673,7 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
 
 ### SMS/MMS sync audit — 5 gaps resolved
 - **Bug A (HIGH) — null-address rows silently dropped** — `processSmsCursor`
-  (`FirstLaunchSyncWorker`) and `syncLatestSms` (`SmsSyncHandler`) both skipped rows where
+  (`SmsHistoryImportWorker`) and `syncLatestSms` (`SmsSyncHandler`) both skipped rows where
   `address` was null (`?: continue`). Null addresses are normal for WAP push, carrier
   service messages, and some Samsung OEM notifications — causing entire threads or intra-
   thread gaps to be invisible. Fix: `?: ""` preserves the row; `lookupContactName` short-
@@ -638,10 +691,10 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
   Fix: both `getMmsAddress` (full sync) and `getMmsAddressIncremental` (incremental sync)
   return `"Unknown"` when the address column equals `"insert-address-token"`.
 - **Bug F (LOW) — race window before first DB commit** — `SmsSyncHandler` bailed when
-  `maxKnownId == 0` (DB empty); a `ContentObserver` firing during `FirstLaunchSyncWorker`'s
+  `maxKnownId == 0` (DB empty); a `ContentObserver` firing during `SmsHistoryImportWorker`'s
   first 500-row batch window would exit without processing that message. Fix: added
   `SmsSyncHandler.triggerCatchUp()` (public suspend fun, runs one `syncLatestSms` +
-  `syncLatestMms` pass); injected into `FirstLaunchSyncWorker` via Hilt; called
+  `syncLatestMms` pass); injected into `SmsHistoryImportWorker` via Hilt; called
   immediately after `first_sync_completed = true`.
 - *(Bug E deferred — group MMS sent-address display label wrong; thread grouping unaffected.)*
 
@@ -654,7 +707,7 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
   New `previewText` extension returns body when non-empty, otherwise "📷 Photo" /
   "🎥 Video" / "🎵 Audio message" / "[MMS]" based on mime type.
 - **`MessageEntity`** — both new fields wired through `toDomain()` / `toEntity()`.
-- **`FirstLaunchSyncWorker`** — `getMmsBody()` rewritten to return `MmsParts(body,
+- **`SmsHistoryImportWorker`** — `getMmsBody()` rewritten to return `MmsParts(body,
   attachmentUri, mimeType)`. Queries `_id`, `ct`, `text` from `content://mms/{id}/part`;
   accumulates `text/plain` into body; captures first `image/*`, `video/*`, or `audio/*`
   part as `content://mms/part/{partId}`; skips `application/smil`. Thread preview uses
@@ -686,16 +739,16 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
 - **Root cause**: AndroidX Startup's `WorkManagerInitializer` ContentProvider ran before
   Hilt injected `HiltWorkerFactory`, so WorkManager fell back to its reflection-based
   factory which cannot resolve `@AssistedInject` constructors — crashing with
-  `NoSuchMethodException: FirstLaunchSyncWorker.<init> [Context, WorkerParameters]`.
+  `NoSuchMethodException: SmsHistoryImportWorker.<init> [Context, WorkerParameters]`.
 - **`AndroidManifest`** — disabled `WorkManagerInitializer` via `tools:node="remove"` inside
   a `tools:node="merge"` wrapper on `InitializationProvider`. Added `xmlns:tools` to root.
 - **`app/build.gradle.kts`** — added `buildConfig = true` to `buildFeatures {}` block
   (AGP 8+ disables `BuildConfig` generation by default; required for `BuildConfig.DEBUG`).
-- **`FirstLaunchSyncWorker`** — all verbose log calls moved behind `private fun debugLog(msg)`
+- **`SmsHistoryImportWorker`** — all verbose log calls moved behind `private fun debugLog(msg)`
   helper gated on `BuildConfig.DEBUG`; Samsung fallback now also triggers when
   `primaryRowCount <= 0` (catches OneUI firmware returning non-null but empty cursor).
 - **`ConversationsViewModel`** — recovery guard on `init`: if `first_sync_completed=true`
-  but the threads table is empty, clears the pref and re-enqueues `FirstLaunchSyncWorker`.
+  but the threads table is empty, clears the pref and re-enqueues `SmsHistoryImportWorker`.
 - **`ThreadDao`** — added `@Query("SELECT COUNT(*) FROM threads") suspend fun count(): Int`.
 - **`ThreadRepository`** — added `suspend fun isEmpty(): Boolean = dao.count() == 0`.
 - **Confirmed on device**: 620 threads + 51 069 messages synced successfully after fix.
@@ -721,7 +774,7 @@ the self-match regression. The old `fuzzy containment used as fallback` test rem
   "Load sample data" and "Clear all data" buttons.
 
 ### Samsung READ_SMS fix + role denial banner
-- **`FirstLaunchSyncWorker`** — when `content://sms` returns a null cursor (affects some Samsung
+- **`SmsHistoryImportWorker`** — when `content://sms` returns a null cursor (affects some Samsung
   OneUI firmware even with `READ_SMS` granted and the default SMS role held), the sync now
   falls back to `content://sms/inbox`, `content://sms/sent`, and `content://sms/draft` and
   merges the results. All three URIs are tried and results merged into the shared thread/message
@@ -1111,7 +1164,7 @@ The stats screen was wired up but showed zeros because `StatsUpdater` was only c
 - **Dependency upgrades** — Kotlin 2.2.10, KSP 2.3.2, Room 2.7.0, Hilt 2.56, AGP 9.2.0.
 
 ### SMS Engine
-- **Runtime permissions + first-launch sync** — `MainActivity` requests `READ_SMS` + `READ_CONTACTS` at runtime. `FirstLaunchSyncWorker` enqueued exactly once via a `postmark_prefs` flag after permissions are granted. Reliable sync using `REPLACE` policy to clear stale WorkManager entries. Removed upfront default-SMS-app role request from startup.
+- **Runtime permissions + first-launch sync** — `MainActivity` requests `READ_SMS` + `READ_CONTACTS` at runtime. `SmsHistoryImportWorker` enqueued exactly once via a `postmark_prefs` flag after permissions are granted. Reliable sync using `REPLACE` policy to clear stale WorkManager entries. Removed upfront default-SMS-app role request from startup.
 - **Sync diagnostics** — Logcat logging under tag `PostmarkSync`, in-app status banner, error reporting surface.
 - **Room schema v1→v3** — `ThreadEntity` gained `lastMessagePreview` (migration 1→2); `MessageEntity` gained `deliveryStatus` (migration 2→3). `fallbackToDestructiveMigration` is not used.
 - **FTS4 virtual table** — word-start search (`^"term"*`) with INSERT/UPDATE/DELETE sync triggers. Fixed trigger syntax; added tests and docs.
@@ -1133,7 +1186,7 @@ The stats screen was wired up but showed zeros because `StatsUpdater` was only c
 - "Back up now" button wired to `BackupScheduler.runNow()` via Hilt injection.
 
 ### Stats
-- `StatsUpdater` — full compute after `FirstLaunchSyncWorker`; incremental update from `SmsSyncHandler`; streak, active days, avg response time, emoji counts, by-day-of-week, by-month.
+- `StatsUpdater` — full compute after `SmsHistoryImportWorker`; incremental update from `SmsSyncHandler`; streak, active days, avg response time, emoji counts, by-day-of-week, by-month.
 - Integration test suite for `StatsUpdater`; migration tests; new DAO method tests.
 
 ### Export

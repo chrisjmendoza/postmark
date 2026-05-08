@@ -41,7 +41,7 @@ import dagger.assisted.AssistedInject
  * Runs as a foreground worker (shows a persistent notification with progress).
  */
 @HiltWorker
-class FirstLaunchSyncWorker @AssistedInject constructor(
+class SmsHistoryImportWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
     private val threadRepository: ThreadRepository,
@@ -234,18 +234,23 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
             val normalMsgs = threadMsgs.filter { !reactionParser.isReactionFallback(it.body) }
             reactionMsgsInThread.forEach { msg ->
                 val parsed = reactionParser.parse(msg.body) ?: return@forEach
-                if (!parsed.isRemoval) {
-                    val senderAddress = if (msg.isSent) SELF_ADDRESS else msg.address
-                    val reaction = reactionParser.processIncomingMessage(msg, normalMsgs, senderAddress)
-                    if (reaction != null && !messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
+                val senderAddress = if (msg.isSent) SELF_ADDRESS else msg.address
+                val reaction = reactionParser.processIncomingMessage(msg, normalMsgs, senderAddress)
+
+                if (reaction != null) {
+                    if (parsed.isRemoval) {
+                        messageRepository.deleteReaction(reaction.messageId, reaction.senderAddress, reaction.emoji)
+                        reactionMsgIds += msg.id
+                    } else if (!messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
                         messageRepository.insertReaction(reaction)
                         // Only delete the fallback when the reaction was successfully resolved.
                         reactionMsgIds += msg.id
                     }
-                    // If reaction is null (original not found or > 100 messages away),
-                    // leave the message in Room as a normal visible bubble.
-                } else {
-                    // Removal: delete without inserting a reaction entity.
+                }
+                // If reaction is null (original not found or > 100 messages away),
+                // leave the message in Room as a normal visible bubble (only for additions).
+                else if (parsed.isRemoval) {
+                    // Removal without original found: still delete the fallback message.
                     reactionMsgIds += msg.id
                 }
             }
@@ -698,7 +703,7 @@ class FirstLaunchSyncWorker @AssistedInject constructor(
         )
 
         fun buildRequest(): OneTimeWorkRequest =
-            OneTimeWorkRequestBuilder<FirstLaunchSyncWorker>()
+            OneTimeWorkRequestBuilder<SmsHistoryImportWorker>()
                 .setConstraints(
                     Constraints.Builder()
                         .setRequiredNetworkType(NetworkType.NOT_REQUIRED)

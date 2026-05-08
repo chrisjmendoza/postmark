@@ -24,8 +24,49 @@ class ReactionFallbackParser @Inject constructor(
     /** Returns true if this message body is a reaction fallback and should NOT be a visible bubble. */
     fun isReactionFallback(body: String): Boolean = parse(body) != null
 
-    fun findOriginalMessage(quotedText: String, candidates: List<Message>): Message? =
-        androidParser.findOriginalMessage(quotedText, candidates)
+    /**
+     * Searches [candidates] for the message that [quotedText] refers to.
+     *
+     * Tries exact match, then Unicode-normalized match (handling Apple/Android
+     * quote variants), then prefix match. Searches the 100 most-recent candidates
+     * newest-first. Returns `null` if no match is found in that window.
+     */
+    fun findOriginalMessage(quotedText: String, candidates: List<Message>): Message? {
+        val trimmedQuery = quotedText.trim()
+        if (trimmedQuery.isEmpty()) return null
+
+        // Search newest-to-oldest, capped at 100 messages — reactions referring to older
+        // messages are treated as unresolvable and rendered as normal bubbles.
+        val searchWindow = candidates
+            .sortedByDescending { it.timestamp }
+            .take(100)
+
+        // 1. Exact match (case-insensitive, trimmed)
+        searchWindow.firstOrNull { it.body.trim().equals(trimmedQuery, ignoreCase = true) }
+            ?.let { return it }
+
+        // 2. Normalized match — handles apostrophe/quote mismatches between
+        //    Apple (U+2019 right single quote) and Android (U+0027 straight apostrophe)
+        //    and other common Unicode substitutions between platforms.
+        val normalizedQuery = normalize(trimmedQuery)
+        searchWindow.firstOrNull { normalize(it.body.trim()).equals(normalizedQuery, ignoreCase = true) }
+            ?.let { return it }
+
+        // 3. Prefix match — reaction may quote only the start of a long message
+        searchWindow.firstOrNull {
+            val trimmedBody = it.body.trim()
+            trimmedBody.startsWith(trimmedQuery, ignoreCase = true) ||
+            normalize(trimmedBody).startsWith(normalizedQuery, ignoreCase = true)
+        }?.let { return it }
+
+        return null
+    }
+
+    private fun normalize(text: String): String = text
+        .replace('\u2019', '\'').replace('\u2018', '\'')
+        .replace('\u201C', '"').replace('\u201D', '"')
+        .replace("\u2026", "...")
+        .replace('\u2014', '-').replace('\u2013', '-')
 
     fun processIncomingMessage(
         message: Message,
@@ -40,7 +81,7 @@ class ReactionFallbackParser @Inject constructor(
             it.id != message.id && !isReactionFallback(it.body)
         }
         val original = findOriginalMessage(parsed.quotedText, candidates) ?: return null
-        if (parsed.isRemoval) return null
+
         return Reaction(
             id = 0,
             messageId = original.id,

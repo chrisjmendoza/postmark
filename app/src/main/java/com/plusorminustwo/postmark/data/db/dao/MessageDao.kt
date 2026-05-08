@@ -124,7 +124,7 @@ interface MessageDao {
 
     /** Lowest stored MMS row id (already offset by MMS_ID_OFFSET).
      *  Subtract MMS_ID_OFFSET to get the raw content-provider `_id`.
-     *  Used by [FirstLaunchSyncWorker] to resume a newest-first MMS import. */
+     *  Used by [SmsHistoryImportWorker] to resume a newest-first MMS import. */
     @Query("SELECT MIN(id) FROM messages WHERE isMms = 1")
     suspend fun getMinMmsId(): Long?
 

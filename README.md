@@ -87,7 +87,7 @@ app/src/main/java/com/plusorminustwo/postmark/
 │   ├── db/             # Room database, entities, DAOs, migrations
 │   ├── repository/     # Data access layer
 │   ├── preferences/    # ThemePreferenceRepository
-│   └── sync/           # FirstLaunchSyncWorker, StatsUpdater,
+│   └── sync/           # SmsHistoryImportWorker, StatsUpdater,
 │                       # StatsAlgorithms
 ├── di/                 # Hilt modules (DatabaseModule, RepositoryModule)
 ├── domain/
@@ -142,7 +142,7 @@ app/src/main/java/com/plusorminustwo/postmark/
 
 ### First launch
 
-On first launch Postmark requests the **default SMS role** via `RoleManager`. Once granted, `FirstLaunchSyncWorker` performs a full historical sync from the Android system SMS content provider (`content://sms`) into the local Room database. All existing messages, including Apple reaction fallback texts, are processed during this sync. Subsequent messages are picked up live by `SmsReceiver` and `SmsContentObserver`.
+On first launch Postmark requests the **default SMS role** via `RoleManager`. Once granted, `SmsHistoryImportWorker` performs a full historical sync from the Android system SMS content provider (`content://sms`) into the local Room database. All existing messages, including Apple reaction fallback texts, are processed during this sync. Subsequent messages are picked up live by `SmsReceiver` and `SmsContentObserver`.
 
 ---
 

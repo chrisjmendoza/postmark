@@ -14,7 +14,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] `SmsManagerWrapper` for sending
 - [x] `SmsContentObserver` watching `content://sms`
 - [x] `SmsSyncHandler` — incremental sync from content provider to Room; Channel+Mutex concurrency control; correct MMS gate using `first_sync_completed` flag
-- [x] `FirstLaunchSyncWorker` — full historical sync with retry; Logcat tag `PostmarkSync`; last-sync status written to SharedPrefs; WorkManager Hilt init fixed (disabled `WorkManagerInitializer` in AndroidManifest); thread upsert uses IGNORE + targeted UPDATE to preserve user settings
+- [x] `SmsHistoryImportWorker` — full historical sync with retry; Logcat tag `PostmarkSync`; last-sync status written to SharedPrefs; WorkManager Hilt init fixed (disabled `WorkManagerInitializer` in AndroidManifest); thread upsert uses IGNORE + targeted UPDATE to preserve user settings
 - [x] `SmsReceiver` — writes `content://sms/inbox` on `SMS_DELIVER_ACTION`; all ContentResolver IO on `Dispatchers.IO` inside `goAsync()`; explicit `THREAD_ID` via `Telephony.Threads.getOrCreateThreadId()`
 - [x] `SyncLogger` — persistent append-only log for sync/receive events; viewable in DevOptions screen
 - [x] `AppleReactionParser` — 6 emoji × 5 languages, loaded from JSON asset; unified with `AndroidReactionParser` via `ReactionFallbackParser`
@@ -47,6 +47,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Per-thread backup policy UI — `⋮` overflow menu → 3-option radio dialog
 - [x] **Thread view performance** — flat `ThreadListItem` render model pre-computed in ViewModel (`buildRenderState()`); six `remember` blocks removed from `ThreadContent`; LazyColumn flattened to single `items()` with stable keys; Coil `.size(560, 480)` on `MmsAttachment`; `LaunchedEffect` blocks extracted to focused helper composables; all ~20 ViewModel callbacks stabilised with `remember(viewModel) { ... }`; `Trace` markers for Perfetto profiling
 - [x] **MMS PDU fix** — `multipart/related` + SMIL with regions, `Content-Id`/`Content-Location` per part, subscription-aware `SmsManager`, PDU overhead budget (`PDU_OVERHEAD_BYTES = 5_000`)
+- [x] **Reaction system fully wired** — `syncLatestMms` now partitions MMS reaction fallbacks (mirrors `syncLatestSms`); re-insert-after-delete bug fixed; `ReactionPills` moved to Column sibling of bubble Box for correct iMessage-style badge layout; `reprocessReactions()` non-blocking on `Dispatchers.IO` with per-thread progress label
 - [x] **New conversation screen** — `NewConversationScreen` + `NewConversationViewModel`; live contact search; FAB on `ConversationsScreen`; `AppNavigation` destination
 - [x] **Shared debug keystore** — `app/debug.keystore` in repo; all dev machines produce same app signature, eliminating uninstall/reinstall cycle when switching machines
 
@@ -81,7 +82,7 @@ Build order follows the spec. Each phase depends on the previous.
 
 - [x] **Coil 2.7.0** — `coil-compose` added as dependency
 - [x] **Room schema v9** — `attachmentUri TEXT` + `mimeType TEXT` nullable columns on messages; `MIGRATION_8_9` non-destructive
-- [x] **MmsParts extraction** — both `FirstLaunchSyncWorker` and `SmsSyncHandler` query `_id`/`ct`/`text` from `content://mms/{id}/part`; capture first image/video/audio part URI; skip SMIL
+- [x] **MmsParts extraction** — both `SmsHistoryImportWorker` and `SmsSyncHandler` query `_id`/`ct`/`text` from `content://mms/{id}/part`; capture first image/video/audio part URI; skip SMIL
 - [x] **`previewText` extension** — "📷 Photo" / "🎥 Video" / "🎵 Audio message" fallback when body empty; used for thread list preview
 - [x] **`MmsAttachment` composable** — `AsyncImage` for images, play-icon placeholder for video, chip for audio
 - [x] **`MessageBubble` updated** — attachment-mode vs text-mode layout switch; caption below attachment when body non-empty
@@ -114,7 +115,7 @@ Build order follows the spec. Each phase depends on the previous.
 
 - [x] `StatsScreen` with three-way segmented toggle (Numbers / Charts / Heatmap)
 - [x] Numbers view — global totals from `ThreadStatsEntity`
-- [x] **`StatsUpdater`** — full compute after `FirstLaunchSyncWorker`, incremental update from `SmsSyncHandler`; streak, active days, avg response time, emoji counts, by-day-of-week, by-month; comprehensive integration test suite
+- [x] **`StatsUpdater`** — full compute after `SmsHistoryImportWorker`, incremental update from `SmsSyncHandler`; streak, active days, avg response time, emoji counts, by-day-of-week, by-month; comprehensive integration test suite
 - [x] **Charts view** — monthly bar chart (Jan–Dec) and day-of-week bar chart; month-scoped DOW data derived from `heatmapMessages`
 - [x] **Heatmap view** — month-navigation calendar grid with 7 intensity tiers; day-tap detail panel; multi-day selection; month/thread scoped; summary cards
 - [x] **Per-thread drilldown** — tap thread in Numbers view → same three-style view filtered to that thread; back restores correct origin scope (GLOBAL or PER_THREAD list)
@@ -147,7 +148,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Three-tier matching: exact → prefix → fuzzy containment
 - [x] Stored as `ReactionEntity`, not as a message
 - [x] Run on every incoming message via `SmsSyncHandler`
-- [x] Run on all historical messages during `FirstLaunchSyncWorker`
+- [x] Run on all historical messages during `SmsHistoryImportWorker`
 
 ---
 

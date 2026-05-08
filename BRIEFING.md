@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: May 6, 2026
+Last updated: May 8, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -37,7 +37,7 @@ com.plusorminustwo.postmark
 │   ├── db                  ← Room database v2
 │   ├── repository
 │   └── sync                ← ContentObserver +
-│                              FirstLaunchSyncWorker
+│                              SmsHistoryImportWorker
 ├── domain
 │   ├── model
 │   └── formatter           ← ExportFormatter (scaffolded)
@@ -196,7 +196,7 @@ WHAT IS WORKING (tested on device)
 ✅ StatsUpdater computing real stats from Room data
 ✅ GlobalStats aggregated across all threads
 ✅ Room schema v6 — all migrations non-destructive
-✅ FirstLaunchSyncWorker — full SMS sync confirmed on device
+✅ SmsHistoryImportWorker — full SMS sync confirmed on device
    (620 threads, 51 069 SMS + 108 000+ MMS synced on Samsung S24 Ultra)
 ✅ Streaming MMS import — newest-first (_id DESC); messages appear
    in thread view progressively every 500 rows; foreground notification
@@ -283,7 +283,7 @@ WHAT IS WORKING (tested on device)
       Apple↔Android keyboard mismatches.
    4. Unresolved reactions (original >100 messages away or
       not found) preserved as normal visible bubbles in
-      all three code paths (FirstLaunchSyncWorker,
+      all three code paths (SmsHistoryImportWorker,
       SmsSyncHandler, DevOptionsViewModel).
    5. Sent reactions use SELF_ADDRESS not contact’s address
       so own-reaction highlighting and dedup work correctly.
@@ -303,12 +303,11 @@ WHAT IS WORKING (tested on device)
      outside pill to dismiss
    - Select button in action bar promotes to full
      multi-select mode (selected message carries over)
-   - ReactionPills chip anchored to bubble bottom-right
-     corner (received) or bottom-left (sent) using
-     Box + Alignment; Spacer(12.dp) reserves overhang
-     only at cluster tail (SINGLE or BOTTOM)
-   - Timestamp offset(-12.dp) when reactions present
-     so it stays close to bubble
+   - ReactionPills chip anchored to bubble bottom — Column sibling of bubble
+     Box; offset(y=(-12).dp) badges bubble bottom edge (iMessage style);
+     align(Start) for sent / align(End) for received; Spacer(12.dp) reserves
+     space only at cluster tail (SINGLE or BOTTOM)
+   - Timestamp follows naturally in Column below pills (no negative offset)
    - Own reactions highlighted (primaryContainer background,
      primary border)
    - Toggle: tap to add, tap own reaction to remove
@@ -342,7 +341,7 @@ WHAT IS WORKING (tested on device)
    B: Samsung fallback now includes outbox + failed URIs
    C: isSent uses type != INBOX / msgBox != INBOX (covers drafts/outbox/failed)
    D: "insert-address-token" MMS placeholder replaced with "Unknown"
-   F: SmsSyncHandler.triggerCatchUp() called at end of FirstLaunchSyncWorker
+   F: SmsSyncHandler.triggerCatchUp() called at end of SmsHistoryImportWorker
       to catch messages arriving in the race window before first DB commit
 ✅ SMS send pipeline fixed (SmsManager audit):
    - SmsManagerWrapper: adds THREAD_ID, DATE_SENT, SEEN=1 to ContentValues;
@@ -375,7 +374,7 @@ SAMSUNG + SYNC — RESOLVED (May 2–3, 2026)
 Two original bugs fixed (May 2):
 1. WorkManager init: AndroidX Startup ran WorkManagerInitializer
    before Hilt injected HiltWorkerFactory, causing
-   NoSuchMethodException on FirstLaunchSyncWorker. Fixed by
+   NoSuchMethodException on SmsHistoryImportWorker. Fixed by
    disabling WorkManagerInitializer in AndroidManifest via
    tools:node="remove".
 2. Samsung READ_SMS: content://sms returns null cursor despite
@@ -408,13 +407,35 @@ TIER 1 — REMAINING (in priority order)
 3. SYNC COMPLETENESS INVESTIGATION
    Some threads + messages missing from sync.
    Likely causes: address normalization, cursor pagination,
-   or type filtering in SmsSyncHandler / FirstLaunchSyncWorker.
+   or type filtering in SmsSyncHandler / SmsHistoryImportWorker.
 
 4. MMS MEDIA — remaining playback
    Tap image → full-screen viewer, tap video → ExoPlayer dialog.
    (Audio chip play/pause is now done.)
 
 COMPLETED THIS SPRINT (May 8, 2026)
+✅ Reaction system — MMS fallbacks and layout fully fixed
+   syncLatestMms now partitions reaction-fallback MMS (mirrors syncLatestSms):
+   only normal messages are insertAll'd; fallbacks are resolved via
+   reactionParser.processIncomingMessage() → insertReaction / deleteReaction;
+   unresolved fallbacks preserved as visible bubbles. Eliminates the
+   re-insert-after-reprocess bug where ContentObserver re-fetched deleted MMS
+   fallbacks and stored them as plain message bubbles.
+   ReactionPills moved from inside bubble Box to Column sibling between the
+   bubble and the timestamp Row. offset(y=(-12).dp) badges the bubble's bottom
+   edge (iMessage style). Removed erroneous offset(y=(-12).dp) from the
+   timestamp Row that pulled it into the bubble area.
+✅ reprocessReactions() non-blocking (Dispatchers.IO, yield(), per-thread progress)
+   Full rewrite: withContext(Dispatchers.IO); yield() after each thread to keep
+   Coroutine cancellable; progress label emitted via _reprocessProgress StateFlow
+   ("Thread X / Y") displayed in DevOptionsScreen subtitle while running.
+✅ SmsHistoryImportWorker rename (formerly FirstLaunchSyncWorker)
+   Renamed across 14 files for clarity; name now reflects actual behavior
+   (full historical import + sync-recovery re-runs).
+✅ Reaction test suite restored after Gemini refactoring
+   findOriginalMessage / normalize / processIncomingMessage restored as internal
+   methods on AndroidReactionParser; stale removal test updated to reflect the
+   new non-null Reaction return contract.
 ✅ Shared debug keystore (feat/ui-improvements → master)
    app/debug.keystore committed; all dev machines now use the same signature.
    Eliminates the uninstall/reinstall cycle when building from a different machine.
@@ -462,7 +483,7 @@ COMPLETED THIS SPRINT (May 5, 2026)
    MessageDao.getMinMmsId() + MessageRepository.getMinMmsId() added.
 ✅ In-app sync progress banner (ConversationsScreen)
    LinearProgressIndicator + phase/count/ETA text below top bar
-   during FirstLaunchSyncWorker run; scoped to WORK_NAME so it
+   during SmsHistoryImportWorker run; scoped to WORK_NAME so it
    never appears during incremental SmsSyncHandler catch-ups.
 ✅ Settings screen — scrollable (verticalScroll on Column)
 ✅ computeEta() refactored to internal companion object function
@@ -478,7 +499,7 @@ COMPLETED THIS SPRINT (May 5, 2026)
    - AppleReactionParser: updated quote-variant regex.
    - SmsSyncHandler: partitions reaction fallbacks BEFORE insert;
      dedup check via countByMessageSenderAndEmoji.
-   - FirstLaunchSyncWorker: same partition logic; deletes fallback
+   - SmsHistoryImportWorker: same partition logic; deletes fallback
      messages from Room after processing; fixes thread previews.
    - ReactionDao: added countByMessageSenderAndEmoji.
    - MessageDao: added deleteById + getLatestNonReactionForThread.

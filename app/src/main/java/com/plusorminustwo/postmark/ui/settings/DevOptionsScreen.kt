@@ -30,6 +30,7 @@ fun DevOptionsScreen(
     val feedback by viewModel.feedback.collectAsState()
     val isRecomputing by viewModel.isRecomputing.collectAsState()
     val isReprocessing by viewModel.isReprocessing.collectAsState()
+    val reprocessProgress by viewModel.reprocessProgress.collectAsState()
     val logContent by viewModel.logContent.collectAsState()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -123,7 +124,8 @@ fun DevOptionsScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Reprocess reactions", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        "Scan all messages, convert reaction fallbacks to Reaction entities, remove fallback bubbles",
+                        if (isReprocessing && reprocessProgress != null) reprocessProgress!!
+                        else "Scan all messages, convert reaction fallbacks to Reaction entities, remove fallback bubbles",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

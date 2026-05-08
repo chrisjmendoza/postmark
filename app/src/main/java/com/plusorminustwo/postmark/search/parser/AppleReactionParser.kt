@@ -1,8 +1,6 @@
 package com.plusorminustwo.postmark.search.parser
 
 import android.content.Context
-import com.plusorminustwo.postmark.domain.model.Message
-import com.plusorminustwo.postmark.domain.model.Reaction
 import org.json.JSONArray
 import org.json.JSONObject
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -63,55 +61,6 @@ class AppleReactionParser @Inject constructor(
             }
         }
         return null
-    }
-
-    /**
-     * Searches [candidates] for the message that [quotedText] refers to.
-     *
-     * Strategy: exact match → Unicode-normalised match → prefix match.
-     * Searches the 100 most-recent candidates newest-first.
-     */
-    fun findOriginalMessage(quotedText: String, candidates: List<Message>): Message? {
-        val searchWindow = candidates
-            .sortedByDescending { it.timestamp }
-            .take(100)
-
-        searchWindow.firstOrNull { it.body.equals(quotedText, ignoreCase = true) }
-            ?.let { return it }
-
-        val normalizedQuery = normalize(quotedText)
-        searchWindow.firstOrNull { normalize(it.body).equals(normalizedQuery, ignoreCase = true) }
-            ?.let { return it }
-
-        return searchWindow.firstOrNull {
-            it.body.startsWith(quotedText, ignoreCase = true) ||
-            normalize(it.body).startsWith(normalizedQuery, ignoreCase = true)
-        }
-    }
-
-    private fun normalize(text: String): String = text
-        .replace('\u2019', '\'').replace('\u2018', '\'')
-        .replace('\u201C', '"').replace('\u201D', '"')
-        .replace("\u2026", "...")
-        .replace('\u2014', '-').replace('\u2013', '-')
-
-    fun processIncomingMessage(
-        message: Message,
-        threadMessages: List<Message>,
-        senderAddress: String
-    ): Reaction? {
-        val parsed = parse(message.body) ?: return null
-        val original = findOriginalMessage(parsed.quotedText, threadMessages) ?: return null
-        if (parsed.isRemoval) return null // caller handles deletion
-
-        return Reaction(
-            id = 0,
-            messageId = original.id,
-            senderAddress = senderAddress,
-            emoji = parsed.emoji,
-            timestamp = message.timestamp,
-            rawText = message.body
-        )
     }
 
     private fun loadPatterns(): List<ReactionPattern> {

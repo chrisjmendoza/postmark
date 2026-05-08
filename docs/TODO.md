@@ -7,9 +7,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🔴 TIER 1 — Core Loop (app unusable as daily driver without these)
 
 ### Thread view — finish the experience
-- [x] **Reaction chip position** — chips sit at bubble bottom using
-      Box + Alignment (BottomStart for sent, BottomEnd for received),
-      offset(y=16.dp) overhang, Spacer only at cluster tail.
+- [x] **Reaction chip position** — chips moved to Column sibling of the
+      bubble Box; `offset(y=(-12).dp)` badges the bubble bottom edge;
+      `align(Start/End)` for sent/received; timestamp offset removed so
+      it follows naturally in the Column flow. iMessage-style badge look.
 - [x] **Reaction pill overflow** — FlowRow replaces Row in `ReactionPills`;
       bubble width captured via `onSizeChanged` constrains pills so they
       wrap to a second line instead of overflowing on short messages.

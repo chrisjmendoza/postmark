@@ -26,7 +26,7 @@ The app stores its own copy of SMS data in a Room database. This allows fast, of
 │                     Data Layer                          │
 │   Repository → Room DAOs → SQLite (+ FTS4)              │
 │   SmsContentObserver → SmsSyncHandler                   │
-│   FirstLaunchSyncWorker (WorkManager)                   │
+│   SmsHistoryImportWorker (WorkManager)                   │
 └───────────────────────────┬─────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────┐
@@ -89,7 +89,7 @@ JOIN messages_fts ON m.id = messages_fts.rowid
 `SmsContentObserver`, `SmsSyncHandler`, `BackupScheduler` are `@Singleton` Hilt
 bindings injected directly.
 
-`FirstLaunchSyncWorker` and `BackupWorker` use `@HiltWorker` + `HiltWorkerFactory`
+`SmsHistoryImportWorker` and `BackupWorker` use `@HiltWorker` + `HiltWorkerFactory`
 (configured in `PostmarkApplication`).
 
 ---
@@ -97,7 +97,7 @@ bindings injected directly.
 ## SMS Sync Strategy
 
 ### On first launch
-`FirstLaunchSyncWorker` (WorkManager `OneTimeWorkRequest`) reads the full `content://sms`
+`SmsHistoryImportWorker` (WorkManager `OneTimeWorkRequest`) reads the full `content://sms`
 and `content://mms` cursors newest-first (`_id DESC`), hydrates threads + messages into
 Room in 500-row chunks, runs `ReactionFallbackParser` over every message, then sets a
 flag in SharedPreferences so it never repeats. Supports checkpoint resume: on WorkManager
