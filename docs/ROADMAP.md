@@ -45,6 +45,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **Emoji reaction picker** — long-press bubble → iMessage-style pill (5 usage-ranked quick reactions + ➕ more); `EmojiPickerBottomSheet` with 8-col grid, 4 sections, search; `EmojiData.kt` houses section data
 - [x] **Message action top bar** — long-press → Copy (toast) / Select / Forward; `ActionItem` tints corrected; scrim restricted to content area below action bar
 - [x] Per-thread backup policy UI — `⋮` overflow menu → 3-option radio dialog
+- [x] **Thread view performance** — flat `ThreadListItem` render model pre-computed in ViewModel (`buildRenderState()`); six `remember` blocks removed from `ThreadContent`; LazyColumn flattened to single `items()` with stable keys; Coil `.size(560, 480)` on `MmsAttachment`; `LaunchedEffect` blocks extracted to focused helper composables; all ~20 ViewModel callbacks stabilised with `remember(viewModel) { ... }`; `Trace` markers for Perfetto profiling
 
 ---
 

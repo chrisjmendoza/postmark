@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: May 6, 2026
+Last updated: May 8, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -18,6 +18,12 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       within range. Useful for exporting a full month at once.
 - [x] **Scroll-to-date fix** — first message of selected date should
       appear near top of screen, not bottom.
+- [x] **Thread view performance** — flat `ThreadListItem` render model
+      pre-computed in ViewModel off-thread; LazyColumn flattened to single
+      `items()` with stable keys; six `remember` blocks removed; Coil
+      `.size(560, 480)` on MMS images; LaunchedEffect blocks extracted;
+      all ViewModel callbacks stabilised with `remember(viewModel)`; Trace
+      markers added for Perfetto profiling.
 
 ### Default SMS role + real sync (Samsung S24 Ultra blocker)
 - [x] **Onboarding screen** — implemented in OnboardingScreen.kt;

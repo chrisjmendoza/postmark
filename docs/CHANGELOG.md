@@ -4,6 +4,51 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-05-08
+
+### Improvement: Thread view performance — flat render model, stable lambdas, Coil sizing
+
+Six performance improvements to `ThreadScreen` / `ThreadViewModel`:
+
+1. **`ThreadListItem.kt` (new file)** — `ThreadListItem` sealed interface (`Bubble` | `DateHeader`),
+   `ThreadRenderState` data class, and `buildRenderState()` pure function. All message
+   grouping, clustering, and index-map computation moved off the main thread into the
+   ViewModel's `combine` block (`Dispatchers.Default`). Includes `Trace.beginSection
+   ("ThreadRenderState.build")` for Perfetto / Android Studio CPU Profiler.
+
+2. **`ThreadUiState.renderState`** — `ThreadRenderState` field added to `ThreadUiState`.
+   Computed once per message-list emission inside the existing `combine`, not once per
+   recomposition.
+
+3. **LazyColumn flattened** — replaced the nested `forEach { items(...) item(...) }` DSL
+   with a single `items(uiState.renderState.items, key = { it.key })`. All six `remember`
+   blocks that re-derived grouped/reversed/cluster/index maps in `ThreadContent` removed.
+   Stable string keys let Compose diff the list correctly without rebinding unchanged bubbles.
+   The search-jump `LaunchedEffect` simplified from full re-grouping to a single
+   `renderState.messageIdToIndex[id]` lookup.
+
+4. **Coil `.size(560, 480)`** — `MmsAttachment` `ImageRequest` now caps bitmap decode at
+   2× the bubble's max display size (280 dp × 240 dp). Camera images (12 MP+) were
+   previously decoded fully into memory before display.
+
+5. **`LaunchedEffect` extraction** — three focused helper composables extracted to the
+   bottom of `ThreadScreen.kt`: `ThreadScrollToBottomEffect`, `ThreadNewMessageScrollEffect`,
+   `ThreadFloatingDatePillEffect`. Each restarts only on its own keys.
+
+6. **Stable lambdas** — all ~20 ViewModel callbacks in `ThreadScreen` wrapped in
+   `remember(viewModel) { ... }`. Previously, every `uiState` StateFlow emission caused
+   `ThreadContent` to receive new lambda instances, forcing full recomposition of every
+   `MessageBubble` even when no message data changed.
+
+**Trace markers added:**
+- `ThreadRenderState.build` — in `buildRenderState()`, covers grouping + clustering + map construction
+- `ThreadViewModel.sendMessage` — wraps the full send coroutine including DB insert and SMS/MMS dispatch
+
+No new unit tests: changes are structural (render model pre-computation, lambda identity).
+`./gradlew test` → BUILD SUCCESSFUL.
+
+---
+
 ## 2026-05-06 (3)
 
 ### Fix: MMS send fails with `MMS_ERROR_IO_ERROR` (resultCode=5) on Samsung

@@ -137,6 +137,35 @@ fun ThreadScreen(
     val activeDates by viewModel.activeDates.collectAsState()
     val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
 
+    // ── Stable lambdas ────────────────────────────────────────────────────────
+    // Wrapped in remember(viewModel) so the same function reference is reused
+    // across recompositions. Prevents child composables that accept lambdas from
+    // recomposing just because ThreadScreen recomposed.
+    val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
+    val onDismissDefaultSmsDialog = remember(viewModel) { { viewModel.dismissDefaultSmsDialog() } }
+    val onUpdateBackupPolicy      = remember(viewModel) { { policy: BackupPolicy -> viewModel.updateBackupPolicy(policy) } }
+    val onDismissReactionPicker   = remember(viewModel) { { viewModel.dismissReactionPicker() } }
+    val onEnterSelectionModeFromActionMode = remember(viewModel) { { viewModel.enterSelectionModeFromActionMode() } }
+    val onForwardMessage          = remember(viewModel) { { id: Long -> viewModel.forwardMessage(id) } }
+    val onExitSelectionMode       = remember(viewModel) { { viewModel.exitSelectionMode() } }
+    val onSetSelectionScope       = remember(viewModel) { { scope: SelectionScope -> viewModel.setSelectionScope(scope) } }
+    val onToggleMute              = remember(viewModel) { { viewModel.toggleMute() } }
+    val onTogglePin               = remember(viewModel) { { viewModel.togglePin() } }
+    val onToggleNotifications     = remember(viewModel) { { viewModel.toggleNotificationsEnabled() } }
+    val onEnterSelectionMode      = remember(viewModel) { { viewModel.enterSelectionMode() } }
+    val onReplyTextChanged        = remember(viewModel) { { text: String -> viewModel.onReplyTextChanged(text) } }
+    val onSendMessage             = remember(viewModel) { { viewModel.sendMessage() } }
+    val onToggleSelection         = remember(viewModel) { { id: Long -> viewModel.toggleSelection(id) } }
+    val onShowReactionPicker      = remember(viewModel) { { id: Long, y: Float -> viewModel.showReactionPicker(id, y) } }
+    val onToggleReaction          = remember(viewModel) { { id: Long, emoji: String -> viewModel.toggleReaction(id, emoji) } }
+    val onToggleTimestamp         = remember(viewModel) { { id: Long -> viewModel.toggleTimestamp(id) } }
+    val onToggleMessageIds        = remember(viewModel) { { ids: List<Long> -> viewModel.toggleMessageIds(ids) } }
+    val onRetry                   = remember(viewModel) { { id: Long -> viewModel.retrySend(id) } }
+    val onSelectByDateRange       = remember(viewModel) { { start: LocalDate, end: LocalDate -> viewModel.selectByDateRange(start, end) } }
+    val onAttachmentSelected      = remember(viewModel) { { uri: Uri, mimeType: String -> viewModel.onAttachmentSelected(uri, mimeType) } }
+    val onClearAttachment         = remember(viewModel) { { viewModel.clearAttachment() } }
+    val onSearchInThread_         = remember(viewModel, threadId, onSearchInThread) { { onSearchInThread(threadId) } }
+
     ThreadContent(
         uiState = uiState,
         timestampPref = timestampPref,
@@ -148,30 +177,30 @@ fun ThreadScreen(
         onBack = onBack,
         onViewStats = onViewStats,
         onBackupSettingsClick = onBackupSettingsClick,
-        onHighlightMessage = { viewModel.highlightMessage(it) },
-        onDismissDefaultSmsDialog = { viewModel.dismissDefaultSmsDialog() },
-        onUpdateBackupPolicy = { viewModel.updateBackupPolicy(it) },
-        onDismissReactionPicker = { viewModel.dismissReactionPicker() },
-        onEnterSelectionModeFromActionMode = { viewModel.enterSelectionModeFromActionMode() },
-        onForwardMessage = { viewModel.forwardMessage(it) },
-        onExitSelectionMode = { viewModel.exitSelectionMode() },
-        onSetSelectionScope = { viewModel.setSelectionScope(it) },
-        onToggleMute = { viewModel.toggleMute() },
-        onTogglePin = { viewModel.togglePin() },
-        onToggleNotifications = { viewModel.toggleNotificationsEnabled() },
-        onEnterSelectionMode = { viewModel.enterSelectionMode() },
-        onReplyTextChanged = { viewModel.onReplyTextChanged(it) },
-        onSendMessage = { viewModel.sendMessage() },
-        onToggleSelection = { viewModel.toggleSelection(it) },
-        onShowReactionPicker = { id, y -> viewModel.showReactionPicker(id, y) },
-        onToggleReaction = { id, emoji -> viewModel.toggleReaction(id, emoji) },
-        onToggleTimestamp = { viewModel.toggleTimestamp(it) },
-        onToggleMessageIds = { viewModel.toggleMessageIds(it) },
-        onRetry = { viewModel.retrySend(it) },
-        onSelectByDateRange = { start, end -> viewModel.selectByDateRange(start, end) },
-        onAttachmentSelected = { uri, mimeType -> viewModel.onAttachmentSelected(uri, mimeType) },
-        onClearAttachment = { viewModel.clearAttachment() },
-        onSearchInThread = { onSearchInThread(threadId) }
+        onHighlightMessage = onHighlightMessage,
+        onDismissDefaultSmsDialog = onDismissDefaultSmsDialog,
+        onUpdateBackupPolicy = onUpdateBackupPolicy,
+        onDismissReactionPicker = onDismissReactionPicker,
+        onEnterSelectionModeFromActionMode = onEnterSelectionModeFromActionMode,
+        onForwardMessage = onForwardMessage,
+        onExitSelectionMode = onExitSelectionMode,
+        onSetSelectionScope = onSetSelectionScope,
+        onToggleMute = onToggleMute,
+        onTogglePin = onTogglePin,
+        onToggleNotifications = onToggleNotifications,
+        onEnterSelectionMode = onEnterSelectionMode,
+        onReplyTextChanged = onReplyTextChanged,
+        onSendMessage = onSendMessage,
+        onToggleSelection = onToggleSelection,
+        onShowReactionPicker = onShowReactionPicker,
+        onToggleReaction = onToggleReaction,
+        onToggleTimestamp = onToggleTimestamp,
+        onToggleMessageIds = onToggleMessageIds,
+        onRetry = onRetry,
+        onSelectByDateRange = onSelectByDateRange,
+        onAttachmentSelected = onAttachmentSelected,
+        onClearAttachment = onClearAttachment,
+        onSearchInThread = onSearchInThread_
     )
 }
 
@@ -246,39 +275,27 @@ private fun ThreadContent(
     }
 
     // ── Scroll to message (search-jump) ───────────────────────────────────────
+    // Uses renderState.messageIdToIndex directly — no re-grouping needed.
 
     LaunchedEffect(scrollToMessageId) {
         if (scrollToMessageId == -1L) return@LaunchedEffect
-        val messages = snapshotFlow { uiState.messages }
-            .first { it.any { msg -> msg.id == scrollToMessageId } }
-        val localGrouped = messages.groupByDay()
-        val localReversedByDate = localGrouped.mapValues { (_, msgs) -> msgs.reversed() }
-        var itemIndex = 0
-        var targetIndex = -1
-        localGrouped.entries.reversed().forEach { (dateLabel, dayMessages) ->
-            val msgs = localReversedByDate[dateLabel] ?: emptyList()
-            msgs.forEach { msg ->
-                if (msg.id == scrollToMessageId) targetIndex = itemIndex
-                itemIndex++
-            }
-            itemIndex++ // header item
+        // Wait until the target message is present in the render state.
+        val targetIndex = snapshotFlow { uiState.renderState.messageIdToIndex[scrollToMessageId] }
+            .first { it != null } ?: return@LaunchedEffect
+        // Snap to item first so layoutInfo is populated for the target.
+        listState.scrollToItem(targetIndex)
+        // Wait for the frame that includes the target item in visibleItemsInfo.
+        snapshotFlow { listState.layoutInfo }
+            .first { info -> info.visibleItemsInfo.any { it.index == targetIndex } }
+        // Compute the offset that centers the item in the viewport.
+        val info = listState.layoutInfo
+        val item = info.visibleItemsInfo.firstOrNull { it.index == targetIndex }
+        if (item != null) {
+            val viewportHeight = info.viewportEndOffset - info.viewportStartOffset
+            val centeredOffset = (viewportHeight / 2) - (item.size / 2)
+            listState.animateScrollToItem(targetIndex, scrollOffset = -centeredOffset)
         }
-        if (targetIndex >= 0) {
-            // Snap to item first so layoutInfo is populated for the target.
-            listState.scrollToItem(targetIndex)
-            // Wait for the frame that includes the target item in visibleItemsInfo.
-            snapshotFlow { listState.layoutInfo }
-                .first { info -> info.visibleItemsInfo.any { it.index == targetIndex } }
-            // Compute the offset that centers the item in the viewport.
-            val info = listState.layoutInfo
-            val item = info.visibleItemsInfo.firstOrNull { it.index == targetIndex }
-            if (item != null) {
-                val viewportHeight = info.viewportEndOffset - info.viewportStartOffset
-                val centeredOffset = (viewportHeight / 2) - (item.size / 2)
-                listState.animateScrollToItem(targetIndex, scrollOffset = -centeredOffset)
-            }
-            onHighlightMessage(scrollToMessageId)
-        }
+        onHighlightMessage(scrollToMessageId)
     }
 
     // ── New-message auto-scroll / FAB nudge ────────────────────────────────
@@ -286,73 +303,28 @@ private fun ThreadContent(
     // effect inside the inner Box can drive the same FAB state.
     var fabVisible by remember { mutableStateOf(false) }
 
-    // When the user taps Send, scroll to the bottom unconditionally — even if
-    // they were reading history. This is distinct from an incoming message
-    // arriving while the user is scrolled up (that case uses the FAB nudge).
-    LaunchedEffect(Unit) {
-        scrollToBottomEvent.collect {
-            listState.animateScrollToItem(0)
-        }
-    }
-
-    val messageCount = uiState.messages.size
-    LaunchedEffect(messageCount) {
-        if (messageCount == 0) return@LaunchedEffect
-        if (listState.firstVisibleItemIndex <= 1) {
-            // Already at the bottom — scroll to reveal the new message.
-            listState.animateScrollToItem(0)
-        } else {
-            // User is reading history — show the FAB for 3 s so they know a
-            // new message arrived without hijacking their scroll position.
-            fabVisible = true
-            delay(3_000)
-            fabVisible = false
-        }
-    }
-
     // ── Floating date pill ────────────────────────────────────────────────────
-
     var pillVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        snapshotFlow { listState.isScrollInProgress }
-            .collectLatest { scrolling ->
-                if (scrolling) pillVisible = true
-                else { delay(PILL_HIDE_DELAY_MS); pillVisible = false }
-            }
-    }
+
+    // Scroll effects — each isolated in its own helper composable so unrelated
+    // state changes don't trigger other effects unnecessarily.
+    ThreadScrollToBottomEffect(scrollToBottomEvent, listState)
+    ThreadNewMessageScrollEffect(
+        messageCount = uiState.messages.size,
+        listState    = listState,
+        onFabVisible = { fabVisible = it }
+    )
+    ThreadFloatingDatePillEffect(
+        listState = listState,
+        onPillVisible = { pillVisible = it }
+    )
 
     // ── Derived display state ─────────────────────────────────────────────────
-
-    val grouped = remember(uiState.messages) { uiState.messages.groupByDay() }
-
-    val reversedByDate = remember(grouped) {
-        grouped.mapValues { (_, msgs) -> msgs.reversed() }
-    }
-
-    val messageIdToDate = remember(grouped) {
-        grouped.flatMap { (label, msgs) -> msgs.map { it.id to label } }.toMap()
-    }
-
-    val dateToHeaderIndex = remember(grouped) { buildDateToHeaderIndex(grouped) }
-
-    val messageIdToIndex = remember(grouped) {
-        var idx = 0
-        buildMap<Long, Int> {
-            grouped.entries.reversed().forEach { (dateLabel, _) ->
-                val msgs = reversedByDate[dateLabel] ?: emptyList()
-                msgs.forEachIndexed { i, msg -> put(msg.id, idx + i) }
-                idx += msgs.size + 1  // +1 for the date header
-            }
-        }
-    }
+    // All grouping, clustering, and index maps are pre-computed in ThreadViewModel
+    // via buildRenderState() and live in uiState.renderState. Nothing to derive here.
 
     val initialScrollDateLabel = remember(scrollToDate) {
         if (scrollToDate.isEmpty()) "" else localDateToLabel(LocalDate.parse(scrollToDate))
-    }
-
-    // Cluster positions — pure display, computed once per message-set change.
-    val clusterPositions = remember(uiState.messages) {
-        computeClusterPositions(uiState.messages)
     }
 
     val visibleDate by remember {
@@ -362,7 +334,7 @@ private fun ThreadContent(
             val topItem = visible.maxByOrNull { it.index } ?: return@derivedStateOf ""
             when (val key = topItem.key) {
                 is String -> key.removePrefix("header_")
-                is Long   -> messageIdToDate[key] ?: ""
+                is Long   -> uiState.renderState.messageIdToDate[key] ?: ""
                 else      -> ""
             }
         }
@@ -372,7 +344,7 @@ private fun ThreadContent(
     if (visibleDate.isNotEmpty()) pillDateLabel = visibleDate
 
     fun scrollToDateLabel(label: String) {
-        dateToHeaderIndex[label]?.let { headerIdx ->
+        uiState.renderState.dateToHeaderIndex[label]?.let { headerIdx ->
             scope.launch {
                 // Instant snap so the item is in view; scrollToItem is a suspend function
                 // that waits for layout to settle, so layoutInfo is accurate immediately after.
@@ -398,8 +370,8 @@ private fun ThreadContent(
         if (initialScrollDone || uiState.messages.isEmpty()) return@LaunchedEffect
         if (scrollToMessageId == -1L && scrollToDate.isEmpty()) { initialScrollDone = true; return@LaunchedEffect }
         val targetIdx = when {
-            scrollToMessageId != -1L            -> messageIdToIndex[scrollToMessageId]
-            initialScrollDateLabel.isNotEmpty() -> dateToHeaderIndex[initialScrollDateLabel]
+            scrollToMessageId != -1L            -> uiState.renderState.messageIdToIndex[scrollToMessageId]
+            initialScrollDateLabel.isNotEmpty() -> uiState.renderState.dateToHeaderIndex[initialScrollDateLabel]
             else                                -> null
         }
         if (targetIdx != null) {
@@ -600,33 +572,31 @@ private fun ThreadContent(
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
-                grouped.entries.reversed().forEach { (dateLabel, messages) ->
-                    val msgs = reversedByDate[dateLabel] ?: emptyList()
-                    items(msgs, key = { it.id }) { message ->
-                        MessageBubble(
-                            message = message,
-                            clusterPosition = clusterPositions[message.id] ?: ClusterPosition.SINGLE,
-                            isSelected = message.id in uiState.selectedMessageIds,
+                // Flat list from renderState — no forEach loops, stable keys, no recomputation.
+                items(uiState.renderState.items, key = { it.key }) { item ->
+                    when (item) {
+                        is ThreadListItem.Bubble -> MessageBubble(
+                            message = item.message,
+                            clusterPosition = item.clusterPosition,
+                            isSelected = item.message.id in uiState.selectedMessageIds,
                             isSelectionMode = uiState.isSelectionMode,
-                            isHighlighted = message.id == uiState.highlightedMessageId,
-                            onToggleSelect = { onToggleSelection(message.id) },
-                            onLongClick = { y -> onShowReactionPicker(message.id, y) },
-                            onReactionTargetYChanged = if (message.id == uiState.reactionPickerMessageId)
+                            isHighlighted = item.message.id == uiState.highlightedMessageId,
+                            onToggleSelect = { onToggleSelection(item.message.id) },
+                            onLongClick = { y -> onShowReactionPicker(item.message.id, y) },
+                            onReactionTargetYChanged = if (item.message.id == uiState.reactionPickerMessageId)
                                 { y -> liveBubbleY = y } else null,
-                            onReactionClick = { emoji -> onToggleReaction(message.id, emoji) },
+                            onReactionClick = { emoji -> onToggleReaction(item.message.id, emoji) },
                             timestampPref = timestampPref,
-                            isTimestampExpanded = message.id in uiState.expandedTimestampIds,
-                            onToggleTimestamp = { onToggleTimestamp(message.id) },
-                            onRetry = { onRetry(message.id) }
+                            isTimestampExpanded = item.message.id in uiState.expandedTimestampIds,
+                            onToggleTimestamp = { onToggleTimestamp(item.message.id) },
+                            onRetry = { onRetry(item.message.id) }
                         )
-                    }
-                    item(key = "header_$dateLabel") {
-                        DateHeader(
-                            label = dateLabel,
+                        is ThreadListItem.DateHeader -> DateHeader(
+                            label = item.dateLabel,
                             isSelectionMode = uiState.isSelectionMode,
-                            selectedCount = messages.count { it.id in uiState.selectedMessageIds },
-                            totalCount = messages.size,
-                            onToggleDay = { onToggleMessageIds(messages.map { it.id }) }
+                            selectedCount = item.messageIds.count { it in uiState.selectedMessageIds },
+                            totalCount = item.messageIds.size,
+                            onToggleDay = { onToggleMessageIds(item.messageIds) }
                         )
                     }
                 }
@@ -1049,6 +1019,10 @@ private fun MmsAttachment(uri: String, mimeType: String?) {
             SubcomposeAsyncImage(
                 model = ImageRequest.Builder(ctx)
                     .data(Uri.parse(uri))
+                    // Bound the decoded bitmap to 2× the bubble's max display size (280dp × 240dp).
+                    // Coil will not decode a larger bitmap than this, cutting memory use and
+                    // decode time significantly for full-resolution camera images.
+                    .size(560, 480)
                     .crossfade(true)
                     .listener(onError = { _, result ->
                         android.util.Log.e(
@@ -2234,5 +2208,64 @@ private fun ActionItem(
             style = MaterialTheme.typography.labelSmall,
             color = effectiveTint
         )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scroll effect helpers — extracted to dedicated composables so each LaunchedEffect
+// only restarts when its own keys change, not when any ThreadContent state changes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Scrolls the list to the bottom whenever a scroll-to-bottom event is emitted.
+ * Triggered by the user sending a message.
+ */
+@Composable
+private fun ThreadScrollToBottomEffect(
+    scrollToBottomEvent: kotlinx.coroutines.flow.Flow<Unit>,
+    listState: androidx.compose.foundation.lazy.LazyListState
+) {
+    LaunchedEffect(Unit) {
+        scrollToBottomEvent.collect { listState.animateScrollToItem(0) }
+    }
+}
+
+/**
+ * Watches the total message count. If the user is already near the bottom, auto-scrolls
+ * to show the new message. Otherwise raises the FAB for [PILL_HIDE_DELAY_MS]-ish ms.
+ */
+@Composable
+private fun ThreadNewMessageScrollEffect(
+    messageCount: Int,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    onFabVisible: (Boolean) -> Unit
+) {
+    LaunchedEffect(messageCount) {
+        if (messageCount == 0) return@LaunchedEffect
+        if (listState.firstVisibleItemIndex <= 1) {
+            listState.animateScrollToItem(0)
+        } else {
+            onFabVisible(true)
+            kotlinx.coroutines.delay(3_000)
+            onFabVisible(false)
+        }
+    }
+}
+
+/**
+ * Shows the floating date pill while the list is scrolling, then hides it
+ * after [PILL_HIDE_DELAY_MS] of inactivity.
+ */
+@Composable
+private fun ThreadFloatingDatePillEffect(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    onPillVisible: (Boolean) -> Unit
+) {
+    LaunchedEffect(Unit) {
+        snapshotFlow { listState.isScrollInProgress }
+            .collectLatest { scrolling ->
+                if (scrolling) onPillVisible(true)
+                else { kotlinx.coroutines.delay(PILL_HIDE_DELAY_MS); onPillVisible(false) }
+            }
     }
 }

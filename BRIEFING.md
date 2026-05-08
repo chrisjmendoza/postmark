@@ -394,7 +394,7 @@ Five additional sync gaps resolved (May 3 audit):
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
-ACTIVE BRANCH: feat/ui-improvements
+ACTIVE BRANCH: feat/thread-view
 
 TIER 1 — REMAINING (in priority order)
 1. MULTIPART MESSAGE HANDLING
@@ -414,20 +414,16 @@ TIER 1 — REMAINING (in priority order)
    Tap image → full-screen viewer, tap video → ExoPlayer dialog.
    (Audio chip play/pause is now done.)
 
-COMPLETED THIS SPRINT (May 6, 2026)
-✅ Unread badges in conversation list (schema v10)
-   isRead field on messages; markAllRead on thread open;
-   observeUnreadCounts() Flow drives Badge in ThreadRow;
-   SmsSyncHandler sets isRead=isSent for new rows.
-✅ Search-in-thread — overflow menu item now navigates to
-   SearchScreen pre-filtered to the current thread.
-   Screen.Search route updated to support ?threadId= arg;
-   SearchViewModel reads threadId from SavedStateHandle.
-✅ 6 SMS pipeline reliability fixes (see 2026-05-06 CHANGELOG)
-   SmsReceiver inbox write, goAsync IO, THREAD_ID, Channel/Mutex,
-   MMS gate flag, MIGRATION_8_9 delivery fields.
-✅ SyncLogger injected into SmsSyncHandler; DevOptions sync log viewer
-   with Share button (FileProvider content:// URI).
+COMPLETED THIS SPRINT (May 8, 2026)
+✅ Thread view performance (feat/thread-view branch)
+   ThreadListItem.kt: flat render model (Bubble|DateHeader), ThreadRenderState,
+   buildRenderState() pure function — runs in ViewModel combine on Dispatchers.Default.
+   ThreadUiState.renderState field added; six remember blocks removed from ThreadContent;
+   LazyColumn flattened from nested forEach DSL to single items() with stable keys;
+   Coil .size(560, 480) on MmsAttachment; LaunchedEffect blocks extracted to
+   ThreadScrollToBottomEffect / ThreadNewMessageScrollEffect / ThreadFloatingDatePillEffect;
+   all ~20 ViewModel lambdas wrapped in remember(viewModel) for stable references.
+   Trace markers: ThreadRenderState.build + ThreadViewModel.sendMessage for Perfetto.
 
 COMPLETED THIS SPRINT (May 6, 2026)
 ✅ MMS send fix — resultCode=5 on Samsung (see WHAT IS WORKING above)

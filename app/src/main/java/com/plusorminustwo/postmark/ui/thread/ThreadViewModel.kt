@@ -67,7 +67,10 @@ data class ThreadUiState(
     val highlightedMessageId: Long? = null,
     // Pending outgoing MMS attachment (URI string + MIME type). Null when composing plain SMS.
     val pendingAttachmentUri: String? = null,
-    val pendingMimeType: String? = null
+    val pendingMimeType: String? = null,
+    // Pre-computed flat render list + index maps — derived from messages, computed in the
+    // ViewModel so the composable never re-derives them on the main thread.
+    val renderState: ThreadRenderState = ThreadRenderState()
 )
 
 /**
@@ -185,6 +188,8 @@ class ThreadViewModel @Inject constructor(
         ThreadUiState(
             thread = thread,
             messages = messages,
+            // Build the flat render list off the main thread inside this combine block.
+            renderState = buildRenderState(messages),
             selectedMessageIds = selected,
             isSelectionMode = selectionMode,
             selectionScope = inner.selectionScope,
@@ -390,6 +395,8 @@ class ThreadViewModel @Inject constructor(
         clearAttachment()
 
         viewModelScope.launch {
+            android.os.Trace.beginSection("ThreadViewModel.sendMessage")
+            try {
             _isSending.value = true
             val now    = System.currentTimeMillis()
             val tempId = -now
@@ -483,6 +490,9 @@ class ThreadViewModel @Inject constructor(
                 smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
             }
             _isSending.value = false
+            } finally {
+                android.os.Trace.endSection()
+            }
         }
     }
 
