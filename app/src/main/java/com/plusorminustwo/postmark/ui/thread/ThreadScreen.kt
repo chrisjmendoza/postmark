@@ -42,7 +42,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.ClickableText
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
@@ -978,13 +982,30 @@ private fun MessageBubble(
                         )
                         // Show caption text below the attachment if present.
                         if (message.body.isNotEmpty()) {
-                            val fontScale = LocalBubbleFontScale.current
-                            Text(
-                                text = message.body,
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontSize = MaterialTheme.typography.bodyMedium.fontSize * fontScale
+                            val fontScale   = LocalBubbleFontScale.current
+                            val linkColor   = MaterialTheme.colorScheme.primary
+                            val textColor   = LocalContentColor.current
+                            val baseStyle   = MaterialTheme.typography.bodyMedium
+                            val ctx         = LocalContext.current
+                            val annotated   = remember(message.body, linkColor) {
+                                linkifyText(message.body, linkColor)
+                            }
+                            ClickableText(
+                                text = annotated,
+                                style = baseStyle.copy(
+                                    fontSize = baseStyle.fontSize * fontScale,
+                                    color = textColor
                                 ),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                onClick = { offset ->
+                                    annotated.getStringAnnotations("URL", offset, offset)
+                                        .firstOrNull()?.let {
+                                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it.item)))
+                                        } ?: annotated.getStringAnnotations("PHONE", offset, offset)
+                                        .firstOrNull()?.let {
+                                            ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${it.item}")))
+                                        }
+                                }
                             )
                         }
                     }
@@ -996,12 +1017,30 @@ private fun MessageBubble(
                         )
                     }
                 } else {
-                    val fontScale = LocalBubbleFontScale.current
-                    Text(
-                        text = message.body,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = MaterialTheme.typography.bodyMedium.fontSize * fontScale
-                        )
+                    // Plain SMS bubble — linkify URLs and phone numbers.
+                    val fontScale  = LocalBubbleFontScale.current
+                    val linkColor  = MaterialTheme.colorScheme.primary
+                    val textColor  = LocalContentColor.current
+                    val baseStyle  = MaterialTheme.typography.bodyMedium
+                    val ctx        = LocalContext.current
+                    val annotated  = remember(message.body, linkColor) {
+                        linkifyText(message.body, linkColor)
+                    }
+                    ClickableText(
+                        text = annotated,
+                        style = baseStyle.copy(
+                            fontSize = baseStyle.fontSize * fontScale,
+                            color = textColor
+                        ),
+                        onClick = { offset ->
+                            annotated.getStringAnnotations("URL", offset, offset)
+                                .firstOrNull()?.let {
+                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it.item)))
+                                } ?: annotated.getStringAnnotations("PHONE", offset, offset)
+                                .firstOrNull()?.let {
+                                    ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${it.item}")))
+                                }
+                        }
                     )
                 }
             }
@@ -1931,6 +1970,56 @@ private fun smsCounter(length: Int): String? {
 }
 
 // ── ReactionPills ─────────────────────────────────────────────────────────────
+
+// ── linkifyText ───────────────────────────────────────────────────────────────
+
+/**
+ * Scans [text] for URLs and phone numbers and returns an [androidx.compose.ui.text.AnnotatedString]
+ * with coloured, underlined spans and string annotations so the caller can launch the right
+ * [Intent] when the user taps.
+ *
+ * - URLs  → "URL"   annotation → [Intent.ACTION_VIEW]
+ * - Phone → "PHONE" annotation → [Intent.ACTION_DIAL]
+ *
+ * Phone ranges that overlap an already-matched URL range are skipped to avoid
+ * double-annotating telephone numbers embedded in URLs (e.g. `tel:` links).
+ *
+ * @param text      Raw message body.
+ * @param linkColor Colour applied to detected links; pass [MaterialTheme.colorScheme.primary].
+ */
+private fun linkifyText(text: String, linkColor: androidx.compose.ui.graphics.Color): androidx.compose.ui.text.AnnotatedString {
+    return buildAnnotatedString {
+        append(text)
+
+        // ── URLs ──────────────────────────────────────────────────────────────
+        val urlMatcher = android.util.Patterns.WEB_URL.matcher(text)
+        val urlRanges  = mutableListOf<IntRange>()
+        while (urlMatcher.find()) {
+            val start = urlMatcher.start()
+            val end   = urlMatcher.end()
+            urlRanges += start until end
+            addStyle(
+                SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
+                start = start, end = end
+            )
+            addStringAnnotation("URL", annotation = urlMatcher.group(), start = start, end = end)
+        }
+
+        // ── Phone numbers ─────────────────────────────────────────────────────
+        val phoneMatcher = android.util.Patterns.PHONE.matcher(text)
+        while (phoneMatcher.find()) {
+            val start = phoneMatcher.start()
+            val end   = phoneMatcher.end()
+            // Skip phone matches that overlap a URL match (e.g. number in a URL path).
+            if (urlRanges.any { start < it.last && end > it.first }) continue
+            addStyle(
+                SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
+                start = start, end = end
+            )
+            addStringAnnotation("PHONE", annotation = phoneMatcher.group(), start = start, end = end)
+        }
+    }
+}
 
 // ── FullScreenImageViewer ─────────────────────────────────────────────────────
 
