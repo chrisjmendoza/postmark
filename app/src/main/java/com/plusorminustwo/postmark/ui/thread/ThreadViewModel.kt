@@ -14,6 +14,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
+import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -91,7 +92,8 @@ class ThreadViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val smsManagerWrapper: SmsManagerWrapper,
     private val mmsManagerWrapper: MmsManagerWrapper,
-    private val timestampPrefRepo: TimestampPreferenceRepository
+    private val timestampPrefRepo: TimestampPreferenceRepository,
+    private val fontScaleRepo: BubbleFontScaleRepository
 ) : ViewModel() {
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
@@ -327,6 +329,20 @@ class ThreadViewModel @Inject constructor(
             if (messageId in cur) cur - messageId else cur + messageId
         }
     }
+
+    // ── Bubble font scale (pinch-to-zoom) ─────────────────────────────────────
+
+    /** Live font-scale multiplier (0.8 – 1.6) for message bubble text. */
+    val bubbleFontScale: StateFlow<Float> = fontScaleRepo.scale
+
+    /**
+     * Adjusts the bubble font scale by [delta]. Clamping is applied inside the repository.
+     * Triggered by a pinch gesture on the thread content area.
+     */
+    fun adjustFontScale(delta: Float) { fontScaleRepo.adjust(delta) }
+
+    /** Resets bubble font scale to 1.0 (e.g. from the ⋮ menu). */
+    fun resetFontScale() { fontScaleRepo.reset() }
 
     // ── Day select (kept for backward compatibility) ──────────────────────────
 

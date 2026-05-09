@@ -66,6 +66,11 @@ fun ConversationsScreen(
     val roleBannerDismissed by viewModel.roleBannerDismissed.collectAsState()
     // Live unread-message counts keyed by threadId — drives the badge in ThreadRow.
     val unreadCounts by viewModel.unreadCounts.collectAsState()
+    // Whether the "unread only" filter chip is active.
+    val showUnreadOnly by viewModel.showUnreadOnly.collectAsState()
+    // Total unread thread count — shown inside the filter chip so the user can see at a glance
+    // how many conversations are waiting even before activating the filter.
+    val unreadThreadCount = remember(unreadCounts) { unreadCounts.count { (_, v) -> v > 0 } }
     val threadList = threads  // local val so Kotlin can smart-cast the nullable
 
     // Re-check whether we hold the default SMS role every time this screen resumes
@@ -112,6 +117,31 @@ fun ConversationsScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // ── Unread filter chip row ─────────────────────────────────────────
+            // Only shown when there are unread threads so the bar doesn't appear
+            // in an all-read inbox where it would just be visual noise.
+            if (unreadThreadCount > 0 || showUnreadOnly) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = showUnreadOnly,
+                        onClick  = { viewModel.toggleUnreadFilter() },
+                        label    = {
+                            Text(
+                                if (unreadThreadCount > 0) "Unread ($unreadThreadCount)"
+                                else "Unread"
+                            )
+                        },
+                        leadingIcon = if (showUnreadOnly) {
+                            { Icon(Icons.Default.Close, contentDescription = "Clear filter", modifier = Modifier.size(16.dp)) }
+                        } else null
+                    )
+                }
+            }
             // Role denial banner — shown when the app is not the default SMS app
             // and the user hasn't dismissed it this install.
             if (!isDefaultSmsApp && !roleBannerDismissed) {
@@ -141,6 +171,12 @@ fun ConversationsScreen(
                 threadList == null -> {
                     // Room hasn't emitted yet — show nothing to avoid empty-state flash.
                     Box(Modifier.fillMaxSize())
+                }
+                threadList.isEmpty() && showUnreadOnly -> {
+                    // Filter is active but everything is read.
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No unread messages", style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
                 threadList.isEmpty() -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -421,15 +457,42 @@ private fun ThreadRow(
     } // end Box
 }
 
+/**
+ * Converts a message timestamp to a human-friendly label for conversation rows.
+ *
+ * Rules (matching iMessage / Google Messages conventions):
+ *  - < 1 minute ago  → "just now"
+ *  - < 60 minutes ago → "Xm" (e.g. "5m")
+ *  - Same calendar day → "9:41 AM"
+ *  - Within the last 6 days → short weekday name (e.g. "Mon")
+ *  - Same calendar year → "Apr 25"
+ *  - Older → "4/25/23"
+ */
 private fun formatDate(timestamp: Long): String {
-    val now = System.currentTimeMillis()
+    val now  = System.currentTimeMillis()
     val diff = now - timestamp
+
+    // ── Very recent ───────────────────────────────────────────────────────────
+    if (diff < 60_000L) return "just now"
+    if (diff < 60 * 60_000L) return "${diff / 60_000}m"
+
+    // ── Calendar comparisons ──────────────────────────────────────────────────
+    val msgCal = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
+    val nowCal = java.util.Calendar.getInstance()
+
+    val sameDay  = msgCal.get(java.util.Calendar.DAY_OF_YEAR) == nowCal.get(java.util.Calendar.DAY_OF_YEAR) &&
+                   msgCal.get(java.util.Calendar.YEAR) == nowCal.get(java.util.Calendar.YEAR)
+    val sameYear = msgCal.get(java.util.Calendar.YEAR) == nowCal.get(java.util.Calendar.YEAR)
+    val daysAgo  = diff / (24 * 60 * 60_000L)
+
     return when {
-        diff < 24 * 60 * 60 * 1000 ->
-            SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
-        diff < 7 * 24 * 60 * 60 * 1000 ->
-            SimpleDateFormat("EEE", Locale.getDefault()).format(Date(timestamp))
-        else ->
-            SimpleDateFormat("MM/dd/yy", Locale.getDefault()).format(Date(timestamp))
+        // Today — show wall-clock time
+        sameDay    -> SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+        // Within 6 days — short weekday (Mon, Tue …)
+        daysAgo < 7 -> SimpleDateFormat("EEE", Locale.getDefault()).format(Date(timestamp))
+        // Same year — "Apr 25"
+        sameYear   -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(timestamp))
+        // Older — "4/25/23"
+        else       -> SimpleDateFormat("M/d/yy", Locale.getDefault()).format(Date(timestamp))
     }
 }

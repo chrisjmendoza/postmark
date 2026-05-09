@@ -21,8 +21,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -78,12 +80,27 @@ class ConversationsViewModel @Inject constructor(
         }
     }
 
-    val threads: StateFlow<List<Thread>?> = threadRepository.observeAll()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    // Toggle for the "Unread only" filter chip in the top bar.
+    private val _showUnreadOnly = MutableStateFlow(false)
+    val showUnreadOnly: StateFlow<Boolean> = _showUnreadOnly.asStateFlow()
 
-    // Live map of threadId → unread-message count, used by ThreadRow to show badges.
+    // Live map of threadId → unread-message count, used by ThreadRow badges and the filter.
     val unreadCounts: StateFlow<Map<Long, Int>> = messageRepository.observeUnreadCounts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    // All threads from Room — may be filtered below before reaching the UI.
+    private val allThreads: StateFlow<List<Thread>?> = threadRepository.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    // Derived: full list or unread-only list depending on the filter toggle.
+    val threads: StateFlow<List<Thread>?> = combine(allThreads, unreadCounts, _showUnreadOnly) { list, counts, unreadOnly ->
+        if (list == null) null
+        else if (!unreadOnly) list
+        else list.filter { (counts[it.id] ?: 0) > 0 }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Flips the "show unread only" filter on or off. */
+    fun toggleUnreadFilter() { _showUnreadOnly.update { !it } }
 
     val isSyncing: StateFlow<Boolean> = workManager
         .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)

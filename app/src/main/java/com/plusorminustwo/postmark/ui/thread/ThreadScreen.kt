@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,10 +102,21 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTransformGestures
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 
 private val PILL_HIDE_DELAY_MS = 1_800L
+
+/**
+ * CompositionLocal carrying the current bubble font-scale multiplier (0.8 – 1.6).
+ * Set by [ThreadContent] and consumed by [MessageBubble] for body text sizing.
+ * Defaults to 1.0 so previews and other consumers outside the thread view are unaffected.
+ */
+internal val LocalBubbleFontScale = compositionLocalOf { 1.0f }
 
 /**
  * Entry-point composable for a single conversation thread.
@@ -136,6 +148,8 @@ fun ThreadScreen(
     val timestampPref by viewModel.timestampPreference.collectAsState()
     val activeDates by viewModel.activeDates.collectAsState()
     val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
+    // Bubble font scale — driven by pinch gesture, persisted across sessions.
+    val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
 
     // ── Stable lambdas ────────────────────────────────────────────────────────
     // Wrapped in remember(viewModel) so the same function reference is reused
@@ -165,12 +179,15 @@ fun ThreadScreen(
     val onAttachmentSelected      = remember(viewModel) { { uri: Uri, mimeType: String -> viewModel.onAttachmentSelected(uri, mimeType) } }
     val onClearAttachment         = remember(viewModel) { { viewModel.clearAttachment() } }
     val onSearchInThread_         = remember(viewModel, threadId, onSearchInThread) { { onSearchInThread(threadId) } }
+    val onAdjustFontScale         = remember(viewModel) { { delta: Float -> viewModel.adjustFontScale(delta) } }
+    val onResetFontScale          = remember(viewModel) { { viewModel.resetFontScale() } }
 
     ThreadContent(
         uiState = uiState,
         timestampPref = timestampPref,
         activeDates = activeDates,
         quickReactionEmojis = quickReactionEmojis,
+        bubbleFontScale = bubbleFontScale,
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
         scrollToBottomEvent = viewModel.scrollToBottomEvent,
@@ -200,7 +217,9 @@ fun ThreadScreen(
         onSelectByDateRange = onSelectByDateRange,
         onAttachmentSelected = onAttachmentSelected,
         onClearAttachment = onClearAttachment,
-        onSearchInThread = onSearchInThread_
+        onSearchInThread = onSearchInThread_,
+        onAdjustFontScale = onAdjustFontScale,
+        onResetFontScale = onResetFontScale
     )
 }
 
@@ -224,6 +243,7 @@ private fun ThreadContent(
     timestampPref: TimestampPreference,
     activeDates: Set<LocalDate>,
     quickReactionEmojis: List<String>,
+    bubbleFontScale: Float = 1.0f,
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
     scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
@@ -254,6 +274,8 @@ private fun ThreadContent(
     onAttachmentSelected: (Uri, String) -> Unit = { _, _ -> },
     onClearAttachment: () -> Unit = {},
     onSearchInThread: () -> Unit = {},
+    onAdjustFontScale: (Float) -> Unit = {},
+    onResetFontScale: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -439,7 +461,22 @@ private fun ThreadContent(
 
     // ── Scaffold + overlay ────────────────────────────────────────────────────
 
-    Box(Modifier.fillMaxSize()) {
+    // Provide the current font scale to all bubble composables via CompositionLocal.
+    // A two-finger pinch anywhere on the thread area updates the scale via onAdjustFontScale.
+    CompositionLocalProvider(LocalBubbleFontScale provides bubbleFontScale) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            // Detect two-finger pinch anywhere on the thread to adjust font scale.
+            .pointerInput(Unit) {
+                detectTransformGestures { _, _, zoomFactor, _ ->
+                    // zoomFactor > 1 = spreading (bigger), < 1 = pinching (smaller).
+                    // Map zoom to a delta relative to default 1.0, dampened so a single
+                    // gesture sweep doesn't jump the full range.
+                    onAdjustFontScale((zoomFactor - 1f) * 0.5f)
+                }
+            }
+    ) {
     Scaffold(
         modifier = Modifier.imePadding(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -538,6 +575,10 @@ private fun ThreadContent(
                                 DropdownMenuItem(
                                     text = { Text("Backup settings") },
                                     onClick = { menuExpanded = false; showBackupPolicyDialog = true }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Reset text size") },
+                                    onClick = { menuExpanded = false; onResetFontScale() }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Block number") },
@@ -652,6 +693,7 @@ private fun ThreadContent(
             )
         }
     } // end overlay Box
+    } // end CompositionLocalProvider
 }
 
 // ── SelectionTopBar ────────────────────────────────────────────────────────────
@@ -923,23 +965,44 @@ private fun MessageBubble(
                     .onSizeChanged { bubbleWidthPx = it.width }
             ) {
                 if (message.attachmentUri != null) {
+                    // Track whether the full-screen image viewer is open.
+                    var showImageViewer by remember { mutableStateOf(false) }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         // Render the media attachment (image, video, or audio).
                         MmsAttachment(
                             uri = message.attachmentUri,
-                            mimeType = message.mimeType
+                            mimeType = message.mimeType,
+                            // Only images are tappable; video/audio have their own interactions.
+                            onImageClick = if (message.mimeType?.startsWith("image/") == true)
+                                { { showImageViewer = true } } else null
                         )
                         // Show caption text below the attachment if present.
                         if (message.body.isNotEmpty()) {
+                            val fontScale = LocalBubbleFontScale.current
                             Text(
                                 text = message.body,
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = MaterialTheme.typography.bodyMedium.fontSize * fontScale
+                                ),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )
                         }
                     }
+                    // Full-screen image viewer — shown when the user taps a photo.
+                    if (showImageViewer) {
+                        FullScreenImageViewer(
+                            uri = message.attachmentUri,
+                            onDismiss = { showImageViewer = false }
+                        )
+                    }
                 } else {
-                    Text(text = message.body, style = MaterialTheme.typography.bodyMedium)
+                    val fontScale = LocalBubbleFontScale.current
+                    Text(
+                        text = message.body,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = MaterialTheme.typography.bodyMedium.fontSize * fontScale
+                        )
+                    )
                 }
             }
         }
@@ -1009,7 +1072,12 @@ private fun MessageBubble(
 // Video shows a play-icon placeholder. Audio shows a labelled chip.
 
 @Composable
-private fun MmsAttachment(uri: String, mimeType: String?) {
+private fun MmsAttachment(
+    uri: String,
+    mimeType: String?,
+    // Non-null when the image can be tapped to open the full-screen viewer.
+    onImageClick: (() -> Unit)? = null
+) {
     when {
         // ── Image ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("image/") == true -> {
@@ -1058,6 +1126,11 @@ private fun MmsAttachment(uri: String, mimeType: String?) {
                     .fillMaxWidth()
                     .heightIn(max = 240.dp)
                     .clip(RoundedCornerShape(8.dp))
+                    .then(
+                        if (onImageClick != null)
+                            Modifier.clickable(onClick = onImageClick)
+                        else Modifier
+                    )
             )
         }
 
@@ -1858,6 +1931,88 @@ private fun smsCounter(length: Int): String? {
 }
 
 // ── ReactionPills ─────────────────────────────────────────────────────────────
+
+// ── FullScreenImageViewer ─────────────────────────────────────────────────────
+
+/**
+ * Full-screen overlay that displays an MMS image with pinch-to-zoom support.
+ *
+ * The image is shown on a black scrim. The user can:
+ *  - Pinch to zoom (1× – 5×)
+ *  - Pan while zoomed
+ *  - Tap the scrim or press Back to dismiss
+ *
+ * @param uri      content://mms/part/ URI for the image to display.
+ * @param onDismiss Called when the user closes the viewer.
+ */
+@Composable
+private fun FullScreenImageViewer(uri: String, onDismiss: () -> Unit) {
+    // Zoom and pan state — tracked as mutable floats so graphicsLayer can read them
+    // without triggering a full recomposition on every gesture frame.
+    var scale     by remember { mutableStateOf(1f) }
+    var offsetX   by remember { mutableStateOf(0f) }
+    var offsetY   by remember { mutableStateOf(0f) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                // Tap outside the image (on the scrim) dismisses the viewer.
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center
+        ) {
+            val ctx = LocalContext.current
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(ctx)
+                    .data(Uri.parse(uri))
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Full-screen photo",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    // Consume tap on the image itself so it doesn't fall through to the scrim.
+                    .clickable { /* absorb — don't dismiss when tapping the image */ }
+                    // Pinch-to-zoom + pan gesture.
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            // Clamp scale between 1× and 5×.
+                            scale = (scale * zoom).coerceIn(1f, 5f)
+                            // Pan only makes sense when zoomed in.
+                            if (scale > 1f) {
+                                offsetX += pan.x
+                                offsetY += pan.y
+                            } else {
+                                // Reset pan when fully zoomed out.
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
+                        }
+                    }
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offsetX,
+                        translationY = offsetY
+                    )
+            )
+            // Close button in the top-right corner as a fallback affordance.
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close",
+                    tint = Color.White
+                )
+            }
+        }
+    }
+}
 
 /**
  * Displays the emoji reaction chips for a single message.
