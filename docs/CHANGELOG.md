@@ -4,6 +4,35 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## [Unreleased]
+
+### Feature: Swipe-to-reply with inline quote bar
+
+Swiping right on any message bubble triggers a reply-with-quote flow, matching the
+iMessage / WhatsApp gesture.
+
+- `MessageBubble` gains an `onSwipeToReply: (() -> Unit)?` parameter. When non-null,
+  a `pointerInput(detectHorizontalDragGestures)` modifier tracks rightward swipes only
+  (leftward is ignored). Drag is capped at 72 dp; crossing 56 dp fires `onSwipeToReply`.
+  An `Animatable` springs the bubble back to 0 on release or threshold, via
+  `Spring.StiffnessMediumLow`.
+- A reply `Icon` (AutoMirrored.Filled.Reply) fades in proportionally (`alpha =
+  (offset / threshold).coerceIn(0, 1)`) on the leading edge of a `Box(fillMaxWidth)`
+  wrapper around the bubble so it never pushes layout.
+- Gesture is disabled (lambda set to `null`) while in selection mode.
+- `ThreadViewModel` adds `_replyingToId: MutableStateFlow<Long?>`, exposed through
+  `ThreadUiState.replyingToId`. `setReplyingTo(id)` and `clearReplyingTo()` are the
+  two public functions. `sendMessage()` calls `clearReplyingTo()` automatically.
+- `ReplyBar` gains `replyingTo: Message?` and `onClearReplyingTo: () -> Unit` params.
+  When `replyingTo` is non-null a quote strip renders above the text field: a 3 dp
+  colored left-border accent (`primaryContainer`), "You" / "Them" label in bold, a
+  2-line body preview, and an × `IconButton` to dismiss. Quote is visual-only — does
+  not modify the SMS text sent to the carrier.
+- All stable lambda callbacks wired through `ThreadScreen` → `ThreadContent` →
+  `MessageBubble` / `ReplyBar`.
+
+---
+
 ## 2026-05-09
 
 ### Feature: MMS video playback

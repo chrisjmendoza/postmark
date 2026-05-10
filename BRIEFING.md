@@ -846,3 +846,26 @@ APP ICON
     "PostmarkPolishedIcon.png" → mipmap densities
 
 ═══════════════════════════════════════════════════════
+
+SWIPE-TO-REPLY
+- MessageBubble gains onSwipeToReply: (() -> Unit)? param.
+  pointerInput(detectHorizontalDragGestures) allows rightward
+  drag only (leftward ignored); capped at 72 dp; crossing 56 dp
+  fires onSwipeToReply. Animatable springs bubble back to 0
+  (Spring.StiffnessMediumLow) on release or threshold cross.
+- Reply Icon (AutoMirrored.Filled.Reply) fades in proportionally
+  (alpha = offset/threshold coerced 0–1) on the leading edge of
+  a Box(fillMaxWidth) wrapper so it never shifts layout.
+- Gesture is null (disabled) while isSelectionMode = true.
+- ThreadViewModel: _replyingToId MutableStateFlow<Long?>;
+  exposed via ThreadUiState.replyingToId. setReplyingTo(id)
+  and clearReplyingTo() are the two public mutators.
+  sendMessage() auto-calls clearReplyingTo().
+- ReplyBar: replyingTo: Message? + onClearReplyingTo params.
+  Quote strip above text field: 3 dp accent bar, "You"/"Them"
+  label, 2-line body preview, × IconButton to dismiss.
+  Quote is visual-only — carrier SMS text is unmodified.
+- Stable lambdas wired: ThreadScreen → ThreadContent →
+  MessageBubble / ReplyBar.
+
+═══════════════════════════════════════════════════════

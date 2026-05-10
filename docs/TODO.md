@@ -142,9 +142,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       thread row. Requires `isRead` flag on `MessageEntity`.
 - [ ] **Swipe actions on conversation list** — swipe left: delete/archive with undo
       snackbar. Swipe right: mark as read. Standard Android expectation.
-- [ ] **Swipe actions on message bubbles** — swipe right to reply (quote the
-      message inline in the reply bar); swipe left to delete single message
-      with undo snackbar. Standard iMessage/WhatsApp expectation.
+- [x] **Swipe actions on message bubbles** — swipe right to reply (quote the
+      message inline in the reply bar); quote strip shows sender label, 2-line
+      preview, × to dismiss; springs back via Animatable; disabled in selection
+      mode; quote visual-only (carrier SMS unmodified).
 - [ ] **Long-press multi-select** — select multiple threads for
       bulk delete/archive/mute.
 - [x] **Pinned conversations** — `isPinned` on `ThreadEntity`; pins float

@@ -16,6 +16,8 @@ import android.provider.Telephony
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -114,6 +117,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
@@ -188,6 +192,8 @@ fun ThreadScreen(
     val onSelectByDateRange       = remember(viewModel) { { start: LocalDate, end: LocalDate -> viewModel.selectByDateRange(start, end) } }
     val onAttachmentSelected      = remember(viewModel) { { uri: Uri, mimeType: String -> viewModel.onAttachmentSelected(uri, mimeType) } }
     val onClearAttachment         = remember(viewModel) { { viewModel.clearAttachment() } }
+    val onSetReplyingTo           = remember(viewModel) { { id: Long -> viewModel.setReplyingTo(id) } }
+    val onClearReplyingTo         = remember(viewModel) { { viewModel.clearReplyingTo() } }
     val onSearchInThread_         = remember(viewModel, threadId, onSearchInThread) { { onSearchInThread(threadId) } }
     val onAdjustFontScale         = remember(viewModel) { { delta: Float -> viewModel.adjustFontScale(delta) } }
     val onResetFontScale          = remember(viewModel) { { viewModel.resetFontScale() } }
@@ -228,6 +234,8 @@ fun ThreadScreen(
         onSelectByDateRange = onSelectByDateRange,
         onAttachmentSelected = onAttachmentSelected,
         onClearAttachment = onClearAttachment,
+        onSetReplyingTo = onSetReplyingTo,
+        onClearReplyingTo = onClearReplyingTo,
         onSearchInThread = onSearchInThread_,
         onAdjustFontScale = onAdjustFontScale,
         onResetFontScale = onResetFontScale
@@ -285,6 +293,8 @@ private fun ThreadContent(
     onSelectByDateRange: (LocalDate, LocalDate) -> Unit = { _, _ -> },
     onAttachmentSelected: (Uri, String) -> Unit = { _, _ -> },
     onClearAttachment: () -> Unit = {},
+    onSetReplyingTo: (Long) -> Unit = {},
+    onClearReplyingTo: () -> Unit = {},
     onSearchInThread: () -> Unit = {},
     onAdjustFontScale: (Float) -> Unit = {},
     onResetFontScale: () -> Unit = {},
@@ -611,9 +621,11 @@ private fun ThreadContent(
                     text                 = uiState.replyText,
                     pendingAttachmentUri = uiState.pendingAttachmentUri,
                     pendingMimeType      = uiState.pendingMimeType,
+                    replyingTo           = uiState.replyingToId?.let { id -> uiState.messages.find { it.id == id } },
                     onTextChange         = { onReplyTextChanged(it) },
                     onAttachmentSelected = onAttachmentSelected,
                     onClearAttachment    = onClearAttachment,
+                    onClearReplyingTo    = onClearReplyingTo,
                     onSend               = { onSendMessage() }
                 )
             }
@@ -643,7 +655,11 @@ private fun ThreadContent(
                             timestampPref = timestampPref,
                             isTimestampExpanded = item.message.id in uiState.expandedTimestampIds,
                             onToggleTimestamp = { onToggleTimestamp(item.message.id) },
-                            onRetry = { onRetry(item.message.id) }
+                            onRetry = { onRetry(item.message.id) },
+                            // Swipe-to-reply: disabled while in selection mode so the
+                            // horizontal drag doesn't conflict with checkboxes.
+                            onSwipeToReply = if (!uiState.isSelectionMode)
+                                { -> onSetReplyingTo(item.message.id) } else null
                         )
                         is ThreadListItem.DateHeader -> DateHeader(
                             label = item.dateLabel,
@@ -890,6 +906,8 @@ private fun FloatingDatePill(
  * @param isTimestampExpanded  Whether the timestamp is currently revealed (ON_TAP mode).
  * @param onToggleTimestamp    Called when a tap should toggle the timestamp.
  * @param onRetry              Called when the user taps the failed-send indicator to retry.
+ * @param onSwipeToReply       When non-null, a right swipe past the threshold triggers this to
+ *                             quote the message in the reply bar. Null disables the gesture.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -909,7 +927,9 @@ private fun MessageBubble(
     timestampPref: TimestampPreference,
     isTimestampExpanded: Boolean,
     onToggleTimestamp: () -> Unit,
-    onRetry: () -> Unit = {}
+    onRetry: () -> Unit = {},
+    // Null = gesture disabled (e.g. while in selection mode).
+    onSwipeToReply: (() -> Unit)? = null
 ) {
     val bubbleColor = if (message.isSent)
         MaterialTheme.colorScheme.primaryContainer
@@ -935,6 +955,14 @@ private fun MessageBubble(
     val bubbleRootY = remember { FloatArray(1) }
     val density = LocalDensity.current
     var bubbleWidthPx by remember { mutableIntStateOf(0) }
+
+    // ── Swipe-to-reply gesture state ──────────────────────────────────────────
+    // Animatable allows smooth spring-back after the user releases or crosses threshold.
+    val swipeOffset = remember { Animatable(0f) }
+    val coroutineScope = rememberCoroutineScope()
+    val maxDragPx  = with(density) { 72.dp.toPx() }   // hard cap on drag distance
+    val thresholdPx = with(density) { 56.dp.toPx() }  // crossing this fires onSwipeToReply
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -957,6 +985,35 @@ private fun MessageBubble(
                     if (!isSelectionMode) onLongClick(bubbleRootY[0])
                 }
             )
+            // Horizontal drag gesture for swipe-to-reply (only right direction).
+            .then(
+                if (onSwipeToReply != null) Modifier.pointerInput(onSwipeToReply) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (swipeOffset.value >= thresholdPx) onSwipeToReply()
+                            coroutineScope.launch {
+                                swipeOffset.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                                )
+                            }
+                        },
+                        onDragCancel = {
+                            coroutineScope.launch {
+                                swipeOffset.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                                )
+                            }
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            // Only allow rightward drag (positive X); ignore leftward.
+                            val newVal = (swipeOffset.value + dragAmount).coerceIn(0f, maxDragPx)
+                            coroutineScope.launch { swipeOffset.snapTo(newVal) }
+                        }
+                    )
+                } else Modifier
+            )
             .then(
                 if (isSelected) Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
                 else Modifier
@@ -964,7 +1021,28 @@ private fun MessageBubble(
             .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
         horizontalAlignment = alignment
     ) {
-        Box(modifier = Modifier.widthIn(max = 280.dp)) {
+        // Wrap the bubble in a full-width Box so the reply icon can be positioned on the
+        // opposite side while the bubble itself translates horizontally on swipe.
+        Box(modifier = Modifier.fillMaxWidth()) {
+            // Reply icon: fades in as the bubble is dragged right, sits on the start edge.
+            if (onSwipeToReply != null) {
+                Icon(
+                    imageVector        = Icons.AutoMirrored.Filled.Reply,
+                    contentDescription = "Reply",
+                    tint               = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier           = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 4.dp)
+                        .alpha((swipeOffset.value / thresholdPx).coerceIn(0f, 1f))
+                )
+            }
+            // Bubble content — translated right during swipe, springs back on release.
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .align(if (message.isSent) Alignment.CenterEnd else Alignment.CenterStart)
+                    .graphicsLayer { translationX = swipeOffset.value }
+            ) {
             Box(
                 modifier = Modifier
                     .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
@@ -1063,7 +1141,8 @@ private fun MessageBubble(
                     )
                 }
             }
-        }
+        }  // end Box(widthIn+align)
+        }  // end Box(fillMaxWidth) swipe wrapper
         if (message.reactions.isNotEmpty()) {
             ReactionPills(
                 reactions = message.reactions,
@@ -1614,9 +1693,12 @@ private fun ReplyBar(
     text: String,
     pendingAttachmentUri: String?,
     pendingMimeType: String?,
+    // Non-null when the user has swiped to quote a message; drives the quote strip.
+    replyingTo: Message? = null,
     onTextChange: (String) -> Unit,
     onAttachmentSelected: (Uri, String) -> Unit,
     onClearAttachment: () -> Unit,
+    onClearReplyingTo: () -> Unit = {},
     onSend: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1656,6 +1738,67 @@ private fun ReplyBar(
                     .navigationBarsPadding()
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
+                // ── Quote strip ──────────────────────────────────────────────────
+                // Shown when the user has swiped to reply to a specific message.
+                if (replyingTo != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.secondaryContainer)
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Colored left accent bar (same hue as the bubble).
+                        Box(
+                            modifier = Modifier
+                                .width(3.dp)
+                                .height(36.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(
+                                    if (replyingTo.isSent) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.tertiary
+                                )
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text  = if (replyingTo.isSent) "You" else "Them",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (replyingTo.isSent) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.tertiary,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                            )
+                            Text(
+                                text     = replyingTo.body.ifBlank {
+                                    when {
+                                        replyingTo.mimeType?.startsWith("image/") == true -> "🖼️ Photo"
+                                        replyingTo.mimeType?.startsWith("video/") == true -> "🎬 Video"
+                                        replyingTo.mimeType?.startsWith("audio/") == true -> "🎵 Audio"
+                                        else -> "📎 Attachment"
+                                    }
+                                },
+                                style    = MaterialTheme.typography.bodySmall,
+                                color    = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        // Clear button removes the quote context without cancelling the reply.
+                        IconButton(
+                            onClick  = onClearReplyingTo,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector        = Icons.Default.Close,
+                                contentDescription = "Cancel reply",
+                                tint               = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier           = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
                 // Attachment preview — thumbnail for images/video, chip for audio/other.
                 if (pendingAttachmentUri != null && pendingMimeType?.startsWith("image/") == true) {
                     /* Show a real thumbnail so the user can confirm which photo is attached

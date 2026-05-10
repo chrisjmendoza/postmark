@@ -51,6 +51,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **New conversation screen** — `NewConversationScreen` + `NewConversationViewModel`; live contact search; FAB on `ConversationsScreen`; `AppNavigation` destination
 - [x] **Shared debug keystore** — `app/debug.keystore` in repo; all dev machines produce same app signature, eliminating uninstall/reinstall cycle when switching machines
 - [x] **Contact detail screen** — tap contact name/avatar in thread `TopAppBar` → `ContactDetailScreen`; nickname editing (Postmark-only, schema v11 `nickname TEXT`); "Open in Contacts" button (`ACTION_VIEW` for known / `ACTION_INSERT_OR_EDIT` for unknown); Mute/Pin/Notifications toggles; shared media grid (images/video/audio via Coil)
+- [x] **Swipe-to-reply with inline quote bar** — swipe right on any bubble → reply icon fades in → past 56 dp threshold fires `setReplyingTo()`; quote strip appears above the reply field showing sender label, 2-line preview, × to dismiss; springs back via `Animatable`; disabled in selection mode; quote visual-only (carrier SMS unmodified)
 
 ---
 

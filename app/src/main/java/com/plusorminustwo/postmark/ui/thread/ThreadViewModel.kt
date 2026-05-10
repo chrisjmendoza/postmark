@@ -69,6 +69,8 @@ data class ThreadUiState(
     // Pending outgoing MMS attachment (URI string + MIME type). Null when composing plain SMS.
     val pendingAttachmentUri: String? = null,
     val pendingMimeType: String? = null,
+    // ID of the message being quoted via swipe-to-reply; null = no active quote.
+    val replyingToId: Long? = null,
     // Pre-computed flat render list + index maps — derived from messages, computed in the
     // ViewModel so the composable never re-derives them on the main thread.
     val renderState: ThreadRenderState = ThreadRenderState()
@@ -116,6 +118,8 @@ class ThreadViewModel @Inject constructor(
     // URI string + MIME type of a pending outgoing MMS attachment; null when composing SMS.
     private val _pendingAttachmentUri = MutableStateFlow<String?>(null)
     private val _pendingMimeType      = MutableStateFlow<String?>(null)
+    // ID of the message the user is replying to (swipe-to-reply); null = no active quote.
+    private val _replyingToId         = MutableStateFlow<Long?>(null)
 
     /* Fires once per send so the UI unconditionally scrolls to the bottom
      * regardless of the current scroll position. extraBufferCapacity=1 means
@@ -152,7 +156,9 @@ class ThreadViewModel @Inject constructor(
         val reactionPickerBubbleY: Float,
         val highlightedMessageId: Long?,
         val pendingAttachmentUri: String?,
-        val pendingMimeType: String?
+        val pendingMimeType: String?,
+        // ID of the message being quoted via swipe-to-reply; null = no active quote.
+        val replyingToId: Long?
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -171,7 +177,8 @@ class ThreadViewModel @Inject constructor(
             _reactionPickerBubbleY,
             _highlightedMessageId,
             _pendingAttachmentUri,
-            _pendingMimeType
+            _pendingMimeType,
+            _replyingToId
         ) { arr ->
             InnerState(
                 replyText               = arr[0] as String,
@@ -183,7 +190,8 @@ class ThreadViewModel @Inject constructor(
                 reactionPickerBubbleY   = arr[6] as Float,
                 highlightedMessageId    = arr[7] as Long?,
                 pendingAttachmentUri    = arr[8] as String?,
-                pendingMimeType         = arr[9] as String?
+                pendingMimeType         = arr[9] as String?,
+                replyingToId            = arr[10] as Long?
             )
         }
     ) { thread, messages, selected, selectionMode, inner ->
@@ -203,7 +211,8 @@ class ThreadViewModel @Inject constructor(
             reactionPickerBubbleY   = inner.reactionPickerBubbleY,
             highlightedMessageId    = inner.highlightedMessageId,
             pendingAttachmentUri    = inner.pendingAttachmentUri,
-            pendingMimeType         = inner.pendingMimeType
+            pendingMimeType         = inner.pendingMimeType,
+            replyingToId            = inner.replyingToId
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
@@ -387,6 +396,15 @@ class ThreadViewModel @Inject constructor(
     }
 
     /**
+     * Sets the message being quoted in the reply bar (triggered by swipe-to-reply).
+     * Clears automatically when the user sends a message or taps the × in the quote strip.
+     */
+    fun setReplyingTo(messageId: Long) { _replyingToId.value = messageId }
+
+    /** Clears the swipe-to-reply quote strip without sending. */
+    fun clearReplyingTo() { _replyingToId.value = null }
+
+    /**
      * Sends the current reply text and/or pending attachment.
      *
      * Chooses the MMS or SMS path automatically. Inserts an optimistic [Message]
@@ -409,6 +427,7 @@ class ThreadViewModel @Inject constructor(
         val thread = uiState.value.thread ?: return
         _replyText.value = ""
         clearAttachment()
+        clearReplyingTo()
 
         viewModelScope.launch {
             android.os.Trace.beginSection("ThreadViewModel.sendMessage")
