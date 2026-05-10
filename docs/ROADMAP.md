@@ -50,6 +50,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **Reaction system fully wired** — `syncLatestMms` now partitions MMS reaction fallbacks (mirrors `syncLatestSms`); re-insert-after-delete bug fixed; `ReactionPills` moved to Column sibling of bubble Box for correct iMessage-style badge layout; `reprocessReactions()` non-blocking on `Dispatchers.IO` with per-thread progress label
 - [x] **New conversation screen** — `NewConversationScreen` + `NewConversationViewModel`; live contact search; FAB on `ConversationsScreen`; `AppNavigation` destination
 - [x] **Shared debug keystore** — `app/debug.keystore` in repo; all dev machines produce same app signature, eliminating uninstall/reinstall cycle when switching machines
+- [x] **Contact detail screen** — tap contact name/avatar in thread `TopAppBar` → `ContactDetailScreen`; nickname editing (Postmark-only, schema v11 `nickname TEXT`); "Open in Contacts" button (`ACTION_VIEW` for known / `ACTION_INSERT_OR_EDIT` for unknown); Mute/Pin/Notifications toggles; shared media grid (images/video/audio via Coil)
 
 ---
 

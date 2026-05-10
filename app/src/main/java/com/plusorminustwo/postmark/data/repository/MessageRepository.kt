@@ -122,4 +122,9 @@ class MessageRepository @Inject constructor(
         reactionDao.deleteAll()
         messageDao.deleteAll()
     }
+
+    /** Live list of media-bearing messages in a thread, newest first.
+     *  Used by ContactDetailScreen to populate the shared-media grid. */
+    fun observeMediaMessages(threadId: Long): Flow<List<Message>> =
+        messageDao.observeMediaMessages(threadId).map { list -> list.map { it.toDomain() } }
 }

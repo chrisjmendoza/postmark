@@ -14,7 +14,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity],
  * [ThreadStatsEntity], [GlobalStatsEntity], [MessageFtsEntity].
  *
- * Current schema version: 10.
+ * Current schema version: 11.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -137,6 +137,14 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE messages ADD COLUMN isRead INTEGER NOT NULL DEFAULT 1"
                 )
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Postmark-only nickname column — nullable, no default. Existing rows
+                // get NULL (i.e. fall back to displayName in the UI).
+                db.execSQL("ALTER TABLE threads ADD COLUMN nickname TEXT")
             }
         }
 

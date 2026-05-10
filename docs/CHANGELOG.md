@@ -4,6 +4,38 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-05-10
+
+### Feature: Contact detail screen
+
+Tapping the contact name or avatar in the thread `TopAppBar` opens a new
+`ContactDetailScreen` with:
+
+- **Large avatar + name** — shows `nickname` if set, otherwise formatted phone number.
+- **Nickname editing** — pencil-icon button opens an `AlertDialog` with an
+  `OutlinedTextField`; nickname is Postmark-only (never written back to system Contacts).
+  Stored as a new nullable `nickname TEXT` column on `threads` (Room schema v11,
+  `MIGRATION_10_11`). Displayed in both the thread `TopAppBar` and the conversation list.
+- **Open in Contacts** — `OutlinedButton` that queries `ContactsContract.PhoneLookup` on
+  `Dispatchers.IO`; fires `ACTION_VIEW` if the number is in system Contacts, or
+  `ACTION_INSERT_OR_EDIT` (pre-filled with the number) if not.
+- **Contact actions** — Mute / Pin / Notifications toggles with `Switch` controls wired to
+  `ContactDetailViewModel`.
+- **Shared media grid** — all MMS attachments for the thread, grouped into rows of 3;
+  image thumbnails via Coil 2.7.0; video items show dark overlay + play icon; audio/other
+  shows dark overlay + music icon. Tapping an image opens a full-screen `Dialog` viewer.
+
+**Schema change:** `MIGRATION_10_11` adds `ALTER TABLE threads ADD COLUMN nickname TEXT`
+(nullable, no default). `ThreadDao.updateNickname()` and `ThreadRepository.setNickname()`
+expose the write path. `MessageDao.observeMediaMessages()` and
+`MessageRepository.observeMediaMessages()` expose a `Flow<List<Message>>` of all messages
+with a non-null `attachmentUri` for a thread.
+
+**Navigation:** `Screen.ContactDetail("contact/{threadId}")` added to `AppNavigation`;
+thread header row made clickable via `Modifier.clickable`.
+
+---
+
 ## 2026-05-08
 
 ### Fix: MMS reaction fallbacks not resolved; reaction pill layout broken

@@ -120,13 +120,12 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       Contacts, update `Thread.displayName` on next sync.
 - [x] **avatarColor seed fix** — `colorSeed = thread.address` passed
       to `LetterAvatar`; colors stable across contact name changes.
-- [ ] **Tap contact name / avatar → contact viewer** — tapping the
-      contact name or profile picture in the thread toolbar opens the
-      system Contacts detail screen (`ContactsContract.QuickContact`
-      or `ACTION_VIEW` with the contact URI) so the user can see
-      all info for that number. Include an Edit button / overflow
-      action that launches `ACTION_EDIT` to take the user directly
-      to the phone's contact editor.
+- [x] **Contact detail screen** — tapping the contact name/avatar in the
+      thread `TopAppBar` opens `ContactDetailScreen`; nickname editing
+      (Postmark-only, schema v11 `nickname TEXT`); "Open in Contacts" button
+      (`ACTION_VIEW` for known contacts, `ACTION_INSERT_OR_EDIT` for unknown);
+      Mute / Pin / Notifications toggles; shared media grid (Coil thumbnails);
+      full-screen image viewer.
 
 ### Conversation list polish
 - [ ] **Unread filter button** — a toggle button (e.g. envelope icon or

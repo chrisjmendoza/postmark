@@ -14,6 +14,9 @@ package com.plusorminustwo.postmark.domain.model
  * @param isPinned                 When true, this thread floats above unpinned threads in the list.
  * @param notificationsEnabled     When false, incoming messages post no notification at all
  *                                 (stronger than mute — use to fully silence a number/thread).
+ * @param nickname                 Postmark-only display alias set by the user. When non-null
+ *                                 this overrides [displayName] everywhere in the UI. Never
+ *                                 written back to the system Contacts database.
  */
 data class Thread(
     val id: Long,
@@ -24,5 +27,7 @@ data class Thread(
     val backupPolicy: BackupPolicy = BackupPolicy.GLOBAL,
     val isMuted: Boolean = false,
     val isPinned: Boolean = false,
-    val notificationsEnabled: Boolean = true
+    val notificationsEnabled: Boolean = true,
+    // Postmark-only alias — null means fall back to displayName in the UI.
+    val nickname: String? = null
 )

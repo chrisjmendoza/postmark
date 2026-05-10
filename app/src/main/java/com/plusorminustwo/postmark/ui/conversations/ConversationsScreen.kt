@@ -393,10 +393,10 @@ private fun ThreadRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        ContactAvatar(address = thread.address, name = thread.displayName)
+        ContactAvatar(address = thread.address, name = thread.nickname ?: thread.displayName)
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = formatPhoneNumber(thread.displayName),
+                text = thread.nickname ?: formatPhoneNumber(thread.displayName),
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,

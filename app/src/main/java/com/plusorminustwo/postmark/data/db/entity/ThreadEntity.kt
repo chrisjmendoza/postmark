@@ -22,7 +22,9 @@ data class ThreadEntity(
     val isMuted: Boolean = false,
     val isPinned: Boolean = false,
     // When false the thread is fully silenced — no notification is posted for incoming messages.
-    val notificationsEnabled: Boolean = true
+    val notificationsEnabled: Boolean = true,
+    // Postmark-only display alias — null means use displayName everywhere in the UI.
+    val nickname: String? = null
 )
 
 /**
@@ -38,7 +40,8 @@ fun ThreadEntity.toDomain() = Thread(
     backupPolicy = backupPolicy,
     isMuted = isMuted,
     isPinned = isPinned,
-    notificationsEnabled = notificationsEnabled
+    notificationsEnabled = notificationsEnabled,
+    nickname = nickname
 )
 
 /**
@@ -54,5 +57,6 @@ fun Thread.toEntity() = ThreadEntity(
     backupPolicy = backupPolicy,
     isMuted = isMuted,
     isPinned = isPinned,
-    notificationsEnabled = notificationsEnabled
+    notificationsEnabled = notificationsEnabled,
+    nickname = nickname
 )

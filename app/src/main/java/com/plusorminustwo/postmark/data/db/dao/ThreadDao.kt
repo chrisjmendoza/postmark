@@ -80,6 +80,10 @@ interface ThreadDao {
     @Query("SELECT displayName FROM threads WHERE address = :address LIMIT 1")
     suspend fun getDisplayNameByAddress(address: String): String?
 
+    /** Saves a Postmark-only nickname for the thread; pass null to clear it. */
+    @Query("UPDATE threads SET nickname = :nickname WHERE id = :threadId")
+    suspend fun updateNickname(threadId: Long, nickname: String?)
+
     @Query("DELETE FROM threads")
     suspend fun deleteAll()
 

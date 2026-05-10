@@ -107,6 +107,11 @@ interface MessageDao {
     @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId")
     suspend fun markAllRead(threadId: Long)
 
+    /** All messages in a thread that carry a media attachment, newest first.
+     *  Used by ContactDetailScreen to build the shared-media grid. */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND attachmentUri IS NOT NULL ORDER BY timestamp DESC")
+    fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>>
+
     /** Live (threadId → unread count) pairs used by [ConversationsViewModel] for unread badges. */
     @Query("SELECT threadId, COUNT(*) as count FROM messages WHERE isRead = 0 GROUP BY threadId")
     fun observeUnreadCounts(): Flow<List<UnreadCount>>

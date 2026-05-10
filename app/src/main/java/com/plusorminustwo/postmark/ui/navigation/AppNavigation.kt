@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.plusorminustwo.postmark.ui.conversations.ConversationsScreen
 import com.plusorminustwo.postmark.ui.conversations.NewConversationScreen
+import com.plusorminustwo.postmark.ui.contact.ContactDetailScreen
 import com.plusorminustwo.postmark.ui.onboarding.OnboardingScreen
 import com.plusorminustwo.postmark.ui.search.SearchScreen
 import com.plusorminustwo.postmark.ui.settings.BackupSettingsScreen
@@ -70,6 +71,10 @@ sealed class Screen(val route: String) {
     data object SyncLog : Screen("settings/dev/synclog")
     /** Compose a new message — recipient picker / phone number entry. */
     data object NewConversation : Screen("new_conversation")
+    /** Contact detail page — opened by tapping the name/avatar in the thread TopAppBar. */
+    data object ContactDetail : Screen("contact/{threadId}") {
+        fun route(threadId: Long) = "contact/$threadId"
+    }
 }
 
 private val SLIDE_IN  = tween<IntOffset>(280)
@@ -132,6 +137,7 @@ fun AppNavigation(showOnboarding: Boolean) {
                 scrollToMessageId = scrollToMessageId,
                 scrollToDate      = scrollToDate,
                 onBack            = { navController.popBackStack() },
+                onViewContact     = { navController.navigate(Screen.ContactDetail.route(threadId)) },
                 onViewStats       = { navController.navigate(Screen.Stats.navRoute(threadId)) },
                 onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) },
                 onSearchInThread  = { id -> navController.navigate(Screen.Search.navRoute(id)) }
@@ -205,6 +211,17 @@ fun AppNavigation(showOnboarding: Boolean) {
                     }
                 },
                 onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Screen.ContactDetail.route,
+            arguments = listOf(navArgument("threadId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val threadId = backStackEntry.arguments!!.getLong("threadId")
+            ContactDetailScreen(
+                threadId = threadId,
+                onBack   = { navController.popBackStack() }
             )
         }
     }

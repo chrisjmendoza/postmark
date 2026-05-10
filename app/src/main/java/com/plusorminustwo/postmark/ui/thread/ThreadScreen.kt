@@ -143,6 +143,7 @@ fun ThreadScreen(
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
     onBack: () -> Unit,
+    onViewContact: () -> Unit = {},
     onViewStats: () -> Unit = {},
     onBackupSettingsClick: () -> Unit = {},
     onSearchInThread: (Long) -> Unit = {},
@@ -196,6 +197,7 @@ fun ThreadScreen(
         scrollToDate = scrollToDate,
         scrollToBottomEvent = viewModel.scrollToBottomEvent,
         onBack = onBack,
+        onViewContact = onViewContact,
         onViewStats = onViewStats,
         onBackupSettingsClick = onBackupSettingsClick,
         onHighlightMessage = onHighlightMessage,
@@ -252,6 +254,7 @@ private fun ThreadContent(
     scrollToDate: String = "",
     scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
     onBack: () -> Unit,
+    onViewContact: () -> Unit = {},
     onViewStats: () -> Unit,
     onBackupSettingsClick: () -> Unit,
     onHighlightMessage: (Long) -> Unit,
@@ -524,10 +527,11 @@ private fun ThreadContent(
                 )
                 else -> TopAppBar(
                     title = {
-                        val name = formatPhoneNumber(uiState.thread?.displayName ?: "")
+                        val name = uiState.thread?.let { t -> t.nickname ?: formatPhoneNumber(t.displayName) } ?: ""
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.clickable(onClick = onViewContact)
                         ) {
                             ContactAvatar(
                                 address = uiState.thread?.address ?: "",

@@ -201,6 +201,7 @@ class SearchReactionFilterTest {
         override suspend fun count(): Int = 0
         override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
         override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
+        override suspend fun updateNickname(threadId: Long, nickname: String?) {}
     }
 
     private class FakeReactionDao : ReactionDao {

@@ -72,5 +72,6 @@ class BackupPolicyTest {
         override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) {}
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
+        override suspend fun updateNickname(threadId: Long, nickname: String?) {}
     }
 }

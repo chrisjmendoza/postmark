@@ -84,4 +84,8 @@ class ThreadRepository @Inject constructor(
     // isn't in Room yet (e.g. before first sync completes).
     suspend fun getDisplayNameByAddress(address: String): String? =
         dao.getDisplayNameByAddress(address)
+
+    /** Saves a Postmark-only nickname for the thread; pass null to clear it. */
+    suspend fun setNickname(threadId: Long, nickname: String?) =
+        dao.updateNickname(threadId, nickname)
 }

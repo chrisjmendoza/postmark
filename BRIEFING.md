@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: May 8, 2026
+Last updated: May 10, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -9,7 +9,7 @@ Package: com.plusorminustwo.postmark
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 10
+- Room (database) — currently on schema version 11
 - Hilt (dependency injection)
 - WorkManager (scheduled backup)
 - Kotlin Coroutines + Flow
@@ -48,7 +48,7 @@ com.plusorminustwo.postmark
     └── parser              ← AppleReactionParser (scaffolded)
 
 ═══════════════════════════════════════════════════════
-DATABASE — ROOM SCHEMA v10
+DATABASE — ROOM SCHEMA v11
 ═══════════════════════════════════════════════════════
 Thread
 - id, displayName, address, lastMessageAt,
@@ -56,7 +56,8 @@ Thread
   backupPolicy (GLOBAL/ALWAYS_INCLUDE/NEVER_INCLUDE),
   isMuted BOOLEAN DEFAULT false (added v5),
   isPinned BOOLEAN DEFAULT false (added v6),
-  notificationsEnabled BOOLEAN DEFAULT true (added v8)
+  notificationsEnabled BOOLEAN DEFAULT true (added v8),
+  nickname TEXT nullable (added v11, Postmark-only, never synced to system Contacts)
 
   Threads sort pinned-first (isPinned DESC, lastMessageAt DESC)
 
@@ -101,6 +102,7 @@ Migration 6→7: isMms on messages
 Migration 7→8: notificationsEnabled on threads
 Migration 8→9: attachmentUri + mimeType on messages
 Migration 9→10: isRead on messages
+Migration 10→11: nickname on threads
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -412,6 +414,25 @@ TIER 1 — REMAINING (in priority order)
 4. MMS MEDIA — remaining playback
    Tap image → full-screen viewer, tap video → ExoPlayer dialog.
    (Audio chip play/pause is now done.)
+
+COMPLETED THIS SPRINT (May 10, 2026)
+✅ Contact detail screen (feat/contact-detail)
+   Tapping the contact name/avatar in the thread TopAppBar opens ContactDetailScreen:
+   - Large avatar + nickname (Postmark-only) or formatted phone number
+   - Inline nickname editing via AlertDialog + OutlinedTextField; stored in DB
+     (schema v11 — ALTER TABLE threads ADD COLUMN nickname TEXT nullable)
+   - "Open in Contacts" OutlinedButton — ACTION_VIEW for known contacts,
+     ACTION_INSERT_OR_EDIT (number pre-filled) for unknown numbers
+   - Mute / Pin / Notifications toggles via ContactDetailViewModel
+   - Shared media grid: all MMS attachments for the thread in rows of 3;
+     Coil thumbnails for images; dark overlay + icon for video/audio;
+     tapping image opens full-screen Dialog viewer (pinch-to-zoom)
+   - ContactDetailViewModel (HiltViewModel): exposes thread + mediaMessages
+     StateFlow; setNickname / toggleMute / togglePin / toggleNotifications
+   - ThreadDao.updateNickname + ThreadRepository.setNickname wired
+   - MessageDao.observeMediaMessages + MessageRepository.observeMediaMessages wired
+   - Nickname displayed in ConversationsScreen and ThreadScreen (nickname ?: displayName)
+   All 27 unit test suites pass (0 failures).
 
 COMPLETED THIS SPRINT (May 8, 2026)
 ✅ Reaction system — MMS fallbacks and layout fully fixed

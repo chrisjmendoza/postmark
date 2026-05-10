@@ -534,6 +534,7 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity? = null
     override suspend fun markAllRead(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
+    override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 private class ActionsThreadDao : ThreadDao {
@@ -559,6 +560,7 @@ private class ActionsThreadDao : ThreadDao {
     override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
+    override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
 }
 
 private class ActionsThreadStatsDao : ThreadStatsDao {
