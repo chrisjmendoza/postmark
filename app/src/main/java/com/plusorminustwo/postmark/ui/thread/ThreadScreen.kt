@@ -2133,17 +2133,25 @@ private fun FullScreenImageViewer(uri: String, onDismiss: () -> Unit) {
 /**
  * Full-screen dialog that plays an MMS video using ExoPlayer.
  *
- * Creates an [ExoPlayer] instance, loads [uri], and auto-plays. The player
- * is released when the dialog is dismissed via [DisposableEffect].
+ * Shows the video above a Compose control bar that mirrors the audio chip:
+ * play/pause button, scrubable Slider, and elapsed / total timestamps.
+ * The native PlayerView controls are hidden so only the Compose bar is visible.
  *
- * @param uri      content://mms/part/ URI for the video to play.
+ * @param uri       content://mms/part/ URI for the video to play.
  * @param onDismiss Called when the user closes the player.
  */
 @Composable
 private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
 
-    // Build and prepare the player once. remember() ties its lifetime to this composable.
+    // Playback state mirrored into Compose so the control bar recomposes correctly.
+    var isPlaying  by remember { mutableStateOf(false) }
+    var isScrubbing by remember { mutableStateOf(false) }
+    // Normalised position 0f..1f; durationMs=0 until the player signals READY.
+    var position   by remember { mutableStateOf(0f) }
+    var durationMs by remember { mutableLongStateOf(0L) }
+
+    // Build and prepare the player once.
     val player = remember {
         ExoPlayer.Builder(ctx).build().apply {
             setMediaItem(MediaItem.fromUri(Uri.parse(uri)))
@@ -2152,44 +2160,141 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
         }
     }
 
-    // Release the player when this composable leaves the composition.
-    DisposableEffect(Unit) {
-        onDispose { player.release() }
+    // Mirror ExoPlayer state into Compose variables via a listener.
+    DisposableEffect(player) {
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == androidx.media3.common.Player.STATE_READY && durationMs == 0L) {
+                    durationMs = player.duration.coerceAtLeast(0L)
+                }
+            }
+        }
+        player.addListener(listener)
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
+    }
+
+    // Poll currentPosition every 200 ms while playing (same pattern as audio chip).
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            if (!isScrubbing && durationMs > 0L) {
+                position = player.currentPosition.toFloat() / durationMs
+            }
+            delay(200)
+        }
+    }
+
+    // Format milliseconds as "m:ss" — same helper used in audio chip.
+    fun fmtMs(ms: Long): String {
+        val s = ms / 1000
+        return "%d:%02d".format(s / 60, s % 60)
     }
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black),
-            contentAlignment = Alignment.Center
+            verticalArrangement = Arrangement.Center
         ) {
-            // PlayerView is a traditional Android View — wire it in via AndroidView.
-            AndroidView(
-                factory = { context ->
-                    PlayerView(context).apply {
-                        this.player = player
-                    }
-                },
+            // Video surface — native controls hidden; we supply our own bar below.
+            Box(modifier = Modifier.weight(1f, fill = false)) {
+                AndroidView(
+                    factory = { context ->
+                        PlayerView(context).apply {
+                            this.player = player
+                            // Hide ExoPlayer's built-in control bar.
+                            useController = false
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                )
+                // Close button in top-right corner.
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = Color.White
+                    )
+                }
+            }
+
+            // ── Control bar ────────────────────────────────────────────────────
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
-            )
-            // Close button in top-right corner as a fallback affordance.
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
+                    .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Close",
-                    tint = Color.White
-                )
+                // Play / Pause toggle.
+                IconButton(
+                    onClick = {
+                        if (player.isPlaying) player.pause() else player.play()
+                    },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    // Scrubable progress slider.
+                    Slider(
+                        value = position,
+                        onValueChange = { newVal ->
+                            isScrubbing = true
+                            position = newVal
+                        },
+                        onValueChangeFinished = {
+                            if (durationMs > 0L) {
+                                player.seekTo((position * durationMs).toLong())
+                            }
+                            isScrubbing = false
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(20.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor         = Color.White,
+                            activeTrackColor   = Color.White,
+                            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                        )
+                    )
+                    // Elapsed time (left) and total duration (right).
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text  = if (durationMs > 0L) fmtMs((position * durationMs).toLong()) else "0:00",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.7f)
+                        )
+                        Text(
+                            text  = if (durationMs > 0L) fmtMs(durationMs) else "Video",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.7f)
+                        )
+                    }
+                }
             }
         }
     }
