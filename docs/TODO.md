@@ -92,7 +92,9 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **MMS media in conversation list** — `previewText` extension returns "📷 Photo" /
       "🎥 Video" / "🎵 Audio message" when body is empty; used by both sync handlers.
 - [ ] **Tap image → full-screen viewer** — `Dialog` or separate screen, pinch-to-zoom.
-- [ ] **Tap video → player dialog** — `ExoPlayer` / `VideoView` in a `Dialog`.
+- [x] **Tap video → player dialog** — `VideoPlayerDialog` composable with ExoPlayer
+      (media3 1.5.1); auto-plays on open; `DisposableEffect` releases player on dismiss;
+      tapping the video thumbnail in a bubble opens it.
 - [x] **Audio playback controls** — `MediaPlayer` play/pause on audio chip in `ThreadScreen`.
 - [ ] **Rich media in reply bar** — ~~attachment button left of text field. Image picker
       (`PickVisualMedia`), camera capture. Requires `READ_MEDIA_IMAGES` / `CAMERA`.~~

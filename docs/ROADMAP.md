@@ -89,7 +89,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **`MessageBubble` updated** — attachment-mode vs text-mode layout switch; caption below attachment when body non-empty
 - [x] **"Wipe DB + re-import"** in Dev Options — retroactive re-sync for previously imported MMS without attachment data
 - [ ] Tap image → full-screen pinch-to-zoom viewer
-- [ ] Tap video → `ExoPlayer` dialog
+- [x] Tap video → ExoPlayer dialog (media3 1.5.1; auto-plays, releases on dismiss)
 - [x] Audio chip → `MediaPlayer` playback controls — play/pause button in `ThreadScreen`; `DisposableEffect` for cleanup
 - [x] **Rich media in reply bar** — attach button + dropdown (photo/video, audio file), `GetContent` launcher, attachment preview chip, MMS send path (`MmsManagerWrapper` + WAP Binary PDU, `MmsSentReceiver`). Camera capture still pending.
 - [x] **SMS/MMS type label** — dimmed label next to timestamp in `MessageBubble`

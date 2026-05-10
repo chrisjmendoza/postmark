@@ -4,6 +4,26 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-05-09
+
+### Feature: MMS video playback
+
+Tapping a video thumbnail in a message bubble now opens a full-screen `VideoPlayerDialog`
+backed by ExoPlayer (media3 1.5.1). The player auto-starts, releases on dismiss via
+`DisposableEffect`, and shows a close button in the top-right corner.
+
+- Added `media3-exoplayer` and `media3-ui` dependencies to version catalog and
+  `app/build.gradle.kts`.
+- `MmsAttachment` composable: added `onVideoClick` parameter; video `Box` is now
+  clickable when the callback is provided.
+- New `VideoPlayerDialog` composable: `Dialog(usePlatformDefaultWidth = false)` with
+  black background; `AndroidView` wrapping `PlayerView`; `ExoPlayer` created with
+  `remember`, disposed with `DisposableEffect`.
+- Call site in `MessageBubble`: added `showVideoPlayer` state alongside `showImageViewer`;
+  wires `onVideoClick` for video MIME types; shows `VideoPlayerDialog` when active.
+
+---
+
 ## 2026-05-10
 
 ### Feature: Contact detail screen

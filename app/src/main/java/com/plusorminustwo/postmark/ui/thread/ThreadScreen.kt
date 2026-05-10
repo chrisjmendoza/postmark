@@ -50,7 +50,12 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
@@ -975,6 +980,7 @@ private fun MessageBubble(
                 if (message.attachmentUri != null) {
                     // Track whether the full-screen image viewer is open.
                     var showImageViewer by remember { mutableStateOf(false) }
+                    var showVideoPlayer by remember { mutableStateOf(false) }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         // Render the media attachment (image, video, or audio).
                         MmsAttachment(
@@ -982,7 +988,9 @@ private fun MessageBubble(
                             mimeType = message.mimeType,
                             // Only images are tappable; video/audio have their own interactions.
                             onImageClick = if (message.mimeType?.startsWith("image/") == true)
-                                { { showImageViewer = true } } else null
+                                { { showImageViewer = true } } else null,
+                            onVideoClick = if (message.mimeType?.startsWith("video/") == true)
+                                { { showVideoPlayer = true } } else null
                         )
                         // Show caption text below the attachment if present.
                         if (message.body.isNotEmpty()) {
@@ -1018,6 +1026,13 @@ private fun MessageBubble(
                         FullScreenImageViewer(
                             uri = message.attachmentUri,
                             onDismiss = { showImageViewer = false }
+                        )
+                    }
+                    // Full-screen video player — shown when the user taps a video thumbnail.
+                    if (showVideoPlayer) {
+                        VideoPlayerDialog(
+                            uri = message.attachmentUri,
+                            onDismiss = { showVideoPlayer = false }
                         )
                     }
                 } else {
@@ -1119,7 +1134,9 @@ private fun MmsAttachment(
     uri: String,
     mimeType: String?,
     // Non-null when the image can be tapped to open the full-screen viewer.
-    onImageClick: (() -> Unit)? = null
+    onImageClick: (() -> Unit)? = null,
+    // Non-null when the video thumbnail can be tapped to open the player dialog.
+    onVideoClick: (() -> Unit)? = null
 ) {
     when {
         // ── Image ──────────────────────────────────────────────────────────────
@@ -1184,7 +1201,11 @@ private fun MmsAttachment(
                     .fillMaxWidth()
                     .height(120.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .then(
+                        if (onVideoClick != null) Modifier.clickable(onClick = onVideoClick)
+                        else Modifier
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -2091,6 +2112,73 @@ private fun FullScreenImageViewer(uri: String, onDismiss: () -> Unit) {
                     )
             )
             // Close button in the top-right corner as a fallback affordance.
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close",
+                    tint = Color.White
+                )
+            }
+        }
+    }
+}
+
+// ── VideoPlayerDialog ─────────────────────────────────────────────────────────
+
+/**
+ * Full-screen dialog that plays an MMS video using ExoPlayer.
+ *
+ * Creates an [ExoPlayer] instance, loads [uri], and auto-plays. The player
+ * is released when the dialog is dismissed via [DisposableEffect].
+ *
+ * @param uri      content://mms/part/ URI for the video to play.
+ * @param onDismiss Called when the user closes the player.
+ */
+@Composable
+private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+
+    // Build and prepare the player once. remember() ties its lifetime to this composable.
+    val player = remember {
+        ExoPlayer.Builder(ctx).build().apply {
+            setMediaItem(MediaItem.fromUri(Uri.parse(uri)))
+            prepare()
+            playWhenReady = true
+        }
+    }
+
+    // Release the player when this composable leaves the composition.
+    DisposableEffect(Unit) {
+        onDispose { player.release() }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            // PlayerView is a traditional Android View — wire it in via AndroidView.
+            AndroidView(
+                factory = { context ->
+                    PlayerView(context).apply {
+                        this.player = player
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+            )
+            // Close button in top-right corner as a fallback affordance.
             IconButton(
                 onClick = onDismiss,
                 modifier = Modifier

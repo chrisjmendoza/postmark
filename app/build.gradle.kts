@@ -106,6 +106,10 @@ dependencies {
     // Coil — image loading for MMS attachments
     implementation(libs.coil.compose)
 
+    // Media3 ExoPlayer — video playback in thread view
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
