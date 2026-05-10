@@ -6,6 +6,40 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### Fix: MMS sent image disappears + delivery status vanishes during sync
+
+Two race conditions in `SmsSyncHandler.syncLatestMms()` caused sent MMS images to
+disappear from the sender's screen and the delivery indicator to vanish.
+
+**Root cause 1 — attachmentUri race**: Samsung writes `msg_box=2` (sent) to
+`content://mms` almost immediately, which triggers `syncLatestMms`. The sync called
+`getOptimisticSentAttachmentUri()` to transfer the cached image URI to the real row,
+but `ThreadViewModel.sendMessage()` updates that URI *after* `sendMms()` returns —
+creating a window where the optimistic row still holds the ephemeral picker URI.
+
+**Fix**: `syncLatestMms` now derives the cache file path directly from the optimistic
+row's `id` (= tempId). `MmsManagerWrapper` writes `filesDir/mms_attach_$tempId.bin`
+*before* calling `sendMultimediaMessage`, so the file is guaranteed to exist when the
+observer fires. A FileProvider URI is built for it and transferred to the real row;
+the stored `attachmentUri` on the optimistic row is used only as fallback.
+
+**Root cause 2 — PENDING status not transferred**: The sync only transferred SENT and
+FAILED status to the real row, leaving it at `DELIVERY_STATUS_NONE (0)`. The
+`DeliveryStatusIndicator` composable returns early for status 0, making the pending-
+clock icon disappear as soon as sync replaced the optimistic row.
+
+**Fix**: Status transfer now includes PENDING, so the real row shows the clock icon
+while awaiting MMSC confirmation. `MmsSentReceiver` overwrites it with SENT or FAILED
+when the MMSC responds.
+
+**Files changed**:
+- `data/db/dao/MessageDao.kt` — new `getOptimisticSentId()` query
+- `data/repository/MessageRepository.kt` — delegates `getOptimisticSentId()`
+- `data/sync/SmsSyncHandler.kt` — cache-file-first URI transfer; PENDING transfer
+- 4 test DAO stubs updated
+
+---
+
 ### Feature: Swipe-to-reply with inline quote bar
 
 Swiping right on any message bubble triggers a reply-with-quote flow, matching the

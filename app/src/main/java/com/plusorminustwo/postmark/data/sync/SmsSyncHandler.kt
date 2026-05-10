@@ -18,7 +18,9 @@ import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
+import androidx.core.content.FileProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -354,35 +356,71 @@ class SmsSyncHandler @Inject constructor(
             val latest = msgs.last()
 
             /*
-             * Race scenario A: MmsSentReceiver fired and marked the temp row FAILED
-             * before this sync ran. Transfer that status to the just-inserted real row.
-             * Race scenario B: MmsSentReceiver marked the temp row SENT (MMSC confirmed)
-             * but the real content-provider row wasn't written yet when it queried.
-             * Without this transfer the real row would default to DELIVERY_STATUS_NONE
-             * and the UI would show no delivery indicator after sync deleted the temp row.
+             * Transfer delivery status from the optimistic row to the just-inserted real row.
+             * We transfer PENDING too (not just SENT/FAILED) so the real row keeps showing
+             * a delivery indicator during the window between sync replacing the optimistic row
+             * and MmsSentReceiver updating the real row with the final MMSC result.
+             * Race scenario A: MmsSentReceiver fired and marked the temp row FAILED/SENT
+             * before this sync ran → transfer that terminal status immediately.
+             * Race scenario B: MmsSentReceiver hasn't fired yet → transfer PENDING so the
+             * UI keeps showing the clock indicator instead of a blank.
              */
             val optStatus = messageRepository.getOptimisticSentDeliveryStatus(threadId)
-            if (optStatus == DELIVERY_STATUS_FAILED || optStatus == DELIVERY_STATUS_SENT) {
+            if (optStatus != null && optStatus != DELIVERY_STATUS_NONE) {
                 val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
                 if (sentMsg != null) {
                     messageRepository.updateDeliveryStatus(sentMsg.id, optStatus)
-                    val statusName = if (optStatus == DELIVERY_STATUS_SENT) "SENT" else "FAILED"
+                    val statusName = when (optStatus) {
+                        DELIVERY_STATUS_SENT    -> "SENT"
+                        DELIVERY_STATUS_FAILED  -> "FAILED"
+                        DELIVERY_STATUS_PENDING -> "PENDING"
+                        else                    -> "status=$optStatus"
+                    }
                     syncLogger.log("IncrementalMms", "transferred $statusName status to real row id=${sentMsg.id} threadId=$threadId")
                 }
             }
 
             /*
-             * Transfer the attachmentUri from the optimistic row to the real row.
-             * The optimistic row's URI points to the locally-cached compressed image
-             * (mms_attach_*.bin served via FileProvider). Samsung's content://mms/part/
-             * data for the SENT copy is typically empty, so using our own cached bytes
-             * keeps the image visible after the real row replaces the optimistic one.
+             * Transfer the attachmentUri from the locally-cached compressed image to the
+             * real row. Samsung's content://mms/part/ data for SENT rows is typically empty,
+             * so we use our own filesDir cache to keep the image visible after the real row
+             * replaces the optimistic one.
+             *
+             * Primary strategy: look for the cache file at mms_attach_<tempId>.bin using the
+             * optimistic row's id (= tempId). This is immune to the race where ThreadViewModel
+             * hasn't yet updated the stored attachmentUri in Room (it does so after sendMms()
+             * returns, but the ContentObserver may fire before that DB update completes).
+             * The cache file is written by MmsManagerWrapper BEFORE sendMultimediaMessage()
+             * is called, so it is guaranteed to exist by the time the observer fires.
+             *
+             * Fallback: use the stored attachmentUri on the optimistic row.
              */
             val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
             if (sentMsg != null) {
-                val optUri = messageRepository.getOptimisticSentAttachmentUri(threadId)
-                if (optUri != null) {
-                    messageRepository.updateAttachmentUri(sentMsg.id, optUri)
+                val optId = messageRepository.getOptimisticSentId(threadId)
+                val transferUri: String? = if (optId != null) {
+                    // Derive the cache file path from the tempId stored as the optimistic row id.
+                    val cacheFile = File(context.filesDir, "mms_attach_$optId.bin")
+                    if (cacheFile.exists()) {
+                        try {
+                            // Build a FileProvider URI so Coil can load it within the app process.
+                            FileProvider.getUriForFile(
+                                context, "${context.packageName}.fileprovider", cacheFile
+                            ).toString()
+                        } catch (_: Exception) {
+                            // FileProvider lookup failed — fall back to the DB-stored URI.
+                            messageRepository.getOptimisticSentAttachmentUri(threadId)
+                        }
+                    } else {
+                        // Cache file not found — fall back to whatever URI is stored on the row.
+                        messageRepository.getOptimisticSentAttachmentUri(threadId)
+                    }
+                } else {
+                    // No optimistic row found (already deleted or never existed) — try DB URI.
+                    messageRepository.getOptimisticSentAttachmentUri(threadId)
+                }
+                if (transferUri != null) {
+                    messageRepository.updateAttachmentUri(sentMsg.id, transferUri)
                     syncLogger.log("IncrementalMms", "transferred attachmentUri to real row id=${sentMsg.id}")
                 }
             }

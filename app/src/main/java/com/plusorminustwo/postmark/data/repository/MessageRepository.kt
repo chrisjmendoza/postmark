@@ -89,6 +89,12 @@ class MessageRepository @Inject constructor(
     suspend fun getOptimisticSentAttachmentUri(threadId: Long): String? =
         messageDao.getOptimisticSentAttachmentUri(threadId)
 
+    /** Returns the negative tempId of the most recent temp sent row for a thread.
+     *  Used by [SmsSyncHandler] to derive the cache file name and bypass the race
+     *  where [ThreadViewModel] hasn't yet updated the stored attachmentUri. */
+    suspend fun getOptimisticSentId(threadId: Long): Long? =
+        messageDao.getOptimisticSentId(threadId)
+
     suspend fun updateAttachmentUri(messageId: Long, uri: String) =
         messageDao.updateAttachmentUri(messageId, uri)
 

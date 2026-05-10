@@ -88,6 +88,13 @@ interface MessageDao {
     @Query("SELECT attachmentUri FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentAttachmentUri(threadId: Long): String?
 
+    /** Returns the row id (negative tempId) of the most recent optimistic sent message in a thread.
+     *  Used by [SmsSyncHandler.syncLatestMms] to derive the cache file name
+     *  (mms_attach_<tempId>.bin) and build a stable FileProvider URI, bypassing the
+     *  race where [ThreadViewModel] hasn't yet updated the stored attachmentUri. */
+    @Query("SELECT id FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
+    suspend fun getOptimisticSentId(threadId: Long): Long?
+
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteById(messageId: Long)
 
