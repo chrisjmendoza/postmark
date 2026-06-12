@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: May 10, 2026
+Last updated: June 11, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -144,6 +144,12 @@ WHAT IS WORKING (tested on device)
    (Required for Android 8+ / API 26+)
 ✅ POST_NOTIFICATIONS permission declared (API 33+),
    requested alongside READ_SMS and READ_CONTACTS
+✅ SMS sync reliability fix (post Android system update):
+   - SmsManagerWrapper explicitly calls SmsSyncHandler.onSmsContentChanged()
+     after writing sent row to content://sms/sent (mirrors SmsReceiver pattern);
+     fixes sent messages not appearing when OS broke content-observer chain
+   - syncLatestSms() Samsung fallback: tries content://sms/inbox + /sent with
+     same _id > maxKnownId filter when primary cursor is null; logs warning
 ✅ SmsReceiver posts heads-up notification on incoming SMS:
    - Multi-part SMS body reassembled before display
    - Sync triggered once (not once-per-part)

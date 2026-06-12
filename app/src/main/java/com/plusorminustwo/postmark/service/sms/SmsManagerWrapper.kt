@@ -8,6 +8,7 @@ import android.content.Intent
 import android.provider.Telephony
 import android.telephony.SmsManager
 import android.util.Log
+import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,13 +18,14 @@ import javax.inject.Singleton
  * system telephony content provider.
  *
  * As the default SMS app, Postmark is responsible for persisting sent messages so
- * other apps and the OS can see them. After writing the row [SmsContentObserver]
- * picks it up, syncs it to Room, and removes the optimistic entry created by
- * [ThreadViewModel].
+ * other apps and the OS can see them. After writing the row, [SmsSyncHandler] is
+ * triggered explicitly (and [SmsContentObserver] may also fire) to sync the real
+ * row into Room and remove the optimistic entry created by [ThreadViewModel].
  */
 @Singleton
 class SmsManagerWrapper @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val smsSyncHandler: SmsSyncHandler
 ) {
     private val smsManager: SmsManager
         get() = context.getSystemService(SmsManager::class.java)
@@ -37,17 +39,10 @@ class SmsManagerWrapper @Inject constructor(
      *   PendingIntents so the receiver can identify which message to update.
      */
     fun sendTextMessage(destinationAddress: String, text: String, messageId: Long) {
-        // ── Write to content://sms/sent ───────────────────────────────────────────
-        // SmsManager only transmits over the radio; the default SMS app is
-        // responsible for writing sent messages to the telephony content provider
-        // so other apps (e.g. Google Messages) can see them. The SmsContentObserver
-        // will pick up the new row, sync it into Room, and clean up the optimistic
-        // entry created by ThreadViewModel.
-        // ── Write to content://sms/sent and capture the assigned row ID ────────────────
-        // We need the real positive row ID from the content provider so the delivery
-        // callbacks in SmsSentDeliveryReceiver can update the correct Room row.  By the
-        // time the sentIntent fires, SmsSyncHandler will have already replaced the
-        // optimistic negative-ID entry with this positive-ID row.
+        // SmsManager transmits over the radio; as default SMS app we must write the row
+        // to content://sms/sent so other apps can see it. We also capture the assigned
+        // row ID so SmsSentDeliveryReceiver can update the correct Room row (the optimistic
+        // negative-ID entry will have been replaced by SmsSyncHandler before that fires).
         var smsRowId = -1L
         try {
             val now = System.currentTimeMillis()
@@ -72,6 +67,14 @@ class SmsManagerWrapper @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write sent message to content provider", e)
         }
+
+        /* Explicitly trigger incremental SMS sync — mirrors what SmsReceiver does for
+         * incoming messages. After an Android/Samsung system update the content-observer
+         * notification chain from content://sms/sent → content://sms became unreliable,
+         * so we can no longer rely solely on SmsContentObserver to kick off the sync.
+         * This call is idempotent: if the observer already fired the sync, SmsSyncHandler's
+         * CONFLATED channel simply drops the duplicate signal. */
+        smsSyncHandler.onSmsContentChanged(Telephony.Sms.CONTENT_URI)
 
         val reqBase = (messageId and 0x3FFF_FFFFL).toInt()
         // Capture in a local val so the lambdas below can close over it.

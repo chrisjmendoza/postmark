@@ -135,19 +135,42 @@ class SmsSyncHandler @Inject constructor(
 
         // Fetch every SMS row we haven't seen yet, oldest-first so thread
         // metadata (lastMessageAt/Preview) ends up reflecting the true latest.
-        val cursor = context.contentResolver.query(
+        val selectionArgs = arrayOf(maxKnownId.toString())
+        val sortOrder = "${Telephony.Sms._ID} ASC"
+        val primaryCursor = context.contentResolver.query(
             Telephony.Sms.CONTENT_URI,
             projection,
             "${Telephony.Sms._ID} > ?",
-            arrayOf(maxKnownId.toString()),
-            "${Telephony.Sms._ID} ASC"
-        ) ?: return
+            selectionArgs,
+            sortOrder
+        )
+
+        /* Samsung fallback: after some OneUI updates content://sms returns null for
+         * incremental queries even with READ_SMS granted. Try the per-mailbox URIs
+         * (inbox + sent) with the same _id filter so we don't silently drop messages. */
+        val cursors = if (primaryCursor != null) {
+            listOf(primaryCursor)
+        } else {
+            Log.w(TAG, "syncLatestSms: primary cursor null after id=$maxKnownId — trying mailbox fallback URIs")
+            syncLogger.log("IncrementalSms", "primary cursor null — trying mailbox fallback URIs after id=$maxKnownId")
+            listOf("content://sms/inbox", "content://sms/sent").mapNotNull { uriStr ->
+                context.contentResolver.query(
+                    Uri.parse(uriStr),
+                    projection,
+                    "${Telephony.Sms._ID} > ?",
+                    selectionArgs,
+                    sortOrder
+                )
+            }
+        }
+
+        if (cursors.isEmpty()) return
 
         val newMessages = mutableListOf<Message>()
         // Track threads ensured in this batch to avoid redundant DB lookups.
         val ensuredThreadIds = mutableSetOf<Long>()
 
-        cursor.use {
+        for (cursor in cursors) cursor.use {
             val idIdx      = it.getColumnIndexOrThrow(Telephony.Sms._ID)
             val threadIdx  = it.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
             val addressIdx = it.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)

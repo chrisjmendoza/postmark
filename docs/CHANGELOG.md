@@ -6,6 +6,36 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### Fix: Sent SMS messages not appearing after Android system update
+
+After a Samsung/Android OS update the content-observer notification chain from
+`content://sms/sent` → `content://sms` became unreliable. Since `SmsManagerWrapper`
+relied solely on that chain to trigger the incremental Room sync, newly sent messages
+were never picked up; the optimistic row lingered briefly then was deleted when the
+next received message triggered a sync, leaving the sent message invisible.
+
+**Fix 1 — explicit sync trigger**: `SmsManagerWrapper.sendTextMessage()` now calls
+`smsSyncHandler.onSmsContentChanged()` immediately after writing the sent row to
+`content://sms/sent`. This mirrors exactly what `SmsReceiver` does for incoming
+messages. The content observer remains a secondary redundant path; if it fires,
+`SmsSyncHandler`'s CONFLATED channel drops the duplicate signal harmlessly.
+
+**Fix 2 — Samsung fallback in `syncLatestSms()`**: When `content://sms` returns a null
+cursor (Samsung OneUI may return null for incremental queries even with READ_SMS
+granted), the sync now logs a warning and retries against `content://sms/inbox` and
+`content://sms/sent` with the same `_id > maxKnownId` filter. Prevents silent no-op
+syncs on Samsung ROMs where the base URI becomes unavailable after an update.
+
+**Root cause of background sync delay**: Same broken notification chain — sent messages
+depended on it, so they appeared to sync slowly or not at all. Fix 1 resolves this for
+sent messages; received messages were already handled directly by `SmsReceiver`.
+
+**Files changed**:
+- `service/sms/SmsManagerWrapper.kt` — inject `SmsSyncHandler`; call `onSmsContentChanged()` after insert
+- `data/sync/SmsSyncHandler.kt` — Samsung fallback + warning log in `syncLatestSms()`
+
+---
+
 ### Fix: MMS sent image disappears + delivery status vanishes during sync
 
 Two race conditions in `SmsSyncHandler.syncLatestMms()` caused sent MMS images to
