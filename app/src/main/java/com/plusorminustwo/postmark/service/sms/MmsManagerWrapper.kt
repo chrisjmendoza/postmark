@@ -10,11 +10,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -80,8 +76,9 @@ class MmsManagerWrapper @Inject constructor(
         /* Photo-picker URIs (content://media/picker_get_content/…) are only valid
          * within the originating Activity's lifecycle; a process restart revokes
          * the grant. We persist the raw bytes to filesDir after the first successful
-         * read so that retries after process death still work.
-         * MmsSentReceiver deletes the file when the MMSC confirms delivery (SENT). */
+         * read so that retries after process death still work. The file is left in
+         * place after send so SmsSyncHandler can use it as the attachmentUri for the
+         * real Room row (keeping the image visible after the optimistic row is replaced). */
         val attachmentCacheFile = File(context.filesDir, "mms_attach_$messageId.bin")
         val mediaBytes: ByteArray = if (attachmentCacheFile.exists()) {
             val cachedBytes = attachmentCacheFile.readBytes()
@@ -120,15 +117,18 @@ class MmsManagerWrapper @Inject constructor(
         } catch (_: Exception) { DEFAULT_MAX_MMS_BYTES }
         // Reserve headroom for PDU framing + SMIL part so the total PDU stays under
         // the carrier cap. The carrier limit applies to the full PDU, not just media bytes.
-        val effectiveMediaLimit = (carrierMaxBytes - PDU_OVERHEAD_BYTES).coerceAtLeast(300_000)
+        val effectiveMediaLimit = carrierMaxBytes - PDU_OVERHEAD_BYTES
         syncLogger.log(TAG, "sendMms: carrierMaxBytes=$carrierMaxBytes effectiveMediaLimit=$effectiveMediaLimit messageId=$messageId")
 
+        var effectiveMimeType = mimeType
         val finalMediaBytes = if (mimeType.startsWith("image/") && mediaBytes.size > effectiveMediaLimit) {
             val compressed = compressImage(mediaBytes, mimeType, messageId, effectiveMediaLimit)
             if (compressed == null) {
                 syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit (effectiveMediaLimit=$effectiveMediaLimit) for messageId=$messageId")
                 return@withContext false
             }
+            // compressImage always re-encodes as JPEG regardless of input format
+            effectiveMimeType = "image/jpeg"
             compressed
         } else {
             mediaBytes
@@ -139,7 +139,7 @@ class MmsManagerWrapper @Inject constructor(
             MmsPduBuilder.buildPdu(
                 toAddress  = toAddress,
                 mediaBytes = finalMediaBytes,
-                mimeType   = mimeType,
+                mimeType   = effectiveMimeType,
                 textBody   = textBody
             )
         } catch (e: Exception) {
@@ -198,17 +198,10 @@ class MmsManagerWrapper @Inject constructor(
             return@withContext false
         }
 
-        /* ── 6. Schedule PDU file cleanup (fire-and-forget) ──────────────────────
-         * Delete the temp PDU file after a 60 s delay — ample time for any carrier
-         * MMSC timeout — so the telephony service is guaranteed to have read the
-         * file first. Launched in a detached scope so sendMms() returns immediately
-         * rather than blocking the caller's coroutine for a full minute. */
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            try {
-                delay(60_000)
-                pduFile.delete()
-            } catch (_: Exception) {}
-        }
+        /* ── 6. PDU file cleanup ──────────────────────────────────────────────────
+         * The PDU file is deleted by MmsSentReceiver once the platform reports a
+         * result (success or failure). This ensures the telephony service can always
+         * read the file, even when MMS-APN bring-up or carrier retries take > 60 s. */
 
         return@withContext true
     }
@@ -348,13 +341,14 @@ private object MmsPduBuilder {
     // ── WAP well-known MIME content type short codes ───────────────────────────
     // Types with an assigned WAP code are one byte; everything else is text-string.
     private val WELL_KNOWN_CT: Map<String, Byte> = mapOf(
-        "text/plain"  to 0x83.toByte(),   // 0x03 | 0x80
+        // WAP-230 WSP Table B.4 well-known content types (value | 0x80)
         "text/html"   to 0x82.toByte(),   // 0x02 | 0x80
         "image/gif"   to 0x9D.toByte(),   // 0x1D | 0x80
         "image/jpeg"  to 0x9E.toByte(),   // 0x1E | 0x80
         "image/jpg"   to 0x9E.toByte(),   // alias
-        "image/png"   to 0x9F.toByte(),   // 0x1F | 0x80
-        "image/webp"  to 0xA6.toByte(),   // 0x26 | 0x80
+        // 0x9F = image/tiff (0x1F); PNG is 0x20 → 0xA0
+        "image/png"   to 0xA0.toByte(),   // 0x20 | 0x80
+        // image/webp has no WAP well-known code — encoded as Extension-media text string
     )
 
     // ── Entry point ───────────────────────────────────────────────────────────
@@ -484,8 +478,9 @@ private object MmsPduBuilder {
     ): ByteArray {
         val hdr = ByteArrayOutputStream()
         hdr.write(encodeContentTypeHeader(mimeType))
-        // Content-Id (text-string, e.g. "<smil>")
+        // Content-Id: Quoted-string per WSP §8.4.2.1 — 0x22 opening quote, null-terminated
         hdr.write(FIELD_CONTENT_ID)
+        hdr.write(0x22)
         hdr.write(contentId.toByteArray(Charsets.US_ASCII)); hdr.write(0x00)
         // Content-Location (filename; matched by SMIL src attributes)
         hdr.write(FIELD_CONTENT_LOCATION)
@@ -501,13 +496,25 @@ private object MmsPduBuilder {
     }
 
     /**
-     * Encodes the Content-Type header for a part.
-     * Well-known types use a short-integer byte; unknown types (audio/mpeg,
-     * application/smil, etc.) use a null-terminated Extension-media text string.
+     * Encodes the Content-Type value for a multipart part (WAP-230 §8.5.3).
+     *
+     * Per WSP, each part's Content-Type is written directly at the start of the
+     * part headers — there is NO 0x84 field-code prefix. The 0x84 byte belongs
+     * only in the top-level MMS header block, not inside part headers.
+     *
+     * - Well-known types: single short-integer byte (value | 0x80)
+     * - text/plain: Content-General-Form with charset=UTF-8 so non-ASCII captions
+     *   (emoji, accents) arrive correctly on the recipient's device
+     * - Everything else: Extension-media text string (null-terminated)
      */
     private fun encodeContentTypeHeader(mimeType: String): ByteArray {
         val ct = ByteArrayOutputStream()
-        ct.write(FIELD_CONTENT_TYPE)
+        if (mimeType == "text/plain") {
+            // Content-General-Form: value-length(3) + text/plain(0x83) + charset-token(0x81) + UTF-8(0xEA)
+            // charset param token 0x01 → 0x81; UTF-8 MIBenum 106 = 0x6A → 0xEA
+            ct.write(0x03); ct.write(0x83); ct.write(0x81); ct.write(0xEA)
+            return ct.toByteArray()
+        }
         val knownByte = WELL_KNOWN_CT[mimeType]
         if (knownByte != null) {
             ct.write(knownByte.toInt())

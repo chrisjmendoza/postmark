@@ -6,6 +6,69 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### Fix: MMS PDU encoding — 8 correctness bugs (Fable 5 audit)
+
+Deep audit of the WAP Binary M-Send.req PDU encoder by Claude Fable 5 uncovered 8
+correctness bugs, the most critical of which broke every single outgoing MMS send.
+MMSC would still accept the malformed PDU and `MmsSentReceiver` would report success,
+but the recipient's device would see a blank, broken, or un-renderable message.
+
+**Bug 1 — Critical: spurious `0x84` field-code byte in every part's Content-Type**
+`encodeContentTypeHeader()` wrote `0x84` (Content-Type field-code) before the
+content-type value in every MIME part header. Per WAP-230 WSP §8.5.3, the part
+Content-Type is positional — no field-code prefix. A strict receiver reads `0x84` as
+short-integer type `0x04` (`text/x-hdml`), then misparses the real content-type byte
+as a header field, corrupting the SMIL, image, and text parts of every MMS.
+Fix: removed `ct.write(FIELD_CONTENT_TYPE)` from `encodeContentTypeHeader()`.
+
+**Bug 2 — MIME type not updated after JPEG re-encode**
+`compressImage()` always re-encodes to JPEG but the original `mimeType` (e.g.
+`"image/png"`) was still passed to `buildPdu()`. PDU declared PNG/WebP but contained
+JPEG bytes — recipient parsers failed to decode.
+Fix: `effectiveMimeType = "image/jpeg"` set after compression.
+
+**Bug 3 — Wrong WAP code for `image/png`**
+`WELL_KNOWN_CT` mapped `image/png` to `0x9F` (= `image/tiff` in WAP-230 Table B.4).
+PNG is `0x20 | 0x80 = 0xA0`. A PNG under the size limit arrived labeled as TIFF.
+Fix: `"image/png" to 0xA0.toByte()`.
+
+**Bug 4 — `image/webp` mapped to a bogus WAP code**
+`image/webp` has no WAP well-known code; the table entry `0xA6` maps to
+`application/vnd.wap.multipart.alternative`, causing the image part to be parsed as a
+nested multipart container.
+Fix: removed from `WELL_KNOWN_CT`; falls through to Extension-media text-string path.
+
+**Bug 5 — Size-limit floor reintroduced `MMS_ERROR_IO_ERROR`**
+`(carrierMaxBytes - PDU_OVERHEAD_BYTES).coerceAtLeast(300_000)`: when `carrierMaxBytes`
+is near 300 KB, the floor pushed the media limit back up to the full carrier cap,
+letting ~299 KB images pass uncompressed and exceed the MMSC limit.
+Fix: removed `.coerceAtLeast(300_000)`.
+
+**Bug 7 — PDU file deleted on 60 s timer; carrier/Samsung can take longer**
+`sendMms()` deleted `mms_out_$id.pdu` after 60 seconds via a fire-and-forget coroutine.
+Samsung MMS-APN bring-up + platform retries can exceed 60 s, causing `MMS_ERROR_IO_ERROR`
+when the telephony service tries to read the (now-deleted) file.
+Fix: removed the timer; `MmsSentReceiver` deletes the PDU in its `finally` block.
+
+**Bug 8 — Content-ID not encoded as Quoted-string**
+WSP §8.4.2.1 requires Content-ID values to be Quoted-strings (`0x22` prefix).
+Without it, strict receivers fail to match the part against `start="<smil>"`.
+Fix: `hdr.write(0x22)` added before Content-ID bytes in `encodePart()`.
+
+**Bug 9 — `text/plain` part had no charset — emoji/accents arrived as mojibake**
+The text part was encoded as bare `0x83` (text/plain) with no charset. Recipients
+default to US-ASCII/Latin-1.
+Fix: Content-General-Form: `value-length(3) + 0x83 + charset-token(0x81) + UTF-8(0xEA)`.
+
+**Not fixed — separate PR**: EXIF orientation stripped by `compressImage()` causes
+camera photos to arrive rotated 90° on recipient devices. Requires `androidx.exifinterface`.
+
+**Files changed**:
+- `service/sms/MmsManagerWrapper.kt` — Bugs 1–5, 8, 9
+- `service/sms/MmsSentReceiver.kt` — Bug 7
+
+---
+
 ### Fix: Sent SMS messages not appearing after Android system update
 
 After a Samsung/Android OS update the content-observer notification chain from

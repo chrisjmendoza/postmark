@@ -228,19 +228,33 @@ WHAT IS WORKING (tested on device)
    - MmsManagerWrapper builds WAP Binary M-Send.req PDU, sends via
      SmsManager.sendMultimediaMessage(); temp PDU via FileProvider cacheDir;
      returns Boolean (true = dispatched, false = local failure)
-   - Images > 1.2 MB are auto-compressed before PDU build: pass 1 = iterative
-     JPEG quality reduction (85→40%); pass 2 = dimension halving up to 3× at
-     quality=70% if quality-only still exceeds 1.2 MB. Prevents MMS_ERROR_IO_ERROR
-     carrier rejection for large (12 MP+) photos.
+   - Images auto-compressed to fit carrier size limit: pass 1 = JPEG quality
+     reduction (85→40%); pass 2 = dimension scaling (2000→800 px) at quality 70%.
+     Carrier cap read from CarrierConfig; fallback = 860 KB (Signal's proven ceiling).
+   - After compression, mimeType updated to "image/jpeg" so PDU Content-Type matches
+     the actual bytes (previously sent PNG/WebP bytes labeled as original type).
    - grantUriPermission covers all known MMS service packages: "android" (system UID
      for Samsung OneUI), com.samsung.android.messaging, com.sec.mms, com.android.phone,
      com.android.mms.service, com.google.android.apps.messaging
-   - MmsSentReceiver carries EXTRA_SENT_AT_MS; finds real content://mms row
-     by timestamp window even if sync replaced the optimistic row first
+   - MmsSentReceiver carries EXTRA_SENT_AT_MS + EXTRA_BEFORE_SEND_MAX_ID; finds real
+     content://mms row by _id snapshot (fallback: timestamp window)
+   - MmsSentReceiver deletes mms_out_$id.pdu in finally block (platform has reported
+     result by then; previously a 60s timer could fire before Samsung MMS-APN completes)
    - SmsSyncHandler.syncLatestMms() transfers DELIVERY_STATUS_FAILED from
      optimistic row to real row before deleting it (race condition fix)
    - ThreadViewModel marks optimistic row as FAILED immediately on local send failure
    - SMS/MMS type label dimmed next to timestamp in each bubble
+   ⚠️ Known gap: EXIF orientation stripped by compressImage() — camera photos arrive
+     rotated 90° on recipient devices. Requires androidx.exifinterface (separate PR).
+
+✅ MMS PDU WAP Binary encoding audit (Fable 5, June 2026):
+   - Bug 1 (critical): spurious 0x84 field-code byte in every part Content-Type header
+     per WSP §8.5.3 parts don't use a field-code prefix — corrupted all MMS sends.
+   - Bug 3: image/png WAP code was 0x9F (image/tiff); correct is 0xA0.
+   - Bug 4: image/webp has no WAP well-known code; 0xA6 is multipart/alternative.
+   - Bug 8: Content-ID must be Quoted-string (0x22 prefix) per WSP §8.4.2.1.
+   - Bug 9: text/plain needs charset=UTF-8 in Content-General-Form or captions
+     with emoji/accents arrive as mojibake on recipient devices.
 ✅ Notifications show contact display name (not raw phone number):
    - SmsReceiver queries threadRepository.getDisplayNameByAddress(rawSender)
      before posting notification; falls back to raw number if thread not in Room

@@ -134,9 +134,14 @@ class MmsSentReceiver : BroadcastReceiver() {
                     syncLogger.log(TAG, "MmsSentReceiver: no real MMS rows found after $attempt attempts — SmsSyncHandler will transfer status on next sync")
                 }
             } finally {
-                /* Leave mms_attach_$messageId.bin in place \u2014 SmsSyncHandler uses it
-                 * as the attachmentUri for the real Room row so the image stays visible
-                 * after the optimistic row is replaced. Cleanup is handled on app start. */
+                // Delete the temp PDU file now that the platform has reported a result.
+                // Doing this here (rather than on a 60 s timer in MmsManagerWrapper) ensures
+                // the file is available for the full duration of any carrier retry / APN
+                // bring-up, which can exceed 60 s on Samsung.
+                // mms_attach_$messageId.bin is intentionally left in place \u2014 SmsSyncHandler
+                // uses it as the attachmentUri for the real Room row so the image stays
+                // visible after the optimistic row is replaced.
+                try { java.io.File(context.cacheDir, "mms_out_$messageId.pdu").delete() } catch (_: Exception) {}
                 pendingResult.finish()
             }
         }
