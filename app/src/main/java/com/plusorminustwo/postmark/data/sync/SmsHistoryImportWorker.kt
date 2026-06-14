@@ -167,6 +167,12 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             // Happy path: primary URI returned rows — use them directly.
             debugLog("Using primary cursor ($primaryRowCount rows)")
             primaryCursor!!.use { processSmsCursor(it, threads, messages) }
+            // Supplement with content://sms/sent — post-June 2026 Android update excludes
+            // sent messages from the aggregate URI even when it returns a non-null cursor.
+            // Duplicates with the primary cursor are resolved by ID before persisting.
+            applicationContext.contentResolver.query(
+                Uri.parse("content://sms/sent"), SMS_PROJECTION, null, null, "${Telephony.Sms.DATE} ASC"
+            )?.use { processSmsCursor(it, threads, messages) }
         } else {
             // ── Samsung / OEM fallback ────────────────────────────────────────
             // Two known failure modes:
@@ -216,6 +222,11 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             threadRepository.updateLastMessageAt(thread.id, thread.lastMessageAt)
             threadRepository.updateLastMessagePreview(thread.id, thread.lastMessagePreview)
         }
+        // Dedup by ID: content://sms and content://sms/sent may contain overlapping rows.
+        val seenMsgIds = mutableSetOf<Long>()
+        val dedupIter = messages.iterator()
+        while (dedupIter.hasNext()) { if (!seenMsgIds.add(dedupIter.next().id)) dedupIter.remove() }
+
         val smsTotal = messages.size
         messages.chunked(500).forEachIndexed { idx, chunk ->
             messageRepository.insertAll(chunk)

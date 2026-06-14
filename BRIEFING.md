@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: June 11, 2026
+Last updated: June 14, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -255,6 +255,19 @@ WHAT IS WORKING (tested on device)
    - Bug 8: Content-ID must be Quoted-string (0x22 prefix) per WSP §8.4.2.1.
    - Bug 9: text/plain needs charset=UTF-8 in Content-General-Form or captions
      with emoji/accents arrive as mojibake on recipient devices.
+✅ Sent SMS messages not appearing — June 2026 Android system update fix:
+   Root cause: Android updated content://sms aggregate URI to return a non-null
+   cursor that silently excludes sent messages. Our fallback to content://sms/sent
+   only fired when the cursor was null — so the fallback never triggered and every
+   sent message was dropped. Received messages still came through (they were in the
+   inbox portion of the cursor), producing conversations with only left-side bubbles.
+   Fix (SmsSyncHandler + SmsHistoryImportWorker):
+   - syncLatestSms(): when primary cursor is non-null, always run a supplemental
+     content://sms/sent query with the same _id > maxKnownId filter; merge both
+     cursors; seenIds set deduplicates rows that appear in both.
+   - syncAllSms(): supplemental content://sms/sent query in the primary-cursor
+     happy path (primaryRowCount > 0); iterator-based ID dedup before batch insert.
+   Both the incremental (real-time) and full historical sync paths are covered.
 ✅ Notifications show contact display name (not raw phone number):
    - SmsReceiver queries threadRepository.getDisplayNameByAddress(rawSender)
      before posting notification; falls back to raw number if thread not in Room
@@ -415,7 +428,7 @@ Five additional sync gaps resolved (May 3 audit):
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
-ACTIVE BRANCH: feat/thread-view
+ACTIVE BRANCH: fix/mms-pdu-encoding
 
 TIER 1 — REMAINING (in priority order)
 1. MULTIPART MESSAGE HANDLING

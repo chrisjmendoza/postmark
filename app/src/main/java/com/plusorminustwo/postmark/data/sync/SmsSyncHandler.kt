@@ -145,11 +145,19 @@ class SmsSyncHandler @Inject constructor(
             sortOrder
         )
 
-        /* Samsung fallback: after some OneUI updates content://sms returns null for
-         * incremental queries even with READ_SMS granted. Try the per-mailbox URIs
-         * (inbox + sent) with the same _id filter so we don't silently drop messages. */
+        /* After some Android system updates (observed June 2026), content://sms excludes sent
+         * messages from aggregate queries even when READ_SMS is granted and the cursor is
+         * non-null. Always supplement with content://sms/sent so sent messages are never
+         * silently dropped; duplicate _ids across both cursors are removed below. */
         val cursors = if (primaryCursor != null) {
-            listOf(primaryCursor)
+            val sentCursor = context.contentResolver.query(
+                Uri.parse("content://sms/sent"),
+                projection,
+                "${Telephony.Sms._ID} > ?",
+                selectionArgs,
+                sortOrder
+            )
+            listOfNotNull(primaryCursor, sentCursor)
         } else {
             Log.w(TAG, "syncLatestSms: primary cursor null after id=$maxKnownId — trying mailbox fallback URIs")
             syncLogger.log("IncrementalSms", "primary cursor null — trying mailbox fallback URIs after id=$maxKnownId")
@@ -167,7 +175,7 @@ class SmsSyncHandler @Inject constructor(
         if (cursors.isEmpty()) return
 
         val newMessages = mutableListOf<Message>()
-        // Track threads ensured in this batch to avoid redundant DB lookups.
+        val seenIds = mutableSetOf<Long>()
         val ensuredThreadIds = mutableSetOf<Long>()
 
         for (cursor in cursors) cursor.use {
@@ -180,6 +188,7 @@ class SmsSyncHandler @Inject constructor(
 
             while (it.moveToNext()) {
                 val id       = it.getLong(idIdx)
+                if (!seenIds.add(id)) continue
                 val threadId = it.getLong(threadIdx)
                 /* Null address is valid for WAP push, carrier service, and some OEM ROMs.
                  * Preserve the row with an empty fallback — never skip based on missing address. */
