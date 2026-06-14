@@ -374,8 +374,21 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         // We import newest-first (_id DESC), so a killed worker has already persisted
         // IDs from the top down to some minimum. On resume, skip rawId >= that minimum.
         // MMS IDs in Room are offset by MMS_ID_OFFSET, so subtract to get the raw _id.
-        val resumeBeforeRawId: Long = (messageRepository.getMinMmsId() ?: 0L)
-            .let { if (it > 0) it - MMS_ID_OFFSET else Long.MAX_VALUE }
+        //
+        // Filter-version guard: when the msg_box filter definition changes (e.g. adding
+        // outbox=4 for RCS), a prior interrupted import may have stored a checkpoint that
+        // would fast-skip rows the old filter excluded. Force a full re-walk for one run
+        // whenever the stored version is behind MMS_IMPORT_FILTER_VERSION.
+        val prefs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val storedFilterVersion = prefs.getInt(KEY_MMS_FILTER_VERSION, 1)
+        val filterVersionChanged = storedFilterVersion < MMS_IMPORT_FILTER_VERSION
+        val resumeBeforeRawId: Long = if (filterVersionChanged) {
+            Log.i(TAG_MMS, "syncAllMms: filter version $storedFilterVersion → $MMS_IMPORT_FILTER_VERSION — forcing full re-walk to pick up previously-excluded msg_box rows")
+            Long.MAX_VALUE
+        } else {
+            (messageRepository.getMinMmsId() ?: 0L)
+                .let { if (it > 0) it - MMS_ID_OFFSET else Long.MAX_VALUE }
+        }
         if (resumeBeforeRawId < Long.MAX_VALUE) {
             Log.i(TAG_MMS, "syncAllMms: resuming, skipping rawId >= $resumeBeforeRawId")
         }
@@ -388,12 +401,15 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         val primaryCursor = applicationContext.contentResolver.query(
             Telephony.Mms.CONTENT_URI,
             mmsProjection,
-            /* Whitelist only inbox (1) and sent (2).
-             * Drafts (3), outbox (4), and failed (5) are excluded:
-             * - Drafts are not real messages.
-             * - Outbox is transitional; same _id flips to sent or failed.
-             * - Failed sends have no error UI here — showing as sent is misleading. */
-            "${Telephony.Mms.MESSAGE_BOX} IN (${Telephony.Mms.MESSAGE_BOX_INBOX}, ${Telephony.Mms.MESSAGE_BOX_SENT})",
+            /* Include inbox (1), sent (2), and outbox (4).
+             * Drafts (3) are excluded — not real sent messages.
+             * Failed (5) excluded — no error UI for historical failed sends.
+             * IMPORTANT: RCS messages sent via Google Messages (and MMS messages that
+             * have not yet received MMSC confirmation) remain in outbox (4) permanently
+             * rather than flipping to sent (2). Without outbox, every RCS sent message
+             * is silently dropped. MmsSentReceiver already queries (msg_box=2 OR msg_box=4)
+             * for exactly this reason. */
+            "${Telephony.Mms.MESSAGE_BOX} IN (${Telephony.Mms.MESSAGE_BOX_INBOX}, ${Telephony.Mms.MESSAGE_BOX_SENT}, ${Telephony.Mms.MESSAGE_BOX_OUTBOX})",
             null,
             sortOrder
         )
@@ -403,6 +419,16 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         if (primaryRowCount > 0) {
             // Happy path: primary URI returned rows — use them directly.
             primaryCursor!!.use { totalMmsCount += processMmsCursor(it, threads, primaryRowCount, resumeBeforeRawId, onProgress) }
+            // Supplement queries catch sent/outbox rows the aggregate URI may have silently
+            // omitted. Rows already inserted by the primary cursor are safely overwritten
+            // by REPLACE — no data loss, and dedup is handled at the DB level.
+            listOf("content://mms/sent", "content://mms/outbox").forEach { uriStr ->
+                val supp = applicationContext.contentResolver.query(
+                    Uri.parse(uriStr), mmsProjection, null, null, sortOrder
+                )
+                debugMmsLog("syncAllMms: supplement $uriStr → ${supp?.count ?: "null"} rows")
+                supp?.use { totalMmsCount += processMmsCursor(it, threads, it.count, resumeBeforeRawId, onProgress) }
+            }
         } else {
             // ── Samsung / OEM fallback ────────────────────────────────────────
             // Samsung OneUI returns a null or empty cursor for content://mms
@@ -414,6 +440,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             listOf(
                 Uri.parse("content://mms/inbox"),
                 Uri.parse("content://mms/sent"),
+                Uri.parse("content://mms/outbox"),
             ).forEach { uri ->
                 val c = applicationContext.contentResolver.query(
                     uri, mmsProjection, null, null, sortOrder
@@ -444,6 +471,10 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                 threadRepository.updateLastMessagePreview(threadId, mmsThread.lastMessagePreview)
             }
         }
+
+        // Record that this import ran with the current filter version so future resumes
+        // don't incorrectly force a full re-walk when nothing changed.
+        prefs.edit().putInt(KEY_MMS_FILTER_VERSION, MMS_IMPORT_FILTER_VERSION).apply()
 
         return totalMmsCount
     }
@@ -698,6 +729,11 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         private const val TAG          = "PostmarkSync"
         private const val TAG_MMS      = "PostmarkMms"
         private const val PREFS        = "postmark_prefs"
+        // Bump this whenever the msg_box filter definition changes (currently IN (1,2,4)).
+        // On upgrade, syncAllMms() detects the version mismatch and forces a full re-walk
+        // so rows excluded by the old filter are not permanently skipped by the checkpoint.
+        private const val KEY_MMS_FILTER_VERSION  = "mms_import_filter_version"
+        private const val MMS_IMPORT_FILTER_VERSION = 2
         // Notification ID for the foreground-service progress notification.
         // Must be > 0 and distinct from SMS notification IDs (which are sender hashCodes
         // or Int.MIN_VALUE for the summary).

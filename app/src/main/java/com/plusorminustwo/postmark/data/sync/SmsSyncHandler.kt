@@ -304,30 +304,49 @@ class SmsSyncHandler @Inject constructor(
         val maxRawId = (maxStoredId - MMS_ID_OFFSET).coerceAtLeast(0L)
         debugLog("syncLatestMms: maxStoredId=$maxStoredId  maxRawId=$maxRawId")
 
-        val cursor = context.contentResolver.query(
+        val mmsIncProjection = arrayOf("_id", "thread_id", "date", "msg_box")
+        val primaryMmsCursor = context.contentResolver.query(
             Telephony.Mms.CONTENT_URI,
-            arrayOf("_id", "thread_id", "date", "msg_box"),
-            /* Whitelist only inbox (1) and sent (2).
-             * Drafts (3), outbox (4), and failed (5) are excluded:
-             * - Drafts are not real messages.
-             * - Outbox is a transient state; the same _id flips to sent or failed.
-             *   Importing it now would leave a stale "sent" bubble if it fails.
-             * - Failed OS-level sends have no error UI here, so showing them as
-             *   sent bubbles would be misleading. */
-            "_id > ? AND ${Telephony.Mms.MESSAGE_BOX} IN (${Telephony.Mms.MESSAGE_BOX_INBOX}, ${Telephony.Mms.MESSAGE_BOX_SENT})",
+            mmsIncProjection,
+            /* Include inbox (1), sent (2), and outbox (4).
+             * Drafts (3) are excluded — not real sent messages.
+             * Failed (5) excluded — no error UI for historical failed sends.
+             * IMPORTANT: RCS messages sent via Google Messages (and MMS messages that
+             * have not yet received MMSC confirmation) remain in outbox (4) permanently
+             * rather than flipping to sent (2). Without outbox, every RCS sent message
+             * is silently dropped. MmsSentReceiver already queries (msg_box=2 OR msg_box=4)
+             * for exactly this reason — the sync paths must match. */
+            "_id > ? AND ${Telephony.Mms.MESSAGE_BOX} IN (${Telephony.Mms.MESSAGE_BOX_INBOX}, ${Telephony.Mms.MESSAGE_BOX_SENT}, ${Telephony.Mms.MESSAGE_BOX_OUTBOX})",
             arrayOf(maxRawId.toString()),
             "_id ASC"
-        ) ?: run {
-            Log.w(TAG, "syncLatestMms: cursor was null — provider unavailable or permission denied")
+        )
+        /* Supplement per-mailbox URIs catch rows the aggregate URI may have silently
+         * excluded. The seenMmsRawIds set below deduplicates any overlap. */
+        val sentMmsCursor = context.contentResolver.query(
+            Uri.parse("content://mms/sent"),
+            mmsIncProjection,
+            "_id > ?",
+            arrayOf(maxRawId.toString()),
+            "_id ASC"
+        )
+        val outboxMmsCursor = context.contentResolver.query(
+            Uri.parse("content://mms/outbox"),
+            mmsIncProjection,
+            "_id > ?",
+            arrayOf(maxRawId.toString()),
+            "_id ASC"
+        )
+        if (primaryMmsCursor == null && sentMmsCursor == null && outboxMmsCursor == null) {
+            Log.w(TAG, "syncLatestMms: all cursors null — provider unavailable or permission denied")
             return
         }
-
-        debugLog("syncLatestMms: cursor has ${cursor.count} new MMS rows")
+        val mmsCursors = listOfNotNull(primaryMmsCursor, sentMmsCursor, outboxMmsCursor)
 
         val newMessages       = mutableListOf<Message>()
+        val seenMmsRawIds     = mutableSetOf<Long>()
         val ensuredThreadIds  = mutableSetOf<Long>()
 
-        cursor.use {
+        for (cursor in mmsCursors) cursor.use {
             val idIdx     = it.getColumnIndexOrThrow("_id")
             val threadIdx = it.getColumnIndexOrThrow("thread_id")
             val dateIdx   = it.getColumnIndexOrThrow("date")
@@ -335,6 +354,7 @@ class SmsSyncHandler @Inject constructor(
 
             while (it.moveToNext()) {
                 val rawId     = it.getLong(idIdx)
+                if (!seenMmsRawIds.add(rawId)) continue
                 val threadId  = it.getLong(threadIdx)
                 val dateSec   = it.getLong(dateIdx)
                 val msgBox    = it.getInt(boxIdx)

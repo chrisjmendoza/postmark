@@ -136,8 +136,12 @@ interface MessageDao {
 
     /** Lowest stored MMS row id (already offset by MMS_ID_OFFSET).
      *  Subtract MMS_ID_OFFSET to get the raw content-provider `_id`.
-     *  Used by [SmsHistoryImportWorker] to resume a newest-first MMS import. */
-    @Query("SELECT MIN(id) FROM messages WHERE isMms = 1")
+     *  Used by [SmsHistoryImportWorker] to resume a newest-first MMS import.
+     *  The `id > 0` guard excludes optimistic sent-MMS rows (which have negative IDs
+     *  like `-System.currentTimeMillis()`). Without it, a live optimistic row would make
+     *  resumeBeforeRawId go deeply negative, causing `rawId >= resumeBeforeRawId` to be
+     *  true for every positive rawId and silently skipping the entire MMS import. */
+    @Query("SELECT MIN(id) FROM messages WHERE isMms = 1 AND id > 0")
     suspend fun getMinMmsId(): Long?
 
     /** Used for the 8-week activity heatmap (all threads). */

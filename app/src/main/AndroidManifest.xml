@@ -137,6 +137,19 @@
             android:name=".service.sms.MmsSentReceiver"
             android:exported="false" />
 
+        <!-- RCS archival broadcast from Google Messages (post June 2026 Play Services update).
+             Google Messages stopped triggering the standard content observer for RCS messages
+             and now fires this explicit broadcast instead. Protected by WRITE_SMS so only the
+             system or the default SMS app can send it. -->
+        <receiver
+            android:name=".service.sms.RcsArchivalReceiver"
+            android:exported="true"
+            android:permission="android.permission.WRITE_SMS">
+            <intent-filter>
+                <action android:name="com.google.android.apps.messaging.GOOGLE_MESSAGES_ARCHIVAL_UPDATE" />
+            </intent-filter>
+        </receiver>
+
         <!-- FileProvider for sharing exported images -->
         <provider
             android:name="androidx.core.content.FileProvider"

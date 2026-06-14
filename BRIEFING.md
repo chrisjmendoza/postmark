@@ -268,6 +268,63 @@ WHAT IS WORKING (tested on device)
    - syncAllSms(): supplemental content://sms/sent query in the primary-cursor
      happy path (primaryRowCount > 0); iterator-based ID dedup before batch insert.
    Both the incremental (real-time) and full historical sync paths are covered.
+✅ RCS/MMS sent messages not appearing — msg_box outbox filter bug (definitive fix):
+   Root cause: MMS sent messages (including ALL Google Messages RCS sent messages)
+   are stored in content://mms with msg_box=4 (OUTBOX), not msg_box=2 (SENT).
+   For standard MMSC MMS, the system flips the row from outbox→sent after MMSC
+   confirmation. For RCS messages, Google Messages writes the row to the Telephony
+   provider via the archival API and leaves it permanently at msg_box=4 because
+   there is no MMSC to confirm delivery. Our sync filter was `msg_box IN (1, 2)`,
+   so every RCS sent message was silently excluded from both historical import and
+   incremental sync. This was already documented inside MmsSentReceiver.kt — it
+   already queries `(msg_box = 2 OR msg_box = 4)` when looking for the real MMS
+   row after send. The sync paths just didn't match.
+   Fix (SmsSyncHandler + SmsHistoryImportWorker):
+   - syncLatestMms(): Changed filter to `msg_box IN (1, 2, 4)` and added
+     content://mms/outbox supplement cursor alongside content://mms/sent.
+     seenMmsRawIds set deduplicates overlap across all three cursors.
+   - syncAllMms(): Changed filter to `msg_box IN (1, 2, 4)` and expanded
+     supplement list to [content://mms/sent, content://mms/outbox] (iterated).
+     Samsung fallback also gains content://mms/outbox.
+   The isSent determination `msgBox != MESSAGE_BOX_INBOX` was already correct —
+   outbox (4) messages are correctly treated as sent=true.
+   Two additional bugs found in Opus code audit and fixed alongside:
+   - MessageDao.getMinMmsId(): Added `AND id > 0` guard. Without it, optimistic
+     sent-MMS rows (negative IDs like `-System.currentTimeMillis()`) made
+     resumeBeforeRawId go deeply negative, causing every positive rawId to be
+     fast-skipped as "already imported" and silently dropping the entire MMS
+     history on a "Wipe DB + re-import" triggered while a send was in flight.
+   - SmsHistoryImportWorker: Added MMS_IMPORT_FILTER_VERSION (currently 2) in
+     SharedPreferences. On upgrade from version 1 (old IN(1,2) filter), syncAllMms()
+     detects the mismatch and forces resumeBeforeRawId = Long.MAX_VALUE for one full
+     re-walk, ensuring outbox rows previously excluded by the checkpoint are now
+     imported. Version is persisted only on successful completion so killed workers
+     retry the full re-walk automatically.
+✅ RCS archival broadcast receiver — June 2026 Google Play Services v26.22:
+   Additional cause: Google Play Services v26.22 (June 8, 2026) changed how Google
+   Messages notifies other apps about new RCS messages. Previously it triggered the
+   standard Android content observer; after the update it sends an explicit
+   broadcast (action TBD — verify on-device) carrying the Telephony provider row
+   URI in "com.google.android.apps.messaging.EXTRA_ARCHIVAL_URI". Without a
+   receiver, new RCS messages would not trigger incremental sync.
+   Fix: RcsArchivalReceiver (service/sms/RcsArchivalReceiver.kt)
+   - @AndroidEntryPoint BroadcastReceiver, same pattern as MmsReceiver.
+   - Action: "com.google.android.apps.messaging.GOOGLE_MESSAGES_ARCHIVAL_UPDATE"
+     (namespaced to match EXTRA key convention — verify on-device with logcat).
+   - Protected by android.permission.WRITE_SMS so only the system / default SMS
+     app can send it.
+   - Extracts URI from intent.data → getParcelableExtra → getStringExtra (three
+     fallback layers to handle API differences and future broadcast format changes).
+   - Routes to smsSyncHandler.onSmsContentChanged() for content://sms URIs,
+     onMmsContentChanged() for content://mms URIs, both for unknown/absent URIs.
+   - Registered in AndroidManifest.xml with android:exported="true" and
+     android:permission="android.permission.WRITE_SMS".
+   Note: The msg_box=4 outbox filter fix above is the primary fix. This broadcast
+   receiver covers incremental sync for new messages arriving after the update.
+   ⚠️ ACTION STRING UNVERIFIED: Confirm the correct broadcast action on a device
+   running Play Services v26.22+ (adb logcat | grep -i archival). If the action
+   turns out to be the bare "GOOGLE_MESSAGES_ARCHIVAL_UPDATE" without namespace,
+   update RcsArchivalReceiver.ACTION_ARCHIVAL_UPDATE and the manifest intent-filter.
 ✅ Notifications show contact display name (not raw phone number):
    - SmsReceiver queries threadRepository.getDisplayNameByAddress(rawSender)
      before posting notification; falls back to raw number if thread not in Room
