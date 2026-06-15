@@ -482,6 +482,71 @@ Five additional sync gaps resolved (May 3 audit):
 ✔️ Confirmed working: 620 threads, 51 069 messages synced on
    Samsung S24 Ultra (OneUI).
 
+✅ Message importing architecture overhaul (June 14, 2026):
+   Three coordinated changes replace supplement cursors, version flags, and manual
+   import triggers with a simpler, self-healing system.
+
+   Part A — NOT IN (3, 5) filter:
+   Old filter `msg_box IN (1, 2, 4)` required three cursors + dedup sets + a version
+   flag mechanism to handle filter changes. Replaced with `msg_box NOT IN (3, 5)`:
+   excludes only drafts (3) and failed sends (5); everything else is a real message.
+   Single cursor per path. No supplement cursors. No filter version constants. Future
+   msg_box values auto-included.
+   - SmsHistoryImportWorker.syncAllMms(): single primary cursor, no supplements, no
+     KEY_MMS_FILTER_VERSION / MMS_IMPORT_FILTER_VERSION / needsMmsFilterUpgrade().
+   - SmsSyncHandler.syncLatestMms(): single cursor replacing the old three-cursor loop
+     with seenMmsRawIds dedup set.
+
+   Part B — 60-second foreground polling:
+   ConversationsViewModel.init now launches a coroutine that calls
+   smsSyncHandler.triggerCatchUp() every 60 seconds while the app is in the
+   foreground. Safety net for cases where receivers miss a delivery notification or
+   are killed by OEM battery optimisation. SmsSyncHandler injected via Hilt.
+
+   Part C — Two-phase historical import:
+   SmsHistoryImportWorker.syncAllMms() now runs:
+   Phase 1: ORDER BY _id DESC LIMIT 1000 — newest 1000 MMS rows into Room immediately.
+   Phase 2: WHERE _id < phase1MinRawId ORDER BY _id DESC — full historical walk.
+   UI gets content within seconds; full history loads in background.
+   New finaliseThreadMetadata() helper handles the thread-metadata update pass.
+   Checkpoint-resume logic (resumeBeforeRawId) works correctly across both phases.
+
+   filterUpgrade condition also removed from ConversationsViewModel recovery guard.
+
+✅ Date pill fix (June 14, 2026):
+   Root cause: ALL LazyColumn item keys are Strings — Bubble items use
+   msg.id.toString() (e.g. "10000116428"), DateHeader items use "header_$label"
+   (e.g. "header_May 8, 2026"). The visibleDate derivedStateOf had a single
+   `is String` branch that called removePrefix("header_") unconditionally.
+   When a Bubble was the topmost visible item, its numeric-string key had no
+   prefix to strip, so "10000116428" was returned unchanged and displayed in
+   the date pill. The `is Long` branch was dead code (keys are never Long).
+   Fix (ThreadScreen.kt): in the visibleDate derivedStateOf, check
+   key.startsWith("header_") first; if not a header, parse the key as Long and
+   look up the date in messageIdToDate. Removed the dead `is Long` branch.
+
+✅ Default SMS role request fixed in thread screen (June 14, 2026):
+   Root cause: launchDefaultSmsRoleRequest() used context.startActivity() which
+   the system silently ignores for RoleManager intents on API 29+. The same bug
+   was previously fixed in ConversationsScreen (see "Role denial banner" above).
+   Fix (ThreadScreen.kt): replaced the private helper function with a
+   rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult())
+   launcher inside ThreadContent. The AlertDialog confirm button now calls
+   roleRequestLauncher.launch() for both the API 29+ (RoleManager) and
+   API 26–28 (ACTION_CHANGE_DEFAULT) paths. Deleted launchDefaultSmsRoleRequest.
+
+✅ Draft persistence — text + attachment survive navigation (June 14, 2026):
+   Root cause: _replyText, _pendingAttachmentUri, _pendingMimeType were plain
+   MutableStateFlow fields with no persistence. When the user navigated back from
+   the thread screen and returned, Compose Navigation destroyed and re-created
+   the ViewModel, resetting all three fields to their defaults.
+   Fix (ThreadViewModel.kt): SavedStateHandle (already injected for threadId) is
+   now stored as a property. _replyText initializes from DRAFT_TEXT_KEY, and
+   _pendingAttachmentUri/_pendingMimeType initialize from DRAFT_ATTACHMENT_URI/MIME
+   keys. onReplyTextChanged(), onAttachmentSelected(), and clearAttachment() all
+   write through to SavedStateHandle. sendMessage() also removes the draft keys on
+   send so the cleared state survives process death too.
+
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
@@ -496,10 +561,10 @@ TIER 1 — REMAINING (in priority order)
    Queue outgoing when offline; send on reconnect;
    show "Queued" bubble state.
 
-3. SYNC COMPLETENESS INVESTIGATION
-   Some threads + messages missing from sync.
-   Likely causes: address normalization, cursor pagination,
-   or type filtering in SmsSyncHandler / SmsHistoryImportWorker.
+3. SYNC COMPLETENESS — substantially improved June 14, 2026
+   Architecture overhaul (NOT IN (3,5) filter, two-phase import, 60s polling) removed
+   the main known exclusion gaps. Remaining risk: address normalization edge cases,
+   or OEM-specific cursor pagination limits on 100k+ MMS databases.
 
 4. MMS MEDIA — remaining playback
    Tap image → full-screen viewer, tap video → ExoPlayer dialog.

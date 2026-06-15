@@ -305,86 +305,31 @@ class SmsSyncHandler @Inject constructor(
         debugLog("syncLatestMms: maxStoredId=$maxStoredId  maxRawId=$maxRawId")
 
         val mmsIncProjection = arrayOf("_id", "thread_id", "date", "msg_box")
-        val primaryMmsCursor = context.contentResolver.query(
+        // NOT IN (3, 5): exclude drafts and failed sends. Every other msg_box value
+        // (inbox=1, sent=2, outbox=4 for RCS) represents a real message worth importing.
+        // A single aggregate query is sufficient — no supplement cursors needed.
+        val newMessages      = mutableListOf<Message>()
+        val ensuredThreadIds = mutableSetOf<Long>()
+
+        val mmsCursor = context.contentResolver.query(
             Telephony.Mms.CONTENT_URI,
             mmsIncProjection,
-            /* Include inbox (1), sent (2), and outbox (4).
-             * Drafts (3) are excluded — not real sent messages.
-             * Failed (5) excluded — no error UI for historical failed sends.
-             * IMPORTANT: RCS messages sent via Google Messages (and MMS messages that
-             * have not yet received MMSC confirmation) remain in outbox (4) permanently
-             * rather than flipping to sent (2). Without outbox, every RCS sent message
-             * is silently dropped. MmsSentReceiver already queries (msg_box=2 OR msg_box=4)
-             * for exactly this reason — the sync paths must match. */
-            "_id > ? AND ${Telephony.Mms.MESSAGE_BOX} IN (${Telephony.Mms.MESSAGE_BOX_INBOX}, ${Telephony.Mms.MESSAGE_BOX_SENT}, ${Telephony.Mms.MESSAGE_BOX_OUTBOX})",
+            "_id > ? AND msg_box NOT IN (3, 5)",
             arrayOf(maxRawId.toString()),
             "_id ASC"
         )
-        /* Supplement per-mailbox URIs catch rows the aggregate URI may have silently
-         * excluded. The seenMmsRawIds set below deduplicates any overlap. */
-        val sentMmsCursor = context.contentResolver.query(
-            Uri.parse("content://mms/sent"),
-            mmsIncProjection,
-            "_id > ?",
-            arrayOf(maxRawId.toString()),
-            "_id ASC"
-        )
-        val outboxMmsCursor = context.contentResolver.query(
-            Uri.parse("content://mms/outbox"),
-            mmsIncProjection,
-            "_id > ?",
-            arrayOf(maxRawId.toString()),
-            "_id ASC"
-        )
-        if (primaryMmsCursor == null && sentMmsCursor == null && outboxMmsCursor == null) {
-            Log.w(TAG, "syncLatestMms: all cursors null — provider unavailable or permission denied")
-            return
-        }
-        val mmsCursors = listOfNotNull(primaryMmsCursor, sentMmsCursor, outboxMmsCursor)
-
-        val newMessages       = mutableListOf<Message>()
-        val seenMmsRawIds     = mutableSetOf<Long>()
-        val ensuredThreadIds  = mutableSetOf<Long>()
-
-        for (cursor in mmsCursors) cursor.use {
-            val idIdx     = it.getColumnIndexOrThrow("_id")
-            val threadIdx = it.getColumnIndexOrThrow("thread_id")
-            val dateIdx   = it.getColumnIndexOrThrow("date")
-            val boxIdx    = it.getColumnIndexOrThrow("msg_box")
-
-            while (it.moveToNext()) {
-                val rawId     = it.getLong(idIdx)
-                if (!seenMmsRawIds.add(rawId)) continue
-                val threadId  = it.getLong(threadIdx)
-                val dateSec   = it.getLong(dateIdx)
-                val msgBox    = it.getInt(boxIdx)
-                val id        = MMS_ID_OFFSET + rawId
-                // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
-                val isSent    = msgBox != android.provider.Telephony.Mms.MESSAGE_BOX_INBOX
-                val timestamp = dateSec * 1000L
-                val parts     = getMmsBodyIncremental(rawId)
-                val address   = getMmsAddressIncremental(rawId, isSent)
-                debugLog("syncLatestMms: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
-
-                if (threadId !in ensuredThreadIds) {
-                    ensureThread(threadId, address, timestamp)
-                    ensuredThreadIds += threadId
-                }
-
-                newMessages += Message(
-                    id = id,
-                    threadId = threadId,
-                    address = address,
-                    body = parts.body,
-                    timestamp = timestamp,
-                    isSent = isSent,
-                    type = msgBox,
-                    isMms = true,
-                    attachmentUri = parts.attachmentUri,
-                    mimeType = parts.mimeType,
-                    // Incoming MMS messages start as unread; sent ones are already read.
-                    isRead = isSent
-                )
+        if (mmsCursor != null) {
+            mmsCursor.use { extractMmsMessages(it, newMessages, ensuredThreadIds) }
+        } else {
+            // Samsung OneUI — aggregate content://mms may return a null cursor; try per-mailbox URIs.
+            Log.w(TAG, "syncLatestMms: primary cursor null — trying Samsung mailbox fallback URIs")
+            syncLogger.log("IncrementalMms", "primary cursor null — trying mailbox URIs after rawId=$maxRawId")
+            val seenRawIds = mutableSetOf<Long>()
+            for (uriStr in listOf("content://mms/inbox", "content://mms/sent", "content://mms/outbox")) {
+                context.contentResolver.query(
+                    Uri.parse(uriStr), mmsIncProjection,
+                    "_id > ?", arrayOf(maxRawId.toString()), "_id ASC"
+                )?.use { extractMmsMessages(it, newMessages, ensuredThreadIds, seenRawIds) }
             }
         }
 
@@ -520,46 +465,77 @@ class SmsSyncHandler @Inject constructor(
         }
     }
 
+    // Extracts MMS messages from a single cursor into [newMessages], deduplicating by rawId
+    // when [seenRawIds] is supplied (used for multi-cursor Samsung mailbox fallback paths).
+    private suspend fun extractMmsMessages(
+        cursor: android.database.Cursor,
+        newMessages: MutableList<Message>,
+        ensuredThreadIds: MutableSet<Long>,
+        seenRawIds: MutableSet<Long> = mutableSetOf()
+    ) {
+        val idIdx     = cursor.getColumnIndexOrThrow("_id")
+        val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
+        val dateIdx   = cursor.getColumnIndexOrThrow("date")
+        val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+
+        while (cursor.moveToNext()) {
+            val rawId    = cursor.getLong(idIdx)
+            if (!seenRawIds.add(rawId)) continue
+            val threadId = cursor.getLong(threadIdx)
+            val dateSec  = cursor.getLong(dateIdx)
+            val msgBox   = cursor.getInt(boxIdx)
+            val id       = MMS_ID_OFFSET + rawId
+            // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
+            val isSent   = msgBox != android.provider.Telephony.Mms.MESSAGE_BOX_INBOX
+            val timestamp = dateSec * 1000L
+            val parts    = getMmsBodyIncremental(rawId)
+            val address  = getMmsAddressIncremental(rawId, isSent)
+            debugLog("syncLatestMms: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
+
+            if (threadId !in ensuredThreadIds) {
+                ensureThread(threadId, address, timestamp)
+                ensuredThreadIds += threadId
+            }
+
+            newMessages += Message(
+                id = id,
+                threadId = threadId,
+                address = address,
+                body = parts.body,
+                timestamp = timestamp,
+                isSent = isSent,
+                type = msgBox,
+                isMms = true,
+                attachmentUri = parts.attachmentUri,
+                mimeType = parts.mimeType,
+                isRead = isSent
+            )
+        }
+    }
+
     // Reads text body and first media attachment from the given MMS part table.
-    // Returns MmsParts with a stable content://mms/part/{id} URI for image/video/audio.
-    private fun getMmsBodyIncremental(mmsId: Long): MmsParts {
+    // Returns MmsParsedResult with a stable content://mms/part/{id} URI for image/video/audio.
+    private fun getMmsBodyIncremental(mmsId: Long): MmsParsedResult {
         val cursor = context.contentResolver.query(
             Uri.withAppendedPath(Telephony.Mms.CONTENT_URI, "$mmsId/part"),
             arrayOf("_id", Telephony.Mms.Part.CONTENT_TYPE, Telephony.Mms.Part.TEXT),
             null, null, null
         ) ?: run {
             Log.w(TAG, "getMmsBodyIncremental: parts cursor null for mmsId=$mmsId")
-            return MmsParts("[MMS]", null, null)
+            return MmsParsedResult("[MMS]", null, null)
         }
         debugLog("getMmsBodyIncremental: mmsId=$mmsId  partCount=${cursor.count}")
-        val sb = StringBuilder()
-        var attachmentUri: String? = null
-        var mimeType: String? = null
+        val rawParts = mutableListOf<MmsRawPart>()
         cursor.use {
             val idIdx   = it.getColumnIndexOrThrow("_id")
             val ctIdx   = it.getColumnIndexOrThrow(Telephony.Mms.Part.CONTENT_TYPE)
             val textIdx = it.getColumnIndexOrThrow(Telephony.Mms.Part.TEXT)
             while (it.moveToNext()) {
-                val ct     = it.getString(ctIdx) ?: continue
-                val partId = it.getLong(idIdx)
-                when {
-                    ct.equals("text/plain", ignoreCase = true) ->
-                        sb.append(it.getString(textIdx) ?: "")
-                    ct.equals("application/smil", ignoreCase = true) -> Unit
-                    ct.startsWith("image/", ignoreCase = true) ||
-                    ct.startsWith("video/", ignoreCase = true) ||
-                    ct.startsWith("audio/", ignoreCase = true) -> {
-                        debugLog("getMmsBodyIncremental: found media part ct=$ct  partId=$partId")
-                        if (attachmentUri == null) {
-                            attachmentUri = "content://mms/part/$partId"
-                            mimeType = ct
-                        }
-                    }
-                    else -> debugLog("getMmsBodyIncremental: skipping unknown part ct=$ct")
-                }
+                val ct = it.getString(ctIdx) ?: continue
+                rawParts += MmsRawPart(it.getLong(idIdx), ct, it.getString(textIdx))
             }
         }
-        return MmsParts(sb.toString().trim(), attachmentUri, mimeType)
+        return parseMmsRawParts(rawParts)
     }
 
     private fun getMmsAddressIncremental(mmsId: Long, isSent: Boolean): String {
@@ -617,10 +593,4 @@ class SmsSyncHandler @Inject constructor(
         }
     }
 
-    // Carries the text body and optional media attachment info for one MMS PDU.
-    private data class MmsParts(
-        val body: String,
-        val attachmentUri: String?,
-        val mimeType: String?
-    )
 }

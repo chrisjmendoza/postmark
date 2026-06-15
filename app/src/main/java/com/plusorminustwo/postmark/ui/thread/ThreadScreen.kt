@@ -304,6 +304,12 @@ private fun ThreadContent(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    // RoleManager.createRequestRoleIntent MUST be launched via startActivityForResult;
+    // a plain startActivity() is silently ignored on API 29+.
+    val roleRequestLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {}
+
     var showCalendarPicker by remember { mutableStateOf(false) }
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
     var showDateRangePicker by remember { mutableStateOf(false) }
@@ -377,8 +383,8 @@ private fun ThreadContent(
             if (visible.isEmpty()) return@derivedStateOf ""
             val topItem = visible.maxByOrNull { it.index } ?: return@derivedStateOf ""
             when (val key = topItem.key) {
-                is String -> key.removePrefix("header_")
-                is Long   -> uiState.renderState.messageIdToDate[key] ?: ""
+                is String -> if (key.startsWith("header_")) key.removePrefix("header_")
+                             else key.toLongOrNull()?.let { uiState.renderState.messageIdToDate[it] } ?: ""
                 else      -> ""
             }
         }
@@ -451,7 +457,17 @@ private fun ThreadContent(
             confirmButton = {
                 TextButton(onClick = {
                     onDismissDefaultSmsDialog()
-                    launchDefaultSmsRoleRequest(context)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val rm = context.getSystemService(RoleManager::class.java)
+                        roleRequestLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        roleRequestLauncher.launch(
+                            Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT).putExtra(
+                                Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, context.packageName
+                            )
+                        )
+                    }
                 }) { Text("Set as default") }
             },
             dismissButton = {
@@ -1242,6 +1258,17 @@ private fun MmsAttachment(
                     .build(),
                 contentDescription = "Photo",
                 contentScale = ContentScale.Crop,
+                loading = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                RoundedCornerShape(8.dp)
+                            )
+                    )
+                },
                 error = {
                     // Visible fallback so load failures don't silently disappear.
                     Box(
@@ -1304,11 +1331,13 @@ private fun MmsAttachment(
             val isPlayingState = remember { mutableStateOf(false) }
             var isPlaying by isPlayingState
             var isScrubbing by remember { mutableStateOf(false) }
+            var isPreparing by remember { mutableStateOf(false) }
             /* Normalised playback position 0f..1f, and total duration in ms.
              * durationMs stays 0 until the player is prepared for the first time. */
             var position   by remember { mutableStateOf(0f) }
             var durationMs by remember { mutableStateOf(0) }
             val playerRef  = remember { mutableStateOf<MediaPlayer?>(null) }
+            val scope = rememberCoroutineScope()
 
             val audioManager = remember { ctx.getSystemService(AudioManager::class.java) }
             /* Request audio focus when playback starts. Only react to full AUDIOFOCUS_LOSS
@@ -1378,6 +1407,7 @@ private fun MmsAttachment(
                      * On completion the player is released and position resets to 0. */
                     IconButton(
                         onClick = {
+                            if (isPreparing) return@IconButton
                             if (isPlaying) {
                                 playerRef.value?.pause()
                                 isPlaying = false
@@ -1392,39 +1422,57 @@ private fun MmsAttachment(
                                 } else {
                                     val mp = MediaPlayer()
                                     playerRef.value = mp
-                                    try {
-                                        mp.setDataSource(ctx, Uri.parse(uri))
-                                        mp.prepare()
-                                        durationMs = mp.duration
-                                        // Honour any position the user scrubbed to before pressing play.
-                                        if (position > 0f && durationMs > 0) {
-                                            mp.seekTo((position * durationMs).toInt())
+                                    isPreparing = true
+                                    // prepare() blocks on I/O — run on IO dispatcher to avoid ANR.
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            mp.setDataSource(ctx, Uri.parse(uri))
+                                            mp.prepare()
+                                            val dur = mp.duration
+                                            withContext(Dispatchers.Main) {
+                                                durationMs = dur
+                                                if (position > 0f && durationMs > 0) {
+                                                    mp.seekTo((position * durationMs).toInt())
+                                                }
+                                                mp.setOnCompletionListener {
+                                                    isPlayingState.value = false
+                                                    position  = 0f
+                                                    playerRef.value?.release()
+                                                    playerRef.value = null
+                                                    audioManager.abandonAudioFocusRequest(focusRequest)
+                                                }
+                                                audioManager.requestAudioFocus(focusRequest)
+                                                mp.start()
+                                                isPlaying = true
+                                                isPreparing = false
+                                            }
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("AudioPlayer", "Playback failed for $uri", e)
+                                            withContext(Dispatchers.Main) {
+                                                mp.release()
+                                                playerRef.value = null
+                                                isPreparing = false
+                                            }
                                         }
-                                        mp.setOnCompletionListener {
-                                            isPlayingState.value = false
-                                            position  = 0f
-                                            playerRef.value?.release()
-                                            playerRef.value = null
-                                            audioManager.abandonAudioFocusRequest(focusRequest)
-                                        }
-                                        audioManager.requestAudioFocus(focusRequest)
-                                        mp.start()
-                                        isPlaying = true
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("AudioPlayer", "Playback failed for $uri", e)
-                                        mp.release()
-                                        playerRef.value = null
                                     }
                                 }
                             }
                         },
                         modifier = Modifier.size(36.dp)
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
-                            modifier = Modifier.size(24.dp)
-                        )
+                        if (isPreparing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        } else {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
 
                     Column(modifier = Modifier.weight(1f)) {
@@ -2066,20 +2114,6 @@ private fun BackupPolicyDialog(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-
-private fun launchDefaultSmsRoleRequest(context: android.content.Context) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        val rm = context.getSystemService(RoleManager::class.java)
-        context.startActivity(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
-    } else {
-        @Suppress("DEPRECATION")
-        context.startActivity(
-            Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT).putExtra(
-                Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, context.packageName
-            )
-        )
-    }
-}
 
 private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault()).also {
     it.timeZone = java.util.TimeZone.getDefault()

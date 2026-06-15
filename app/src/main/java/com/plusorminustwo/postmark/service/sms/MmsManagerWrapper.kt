@@ -3,6 +3,9 @@ package com.plusorminustwo.postmark.service.sms
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayInputStream
 import android.net.Uri
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
@@ -121,17 +124,22 @@ class MmsManagerWrapper @Inject constructor(
         syncLogger.log(TAG, "sendMms: carrierMaxBytes=$carrierMaxBytes effectiveMediaLimit=$effectiveMediaLimit messageId=$messageId")
 
         var effectiveMimeType = mimeType
-        val finalMediaBytes = if (mimeType.startsWith("image/") && mediaBytes.size > effectiveMediaLimit) {
-            val compressed = compressImage(mediaBytes, mimeType, messageId, effectiveMediaLimit)
-            if (compressed == null) {
-                syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit (effectiveMediaLimit=$effectiveMediaLimit) for messageId=$messageId")
+        val finalMediaBytes = when {
+            mimeType.startsWith("image/") && mediaBytes.size > effectiveMediaLimit -> {
+                val compressed = compressImage(mediaBytes, mimeType, messageId, effectiveMediaLimit)
+                if (compressed == null) {
+                    syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit (effectiveMediaLimit=$effectiveMediaLimit) for messageId=$messageId")
+                    return@withContext false
+                }
+                // compressImage always re-encodes as JPEG regardless of input format
+                effectiveMimeType = "image/jpeg"
+                compressed
+            }
+            !mimeType.startsWith("image/") && mediaBytes.size > effectiveMediaLimit -> {
+                syncLogger.logError(TAG, "sendMms FAILED — $mimeType too large (${mediaBytes.size} bytes > effectiveMediaLimit=$effectiveMediaLimit) for messageId=$messageId")
                 return@withContext false
             }
-            // compressImage always re-encodes as JPEG regardless of input format
-            effectiveMimeType = "image/jpeg"
-            compressed
-        } else {
-            mediaBytes
+            else -> mediaBytes
         }
 
         // ── 2. Build the MMS PDU ──────────────────────────────────────────────
@@ -230,8 +238,20 @@ class MmsManagerWrapper @Inject constructor(
      * Returns null only if the image cannot be decoded or is still too large
      * at the smallest scale step (genuinely unusable). */
     private fun compressImage(originalBytes: ByteArray, mimeType: String, messageId: Long, maxBytes: Int = DEFAULT_MAX_MMS_BYTES): ByteArray? {
-        val bitmap = BitmapFactory.decodeByteArray(originalBytes, 0, originalBytes.size)
+        // Read EXIF rotation before decoding so the compressed output has correct orientation.
+        val rotationDegrees = try {
+            ByteArrayInputStream(originalBytes).use { ExifInterface(it).rotationDegrees }
+        } catch (_: Exception) { 0 }
+
+        var bitmap = BitmapFactory.decodeByteArray(originalBytes, 0, originalBytes.size)
             ?: return null
+
+        if (rotationDegrees != 0) {
+            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            bitmap.recycle()
+            bitmap = rotated
+        }
 
         // For non-JPEG images (PNG, WEBP…) we re-encode as JPEG so the quality slider works.
         val compressFormat = Bitmap.CompressFormat.JPEG
@@ -458,7 +478,8 @@ private object MmsPduBuilder {
             if (hasText) append("""<text src="text.txt" region="Text"/>""")
         }
 
-        return """<smil><head><layout>$layout</layout></head><body><par dur="5000ms">$parBody</par></body></smil>"""
+        val dur = if (mimeType.startsWith("audio/") || mimeType.startsWith("video/")) "indefinite" else "5000ms"
+        return """<smil><head><layout>$layout</layout></head><body><par dur="$dur">$parBody</par></body></smil>"""
     }
 
     // ── Part encoding ─────────────────────────────────────────────────────────

@@ -364,120 +364,67 @@ class SmsHistoryImportWorker @AssistedInject constructor(
     // are inserted here, and existing threads are updated if MMS has a newer
     // last message. Returns the count of MMS messages persisted.
     private suspend fun syncAllMms(onProgress: suspend (Int, Int, String) -> Unit = { _, _, _ -> }): Int {
-        debugMmsLog("Querying content://mms \u2026")
+        debugMmsLog("Querying content://mms …")
         val threads = mutableMapOf<Long, Thread>()
         var totalMmsCount = 0
         val mmsProjection = arrayOf("_id", "thread_id", "date", "msg_box")
+        val filter = "msg_box NOT IN (3, 5)"
+        val sortDesc = "_id DESC"
 
-        // Checkpoint resume: find the lowest MMS raw ID already in Room so we can
-        // fast-skip those rows on restart instead of re-running the slow sub-queries.
-        // We import newest-first (_id DESC), so a killed worker has already persisted
-        // IDs from the top down to some minimum. On resume, skip rawId >= that minimum.
-        // MMS IDs in Room are offset by MMS_ID_OFFSET, so subtract to get the raw _id.
-        //
-        // Filter-version guard: when the msg_box filter definition changes (e.g. adding
-        // outbox=4 for RCS), a prior interrupted import may have stored a checkpoint that
-        // would fast-skip rows the old filter excluded. Force a full re-walk for one run
-        // whenever the stored version is behind MMS_IMPORT_FILTER_VERSION.
-        val prefs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val storedFilterVersion = prefs.getInt(KEY_MMS_FILTER_VERSION, 1)
-        val filterVersionChanged = storedFilterVersion < MMS_IMPORT_FILTER_VERSION
-        val resumeBeforeRawId: Long = if (filterVersionChanged) {
-            Log.i(TAG_MMS, "syncAllMms: filter version $storedFilterVersion → $MMS_IMPORT_FILTER_VERSION — forcing full re-walk to pick up previously-excluded msg_box rows")
-            Long.MAX_VALUE
-        } else {
-            (messageRepository.getMinMmsId() ?: 0L)
-                .let { if (it > 0) it - MMS_ID_OFFSET else Long.MAX_VALUE }
-        }
+        // Checkpoint resume: skip rows already imported in a prior run.
+        val resumeBeforeRawId: Long = (messageRepository.getMinMmsId() ?: 0L)
+            .let { if (it > 0) it - MMS_ID_OFFSET else Long.MAX_VALUE }
         if (resumeBeforeRawId < Long.MAX_VALUE) {
-            Log.i(TAG_MMS, "syncAllMms: resuming, skipping rawId >= $resumeBeforeRawId")
+            Log.i(TAG_MMS, "syncAllMms: resuming, fast-skipping rawId >= $resumeBeforeRawId")
         }
 
-        // Sort by _id DESC (newest first) so recent messages appear in Room quickly.
-        // Also ensures IDs are monotonically decreasing, making the resume skip exact.
-        val sortOrder = "_id DESC"
-
-        // ── Primary query ─────────────────────────────────────────────────────
-        val primaryCursor = applicationContext.contentResolver.query(
-            Telephony.Mms.CONTENT_URI,
-            mmsProjection,
-            /* Include inbox (1), sent (2), and outbox (4).
-             * Drafts (3) are excluded — not real sent messages.
-             * Failed (5) excluded — no error UI for historical failed sends.
-             * IMPORTANT: RCS messages sent via Google Messages (and MMS messages that
-             * have not yet received MMSC confirmation) remain in outbox (4) permanently
-             * rather than flipping to sent (2). Without outbox, every RCS sent message
-             * is silently dropped. MmsSentReceiver already queries (msg_box=2 OR msg_box=4)
-             * for exactly this reason. */
-            "${Telephony.Mms.MESSAGE_BOX} IN (${Telephony.Mms.MESSAGE_BOX_INBOX}, ${Telephony.Mms.MESSAGE_BOX_SENT}, ${Telephony.Mms.MESSAGE_BOX_OUTBOX})",
-            null,
-            sortOrder
+        // Phase 1: newest 1000 rows so the UI has content quickly.
+        val phase1Cursor = applicationContext.contentResolver.query(
+            Telephony.Mms.CONTENT_URI, mmsProjection, filter, null, "$sortDesc LIMIT 1000"
         )
-        val primaryRowCount = primaryCursor?.count ?: -1
-        debugMmsLog("syncAllMms: primary cursor: ${if (primaryCursor == null) "NULL" else "$primaryRowCount rows"}")
 
-        if (primaryRowCount > 0) {
-            // Happy path: primary URI returned rows — use them directly.
-            primaryCursor!!.use { totalMmsCount += processMmsCursor(it, threads, primaryRowCount, resumeBeforeRawId, onProgress) }
-            // Supplement queries catch sent/outbox rows the aggregate URI may have silently
-            // omitted. Rows already inserted by the primary cursor are safely overwritten
-            // by REPLACE — no data loss, and dedup is handled at the DB level.
-            listOf("content://mms/sent", "content://mms/outbox").forEach { uriStr ->
-                val supp = applicationContext.contentResolver.query(
-                    Uri.parse(uriStr), mmsProjection, null, null, sortOrder
-                )
-                debugMmsLog("syncAllMms: supplement $uriStr → ${supp?.count ?: "null"} rows")
-                supp?.use { totalMmsCount += processMmsCursor(it, threads, it.count, resumeBeforeRawId, onProgress) }
+        if (phase1Cursor == null) {
+            // Samsung / OEM fallback
+            Log.w(TAG_MMS, "MMS primary cursor null — trying mailbox fallback URIs")
+            listOf("content://mms/inbox", "content://mms/sent", "content://mms/outbox").forEach { uriStr ->
+                applicationContext.contentResolver.query(
+                    Uri.parse(uriStr), mmsProjection, filter, null, sortDesc
+                )?.use { totalMmsCount += processMmsCursor(it, threads, it.count, resumeBeforeRawId, onProgress).inserted }
             }
-        } else {
-            // ── Samsung / OEM fallback ────────────────────────────────────────
-            // Samsung OneUI returns a null or empty cursor for content://mms
-            // despite READ_SMS being granted — the same failure mode as
-            // content://sms (see syncAllSms). The per-mailbox sub-URIs remain
-            // readable and return the actual messages.
-            primaryCursor?.close()
-            Log.w(TAG_MMS, "MMS primary cursor returned $primaryRowCount rows — trying mailbox fallback URIs")
-            listOf(
-                Uri.parse("content://mms/inbox"),
-                Uri.parse("content://mms/sent"),
-                Uri.parse("content://mms/outbox"),
-            ).forEach { uri ->
-                val c = applicationContext.contentResolver.query(
-                    uri, mmsProjection, null, null, sortOrder
-                )
-                debugMmsLog("MMS fallback $uri → ${c?.count ?: "null"} rows")
-                // Pass each fallback cursor's own count as the total so progress
-                // resets per-URI — acceptable for the Samsung edge case.
-                c?.use { totalMmsCount += processMmsCursor(it, threads, it.count, resumeBeforeRawId, onProgress) }
-            }
+            return finaliseThreadMetadata(threads, totalMmsCount)
         }
 
-        if (totalMmsCount == 0) {
-            debugMmsLog("No MMS messages found")
-            return 0
+        val phase1Result = phase1Cursor.use { processMmsCursor(it, threads, 1000, resumeBeforeRawId) }
+        totalMmsCount += phase1Result.inserted
+        val phase2BelowRawId = if (phase1Result.minRawId < Long.MAX_VALUE) phase1Result.minRawId else resumeBeforeRawId
+
+        postProgress("Recent messages loaded — loading full history…", 0, 0)
+
+        // Phase 2: everything older.
+        if (phase2BelowRawId > 0L && phase2BelowRawId < Long.MAX_VALUE) {
+            applicationContext.contentResolver.query(
+                Telephony.Mms.CONTENT_URI, mmsProjection,
+                "$filter AND _id < ?", arrayOf(phase2BelowRawId.toString()), sortDesc
+            )?.use { totalMmsCount += processMmsCursor(it, threads, it.count, resumeBeforeRawId, onProgress).inserted }
         }
 
-        Log.i(TAG_MMS, "MMS sync complete — $totalMmsCount messages streamed across ${threads.size} threads")
+        return finaliseThreadMetadata(threads, totalMmsCount)
+    }
 
-        // Final pass: update thread timestamps/previews to reflect the newest MMS data.
-        // Messages were already persisted during streaming; this just fixes thread metadata.
+    private suspend fun finaliseThreadMetadata(threads: MutableMap<Long, Thread>, count: Int): Int {
+        if (count == 0) { debugMmsLog("No MMS messages found"); return 0 }
+        Log.i(TAG_MMS, "MMS sync complete — $count messages across ${threads.size} threads")
         threads.forEach { (threadId, mmsThread) ->
             val inRoom = threadRepository.getById(threadId)
-            if (inRoom == null) {
-                // MMS-only thread that somehow wasn't inserted during streaming — insert now.
-                threadRepository.upsert(mmsThread)
-            } else if (mmsThread.lastMessageAt > inRoom.lastMessageAt) {
+            if (inRoom == null) threadRepository.upsert(mmsThread)
+            else if (mmsThread.lastMessageAt > inRoom.lastMessageAt) {
                 threadRepository.updateLastMessageAt(threadId, mmsThread.lastMessageAt)
                 threadRepository.updateLastMessagePreview(threadId, mmsThread.lastMessagePreview)
             }
         }
-
-        // Record that this import ran with the current filter version so future resumes
-        // don't incorrectly force a full re-walk when nothing changed.
-        prefs.edit().putInt(KEY_MMS_FILTER_VERSION, MMS_IMPORT_FILTER_VERSION).apply()
-
-        return totalMmsCount
+        return count
     }
+
 
     // Extracts MMS rows from a cursor, streaming inserts to Room every 500 rows so messages
     // appear in the UI progressively rather than after the entire cursor is exhausted.
@@ -491,7 +438,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         total: Int = 0,
         resumeBeforeRawId: Long = Long.MAX_VALUE,
         onProgress: suspend (Int, Int, String) -> Unit = { _, _, _ -> }
-    ): Int {
+    ): CursorResult {
         val idIdx     = cursor.getColumnIndexOrThrow("_id")
         val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
         val dateIdx   = cursor.getColumnIndexOrThrow("date")
@@ -505,6 +452,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         // walked = all rows visited (skip + new); inserted = only newly persisted rows.
         var walked = 0
         var inserted = 0
+        var minRawId = Long.MAX_VALUE
         val resuming = resumeBeforeRawId < Long.MAX_VALUE
 
         while (cursor.moveToNext()) {
@@ -530,6 +478,9 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                 if (walked % 500 == 0) onProgress(walked, total, "Resuming\u2026")
                 continue
             }
+
+            // Track the lowest rawId seen — used as the phase-2 boundary in syncAllMms.
+            if (rawId < minRawId) minRawId = rawId
 
             // New row — run the slow sub-queries and queue for insert.
             val parts   = getMmsBody(rawId)
@@ -572,7 +523,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         // Flush any remaining rows in the final partial batch.
         if (pendingMessages.isNotEmpty()) flushMmsBatch(pendingMessages, persistedThreadIds, threads)
         onProgress(walked, total, "") // final update with exact count
-        return inserted
+        return CursorResult(inserted, minRawId)
     }
 
     // Ensures all threads referenced by [pending] exist in Room (required by FK constraint),
@@ -690,6 +641,10 @@ class SmsHistoryImportWorker @AssistedInject constructor(
 
     private data class SyncResult(val threadCount: Int, val messageCount: Int)
 
+    // Return value for processMmsCursor: inserted row count plus the minimum rawId seen
+    // (used by syncAllMms to set the phase-2 boundary after the fast phase-1 seed).
+    private data class CursorResult(val inserted: Int, val minRawId: Long)
+
     // Carries the extracted text body and optional media attachment info for one MMS PDU.
     private data class MmsParts(
         val body: String,
@@ -729,11 +684,6 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         private const val TAG          = "PostmarkSync"
         private const val TAG_MMS      = "PostmarkMms"
         private const val PREFS        = "postmark_prefs"
-        // Bump this whenever the msg_box filter definition changes (currently IN (1,2,4)).
-        // On upgrade, syncAllMms() detects the version mismatch and forces a full re-walk
-        // so rows excluded by the old filter are not permanently skipped by the checkpoint.
-        private const val KEY_MMS_FILTER_VERSION  = "mms_import_filter_version"
-        private const val MMS_IMPORT_FILTER_VERSION = 2
         // Notification ID for the foreground-service progress notification.
         // Must be > 0 and distinct from SMS notification IDs (which are sender hashCodes
         // or Int.MIN_VALUE for the summary).

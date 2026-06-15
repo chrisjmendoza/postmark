@@ -108,13 +108,17 @@ class MmsSentReceiver : BroadcastReceiver() {
                         )
                     } else {
                         // Legacy fallback for PendingIntents created before EXTRA_BEFORE_SEND_MAX_ID.
-                        // Note: date field is seconds on stock Android but ms on some OEMs.
-                        val sentAtSec = sentAtMs / 1000
+                        // Stock Android stores date in seconds; Samsung OEM ROMs store milliseconds.
+                        // The two numeric ranges are ~1000× apart so a single OR query safely covers both.
+                        val sentAtSec = sentAtMs / 1000L
                         context.contentResolver.query(
                             Uri.parse("content://mms"),
                             arrayOf("_id"),
-                            "date >= ? AND date <= ? AND (msg_box = 2 OR msg_box = 4)",
-                            arrayOf((sentAtSec - 30).toString(), (sentAtSec + 120).toString()),
+                            "((date >= ? AND date <= ?) OR (date >= ? AND date <= ?)) AND (msg_box = 2 OR msg_box = 4)",
+                            arrayOf(
+                                (sentAtSec - 30L).toString(), (sentAtSec + 120L).toString(),       // seconds (AOSP)
+                                (sentAtMs  - 30_000L).toString(), (sentAtMs + 120_000L).toString() // ms (Samsung)
+                            ),
                             "_id DESC"
                         )
                     }

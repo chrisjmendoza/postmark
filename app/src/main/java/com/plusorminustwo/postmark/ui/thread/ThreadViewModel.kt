@@ -88,7 +88,7 @@ data class ThreadUiState(
  */
 @HiltViewModel
 class ThreadViewModel @Inject constructor(
-    savedStateHandle: SavedStateHandle,
+    private val savedStateHandle: SavedStateHandle,
     @param:ApplicationContext private val context: Context,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
@@ -108,7 +108,7 @@ class ThreadViewModel @Inject constructor(
     private val _selectionState  = MutableStateFlow(emptySet<Long>())
     private val _isSelectionMode = MutableStateFlow(false)
     private val _selectionScope  = MutableStateFlow(SelectionScope.MESSAGES)
-    private val _replyText       = MutableStateFlow("")
+    private val _replyText       = MutableStateFlow(savedStateHandle.get<String>(DRAFT_TEXT_KEY) ?: "")
     private val _isSending       = MutableStateFlow(false)
     private val _showDefaultSmsDialog     = MutableStateFlow(false)
     private val _expandedTimestampIds     = MutableStateFlow(emptySet<Long>())
@@ -116,8 +116,8 @@ class ThreadViewModel @Inject constructor(
     private val _reactionPickerBubbleY    = MutableStateFlow(0f)
     private val _highlightedMessageId     = MutableStateFlow<Long?>(null)
     // URI string + MIME type of a pending outgoing MMS attachment; null when composing SMS.
-    private val _pendingAttachmentUri = MutableStateFlow<String?>(null)
-    private val _pendingMimeType      = MutableStateFlow<String?>(null)
+    private val _pendingAttachmentUri = MutableStateFlow(savedStateHandle.get<String>(DRAFT_ATTACHMENT_URI_KEY))
+    private val _pendingMimeType      = MutableStateFlow(savedStateHandle.get<String>(DRAFT_ATTACHMENT_MIME_KEY))
     // ID of the message the user is replying to (swipe-to-reply); null = no active quote.
     private val _replyingToId         = MutableStateFlow<Long?>(null)
 
@@ -374,7 +374,10 @@ class ThreadViewModel @Inject constructor(
 
     // ── Reply / Send ──────────────────────────────────────────────────────────
 
-    fun onReplyTextChanged(text: String) { _replyText.value = text }
+    fun onReplyTextChanged(text: String) {
+        _replyText.value = text
+        savedStateHandle[DRAFT_TEXT_KEY] = text
+    }
 
     fun dismissDefaultSmsDialog() { _showDefaultSmsDialog.value = false }
 
@@ -387,12 +390,16 @@ class ThreadViewModel @Inject constructor(
     fun onAttachmentSelected(uri: Uri, mimeType: String) {
         _pendingAttachmentUri.value = uri.toString()
         _pendingMimeType.value      = mimeType
+        savedStateHandle[DRAFT_ATTACHMENT_URI_KEY]  = uri.toString()
+        savedStateHandle[DRAFT_ATTACHMENT_MIME_KEY] = mimeType
     }
 
     /** Clears any pending attachment (user taps the × on the preview chip). */
     fun clearAttachment() {
         _pendingAttachmentUri.value = null
         _pendingMimeType.value      = null
+        savedStateHandle.remove<String>(DRAFT_ATTACHMENT_URI_KEY)
+        savedStateHandle.remove<String>(DRAFT_ATTACHMENT_MIME_KEY)
     }
 
     /**
@@ -426,6 +433,7 @@ class ThreadViewModel @Inject constructor(
 
         val thread = uiState.value.thread ?: return
         _replyText.value = ""
+        savedStateHandle.remove<String>(DRAFT_TEXT_KEY)
         clearAttachment()
         clearReplyingTo()
 
@@ -637,6 +645,10 @@ class ThreadViewModel @Inject constructor(
     }
 
     companion object {
+        private const val DRAFT_TEXT_KEY           = "draft_text"
+        private const val DRAFT_ATTACHMENT_URI_KEY = "draft_attachment_uri"
+        private const val DRAFT_ATTACHMENT_MIME_KEY = "draft_attachment_mime"
+
         val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "🔥")
 
         /**

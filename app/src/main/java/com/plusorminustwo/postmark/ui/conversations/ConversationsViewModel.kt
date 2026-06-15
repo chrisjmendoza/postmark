@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
+import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -42,6 +44,7 @@ import javax.inject.Inject
 class ConversationsViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
+    private val smsSyncHandler: SmsSyncHandler,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -76,6 +79,15 @@ class ConversationsViewModel @Inject constructor(
                     ExistingWorkPolicy.KEEP,
                     SmsHistoryImportWorker.buildRequest()
                 )
+            }
+        }
+
+        // 60-second foreground polling: catch messages that arrived while the broadcast
+        // receiver was paused or missed a delivery notification.
+        viewModelScope.launch {
+            while (true) {
+                delay(60_000)
+                smsSyncHandler.triggerCatchUp()
             }
         }
     }

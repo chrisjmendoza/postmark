@@ -106,6 +106,9 @@ dependencies {
     // Coil — image loading for MMS attachments
     implementation(libs.coil.compose)
 
+    // ExifInterface — read EXIF rotation before image compression
+    implementation(libs.androidx.exifinterface)
+
     // Media3 ExoPlayer — video playback in thread view
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)

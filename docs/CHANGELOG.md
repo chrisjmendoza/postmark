@@ -6,6 +6,271 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### MMS audit fixes (June 14 2026)
+
+Eight correctness bugs found via a full MMS audit against Android documentation.
+Fixes cover sending, receiving, incremental sync, display, and test coverage.
+
+**#7 — Samsung historical sync omitted `NOT IN (3, 5)` filter**
+`SmsHistoryImportWorker.syncAllMms()` Samsung mailbox fallback was passing `null` as
+the selection argument, importing drafts and failed-send rows on affected devices.
+Fixed: pass `filter` variable to the fallback queries.
+
+**#16 — SMIL `dur` hard-coded to `5000ms` for all media**
+Audio and video messages need `dur="indefinite"` (play until the media ends) rather
+than a fixed 5-second cutoff. Images keep `5000ms`. `buildSmil()` now selects `dur`
+based on the MIME type prefix.
+
+**#3 — Video and audio not size-checked before sending**
+`sendMms()` compressed images over the carrier limit but let video and audio pass
+through at full size. Files exceeding the carrier cap (AT&T/Verizon: ~1 MB) caused a
+silent `MMS_ERROR_IO_ERROR` with no user-visible explanation. Now rejects non-image
+attachments that exceed the carrier limit before sending.
+
+**#4 — EXIF orientation stripped on outgoing images**
+`BitmapFactory.decodeByteArray` ignores EXIF metadata, so portrait photos taken in
+landscape grip arrived rotated 90° on the recipient's device. `compressImage()` now
+reads EXIF rotation via `ExifInterface` and applies a matrix rotation before
+compression. Added `androidx.exifinterface:exifinterface:1.3.7` dependency.
+
+**#5 — `MediaPlayer.prepare()` called on main thread (ANR risk)**
+The audio player's first-play path called `setDataSource()` + `prepare()` on the
+main thread inside an `onClick` lambda. Fixed: launches a `Dispatchers.IO` coroutine
+for the blocking prepare; shows a `CircularProgressIndicator` while preparing; sets
+state back on `Dispatchers.Main` before `start()`.
+
+**#11 — No image loading placeholder (blank while Coil decodes)**
+Added a `loading` slot to `SubcomposeAsyncImage` that renders a `surfaceVariant` box
+matching the `error` slot height, so the bubble area is never blank.
+
+**#1 — Samsung `syncLatestMms()` had no mailbox fallback**
+`syncLatestMms()` in `SmsSyncHandler` returned silently when the aggregate
+`content://mms` cursor was null — a common case on Samsung OneUI. Added the same
+per-mailbox fallback (`content://mms/inbox`, `/sent`, `/outbox`) that `syncLatestSms()`
+already has. Extracted the cursor-to-Message loop into a private `extractMmsMessages()`
+helper to avoid duplicating the loop for each cursor source.
+
+**#15 — `MmsSentReceiver` legacy date fallback missed Samsung ms-stored dates**
+The legacy path (no `EXTRA_BEFORE_SEND_MAX_ID`) queried for `date` as seconds, but
+Samsung OEM ROMs store `date` in milliseconds. The two ranges are ~1000× apart, so an
+`OR` clause now covers both without cross-matching: `((date >= sec_low AND date <=
+sec_high) OR (date >= ms_low AND date <= ms_high))`.
+
+**#14 — `getMmsBody()` parsing logic had zero unit tests**
+Extracted the pure part-classification logic from `getMmsBodyIncremental()` into a
+top-level `internal fun parseMmsRawParts(List<MmsRawPart>): MmsParsedResult` in a new
+`MmsPartParsing.kt`. Written 13 unit tests covering: empty parts, text accumulation,
+trim, SMIL skip, image/video/audio attachment URI, first-media-wins, text+image
+coexistence, unknown type skip, case-insensitive matching.
+
+**Files changed**:
+- `data/sync/SmsHistoryImportWorker.kt` — #7
+- `service/sms/MmsManagerWrapper.kt` — #16, #3, #4
+- `ui/thread/ThreadScreen.kt` — #5, #11
+- `data/sync/SmsSyncHandler.kt` — #1, #14 (new `extractMmsMessages()` helper; uses `MmsParsedResult`)
+- `data/sync/MmsPartParsing.kt` — new file with pure parsing logic
+- `service/sms/MmsSentReceiver.kt` — #15
+- `gradle/libs.versions.toml` — exifinterface version entry
+- `app/build.gradle.kts` — exifinterface dependency
+- `app/src/test/…/MmsPartParsingTest.kt` — 13 new unit tests
+
+---
+
+### Overhaul: Faster, more reactive message importing (Parts A + B + C)
+
+Three coordinated changes to replace the patchwork of supplement cursors, version
+flags, and manual import triggers with a clean, self-healing architecture.
+
+**Part A — `NOT IN (3, 5)` filter (drop supplement cursors + version guard)**
+
+The previous `msg_box IN (1, 2, 4)` filter required three separate cursors (inbox,
+sent, outbox) plus a version-flag mechanism to force re-walks when the filter changed.
+Any future `msg_box` value (e.g. a carrier-specific code) would be silently excluded.
+
+Replaced with `msg_box NOT IN (3, 5)` — exclude only drafts (3) and failed sends (5),
+everything else is a real message. Benefits:
+- Single cursor instead of three; no dedup set needed.
+- Future `msg_box` values auto-included without a code change.
+- Removed `KEY_MMS_FILTER_VERSION`, `MMS_IMPORT_FILTER_VERSION`, `needsMmsFilterUpgrade()`,
+  the filter version prefs read/write, and both supplement cursor loops.
+- `syncLatestMms()` in `SmsSyncHandler`: same change, dropped `seenMmsRawIds` and the
+  two extra cursors.
+
+**Part B — 60-second foreground polling in `ConversationsViewModel`**
+
+Added a `viewModelScope` coroutine that calls `smsSyncHandler.triggerCatchUp()` every
+60 seconds while the app is in the foreground. Catches messages that arrived while a
+broadcast receiver was paused, missed a delivery notification, or the receiver simply
+wasn't running (killed by OEM battery optimisation). Works alongside the existing
+content-observer and receiver-based paths as a safety net, not a replacement.
+
+`SmsSyncHandler` injected into `ConversationsViewModel` via Hilt constructor injection.
+
+**Part C — Two-phase historical import in `SmsHistoryImportWorker`**
+
+`syncAllMms()` now runs two passes to give the UI content quickly while still loading
+the full archive:
+- Phase 1: `ORDER BY _id DESC LIMIT 1000` — loads the 1000 most-recent MMS rows first.
+  These appear in Room within seconds of worker start.
+- Phase 2: `WHERE _id < phase1MinRawId ORDER BY _id DESC` — walks the full historical
+  archive after phase 1 completes.
+
+The existing checkpoint-resume logic (`resumeBeforeRawId`) works correctly across both
+phases and across crash-restart cycles.
+
+**Also removed**: the `filterUpgrade` third condition from `ConversationsViewModel.init`
+recovery guard (now only the two crash-recovery conditions remain).
+
+**Files changed**:
+- `data/sync/SmsHistoryImportWorker.kt` — `syncAllMms()` rewrite; new
+  `finaliseThreadMetadata()` helper; removed filter version constants and
+  `needsMmsFilterUpgrade()`.
+- `data/sync/SmsSyncHandler.kt` — `syncLatestMms()` simplified to single cursor with
+  `NOT IN (3, 5)`.
+- `ui/conversations/ConversationsViewModel.kt` — `SmsSyncHandler` injection; 60s polling
+  coroutine; removed `filterUpgrade` recovery condition.
+
+---
+
+### Fix: RCS historical sent messages not auto-importing after filter upgrade
+
+> **Note**: This entry describes an intermediate approach (filter version guard +
+> `needsMmsFilterUpgrade()`) that has been replaced by the architecture overhaul above.
+> The final solution is Part A's `NOT IN (3, 5)` filter which makes version guards
+> unnecessary.
+
+After the `msg_box=4` filter fix was deployed, historical RCS sent messages (those
+sent before the new version was installed) were still missing in threads. Today's
+messages worked because incremental sync (`SmsSyncHandler`) picked them up live, but
+older messages had already been skipped under the previous `IN (1, 2)` filter and
+incremental sync only processes rows newer than `maxKnownId`.
+
+`SmsHistoryImportWorker.syncAllMms()` had a `MMS_IMPORT_FILTER_VERSION` guard that
+forces a full re-walk when the stored version is behind the current one — but there
+was no code to *trigger the worker* at startup when the version changed. The worker
+only ran during first-launch or manual wipe+reimport, meaning upgraded installs never
+got the re-walk automatically.
+
+**Fix 1 — `needsMmsFilterUpgrade()` helper**: Added a public companion function to
+`SmsHistoryImportWorker` that reads the stored filter version from SharedPreferences
+and returns true if it is behind `MMS_IMPORT_FILTER_VERSION`.
+
+**Fix 2 — Startup auto-trigger**: Extended the recovery guard in
+`ConversationsViewModel.init` to include a third condition: `filterUpgrade`. When
+the stored MMS filter version is outdated, the worker is enqueued (with
+`ExistingWorkPolicy.KEEP`) on app startup. The worker detects `filterVersionChanged`
+and forces `resumeBeforeRawId = Long.MAX_VALUE`, guaranteeing all historical
+`msg_box=4` rows are imported in a single pass without requiring a wipe.
+
+**Files changed**:
+- `data/sync/SmsHistoryImportWorker.kt` — `needsMmsFilterUpgrade(context)` companion fn
+- `ui/conversations/ConversationsViewModel.kt` — `filterUpgrade` recovery condition
+
+---
+
+### Fix: RCS/MMS sent messages permanently invisible — msg_box=4 outbox filter
+
+RCS sent messages are stored in `content://mms` with `msg_box=4` (OUTBOX). Google
+Messages uses the Telephony archival API and leaves RCS rows permanently at OUTBOX
+because there is no MMSC confirmation step. The sync filter was `msg_box IN (1, 2)`,
+so every RCS sent message was silently excluded from both historical import and
+incremental sync — producing threads where only the other person's side was visible.
+
+**Root cause evidence**: `MmsSentReceiver` already queried `msg_box = 2 OR msg_box = 4`
+when looking for the real MMS row after send. The sync paths simply didn't match.
+
+**Fix — `syncLatestMms()`**: Changed filter to `msg_box IN (1, 2, 4)`. Added
+`content://mms/outbox` supplement cursor alongside `content://mms/sent`. The existing
+`seenMmsRawIds` set deduplicates overlap across all three cursors.
+
+**Fix — `syncAllMms()`**: Changed filter to `msg_box IN (1, 2, 4)`. Expanded supplement
+list to `[content://mms/sent, content://mms/outbox]`. Samsung fallback gains
+`content://mms/outbox`. Added `MMS_IMPORT_FILTER_VERSION = 2` (bumped from 1) to
+SharedPreferences so a filter change automatically triggers a full re-walk on the next
+worker run.
+
+**Additional bugs fixed (Opus audit)**:
+- `MessageDao.getMinMmsId()`: Added `AND id > 0` guard. Without it, optimistic
+  sent-MMS rows (negative IDs) made `resumeBeforeRawId` deeply negative, causing
+  every positive rawId to be fast-skipped as "already imported".
+- `RcsArchivalReceiver`: Added receiver for
+  `com.google.android.apps.messaging.GOOGLE_MESSAGES_ARCHIVAL_UPDATE` broadcast.
+  Google Play Services v26.22 (June 8, 2026) replaced content-observer notifications
+  for RCS messages with this explicit broadcast. Protected by `WRITE_SMS` permission.
+  ⚠️ Action string unverified — confirm with `adb logcat | grep -i archival`.
+
+**Files changed**:
+- `data/sync/SmsSyncHandler.kt` — `msg_box IN (1,2,4)`; outbox supplement cursor
+- `data/sync/SmsHistoryImportWorker.kt` — filter + supplement; version guard
+- `data/db/dao/MessageDao.kt` — `AND id > 0` on `getMinMmsId()`
+- `service/sms/RcsArchivalReceiver.kt` — new file
+- `AndroidManifest.xml` — receiver registration
+
+---
+
+### Fix: Date pill showing raw MMS ID instead of date label
+
+The floating date pill displayed a raw number like `10000116428` instead of a date
+label when the topmost visible item in the thread was a message bubble.
+
+**Root cause**: All `LazyColumn` item keys are `String` — `DateHeader` items use
+`"header_$dateLabel"` (e.g. `"header_June 12, 2026"`) and `Bubble` items use
+`msg.id.toString()` (e.g. `"10000116428"` for an MMS). The `visibleDate`
+`derivedStateOf` in `ThreadContent` had one `is String` branch that called
+`key.removePrefix("header_")` unconditionally. When a `Bubble` was the topmost
+visible item, `removePrefix("header_")` returned the ID string unchanged. The
+`is Long` branch was dead code — keys are never Long.
+
+**Fix** (`ThreadScreen.kt`): The `is String` branch now checks
+`key.startsWith("header_")` first. If it is a header, strip the prefix as before.
+If it is a bubble key, convert to Long and look up in `messageIdToDate`. Removed
+the dead `is Long` branch.
+
+**Files changed**: `ui/thread/ThreadScreen.kt`
+
+---
+
+### Fix: Default SMS role request silent failure in thread screen
+
+Tapping "Set as default" in the thread screen's default-SMS dialog had no effect on
+API 29+ — no system prompt appeared, the app just silently fell back to the message.
+
+**Root cause**: `launchDefaultSmsRoleRequest()` used bare `context.startActivity()`.
+On API 29+, `RoleManager.createRequestRoleIntent()` requires `startActivityForResult`
+to deliver the result; a plain `startActivity()` is silently ignored by the system.
+The same bug was fixed in `ConversationsScreen` (role denial banner) and
+`SettingsScreen` in May — `ThreadScreen` was missed.
+
+**Fix** (`ThreadScreen.kt`): Added `rememberLauncherForActivityResult(
+ActivityResultContracts.StartActivityForResult())` inside `ThreadContent`. The
+`AlertDialog` confirm button now calls `roleRequestLauncher.launch()` for both the
+API 29+ (RoleManager) and API 26–28 (ACTION_CHANGE_DEFAULT) paths. Deleted the
+now-unused `launchDefaultSmsRoleRequest` private function.
+
+**Files changed**: `ui/thread/ThreadScreen.kt`
+
+---
+
+### Fix: Draft text + attachment lost on navigation away from thread
+
+Typing a message or attaching an image, then navigating back and returning to the
+thread, cleared the compose field completely.
+
+**Root cause**: `_replyText`, `_pendingAttachmentUri`, and `_pendingMimeType` in
+`ThreadViewModel` were plain `MutableStateFlow` fields. Compose Navigation destroys
+and re-creates the ViewModel when popping the back stack, resetting all three fields
+to their defaults on every return visit.
+
+**Fix** (`ThreadViewModel.kt`): `savedStateHandle` (already injected for `threadId`)
+is now a property (`private val`). The three draft fields are initialized from
+`SavedStateHandle` on construction. `onReplyTextChanged()`, `onAttachmentSelected()`,
+and `clearAttachment()` write through to `SavedStateHandle`. `sendMessage()` removes
+the draft keys after clearing state so the empty draft survives process death too.
+
+**Files changed**: `ui/thread/ThreadViewModel.kt`
+
+---
+
 ### Fix: MMS PDU encoding — 8 correctness bugs (Fable 5 audit)
 
 Deep audit of the WAP Binary M-Send.req PDU encoder by Claude Fable 5 uncovered 8
