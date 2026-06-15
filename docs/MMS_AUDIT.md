@@ -243,11 +243,11 @@ Note: Emulator has no MMSC simulation — MMS testing requires a physical device
 | 6 | Group MMS — detection and sending not implemented | High | High | Multiple | [ ] |
 | 7 | Samsung fallback omits `NOT IN (3, 5)` filter | Medium | Trivial | `SmsHistoryImportWorker.kt` | [x] |
 | 8 | Manual PDU construction — no library backing | Medium | High | `MmsManagerWrapper.kt` | [ ] |
-| 9 | GIF animations destroyed by compression | Medium | Medium | `MmsManagerWrapper.kt` | [ ] |
+| 9 | GIF animations destroyed by compression | Medium | Medium | `MmsManagerWrapper.kt` | [x] |
 | 10 | `RcsArchivalReceiver` action string unverified on-device | Medium | Low (test) | `RcsArchivalReceiver.kt` | [ ] |
 | 11 | No image loading placeholder (blank during decode) | Low | Low | `ThreadScreen.kt` | [x] |
 | 12 | AMR/3GPP voice memo playback unverified on real device | Low | Low (test) | — | [ ] |
-| 13 | `MmsPduBuilder` — zero unit tests | Medium | Medium | `MmsManagerWrapper.kt` | [ ] |
+| 13 | `MmsPduBuilder` — zero unit tests | Medium | Medium | `MmsManagerWrapper.kt` | [x] |
 | 14 | `getMmsBody()` logic — zero unit tests | Medium | Low | `SmsSyncHandler.kt` | [x] |
 | 15 | `MmsSentReceiver` Samsung ms-vs-seconds date in legacy path | Low | Low | `MmsSentReceiver.kt` | [x] |
 | 16 | SMIL duration hard-coded to 5000ms | Low | Trivial | `MmsManagerWrapper.kt` | [x] |

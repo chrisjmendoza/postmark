@@ -126,6 +126,10 @@ class MmsManagerWrapper @Inject constructor(
         var effectiveMimeType = mimeType
         val finalMediaBytes = when {
             mimeType.startsWith("image/") && mediaBytes.size > effectiveMediaLimit -> {
+                // Animated GIFs are flattened to JPEG when over the carrier limit — no GIF encoder available.
+                if (mimeType.equals("image/gif", ignoreCase = true)) {
+                    syncLogger.log(TAG, "sendMms: GIF over carrier limit — animation will be lost (compressing as JPEG) for messageId=$messageId")
+                }
                 val compressed = compressImage(mediaBytes, mimeType, messageId, effectiveMediaLimit)
                 if (compressed == null) {
                     syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit (effectiveMediaLimit=$effectiveMediaLimit) for messageId=$messageId")
@@ -587,8 +591,9 @@ private object MmsPduBuilder {
 
 // ── UintVar extension ─────────────────────────────────────────────────────────
 // WSP variable-length unsigned integer: last byte has MSB 0, earlier bytes have MSB 1.
+// internal (not private) so MmsPduBuilderTest can exercise it directly.
 
-private fun ByteArrayOutputStream.writeUintVar(value: Int) {
+internal fun ByteArrayOutputStream.writeUintVar(value: Int) {
     if (value <= 0x7F) {
         write(value)
         return

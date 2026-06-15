@@ -6,6 +6,27 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### MMS audit — round 2 (June 14 2026)
+
+**#9 — GIF over carrier limit logged explicitly**
+GIFs within the carrier limit already sent unchanged (no change there). For GIFs
+over the limit, added a `syncLogger.log()` entry stating animation will be lost before
+falling through to JPEG compression, so logs make the behavior visible without needing
+a GIF encoder library.
+
+**#13 — `writeUintVar()` unit tests (10 cases)**
+Changed `writeUintVar` from `private` to `internal` so tests can call it directly.
+10 table-driven tests verify every boundary: 0, single-byte max (127), two-byte min
+(128), two-byte max (16383), three-byte min (16384), three-byte max (2097151), a
+typical part-header size (50), and a typical 200 KB media payload — all passing.
+
+**Files changed**:
+- `service/sms/MmsManagerWrapper.kt` — #9 log; `writeUintVar` made internal
+- `app/src/test/…/MmsPduBuilderTest.kt` — 10 new unit tests
+- `docs/MMS_AUDIT.md` — #9 and #13 checked off
+
+---
+
 ### MMS audit fixes (June 14 2026)
 
 Eight correctness bugs found via a full MMS audit against Android documentation.
