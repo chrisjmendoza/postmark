@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
@@ -332,13 +333,13 @@ private fun ThreadContent(
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
     var showDateRangePicker by remember { mutableStateOf(false) }
 
-    // Index into uiState.threadImageUris the full-screen viewer opens at; null = closed.
+    // Index into uiState.threadImages the full-screen viewer opens at; null = closed.
     // Lifted up here (rather than per-MessageBubble) so swiping pages across every image
     // in the thread, not just the tapped message's own attachments.
     var globalImageViewerIndex by remember { mutableStateOf<Int?>(null) }
-    val onImageTap = remember(uiState.threadImageUris) {
+    val onImageTap = remember(uiState.threadImages) {
         { uri: String ->
-            val index = uiState.threadImageUris.indexOf(uri)
+            val index = uiState.threadImages.indexOfFirst { it.uri == uri }
             if (index >= 0) globalImageViewerIndex = index
         }
     }
@@ -353,14 +354,15 @@ private fun ThreadContent(
         mutableFloatStateOf(uiState.reactionPickerBubbleY)
     }
 
-    // ── Scroll to message (search-jump) ───────────────────────────────────────
+    // ── Scroll to message (search-jump / image-viewer "go to chat") ───────────
     // Uses renderState.messageIdToIndex directly — no re-grouping needed.
 
-    LaunchedEffect(scrollToMessageId) {
-        if (scrollToMessageId == -1L) return@LaunchedEffect
+    // Scrolls to and highlights [targetId], centering it in the viewport. Shared by the
+    // search-jump navigation effect below and the image viewer's "Go to chat" action.
+    suspend fun scrollToMessageCentered(targetId: Long) {
         // Wait until the target message is present in the render state.
-        val targetIndex = snapshotFlow { uiState.renderState.messageIdToIndex[scrollToMessageId] }
-            .first { it != null } ?: return@LaunchedEffect
+        val targetIndex = snapshotFlow { uiState.renderState.messageIdToIndex[targetId] }
+            .first { it != null } ?: return
         // Snap to item first so layoutInfo is populated for the target.
         listState.scrollToItem(targetIndex)
         // Wait for the frame that includes the target item in visibleItemsInfo.
@@ -374,7 +376,12 @@ private fun ThreadContent(
             val centeredOffset = (viewportHeight / 2) - (item.size / 2)
             listState.animateScrollToItem(targetIndex, scrollOffset = -centeredOffset)
         }
-        onHighlightMessage(scrollToMessageId)
+        onHighlightMessage(targetId)
+    }
+
+    LaunchedEffect(scrollToMessageId) {
+        if (scrollToMessageId == -1L) return@LaunchedEffect
+        scrollToMessageCentered(scrollToMessageId)
     }
 
     // ── New-message auto-scroll / FAB nudge ────────────────────────────────
@@ -724,10 +731,14 @@ private fun ThreadContent(
             // the tapped message's own attachments. Rendered once here (not per-bubble) so
             // there's a single shared pager instance keyed by a thread-wide index.
             globalImageViewerIndex?.let { startIndex ->
-                if (uiState.threadImageUris.isNotEmpty()) {
+                if (uiState.threadImages.isNotEmpty()) {
                     FullScreenImageViewer(
-                        uris = uiState.threadImageUris,
+                        images = uiState.threadImages,
                         initialIndex = startIndex,
+                        onJumpToMessage = { messageId ->
+                            globalImageViewerIndex = null
+                            scope.launch { scrollToMessageCentered(messageId) }
+                        },
                         onDismiss = { globalImageViewerIndex = null }
                     )
                 }
@@ -2392,25 +2403,30 @@ private fun linkifyText(text: String, linkColor: androidx.compose.ui.graphics.Co
  * Full-screen overlay that displays one or more MMS images with pinch-to-zoom support.
  *
  * The images are shown on a black scrim. The user can:
- *  - Swipe horizontally to page between images (when more than one) — [uris] spans the
+ *  - Swipe horizontally to page between images (when more than one) — [images] spans the
  *    whole thread, not just the tapped message's own attachments, so paging can cross
  *    message boundaries, matching the swipe-through-gallery behavior of other messaging apps.
  *  - Pinch to zoom (1× – 5×) and pan while zoomed
+ *  - Tap "Go to chat" to jump straight to that image's message in the conversation
  *  - Tap the scrim or press Back to dismiss
  *
- * @param uris         content://mms/part/ URIs of every image in the thread, in chronological order.
- * @param initialIndex Index of the image the user tapped, shown first.
- * @param onDismiss    Called when the user closes the viewer.
+ * @param images          Every image in the thread, in chronological order.
+ * @param initialIndex    Index of the image the user tapped, shown first.
+ * @param onJumpToMessage Called with the current page's message ID when "Go to chat" is
+ *                        tapped. The caller is expected to dismiss the viewer and scroll.
+ * @param onDismiss       Called when the user closes the viewer.
  */
 @Composable
 private fun FullScreenImageViewer(
-    uris: List<String>,
+    images: List<ThreadImageRef>,
     initialIndex: Int,
+    onJumpToMessage: (Long) -> Unit,
     onDismiss: () -> Unit
 ) {
     val pagerState = rememberPagerState(
-        initialPage = initialIndex.coerceIn(0, (uris.size - 1).coerceAtLeast(0))
-    ) { uris.size }
+        initialPage = initialIndex.coerceIn(0, (images.size - 1).coerceAtLeast(0))
+    ) { images.size }
+    val currentImage = images.getOrNull(pagerState.currentPage)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -2429,21 +2445,76 @@ private fun FullScreenImageViewer(
             contentAlignment = Alignment.Center
         ) {
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-                ZoomableImage(uri = uris[page])
+                ZoomableImage(uri = images[page].uri)
             }
-            // Page indicator — only relevant with multiple images.
-            if (uris.size > 1) {
-                Text(
-                    text = "${pagerState.currentPage + 1} / ${uris.size}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White,
+            // Date pill — the date of whichever image is currently on screen; updates as
+            // you swipe, same label format as the thread's own date headers.
+            currentImage?.let { image ->
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    tonalElevation = 3.dp,
+                    shadowElevation = 2.dp,
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 16.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.Black.copy(alpha = 0.5f))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                )
+                        .align(Alignment.TopCenter)
+                        .padding(top = 16.dp)
+                ) {
+                    Text(
+                        text = image.dateLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                    )
+                }
+            }
+            // Bottom row: page counter (only relevant with multiple images) + "Go to
+            // chat" jump action, so closing the viewer doesn't strand you wherever you
+            // happened to be scrolled before opening it.
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (images.size > 1) {
+                    Text(
+                        text = "${pagerState.currentPage + 1} / ${images.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+                currentImage?.let { image ->
+                    Surface(
+                        onClick = { onJumpToMessage(image.messageId) },
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        tonalElevation = 3.dp,
+                        shadowElevation = 2.dp
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "Go to chat",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
             }
             // Close button in the top-right corner as a fallback affordance.
             IconButton(

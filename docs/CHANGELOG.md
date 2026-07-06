@@ -6,6 +6,42 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-06
 
+### Image viewer: fixed swipe + full-screen bugs, added date pill and "Go to chat"
+
+On-device testing of the thread-wide swipe (below) turned up two bugs and one piece of
+feedback, all fixed same day.
+
+**Bug 1 — swipe did nothing.** `ZoomableImage`'s pinch-to-zoom gesture
+(`detectTransformGestures`) consumed every single-finger drag unconditionally, so the
+parent `HorizontalPager` never received the gesture regardless of zoom level. Replaced
+with a hand-rolled `pointerInput` that only consumes (as zoom/pan) when a second finger
+is actually down or the image is already zoomed in; a lone finger at 1× now falls
+through untouched so the pager's own drag detection sees it.
+
+**Bug 2 — black bars, not edge-to-edge.** The viewer's `Dialog` was missing
+`DialogProperties(usePlatformDefaultWidth = false)`, so it was capped to Android's
+default non-fullscreen dialog size — `VideoPlayerDialog` already had this,
+`FullScreenImageViewer` didn't. ThreadScreen's own top bar and message bubbles were
+visible peeking around the edges of what should have been a full black scrim.
+
+**Feedback — closing the viewer stranded you wherever you started.** Added:
+- A date pill at the top showing the date of whichever image is currently on screen,
+  updating as you swipe — same label format as the thread's own date headers
+  (`ThreadImageRef.dateLabel`, computed with the identical `DAY_FORMATTER` used by
+  `groupByDay()`, so it always matches).
+- A "Go to chat" button at the bottom that dismisses the viewer and scrolls/highlights
+  that image's message in the conversation. Extracted the existing search-jump
+  centered-scroll logic into a shared `scrollToMessageCentered()` local function so both
+  call sites (search-jump navigation, this new button) use the same routine instead of
+  duplicating it.
+- `buildThreadImages()` (renamed from `buildThreadImageUris()`) now returns
+  `List<ThreadImageRef>` (messageId + uri + dateLabel) instead of a bare `List<String>`,
+  since the date pill and jump button both need the owning message, not just the URI.
+
+Tests: `ThreadImageUrisTest` updated for the richer return type (+3 new cases — message
+ID carried through, date label matches `DAY_FORMATTER`, multiple images in one message
+share a label). `./gradlew test`: all passing.
+
 ### Full-screen image viewer now swipes across the whole thread, not just one message
 
 Reported gap: tapping an image only ever showed that one message's own attachments —

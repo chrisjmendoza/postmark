@@ -106,11 +106,21 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       pinch-to-zoom (1×–5×) + pan; a `HorizontalPager` with an "n / N" indicator.
       **Swipe scope widened to the whole thread (July 6 2026)** — swiping now pages
       across every image in the conversation, not just the tapped message's own
-      attachments (matches Google Messages/iMessage). `ThreadUiState.threadImageUris`
-      (`buildThreadImageUris()`, pure + tested) flattens every image attachment across
-      `uiState.messages` in chronological order; the viewer state moved from per-
-      `MessageBubble` to `ThreadContent` so there's one shared pager instance keyed by
-      a thread-wide index. Video/audio unaffected — still per-message dialogs.
+      attachments (matches Google Messages/iMessage). `ThreadUiState.threadImages`
+      (`buildThreadImages()`, pure + tested) flattens every image attachment across
+      `uiState.messages` in chronological order, each carrying its owning message ID
+      and date label; the viewer state moved from per-`MessageBubble` to `ThreadContent`
+      so there's one shared pager instance keyed by a thread-wide index. Video/audio
+      unaffected — still per-message dialogs. Two on-device bugs found and fixed same
+      day: the pinch-zoom gesture was consuming every single-finger drag before the
+      pager could see it (swipe silently did nothing), and the `Dialog` wasn't
+      edge-to-edge (`DialogProperties(usePlatformDefaultWidth = false)` was missing).
+      **Date pill + "Go to chat" (July 6 2026)** — a floating pill at the top shows the
+      date of whichever image is on screen, updating as you swipe; a "Go to chat" button
+      at the bottom dismisses the viewer and scrolls/highlights that image's message in
+      the conversation, so closing the viewer doesn't strand you wherever you were
+      scrolled to before opening it. Reuses the same centered-scroll routine as
+      search-jump (`scrollToMessageCentered()`, extracted so both share it).
 - [x] **Tap video → player dialog** — `VideoPlayerDialog` composable with ExoPlayer
       (media3 1.5.1); auto-plays on open; `DisposableEffect` releases player on dismiss;
       tapping the video thumbnail in a bubble opens it.
