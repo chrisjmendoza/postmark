@@ -66,6 +66,17 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       thread ⋮ menu or Notification settings screen. Store as a flag on
       `ThreadEntity` (e.g. `notificationsEnabled BOOLEAN DEFAULT true`);
       check in `SmsReceiver` before posting.
+- [ ] **Suppress notification for the thread currently open on screen** —
+      `SmsReceiver.postIncomingNotification()` fires for every incoming
+      message regardless of whether the user is actively viewing that exact
+      conversation in `ThreadScreen`. Standard messaging-app expectation:
+      no notification banner while you're already looking at the thread.
+      Needs some notion of "currently visible thread id" the receiver can
+      check — e.g. a singleton/repository field set by `ThreadViewModel`
+      on `onResume`/composition and cleared on leave (careful with
+      process death / multi-window / lifecycle edge cases), checked
+      alongside the existing mute check before calling
+      `postIncomingNotification()`.
 - [x] **SMS send** — basic send wired up with optimistic insert.
 - [x] **Failed send state** — bubble shows a red ✕ or "!" indicator
       with a tap-to-retry affordance when FAILED status received.
