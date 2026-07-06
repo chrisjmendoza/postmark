@@ -2533,6 +2533,7 @@ private fun FullScreenImageViewer(
     val coroutineScope = rememberCoroutineScope()
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showDetailsFor by remember { mutableStateOf<ThreadImageRef?>(null) }
+    var showEmojiPicker by remember { mutableStateOf(false) }
 
     fun runDownload(uri: String) {
         coroutineScope.launch {
@@ -2674,12 +2675,15 @@ private fun FullScreenImageViewer(
             // Bottom: page counter + "Go to chat" (so closing the viewer doesn't strand
             // you wherever you happened to be scrolled before opening it), then a row of
             // quick-reaction emojis — the same ranked set and toggle as long-pressing a bubble.
+            // Extra bottom margin (28.dp beyond the real nav-bar height, not just 12.dp)
+            // so the reaction row sits comfortably above the nav bar / edge of the
+            // screen rather than hugging it.
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = navBarBottomPadding + 12.dp),
+                    .padding(bottom = navBarBottomPadding + 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -2727,21 +2731,38 @@ private fun FullScreenImageViewer(
                 currentImage?.let { image ->
                     Surface(
                         shape = RoundedCornerShape(50),
-                        color = Color.Black.copy(alpha = 0.5f)
+                        color = Color.Black.copy(alpha = 0.6f)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
                         ) {
                             quickReactionEmojis.forEach { emoji ->
-                                Text(
-                                    text = emoji,
-                                    style = MaterialTheme.typography.titleMedium,
+                                Box(
                                     modifier = Modifier
+                                        .size(48.dp)
                                         .clip(CircleShape)
-                                        .clickable { onToggleReaction(image.messageId, emoji) }
-                                        .padding(6.dp)
+                                        .clickable { onToggleReaction(image.messageId, emoji) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(text = emoji, fontSize = 28.sp)
+                                }
+                            }
+                            // "+" opens the same full emoji picker as long-pressing a bubble,
+                            // not just the ~5 quick-pick reactions.
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .clickable { showEmojiPicker = true },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "More emoji",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }
@@ -2756,6 +2777,15 @@ private fun FullScreenImageViewer(
             image = image,
             contactDisplayName = contactDisplayName,
             onDismiss = { showDetailsFor = null }
+        )
+    }
+
+    if (showEmojiPicker) {
+        EmojiPickerBottomSheet(
+            onEmojiSelected = { emoji ->
+                currentImage?.let { onToggleReaction(it.messageId, emoji) }
+            },
+            onDismiss = { showEmojiPicker = false }
         )
     }
 }

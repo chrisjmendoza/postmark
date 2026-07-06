@@ -6,6 +6,22 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-06
 
+### Image viewer quick-reactions: bigger, higher, full emoji picker
+
+Compared against Google Messages' viewer directly. Three changes to the reaction row:
+- Emoji tap targets grew from a bare `Text` with 6dp padding to explicit 48dp circles
+  (`Box` + `CircleShape`), each showing its emoji at 28sp — noticeably bigger and
+  easier to hit, matching the bubble long-press popup's circle-button pattern
+  (`EmojiReactionPopup`'s 44dp/24sp, just a bit larger here since the viewer has more
+  room).
+- Bottom margin increased from `navBarBottomPadding + 12.dp` to `+ 28.dp` so the row
+  sits with real breathing room above the nav bar instead of hugging it.
+- Added a "+" button reusing the existing `EmojiPickerBottomSheet` (the same full
+  emoji picker — search, sectioned grid — already wired to the bubble long-press
+  popup's "more" button) instead of being limited to the ~5 quick-pick reactions.
+
+`./gradlew test`: all passing. `assembleDebug`: clean.
+
 ### Nav-bar overlap fix #3 (works this time) + full date in the viewer header
 
 The `decorFitsSystemWindows` fix (previous entry below) turned out to be necessary but
