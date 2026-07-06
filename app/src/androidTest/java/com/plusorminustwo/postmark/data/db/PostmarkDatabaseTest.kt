@@ -149,7 +149,7 @@ class PostmarkDatabaseTest {
         db.messageDao().insert(msg(11, 1, body = "Goodbye world"))
 
         // Word-start prefix query — matches "Hello" but not "world" mid-word
-        val results = db.searchDao().searchMessages("^\"Hello\"*")
+        val results = db.searchDao().searchMessagesFiltered("^\"Hello\"*")
         assertEquals(1, results.size)
         assertEquals("Hello world", results[0].body)
     }
@@ -159,7 +159,7 @@ class PostmarkDatabaseTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1, body = "the cat sat"))
         // "he" should NOT match "the" (word-start only)
-        val results = db.searchDao().searchMessages("^\"he\"*")
+        val results = db.searchDao().searchMessagesFiltered("^\"he\"*")
         assertTrue(results.isEmpty())
     }
 
@@ -168,11 +168,11 @@ class PostmarkDatabaseTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1, body = "unique phrase"))
         // Confirm it's searchable
-        assertEquals(1, db.searchDao().searchMessages("^\"unique\"*").size)
+        assertEquals(1, db.searchDao().searchMessagesFiltered("^\"unique\"*").size)
         // Delete the message
         db.messageDao().delete(msg(10, 1, body = "unique phrase"))
         // Should no longer appear
-        assertEquals(0, db.searchDao().searchMessages("^\"unique\"*").size)
+        assertEquals(0, db.searchDao().searchMessagesFiltered("^\"unique\"*").size)
     }
 
     @Test
@@ -181,8 +181,8 @@ class PostmarkDatabaseTest {
         db.messageDao().insert(msg(10, 1, body = "original text"))
         // Update the message
         db.messageDao().insertAll(listOf(msg(10, 1, body = "updated text"))) // REPLACE
-        val oldResults = db.searchDao().searchMessages("^\"original\"*")
-        val newResults = db.searchDao().searchMessages("^\"updated\"*")
+        val oldResults = db.searchDao().searchMessagesFiltered("^\"original\"*")
+        val newResults = db.searchDao().searchMessagesFiltered("^\"updated\"*")
         assertEquals("old body should be gone from FTS", 0, oldResults.size)
         assertEquals("new body should be indexed", 1, newResults.size)
     }
@@ -192,7 +192,7 @@ class PostmarkDatabaseTest {
         db.threadDao().insertAll(listOf(thread(1), thread(2)))
         db.messageDao().insert(msg(10, 1, body = "apple pie"))
         db.messageDao().insert(msg(11, 2, body = "apple cider"))
-        val results = db.searchDao().searchMessagesInThread("^\"apple\"*", threadId = 1L)
+        val results = db.searchDao().searchMessagesFiltered("^\"apple\"*", threadId = 1L)
         assertEquals(1, results.size)
         assertEquals(1L, results[0].threadId)
     }
@@ -265,7 +265,7 @@ class PostmarkDatabaseTest {
         db.messageDao().insertAll(listOf(msg(-100, 1, ts = 3000L), msg(-200, 1, ts = 4000L)))
         assertEquals(4, db.messageDao().countByThread(1L))
 
-        db.messageDao().deleteOptimisticMessages(1L)
+        db.messageDao().deleteOptimisticMessages(1L, isMms = false)
 
         val remaining = db.messageDao().getByThread(1L)
         assertEquals(2, remaining.size)
@@ -278,10 +278,74 @@ class PostmarkDatabaseTest {
         db.messageDao().insert(msg(-1, 1, ts = 1000L))
         db.messageDao().insert(msg(-2, 2, ts = 1000L))
 
-        db.messageDao().deleteOptimisticMessages(1L)
+        db.messageDao().deleteOptimisticMessages(1L, isMms = false)
 
         assertNull(db.messageDao().getById(-1L))
         assertNotNull(db.messageDao().getById(-2L))
+    }
+
+    /* ── Regression: SMS-after-MMS race (sent image vanished from thread) ──
+     *
+     * Repro: user sends an MMS (optimistic row, isMms = 1, still pending because the
+     * MMS round-trip takes seconds), then immediately sends an SMS. The SMS's real
+     * row syncs in well under a second, and syncLatestSms()'s cleanup used to delete
+     * EVERY negative-ID row in the thread — including the pending MMS bubble — so
+     * the image disappeared before syncLatestMms() could import its real row.
+     * The queries are now scoped by isMms, mirroring getMaxId()/getMaxMmsId(). */
+
+    @Test
+    fun deleteOptimisticMessages_smsScope_preservesPendingOptimisticMms() = runBlocking {
+        db.threadDao().insert(thread(1))
+        // Optimistic MMS (image) sent first, optimistic SMS sent moments later.
+        db.messageDao().insert(msg(-2000, 1, ts = 1000L, isSent = true, isMms = true,
+            attachmentUri = "content://cache/img.jpg"))
+        db.messageDao().insert(msg(-1000, 1, ts = 2000L, isSent = true))
+
+        // syncLatestSms() imported the SMS's real row and clears optimistic SMS rows only.
+        db.messageDao().deleteOptimisticMessages(1L, isMms = false)
+
+        assertNull(db.messageDao().getById(-1000L))            // SMS temp row gone
+        assertNotNull(db.messageDao().getById(-2000L))         // MMS image bubble survives
+    }
+
+    @Test
+    fun deleteOptimisticMessages_mmsScope_preservesPendingOptimisticSms() = runBlocking {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insert(msg(-2000, 1, ts = 1000L, isSent = true, isMms = true))
+        db.messageDao().insert(msg(-1000, 1, ts = 2000L, isSent = true))
+
+        db.messageDao().deleteOptimisticMessages(1L, isMms = true)
+
+        assertNotNull(db.messageDao().getById(-1000L))         // SMS temp row survives
+        assertNull(db.messageDao().getById(-2000L))            // MMS temp row gone
+    }
+
+    @Test
+    fun getOptimisticSent_mmsScope_returnsMmsRowDespiteNewerOptimisticSms() = runBlocking {
+        db.threadDao().insert(thread(1))
+        // MMS created first → more-negative id. SMS created after → larger id, so an
+        // unscoped ORDER BY id DESC LIMIT 1 would wrongly return the SMS row.
+        db.messageDao().insert(msg(-2000, 1, ts = 1000L, isSent = true, isMms = true,
+            deliveryStatus = DELIVERY_STATUS_SENT, attachmentUri = "content://cache/img.jpg"))
+        db.messageDao().insert(msg(-1000, 1, ts = 2000L, isSent = true,
+            deliveryStatus = DELIVERY_STATUS_NONE))
+
+        assertEquals(-2000L, db.messageDao().getOptimisticSentId(1L, isMms = true))
+        assertEquals(DELIVERY_STATUS_SENT,
+            db.messageDao().getOptimisticSentDeliveryStatus(1L, isMms = true))
+        assertEquals("content://cache/img.jpg",
+            db.messageDao().getOptimisticSentAttachmentUri(1L, isMms = true))
+    }
+
+    @Test
+    fun getOptimisticSent_mmsScope_noOptimisticMms_returnsNull() = runBlocking {
+        db.threadDao().insert(thread(1))
+        // Only an optimistic SMS exists — MMS-scoped reads must not pick it up.
+        db.messageDao().insert(msg(-1000, 1, ts = 1000L, isSent = true))
+
+        assertNull(db.messageDao().getOptimisticSentId(1L, isMms = true))
+        assertNull(db.messageDao().getOptimisticSentDeliveryStatus(1L, isMms = true))
+        assertNull(db.messageDao().getOptimisticSentAttachmentUri(1L, isMms = true))
     }
 
     // ── MessageDao range queries (month-scoped heatmap) ────────────────────
@@ -384,10 +448,15 @@ class PostmarkDatabaseTest {
         id: Long,
         threadId: Long,
         body: String = "test body",
-        ts: Long = System.currentTimeMillis()
+        ts: Long = System.currentTimeMillis(),
+        isSent: Boolean = false,
+        isMms: Boolean = false,
+        deliveryStatus: Int = DELIVERY_STATUS_NONE,
+        attachmentUri: String? = null
     ) = MessageEntity(
         id = id, threadId = threadId, address = "+1555",
-        body = body, timestamp = ts, isSent = false, type = 1
+        body = body, timestamp = ts, isSent = isSent, type = 1,
+        isMms = isMms, deliveryStatus = deliveryStatus, attachmentUri = attachmentUri
     )
 
     private fun reaction(

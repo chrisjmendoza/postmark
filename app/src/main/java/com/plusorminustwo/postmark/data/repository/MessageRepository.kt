@@ -80,23 +80,25 @@ class MessageRepository @Inject constructor(
     fun observeUnreadCounts(): Flow<Map<Long, Int>> =
         messageDao.observeUnreadCounts().map { list -> list.associate { it.threadId to it.count } }
 
-    suspend fun deleteOptimisticMessages(threadId: Long) =
-        messageDao.deleteOptimisticMessages(threadId)
+    /** Deletes optimistic (negative-ID) rows of one transport in a thread.
+     *  [isMms] scoping keeps the SMS sync path from deleting a pending MMS temp row. */
+    suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) =
+        messageDao.deleteOptimisticMessages(threadId, isMms)
 
-    // Returns the delivery status of the most recent temp sent row for a thread.
+    // Returns the delivery status of the most recent temp sent row of a transport in a thread.
     // Used by syncLatestMms() to carry a FAILED/SENT status over to the real row.
-    suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int? =
-        messageDao.getOptimisticSentDeliveryStatus(threadId)
+    suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? =
+        messageDao.getOptimisticSentDeliveryStatus(threadId, isMms)
 
-    /** Returns the attachmentUri of the most recent temp sent row for a thread. */
-    suspend fun getOptimisticSentAttachmentUri(threadId: Long): String? =
-        messageDao.getOptimisticSentAttachmentUri(threadId)
+    /** Returns the attachmentUri of the most recent temp sent row of a transport in a thread. */
+    suspend fun getOptimisticSentAttachmentUri(threadId: Long, isMms: Boolean): String? =
+        messageDao.getOptimisticSentAttachmentUri(threadId, isMms)
 
-    /** Returns the negative tempId of the most recent temp sent row for a thread.
+    /** Returns the negative tempId of the most recent temp sent row of a transport in a thread.
      *  Used by [SmsSyncHandler] to derive the cache file name and bypass the race
      *  where [ThreadViewModel] hasn't yet updated the stored attachmentUri. */
-    suspend fun getOptimisticSentId(threadId: Long): Long? =
-        messageDao.getOptimisticSentId(threadId)
+    suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? =
+        messageDao.getOptimisticSentId(threadId, isMms)
 
     suspend fun updateAttachmentUri(messageId: Long, uri: String) =
         messageDao.updateAttachmentUri(messageId, uri)

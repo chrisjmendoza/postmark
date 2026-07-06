@@ -6,6 +6,53 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### Sent image vanishes when an SMS follows an MMS — optimistic-row cleanup not type-scoped (July 5 2026)
+
+Repro: send an MMS (image), then an SMS in the same thread seconds later — the image
+bubble disappears from the thread even though the recipient got it. Root cause: MMS
+round-trips take several seconds (PDU build → dispatch → MMSC ack) while an SMS's real
+`content://sms` row syncs into Room in well under a second. `syncLatestSms()`'s cleanup
+called `deleteOptimisticMessages(threadId)` — `DELETE … WHERE threadId = ? AND id < 0`
+with no transport filter — so importing the SMS's real row deleted *every* negative-ID
+optimistic row in the thread, including the still-pending MMS bubble whose real row
+`syncLatestMms()` hadn't imported yet. Even when the real MMS row arrived later, the
+attachment transfer had nothing to read (`getOptimisticSentId()` returned null and the
+`mms_attach_<tempId>.bin` cache file could no longer be located), so the image stayed
+lost.
+
+Same missing scoping in the three `getOptimisticSent*` queries (`ORDER BY id DESC
+LIMIT 1` = "most recently created"): a newer optimistic SMS row (larger, less-negative
+id) shadowed the MMS row, so `syncLatestMms()` could transfer the wrong delivery
+status / attachment URI to the real MMS row.
+
+Fix: all four queries now take an `isMms` parameter (`AND isMms = :isMms`), following
+the scoping pattern already used by `getMaxId()` / `getMaxMmsId()` in the same DAO.
+`syncLatestSms()` passes `isMms = false` (both cleanup call sites), `syncLatestMms()`
+passes `isMms = true` (cleanup + all status/attachment-transfer reads). The `isMms`
+flag is reliable on optimistic rows: `ThreadViewModel.sendMessage()` sets it explicitly
+on the MMS path and the SMS path uses the `Message` default `false`.
+
+Regression tests in `PostmarkDatabaseTest`: SMS-scoped delete preserves the pending
+optimistic MMS row (and vice versa); MMS-scoped `getOptimisticSent*` return the MMS
+row even when a newer optimistic SMS row exists, and null when only an SMS row exists.
+All four ran on a physical device (`connectedDebugAndroidTest`) and passed.
+While there, updated the file's FTS tests off the removed `searchMessages()` /
+`searchMessagesInThread()` DAO methods to `searchMessagesFiltered()` — the whole
+androidTest source set had stopped compiling. Also deleted
+`StatsUpdaterIntegrationTest.kt`: it targeted the pre-`recomputeAll()` StatsUpdater
+API (`computeForThread`, `updateForNewMessage`), had been dead in the androidTest
+source set (never run by `./gradlew test`) since that refactor, and its coverage is
+superseded by `StatsAlgorithmsTest.kt`.
+
+**Files changed**:
+- `data/db/dao/MessageDao.kt:82-108` — `isMms` scoping on `deleteOptimisticMessages()` + 3 `getOptimisticSent*` queries
+- `data/repository/MessageRepository.kt:83-101` — pass-throughs updated
+- `data/sync/SmsSyncHandler.kt:241,250` (SMS, `isMms = false`), `:370-443` (MMS, `isMms = true`)
+- `androidTest …/PostmarkDatabaseTest.kt` — 4 regression tests; `msg()` helper gains `isSent`/`isMms`/`deliveryStatus`/`attachmentUri`; FTS tests moved to `searchMessagesFiltered()`
+- 4 unit-test fake DAOs updated to the new signatures (`./gradlew test` passing)
+
+---
+
 ### ci: Firebase App Distribution workflow (July 5 2026)
 
 Added `.github/workflows/distribute.yml`, mirroring the pattern already proven on

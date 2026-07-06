@@ -389,6 +389,36 @@ WHAT IS WORKING (tested on device)
    (applicationId com.plusorminustwo.postmark) to get FIREBASE_APP_ID, create an
    App Distribution Admin service account and add its JSON as the
    FIREBASE_SERVICE_ACCOUNT repo secret alongside FIREBASE_APP_ID.
+✅ Sent image vanishes when an SMS follows an MMS — optimistic cleanup not type-scoped (July 5, 2026):
+   Repro: send an MMS (image), then an SMS in the same thread seconds later — the
+   image bubble disappears even though the recipient received it. Root cause: an
+   MMS round-trip takes several seconds (PDU build → dispatch → MMSC ack) while an
+   SMS's real content://sms row syncs into Room in well under a second.
+   syncLatestSms()'s cleanup called deleteOptimisticMessages(threadId) — DELETE
+   WHERE threadId = ? AND id < 0 with NO transport filter — so importing the SMS's
+   real row deleted every negative-ID optimistic row in the thread, including the
+   still-pending MMS bubble whose real row syncLatestMms() hadn't imported yet.
+   Worse, once that temp row was gone the later MMS sync had nothing to transfer
+   from: getOptimisticSentId() returned null, so the mms_attach_<tempId>.bin cache
+   lookup was impossible and the real row got no attachmentUri (Samsung part data
+   for sent rows is typically empty) — the image stayed lost, not just late.
+   Same missing scoping in the three getOptimisticSent* queries (ORDER BY id DESC
+   LIMIT 1): a newer optimistic SMS row (less-negative id) shadowed the MMS row,
+   letting syncLatestMms() transfer the wrong deliveryStatus/attachmentUri.
+   Fix: all four queries take an isMms param (AND isMms = :isMms), following the
+   getMaxId()/getMaxMmsId() scoping pattern already in MessageDao.
+   syncLatestSms() passes isMms = false (SmsSyncHandler.kt:241,250);
+   syncLatestMms() passes isMms = true (SmsSyncHandler.kt:370-443). The flag is
+   trustworthy on optimistic rows: ThreadViewModel.sendMessage() sets isMms = true
+   explicitly on the MMS path; the SMS path uses the Message default false.
+   Regression tests in PostmarkDatabaseTest (SMS-scoped delete preserves pending
+   optimistic MMS + vice versa; MMS-scoped reads skip a newer SMS temp row) — ran
+   on a physical device via connectedDebugAndroidTest, all 4 passed. Also repaired
+   that file's FTS tests (searchMessages → searchMessagesFiltered) so the
+   androidTest source set compiles again, and deleted StatsUpdaterIntegrationTest.kt
+   (targeted the removed pre-recomputeAll() StatsUpdater API, dead in androidTest
+   since that refactor since ./gradlew test never runs it; superseded by
+   StatsAlgorithmsTest.kt).
 ✅ Notifications show contact display name (not raw phone number):
    - SmsReceiver queries threadRepository.getDisplayNameByAddress(rawSender)
      before posting notification; falls back to raw number if thread not in Room
@@ -1030,7 +1060,6 @@ TESTING CONVENTIONS
     src/test/.../search/parser/AppleReactionParserLogicTest.kt
     src/test/.../search/FtsQueryBuilderTest.kt
     src/androidTest/.../data/db/PostmarkDatabaseTest.kt
-    src/androidTest/.../data/sync/StatsUpdaterIntegrationTest.kt
 
 CONTACT COLORS / AVATARS
 - avatarColor(name) hashes displayName into an

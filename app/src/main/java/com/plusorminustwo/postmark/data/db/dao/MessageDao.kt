@@ -78,27 +78,34 @@ interface MessageDao {
     @Query("UPDATE messages SET attachmentUri = :uri WHERE id = :messageId")
     suspend fun updateAttachmentUri(messageId: Long, uri: String)
 
-    @Query("DELETE FROM messages WHERE threadId = :threadId AND id < 0")
-    suspend fun deleteOptimisticMessages(threadId: Long)
+    /** Deletes optimistic (negative-ID) rows of ONE transport in a thread.
+     *  Scoped by [isMms] — mirroring [getMaxId]/[getMaxMmsId] — so the SMS sync path
+     *  can never delete a still-pending optimistic MMS row (and vice versa). Without
+     *  this scoping, sending an SMS right after an MMS made the image bubble vanish:
+     *  the fast SMS sync deleted the MMS temp row before its real row had synced in. */
+    @Query("DELETE FROM messages WHERE threadId = :threadId AND id < 0 AND isMms = :isMms")
+    suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean)
 
     /** Returns the [MessageEntity.deliveryStatus] of the most recent optimistic (negative-ID)
-     *  sent message in a thread. Used by [SmsSyncHandler.syncLatestMms] to transfer a FAILED
-     *  status to the real row before the temp row is deleted. */
-    @Query("SELECT deliveryStatus FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
-    suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int?
+     *  sent message of the given transport in a thread. Used by [SmsSyncHandler.syncLatestMms]
+     *  to transfer a FAILED status to the real row before the temp row is deleted.
+     *  [isMms] scoping ensures a newer optimistic SMS row can't shadow the MMS row. */
+    @Query("SELECT deliveryStatus FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
+    suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int?
 
-    /** Returns the attachmentUri of the most recent optimistic sent message in a thread.
-     *  Used by [SmsSyncHandler.syncLatestMms] to transfer the locally-cached image URI
-     *  to the real row, since Samsung's content://mms/part/ data may be empty for sent rows. */
-    @Query("SELECT attachmentUri FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
-    suspend fun getOptimisticSentAttachmentUri(threadId: Long): String?
+    /** Returns the attachmentUri of the most recent optimistic sent message of the given
+     *  transport in a thread. Used by [SmsSyncHandler.syncLatestMms] to transfer the
+     *  locally-cached image URI to the real row, since Samsung's content://mms/part/
+     *  data may be empty for sent rows. */
+    @Query("SELECT attachmentUri FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
+    suspend fun getOptimisticSentAttachmentUri(threadId: Long, isMms: Boolean): String?
 
-    /** Returns the row id (negative tempId) of the most recent optimistic sent message in a thread.
-     *  Used by [SmsSyncHandler.syncLatestMms] to derive the cache file name
-     *  (mms_attach_<tempId>.bin) and build a stable FileProvider URI, bypassing the
-     *  race where [ThreadViewModel] hasn't yet updated the stored attachmentUri. */
-    @Query("SELECT id FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 ORDER BY id DESC LIMIT 1")
-    suspend fun getOptimisticSentId(threadId: Long): Long?
+    /** Returns the row id (negative tempId) of the most recent optimistic sent message of the
+     *  given transport in a thread. Used by [SmsSyncHandler.syncLatestMms] to derive the
+     *  cache file name (mms_attach_<tempId>.bin) and build a stable FileProvider URI,
+     *  bypassing the race where [ThreadViewModel] hasn't yet updated the stored attachmentUri. */
+    @Query("SELECT id FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
+    suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long?
 
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteById(messageId: Long)

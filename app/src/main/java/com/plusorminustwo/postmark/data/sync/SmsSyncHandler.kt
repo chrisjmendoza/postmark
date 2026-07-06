@@ -235,16 +235,19 @@ class SmsSyncHandler @Inject constructor(
             messageRepository.insertAll(normalMessages)
             normalMessages.groupBy { it.threadId }.forEach { (threadId, msgs) ->
                 val latest = msgs.last()
-                messageRepository.deleteOptimisticMessages(threadId)
+                // isMms = false: only clear optimistic SMS rows. A pending optimistic MMS
+                // row must survive until syncLatestMms() imports its real row — deleting
+                // it here made a just-sent image vanish when an SMS followed it quickly.
+                messageRepository.deleteOptimisticMessages(threadId, isMms = false)
                 threadRepository.updateLastMessageAt(threadId, latest.timestamp)
                 threadRepository.updateLastMessagePreview(threadId, latest.previewText)
             }
         }
-        // Clean up optimistic messages for threads that only received reaction fallbacks.
+        // Clean up optimistic SMS rows for threads that only received reaction fallbacks.
         val normalThreadIds = normalMessages.map { it.threadId }.toSet()
         reactionMsgs.map { it.threadId }.distinct()
             .filter { it !in normalThreadIds }
-            .forEach { messageRepository.deleteOptimisticMessages(it) }
+            .forEach { messageRepository.deleteOptimisticMessages(it, isMms = false) }
 
         // One stats recompute covers all affected threads.
         statsUpdater.recomputeAll()
@@ -362,7 +365,9 @@ class SmsSyncHandler @Inject constructor(
              * Race scenario B: MmsSentReceiver hasn't fired yet → transfer PENDING so the
              * UI keeps showing the clock indicator instead of a blank.
              */
-            val optStatus = messageRepository.getOptimisticSentDeliveryStatus(threadId)
+            // isMms = true: a newer optimistic SMS row in the same thread must not shadow
+            // the MMS temp row this status/attachment transfer is meant to read.
+            val optStatus = messageRepository.getOptimisticSentDeliveryStatus(threadId, isMms = true)
             if (optStatus != null && optStatus != DELIVERY_STATUS_NONE) {
                 val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
                 if (sentMsg != null) {
@@ -394,7 +399,7 @@ class SmsSyncHandler @Inject constructor(
              */
             val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
             if (sentMsg != null) {
-                val optId = messageRepository.getOptimisticSentId(threadId)
+                val optId = messageRepository.getOptimisticSentId(threadId, isMms = true)
                 val transferUri: String? = if (optId != null) {
                     // Derive the cache file path from the tempId stored as the optimistic row id.
                     val cacheFile = File(context.filesDir, "mms_attach_$optId.bin")
@@ -406,15 +411,15 @@ class SmsSyncHandler @Inject constructor(
                             ).toString()
                         } catch (_: Exception) {
                             // FileProvider lookup failed — fall back to the DB-stored URI.
-                            messageRepository.getOptimisticSentAttachmentUri(threadId)
+                            messageRepository.getOptimisticSentAttachmentUri(threadId, isMms = true)
                         }
                     } else {
                         // Cache file not found — fall back to whatever URI is stored on the row.
-                        messageRepository.getOptimisticSentAttachmentUri(threadId)
+                        messageRepository.getOptimisticSentAttachmentUri(threadId, isMms = true)
                     }
                 } else {
                     // No optimistic row found (already deleted or never existed) — try DB URI.
-                    messageRepository.getOptimisticSentAttachmentUri(threadId)
+                    messageRepository.getOptimisticSentAttachmentUri(threadId, isMms = true)
                 }
                 if (transferUri != null) {
                     messageRepository.updateAttachmentUri(sentMsg.id, transferUri)
@@ -422,18 +427,20 @@ class SmsSyncHandler @Inject constructor(
                 }
             }
 
-            messageRepository.deleteOptimisticMessages(threadId)
+            // isMms = true: only clear optimistic MMS rows — a pending optimistic SMS
+            // row belongs to syncLatestSms() and must survive this cleanup.
+            messageRepository.deleteOptimisticMessages(threadId, isMms = true)
             threadRepository.updateLastMessageAt(threadId, latest.timestamp)
             // Use emoji label for media-only MMS in the thread preview.
             val preview = latest.previewText
             threadRepository.updateLastMessagePreview(threadId, preview)
         }
 
-        // Clean up optimistic messages for threads that only received MMS reaction fallbacks.
+        // Clean up optimistic MMS rows for threads that only received MMS reaction fallbacks.
         val normalThreadIds = normalMessages.map { it.threadId }.toSet()
         reactionMsgs.map { it.threadId }.distinct()
             .filter { it !in normalThreadIds }
-            .forEach { messageRepository.deleteOptimisticMessages(it) }
+            .forEach { messageRepository.deleteOptimisticMessages(it, isMms = true) }
 
         statsUpdater.recomputeAll()
 
