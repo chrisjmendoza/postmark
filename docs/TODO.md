@@ -112,6 +112,20 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       **Done (different approach):** `GetContent` launcher with `image/*` / `audio/*` MIME
       filter, attach button with dropdown, attachment preview chip, MMS send path via
       `MmsManagerWrapper` + WAP Binary PDU. Camera capture still pending.
+- [ ] **Attachment picker gaps found testing against Google Messages** —
+      three related issues in the current `GetContent` attach flow:
+      1. Only single-select — `GetContent` (not `GetMultipleContents` /
+         `PickMultipleVisualMedia`) means one attachment per send. Real multi-image
+         MMS also needs the data-model fix already tracked above (single
+         `attachmentUri`/`mimeType` per `Message`) before multiple images per
+         message means anything on the receiving/display side too.
+      2. `video/*` isn't in the MIME filter passed to the picker, so videos don't
+         even show up as selectable, despite video send already being supported
+         end-to-end (`MmsManagerWrapper`, `VideoPlayerDialog` on the receive side).
+      3. The picker resolves straight to Google Photos instead of showing the
+         system chooser — use `Intent.createChooser()` (or `ACTION_OPEN_DOCUMENT`
+         with no default handler pre-selected) so the user can pick Files, other
+         gallery apps, etc.
 - [ ] **Group MMS** — multiple recipient addresses → single thread with comma-joined
       display name. Show sender name/avatar per bubble within group thread.
 
@@ -412,6 +426,16 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       Monospace / a curated set of Google Fonts). Persisted to
       SharedPreferences and applied via a custom `FontFamily`
       CompositionLocal so all bubble text updates without restart.
+- [ ] **Per-thread appearance override** — font family, text size, and
+      bubble styling (color/theme accent) configurable per conversation
+      thread, not just the global Settings → Appearance default. Entry
+      point: thread ⋮ menu → "Customize appearance". Needs per-thread
+      override columns on `ThreadEntity` (nullable — null falls back to
+      the global default) rather than a single global
+      `FontFamily`/text-scale CompositionLocal; `ThreadScreen` reads the
+      thread's override (if set) ahead of the global preference.
+      Depends on / extends the global **Custom font selection** and
+      **Pinch to zoom text** items above.
 
 ---
 
