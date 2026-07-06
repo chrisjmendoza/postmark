@@ -167,4 +167,14 @@ interface MessageDao {
     /** Month-scoped heatmap (single thread). */
     @Query("SELECT * FROM messages WHERE threadId = :threadId AND timestamp >= :startMs AND timestamp < :endMs ORDER BY timestamp ASC")
     fun observeMessagesInRangeForThread(threadId: Long, startMs: Long, endMs: Long): Flow<List<MessageEntity>>
+
+    @Query("UPDATE messages SET isStarred = :isStarred WHERE id = :messageId")
+    suspend fun updateStarred(messageId: Long, isStarred: Boolean)
+
+    /** Every starred message with a media attachment, newest first — backs the global
+     *  Starred Images gallery (Settings → Starred images). Image-vs-video/audio filtering
+     *  happens in the repository layer after decoding attachmentsJson, since a single
+     *  starred message can carry a mix of attachment types. */
+    @Query("SELECT * FROM messages WHERE isStarred = 1 AND attachmentUri IS NOT NULL ORDER BY timestamp DESC")
+    fun observeStarredMedia(): Flow<List<MessageEntity>>
 }

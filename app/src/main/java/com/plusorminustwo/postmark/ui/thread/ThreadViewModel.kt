@@ -4,6 +4,7 @@ import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
 import android.app.PendingIntent
+import android.net.Uri
 import android.os.Build
 import android.provider.Telephony
 import androidx.core.content.FileProvider
@@ -17,6 +18,7 @@ import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepositor
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
+import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
@@ -309,10 +311,48 @@ class ThreadViewModel @Inject constructor(
         // _selectionState already contains the long-pressed message
     }
 
-    /** Stub — forward a message to another conversation. */
-    fun forwardMessage(messageId: Long) {
-        dismissReactionPicker()
-        // TODO: navigate to contact picker and send message copy
+    fun toggleStarred(messageId: Long) {
+        viewModelScope.launch {
+            val message = messageRepository.getById(messageId) ?: return@launch
+            messageRepository.updateStarred(messageId, !message.isStarred)
+        }
+    }
+
+    /**
+     * Permanently deletes a message — both the Room row and, for a real (non-optimistic,
+     * `id > 0`) row, the underlying system `content://sms` or `content://mms` row. Requires
+     * being the default SMS app (system providers reject writes from non-default apps);
+     * sets [ThreadUiState.showDefaultSmsDialog] (the same dialog [sendMessage] uses) instead
+     * of failing silently if not.
+     *
+     * The caller is expected to confirm with the user first — this performs the delete
+     * immediately and unconditionally once called.
+     */
+    fun deleteMessage(messageId: Long) {
+        if (!isDefaultSmsApp()) {
+            _showDefaultSmsDialog.value = true
+            return
+        }
+        viewModelScope.launch {
+            val message = messageRepository.getById(messageId) ?: return@launch
+            // Negative IDs are optimistic (not-yet-synced) rows — no system row exists yet.
+            if (message.id > 0) {
+                val uri = if (message.isMms) {
+                    Uri.parse("content://mms/${message.id - MMS_ID_OFFSET}")
+                } else {
+                    Uri.parse("content://sms/${message.id}")
+                }
+                try {
+                    context.contentResolver.delete(uri, null, null)
+                } catch (_: Exception) {
+                    // System provider delete failed (e.g. race with sync) — still remove
+                    // the local row below so the UI doesn't show a message the user just
+                    // asked to delete; a future resync can't resurrect a row that no
+                    // longer exists in Room even if the system row somehow survived.
+                }
+            }
+            messageRepository.deleteById(messageId)
+        }
     }
 
     fun toggleReaction(messageId: Long, emoji: String) {

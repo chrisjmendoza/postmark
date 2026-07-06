@@ -20,6 +20,8 @@ import androidx.compose.runtime.Immutable
  *                        IDs for MMS rows are offset by [MMS_ID_OFFSET] to avoid collisions.
  * @param attachments     All MMS media parts of this message in PDU order (images, video,
  *                        audio). Empty for SMS and text-only MMS.
+ * @param isStarred       User-marked favorite — surfaces this message's images in the
+ *                        global Starred Images gallery. Postmark-only, not synced anywhere.
  */
 @Immutable
 data class Message(
@@ -36,7 +38,8 @@ data class Message(
     // MMS media attachments — empty for SMS and text-only MMS.
     val attachments: List<MessageAttachment> = emptyList(),
     // False for incoming messages not yet viewed; drives the unread badge.
-    val isRead: Boolean = true
+    val isRead: Boolean = true,
+    val isStarred: Boolean = false
 ) {
     /** Content URI of the first attachment — convenience accessor for single-media
      *  call sites (previews, shared-media grid). Null when there are no attachments. */

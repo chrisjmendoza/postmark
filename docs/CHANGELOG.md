@@ -6,6 +6,122 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-06
 
+### Fixed the recurring nav-bar overlap bug (root cause) + added EXIF photo details
+
+**Nav-bar overlap, actually fixed this time.** Reported again after the previous fix
+attempt: the bottom row (reactions, page counter, "Go to chat") was still rendering
+underneath the phone's 3-button nav bar. Root cause: `DialogProperties
+(usePlatformDefaultWidth = false)` makes a Compose `Dialog`'s *content* fill the
+screen, but the dialog's own `Window` — a separate window from the Activity's — still
+defaults to `decorFitsSystemWindows = true`. That means this window never actually
+receives real `navigationBars`/`statusBars` `WindowInsets` values, so
+`navigationBarsPadding()`/`statusBarsPadding()` were silently computing **zero**
+padding the whole time — they weren't missing, they just had nothing to apply. Fixed
+by reaching into the dialog's own `Window` (via `(LocalView.current.parent as
+DialogWindowProvider).window`) and calling `WindowCompat.setDecorFitsSystemWindows
+(window, false)` directly, in both `FullScreenImageViewer` and `VideoPlayerDialog`
+(same latent bug there, proactively fixed even though only the image viewer had been
+reported — video's control bar could hit the same overlap on a short/tall aspect
+ratio).
+
+**EXIF photo metadata in "View details."** Was sender/timestamp/starred only. Now
+also reads, when present: date taken, camera make/model, pixel dimensions (EXIF
+first, falling back to a bounds-only `BitmapFactory` decode if EXIF lacks them), GPS
+coordinates (tap to open in Maps), and file size — via `androidx.exifinterface`
+(already a dependency, used elsewhere for outgoing-image rotation) plus a
+`ContentResolver` file-descriptor size query. Loads asynchronously (a
+`LinearProgressIndicator` while reading) since it touches the content provider.
+**Availability varies a lot in practice and this is called out in the UI, not hidden:**
+Postmark's own outgoing-image compression decodes via `BitmapFactory`, which does not
+preserve EXIF, so images *you sent* essentially never carry metadata beyond what
+Postmark already knows from its own database. Received images keep whatever the
+sender's phone/carrier left intact — inconsistent, since some carriers strip EXIF for
+size/privacy. When nothing is found, the dialog says so plainly instead of showing a
+set of blank/misleading fields.
+
+Tests: no new pure-function surface here (EXIF reading is Android-API-dependent I/O,
+same category as `compressImage`'s `BitmapFactory` calls — not unit-testable off a
+device). `./gradlew test`: all passing. `assembleDebug`: clean.
+
+### Google Messages-style image viewer actions: delete, download, share, forward, star, reactions
+
+Requested after seeing Google Messages' image viewer: download/trash buttons, an
+overflow menu (Forward, Share, Star, View details), and quick reactions at the bottom.
+Not a pixel-for-pixel copy, but every one of those actions now exists in Postmark's
+viewer, plus a global place to browse starred images.
+
+**Real message delete.** The action-bar Delete button and the viewer's trash icon
+previously did nothing — `onDelete` just dismissed the popup, and there was no
+`ContentResolver.delete()` anywhere in the codebase. `ThreadViewModel.deleteMessage()`
+now removes both the Room row and, for a real (non-optimistic, `id > 0`) row, the
+underlying `content://sms/{id}` or `content://mms/{id - MMS_ID_OFFSET}` row — a genuine
+delete, matching what Google Messages' trash icon does, not a Postmark-only hide (a
+Postmark-only hide would let the same message resurface on a future resync, which
+would have been a worse trap than doing nothing). Requires being the default SMS app
+(system providers reject writes otherwise); reuses the existing "set default" dialog
+if not. Both entry points confirm through one shared `AlertDialog` first — this is
+destructive and irreversible.
+
+**Download.** Saves to `Pictures/Postmark` via `MediaStore`. API 29+ needs no
+permission (scoped storage, app's own insert); API 26-28 requests
+`WRITE_EXTERNAL_STORAGE` at runtime first (manifest declares it with
+`maxSdkVersion="28"` — unnecessary and unrequested on newer OS versions).
+
+**Share.** Opens the system share sheet directly on the `content://mms/part/` URI with
+`FLAG_GRANT_READ_URI_PERMISSION` — no `FileProvider` copy needed. This is the same
+mechanism the platform's own Messages app uses to let other apps read one MMS
+attachment without copying it first.
+
+**Forward — full in-app, not just a share sheet.** New `ui/forward/` package:
+`ForwardPickerScreen` shows recent conversations by default, live contact search once
+you type (same query logic as `NewConversationViewModel`, reusing its `ContactResult`
+type rather than redefining it), and `ForwardPickerViewModel.forward()` sends a copy
+of the source message's body + attachments to whichever destination is picked, via the
+same `MmsManagerWrapper.sendMms()`/`SmsManagerWrapper.sendTextMessage()` the live
+compose flow uses. New nav route `forward/{messageId}`, wired to both the action-bar
+Forward button (previously a stub — `dismissReactionPicker()` and a `// TODO` comment,
+no navigation, no send) and the viewer's overflow menu.
+**Known simplification:** the forwarded copy's `sentIntent` is `null` — no fast
+PendingIntent-driven delivery-status callback like the primary compose path gets. It
+still sends correctly and gets reconciled by the normal incremental sync
+(`SmsSyncHandler`); it just doesn't get the *fast* status update. Deliberately not
+duplicating that whole subsystem for a secondary action — revisit if forwarded
+messages feel laggy on delivery status in practice.
+
+**Star + global gallery.** New `isStarred` column on `messages` (schema v13→v14,
+`MessageDao.updateStarred()`/`observeStarredMedia()` mirroring the existing
+`ThreadDao.updatePinned()` pattern). Toggled from the viewer's overflow menu. New
+`ui/starred/StarredImagesScreen` (reachable from Settings → General → "Starred
+images") lists every starred image across every conversation, newest first — tapping
+one navigates to its source thread and scrolls/highlights it via the existing
+`scrollToMessageId` search-jump mechanism, rather than building a third full-screen-
+viewer implementation just for this grid. Deliberately scoped to images specifically,
+distinct from the broader "pin any message, per-thread panel" item already on
+`docs/TODO.md` — different scope (images-only vs. any message) and different browsing
+surface (global gallery vs. per-thread panel), so `isPinned` remains open as its own
+feature rather than being folded into this one.
+
+**Quick reactions in the viewer.** A row of the same ranked quick-reaction emojis
+used by the bubble long-press popup, now also tappable directly from the image
+viewer — calls the same `onToggleReaction(messageId, emoji)` `ThreadViewModel`
+already exposes.
+
+**Adjacent-image peek.** `HorizontalPager`'s `contentPadding`/`pageSpacing` now leave
+the previous/next image's edge visible during a swipe instead of each page filling
+the viewer edge-to-edge — closer to the carousel feel of other gallery viewers.
+
+**Nav-bar padding fix** (reported from testing the previous entry below): the bottom
+row (page counter + "Go to chat") was rendering underneath the system navigation bar,
+unreachable. Cause: the same edge-to-edge `DialogProperties(usePlatformDefaultWidth =
+false)` fix that made the viewer cover the whole screen also meant content could now
+render behind system bars unless explicitly inset. Fixed with
+`navigationBarsPadding()`/`statusBarsPadding()` on the top and bottom rows as part of
+this redesign.
+
+Tests: 453 passing (`./gradlew test`), `assembleDebug` clean. Five test-double
+`MessageDao` implementations across existing test files needed the two new abstract
+methods (`updateStarred`/`observeStarredMedia`) added as no-ops to keep compiling.
+
 ### Image viewer: fixed swipe + full-screen bugs, added date pill and "Go to chat"
 
 On-device testing of the thread-wide swipe (below) turned up two bugs and one piece of

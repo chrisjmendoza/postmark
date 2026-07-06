@@ -1,8 +1,10 @@
 package com.plusorminustwo.postmark.ui.thread
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -12,6 +14,7 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.app.role.RoleManager
+import android.provider.MediaStore
 import android.provider.Telephony
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
@@ -54,9 +57,12 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -85,6 +91,7 @@ import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -167,6 +174,10 @@ fun ThreadScreen(
     onViewStats: () -> Unit = {},
     onBackupSettingsClick: () -> Unit = {},
     onSearchInThread: (Long) -> Unit = {},
+    // Navigates to the forward destination picker for this message. Owned by the nav
+    // layer (like onViewContact) rather than the ViewModel, since picking a destination
+    // and sending there is itself a full screen, not in-ViewModel state.
+    onForwardMessage: (Long) -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -181,11 +192,15 @@ fun ThreadScreen(
     // across recompositions. Prevents child composables that accept lambdas from
     // recomposing just because ThreadScreen recomposed.
     val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
+    val onDeleteMessage           = remember(viewModel) { { id: Long -> viewModel.deleteMessage(id) } }
+    val onToggleStarred           = remember(viewModel) { { id: Long -> viewModel.toggleStarred(id) } }
     val onDismissDefaultSmsDialog = remember(viewModel) { { viewModel.dismissDefaultSmsDialog() } }
     val onUpdateBackupPolicy      = remember(viewModel) { { policy: BackupPolicy -> viewModel.updateBackupPolicy(policy) } }
     val onDismissReactionPicker   = remember(viewModel) { { viewModel.dismissReactionPicker() } }
     val onEnterSelectionModeFromActionMode = remember(viewModel) { { viewModel.enterSelectionModeFromActionMode() } }
-    val onForwardMessage          = remember(viewModel) { { id: Long -> viewModel.forwardMessage(id) } }
+    val onForwardMessage_         = remember(viewModel, onForwardMessage) {
+        { id: Long -> viewModel.dismissReactionPicker(); onForwardMessage(id) }
+    }
     val onExitSelectionMode       = remember(viewModel) { { viewModel.exitSelectionMode() } }
     val onSetSelectionScope       = remember(viewModel) { { scope: SelectionScope -> viewModel.setSelectionScope(scope) } }
     val onToggleMute              = remember(viewModel) { { viewModel.toggleMute() } }
@@ -224,11 +239,13 @@ fun ThreadScreen(
         onViewStats = onViewStats,
         onBackupSettingsClick = onBackupSettingsClick,
         onHighlightMessage = onHighlightMessage,
+        onDeleteMessage = onDeleteMessage,
+        onToggleStarred = onToggleStarred,
         onDismissDefaultSmsDialog = onDismissDefaultSmsDialog,
         onUpdateBackupPolicy = onUpdateBackupPolicy,
         onDismissReactionPicker = onDismissReactionPicker,
         onEnterSelectionModeFromActionMode = onEnterSelectionModeFromActionMode,
-        onForwardMessage = onForwardMessage,
+        onForwardMessage = onForwardMessage_,
         onExitSelectionMode = onExitSelectionMode,
         onSetSelectionScope = onSetSelectionScope,
         onToggleMute = onToggleMute,
@@ -284,6 +301,8 @@ private fun ThreadContent(
     onViewStats: () -> Unit,
     onBackupSettingsClick: () -> Unit,
     onHighlightMessage: (Long) -> Unit,
+    onDeleteMessage: (Long) -> Unit = {},
+    onToggleStarred: (Long) -> Unit = {},
     onDismissDefaultSmsDialog: () -> Unit,
     onUpdateBackupPolicy: (BackupPolicy) -> Unit,
     onDismissReactionPicker: () -> Unit,
@@ -332,6 +351,16 @@ private fun ThreadContent(
     var showCalendarPicker by remember { mutableStateOf(false) }
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
     var showDateRangePicker by remember { mutableStateOf(false) }
+
+    // Non-null shows a "Delete message?" confirm dialog for this message id. Shared by the
+    // action-bar Delete button and the image viewer's trash icon — deletion is real (removes
+    // the system content://sms/mms row too, see ThreadViewModel.deleteMessage), so both
+    // entry points confirm through the same dialog rather than deleting on tap.
+    var pendingDeleteMessageId by remember { mutableStateOf<Long?>(null) }
+
+    // Same nickname-falls-back-to-formatted-number resolution as the top app bar title —
+    // hoisted here too since the image viewer's header needs it for the "You"/contact label.
+    val contactDisplayName = uiState.thread?.let { t -> t.nickname ?: formatPhoneNumber(t.displayName) } ?: ""
 
     // Index into uiState.threadImages the full-screen viewer opens at; null = closed.
     // Lifted up here (rather than per-MessageBubble) so swiping pages across every image
@@ -569,7 +598,10 @@ private fun ThreadContent(
                     },
                     onSelect  = { onEnterSelectionModeFromActionMode() },
                     onForward = { uiState.reactionPickerMessageId?.let { onForwardMessage(it) } },
-                    onDelete  = { onDismissReactionPicker() }
+                    onDelete  = {
+                        pendingDeleteMessageId = uiState.reactionPickerMessageId
+                        onDismissReactionPicker()
+                    }
                 )
                 uiState.isSelectionMode -> SelectionTopBar(
                     selectedCount = uiState.selectedMessageIds.size,
@@ -735,13 +767,46 @@ private fun ThreadContent(
                     FullScreenImageViewer(
                         images = uiState.threadImages,
                         initialIndex = startIndex,
+                        contactDisplayName = contactDisplayName,
+                        quickReactionEmojis = quickReactionEmojis,
+                        onToggleReaction = onToggleReaction,
+                        onToggleStarred = onToggleStarred,
                         onJumpToMessage = { messageId ->
                             globalImageViewerIndex = null
                             scope.launch { scrollToMessageCentered(messageId) }
                         },
+                        onDeleteRequest = { messageId ->
+                            globalImageViewerIndex = null
+                            pendingDeleteMessageId = messageId
+                        },
+                        onForward = { messageId ->
+                            globalImageViewerIndex = null
+                            onForwardMessage(messageId)
+                        },
                         onDismiss = { globalImageViewerIndex = null }
                     )
                 }
+            }
+
+            // Delete confirmation — shared by the action-bar Delete button and the image
+            // viewer's trash icon. Deletion is real (removes the system content://sms/mms
+            // row, not just Postmark's copy), so both entry points confirm here rather than
+            // deleting on tap.
+            pendingDeleteMessageId?.let { messageId ->
+                AlertDialog(
+                    onDismissRequest = { pendingDeleteMessageId = null },
+                    title = { Text("Delete message?") },
+                    text = { Text("This removes it from this device's SMS/MMS history. This can't be undone.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            onDeleteMessage(messageId)
+                            pendingDeleteMessageId = null
+                        }) { Text("Delete") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingDeleteMessageId = null }) { Text("Cancel") }
+                    }
+                )
             }
 
             FloatingDatePill(
@@ -2400,33 +2465,97 @@ private fun linkifyText(text: String, linkColor: androidx.compose.ui.graphics.Co
 // ── FullScreenImageViewer ─────────────────────────────────────────────────────
 
 /**
- * Full-screen overlay that displays one or more MMS images with pinch-to-zoom support.
+ * Full-screen overlay that displays one or more MMS images with pinch-to-zoom support,
+ * modeled loosely on Google Messages' image viewer (not a pixel match — see the header/
+ * action row below for what Postmark actually offers).
  *
  * The images are shown on a black scrim. The user can:
  *  - Swipe horizontally to page between images (when more than one) — [images] spans the
  *    whole thread, not just the tapped message's own attachments, so paging can cross
  *    message boundaries, matching the swipe-through-gallery behavior of other messaging apps.
+ *    Adjacent pages peek in from the edges (contentPadding + pageSpacing on the pager).
  *  - Pinch to zoom (1× – 5×) and pan while zoomed
+ *  - Download, delete (with confirmation — see [onDeleteRequest]), forward, share, star,
+ *    or view details via the top bar / overflow menu
+ *  - Tap a quick-reaction emoji at the bottom, same reactions as long-pressing a bubble
  *  - Tap "Go to chat" to jump straight to that image's message in the conversation
  *  - Tap the scrim or press Back to dismiss
  *
- * @param images          Every image in the thread, in chronological order.
- * @param initialIndex    Index of the image the user tapped, shown first.
- * @param onJumpToMessage Called with the current page's message ID when "Go to chat" is
- *                        tapped. The caller is expected to dismiss the viewer and scroll.
- * @param onDismiss       Called when the user closes the viewer.
+ * @param images              Every image in the thread, in chronological order.
+ * @param initialIndex        Index of the image the user tapped, shown first.
+ * @param contactDisplayName  Name shown for received images ("You" is used for sent ones).
+ * @param quickReactionEmojis Same ranked quick-reaction set as the bubble long-press popup.
+ * @param onToggleReaction    Same reaction toggle used by bubbles/`ReactionPills`.
+ * @param onToggleStarred     Toggles the current page's starred state.
+ * @param onJumpToMessage     Called with the current page's message ID when "Go to chat" is
+ *                            tapped. The caller is expected to dismiss the viewer and scroll.
+ * @param onDeleteRequest     Called with the current page's message ID when the trash icon
+ *                            is tapped. The caller is expected to dismiss the viewer and show
+ *                            a confirmation dialog before actually deleting — this composable
+ *                            never deletes anything itself.
+ * @param onForward           Called with the current page's message ID when "Forward" is
+ *                            tapped. The caller is expected to dismiss the viewer and navigate.
+ * @param onDismiss           Called when the user closes the viewer.
  */
 @Composable
 private fun FullScreenImageViewer(
     images: List<ThreadImageRef>,
     initialIndex: Int,
+    contactDisplayName: String,
+    quickReactionEmojis: List<String>,
+    onToggleReaction: (Long, String) -> Unit,
+    onToggleStarred: (Long) -> Unit,
     onJumpToMessage: (Long) -> Unit,
+    onDeleteRequest: (Long) -> Unit,
+    onForward: (Long) -> Unit,
     onDismiss: () -> Unit
 ) {
     val pagerState = rememberPagerState(
         initialPage = initialIndex.coerceIn(0, (images.size - 1).coerceAtLeast(0))
     ) { images.size }
     val currentImage = images.getOrNull(pagerState.currentPage)
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var showDetailsFor by remember { mutableStateOf<ThreadImageRef?>(null) }
+
+    fun runDownload(uri: String) {
+        coroutineScope.launch {
+            val saved = downloadImageToGallery(context, uri)
+            Toast.makeText(
+                context,
+                if (saved) "Saved to Pictures" else "Couldn't save image",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+    // API 26-28 only: MediaStore inserts on those versions still need the runtime
+    // WRITE_EXTERNAL_STORAGE permission (API 29+ scoped storage needs none for the
+    // app's own inserted content). uriPendingPermission holds the tapped image's URI
+    // across the request so the callback below knows what to download once granted.
+    var uriPendingPermission by remember { mutableStateOf<String?>(null) }
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val uri = uriPendingPermission
+        uriPendingPermission = null
+        if (granted && uri != null) {
+            runDownload(uri)
+        } else if (!granted) {
+            Toast.makeText(context, "Storage permission needed to save images", Toast.LENGTH_SHORT).show()
+        }
+    }
+    fun downloadWithPermissionCheck(uri: String) {
+        val needsPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                PackageManager.PERMISSION_GRANTED
+        if (needsPermission) {
+            uriPendingPermission = uri
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            runDownload(uri)
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -2436,6 +2565,18 @@ private fun FullScreenImageViewer(
         // and bottom bubbles) visible around a smaller black box instead of covering them.
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        // usePlatformDefaultWidth = false alone makes the dialog's CONTENT fill the
+        // screen, but the dialog's underlying Window still defaults to
+        // decorFitsSystemWindows = true — meaning this Window never actually receives
+        // real navigationBars/statusBars WindowInsets values, so navigationBarsPadding()/
+        // statusBarsPadding() below silently computed zero padding and the bottom row sat
+        // behind the 3-button nav bar / gesture handle instead of above it. Reaching into
+        // the dialog's own Window (not the Activity's) and flipping this flag is required
+        // for THIS window's insets to be reported at all.
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -2444,93 +2585,390 @@ private fun FullScreenImageViewer(
                 .clickable(onClick = onDismiss),
             contentAlignment = Alignment.Center
         ) {
-            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+            // contentPadding + pageSpacing leaves the previous/next image's edge visible
+            // during a swipe instead of each page filling the entire viewer edge-to-edge.
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 28.dp),
+                pageSpacing = 10.dp
+            ) { page ->
                 ZoomableImage(uri = images[page].uri)
             }
-            // Date pill — the date of whichever image is currently on screen; updates as
-            // you swipe, same label format as the thread's own date headers.
+
+            // Top bar: close, sender + friendly timestamp, download/delete/overflow.
             currentImage?.let { image ->
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    tonalElevation = 3.dp,
-                    shadowElevation = 2.dp,
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = 16.dp)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = image.dateLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                    )
-                }
-            }
-            // Bottom row: page counter (only relevant with multiple images) + "Go to
-            // chat" jump action, so closing the viewer doesn't strand you wherever you
-            // happened to be scrolled before opening it.
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (images.size > 1) {
-                    Text(
-                        text = "${pagerState.currentPage + 1} / ${images.size}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.Black.copy(alpha = 0.5f))
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                }
-                currentImage?.let { image ->
-                    Surface(
-                        onClick = { onJumpToMessage(image.messageId) },
-                        shape = RoundedCornerShape(50),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        tonalElevation = 3.dp,
-                        shadowElevation = 2.dp
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (image.isSent) "You" else contactDisplayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White
+                        )
+                        Text(
+                            text = image.timestampLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.8f)
+                        )
+                    }
+                    IconButton(onClick = { downloadWithPermissionCheck(image.uri) }) {
+                        Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White)
+                    }
+                    IconButton(onClick = { onDeleteRequest(image.messageId) }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.White)
+                    }
+                    Box {
+                        IconButton(onClick = { showOverflowMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More options", tint = Color.White)
+                        }
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false }
                         ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.size(16.dp)
+                            DropdownMenuItem(
+                                text = { Text("Forward") },
+                                onClick = { showOverflowMenu = false; onForward(image.messageId) }
                             )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = "Go to chat",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            DropdownMenuItem(
+                                text = { Text("Share") },
+                                onClick = { showOverflowMenu = false; shareImage(context, image.uri) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (image.isStarred) "Unstar" else "Star") },
+                                onClick = { showOverflowMenu = false; onToggleStarred(image.messageId) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("View details") },
+                                onClick = { showOverflowMenu = false; showDetailsFor = image }
                             )
                         }
                     }
                 }
             }
-            // Close button in the top-right corner as a fallback affordance.
-            IconButton(
-                onClick = onDismiss,
+
+            // Bottom: page counter + "Go to chat" (so closing the viewer doesn't strand
+            // you wherever you happened to be scrolled before opening it), then a row of
+            // quick-reaction emojis — the same ranked set and toggle as long-pressing a bubble.
+            Column(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Close",
-                    tint = Color.White
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (images.size > 1) {
+                        Text(
+                            text = "${pagerState.currentPage + 1} / ${images.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                    currentImage?.let { image ->
+                        Surface(
+                            onClick = { onJumpToMessage(image.messageId) },
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            tonalElevation = 3.dp,
+                            shadowElevation = 2.dp
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "Go to chat",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                    }
+                }
+                currentImage?.let { image ->
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = Color.Black.copy(alpha = 0.5f)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            quickReactionEmojis.forEach { emoji ->
+                                Text(
+                                    text = emoji,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .clickable { onToggleReaction(image.messageId, emoji) }
+                                        .padding(6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+
+    showDetailsFor?.let { image ->
+        ImageDetailsDialog(
+            image = image,
+            contactDisplayName = contactDisplayName,
+            onDismiss = { showDetailsFor = null }
+        )
+    }
+}
+
+/**
+ * "View details" dialog for the image viewer's overflow menu. Shows the message-level
+ * facts immediately (sender, timestamp, starred), then loads photo EXIF metadata
+ * (date taken, camera, dimensions, GPS, file size) asynchronously — reading EXIF/file
+ * size touches the content provider so it can't be free.
+ *
+ * EXIF availability varies a lot in practice: Postmark's own outgoing-image compression
+ * (`MmsManagerWrapper.compressImage`) decodes via `BitmapFactory`, which does not
+ * preserve EXIF, so **sent** images essentially never have metadata beyond what
+ * Postmark already knows. Received images keep whatever the sender's phone/carrier
+ * left intact, which is inconsistent (some carriers strip EXIF for size/privacy).
+ * The dialog shows only the fields it actually finds, with a clear message when none
+ * of them exist rather than a set of misleading blanks.
+ */
+@Composable
+private fun ImageDetailsDialog(
+    image: ThreadImageRef,
+    contactDisplayName: String,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var metadata by remember(image.uri) { mutableStateOf<ImageMetadata?>(null) }
+    var loadingMetadata by remember(image.uri) { mutableStateOf(true) }
+    LaunchedEffect(image.uri) {
+        metadata = readImageMetadata(context, image.uri)
+        loadingMetadata = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        title = { Text("Image details") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(if (image.isSent) "Sent by you" else "Received from $contactDisplayName")
+                Text(image.timestampLabel)
+                if (image.isStarred) Text("★ Starred")
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                if (loadingMetadata) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                } else {
+                    val md = metadata
+                    val hasAnyMetadata = md != null && (
+                        md.dateTaken != null || md.camera != null || md.dimensions != null ||
+                        md.fileSizeLabel != null || (md.latitude != null && md.longitude != null)
+                    )
+                    if (md != null && hasAnyMetadata) {
+                        md.dateTaken?.let { Text("Taken: $it") }
+                        md.camera?.let { Text("Camera: $it") }
+                        md.dimensions?.let { Text("Dimensions: $it") }
+                        md.fileSizeLabel?.let { Text("Size: $it") }
+                        if (md.latitude != null && md.longitude != null) {
+                            val lat = md.latitude
+                            val lon = md.longitude
+                            Text(
+                                text = "Location: %.4f, %.4f (tap to open in Maps)".format(lat, lon),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable {
+                                    val geoUri = Uri.parse("geo:$lat,$lon?q=$lat,$lon")
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, geoUri))
+                                }
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "No photo metadata found — either stripped by compression " +
+                                "(common for images you sent) or never present in the original file.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    )
+}
+
+/**
+ * Saves an image (content:// URI, any source app can read) into the device's public
+ * Pictures/Postmark gallery folder. Returns false (never throws) on any failure so the
+ * caller can show a plain "couldn't save" toast rather than crashing the viewer.
+ *
+ * API 29+: MediaStore insert with RELATIVE_PATH/IS_PENDING needs no permission for the
+ * app's own inserted content (scoped storage). API 26-28: MediaStore insert still needs
+ * the runtime WRITE_EXTERNAL_STORAGE permission — see the launcher wired up alongside the
+ * download button's caller for that path.
+ */
+private suspend fun downloadImageToGallery(context: android.content.Context, uri: String): Boolean =
+    withContext(Dispatchers.IO) {
+        try {
+            val resolver = context.contentResolver
+            val sourceUri = Uri.parse(uri)
+            val mimeType = resolver.getType(sourceUri) ?: "image/jpeg"
+            val extension = when {
+                mimeType.contains("png") -> "png"
+                mimeType.contains("gif") -> "gif"
+                mimeType.contains("webp") -> "webp"
+                else -> "jpg"
+            }
+            val displayName = "Postmark_${System.currentTimeMillis()}.$extension"
+            val values = android.content.ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+                put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Postmark")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+            val destUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return@withContext false
+            resolver.openOutputStream(destUri)?.use { out ->
+                resolver.openInputStream(sourceUri)?.use { it.copyTo(out) }
+                    ?: return@withContext false
+            } ?: return@withContext false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(destUri, values, null, null)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+/** Opens the system share sheet for one MMS image. content://mms/part/ URIs support
+ *  Intent.FLAG_GRANT_READ_URI_PERMISSION grants (same mechanism the platform's own
+ *  Messages app relies on to forward/share MMS attachments), so no FileProvider copy
+ *  is needed — the receiving app reads the same content URI directly. */
+private fun shareImage(context: android.content.Context, uri: String) {
+    val parsed = Uri.parse(uri)
+    val mimeType = context.contentResolver.getType(parsed) ?: "image/jpeg"
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = mimeType
+        putExtra(Intent.EXTRA_STREAM, parsed)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share image"))
+}
+
+/** EXIF/file facts for the "View details" dialog. Every field is independently
+ *  optional — see [readImageMetadata] for why availability varies so much. */
+private data class ImageMetadata(
+    val dateTaken: String? = null,
+    val camera: String? = null,
+    val dimensions: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val fileSizeLabel: String? = null
+)
+
+private val EXIF_DATETIME_FORMAT =
+    java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US)
+private val FRIENDLY_DATETIME_FORMAT =
+    java.text.SimpleDateFormat("MMMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
+
+/** Reads whatever EXIF metadata and file size are available for [uri]. Never throws —
+ *  a corrupt/absent EXIF block or an unreadable stream just leaves those fields null,
+ *  since "no metadata" is an expected, common outcome (see [ImageDetailsDialog]'s doc). */
+private suspend fun readImageMetadata(context: android.content.Context, uri: String): ImageMetadata =
+    withContext(Dispatchers.IO) {
+        val parsed = Uri.parse(uri)
+        var dateTaken: String? = null
+        var camera: String? = null
+        var dimensions: String? = null
+        var latitude: Double? = null
+        var longitude: Double? = null
+
+        try {
+            context.contentResolver.openInputStream(parsed)?.use { input ->
+                val exif = androidx.exifinterface.media.ExifInterface(input)
+                exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL)
+                    ?.let { raw ->
+                        dateTaken = try {
+                            EXIF_DATETIME_FORMAT.parse(raw)?.let { FRIENDLY_DATETIME_FORMAT.format(it) }
+                        } catch (_: Exception) { null }
+                    }
+                val make = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE)?.trim()
+                val model = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MODEL)?.trim()
+                camera = listOfNotNull(make, model).joinToString(" ").ifBlank { null }
+                val w = exif.getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_PIXEL_X_DIMENSION, 0)
+                val h = exif.getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_PIXEL_Y_DIMENSION, 0)
+                if (w > 0 && h > 0) dimensions = "$w × $h"
+                exif.latLong?.let { latLong ->
+                    latitude = latLong[0]
+                    longitude = latLong[1]
+                }
+            }
+        } catch (_: Exception) {
+            // No EXIF block, unsupported format, or unreadable stream — leave fields null.
+        }
+
+        // EXIF pixel dimensions aren't always present (common for received images whose
+        // EXIF was stripped by a carrier) — fall back to a bounds-only bitmap decode,
+        // which reads the image header without allocating the full bitmap.
+        if (dimensions == null) {
+            try {
+                context.contentResolver.openInputStream(parsed)?.use { input ->
+                    val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeStream(input, null, opts)
+                    if (opts.outWidth > 0 && opts.outHeight > 0) {
+                        dimensions = "${opts.outWidth} × ${opts.outHeight}"
+                    }
+                }
+            } catch (_: Exception) { /* leave dimensions null */ }
+        }
+
+        val fileSizeLabel = try {
+            context.contentResolver.openAssetFileDescriptor(parsed, "r")?.use { afd ->
+                formatFileSize(afd.length)
+            }
+        } catch (_: Exception) { null }
+
+        ImageMetadata(dateTaken, camera, dimensions, latitude, longitude, fileSizeLabel)
+    }
+
+private fun formatFileSize(bytes: Long): String? {
+    if (bytes <= 0) return null
+    val kb = bytes / 1024.0
+    if (kb < 1024) return "%.0f KB".format(kb)
+    return "%.1f MB".format(kb / 1024.0)
 }
 
 /** One page of [FullScreenImageViewer]: a Coil image with pinch-to-zoom and pan.
@@ -2663,10 +3101,19 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        // See the identical comment in FullScreenImageViewer — without this, this dialog's
+        // own Window never reports real navigationBars insets, so navigationBarsPadding()
+        // below would silently compute zero padding on tall/short-aspect videos where the
+        // control bar ends up flush with the bottom edge.
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black),
+                .background(Color.Black)
+                .navigationBarsPadding(),
             verticalArrangement = Arrangement.Center
         ) {
             // Video surface — native controls hidden; we supply our own bar below.

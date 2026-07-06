@@ -62,7 +62,10 @@ data class MessageEntity(
     val attachmentsJson: String? = null,
     // False for received messages that have not yet been viewed (drives unread badge).
     // Defaults to true so existing synced rows never appear as unread after an upgrade.
-    val isRead: Boolean = true
+    val isRead: Boolean = true,
+    // Postmark-only favorite flag — surfaces this message's images in the global
+    // Starred Images gallery. Never written back to the system SMS/MMS provider.
+    val isStarred: Boolean = false
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -81,7 +84,8 @@ fun MessageEntity.toDomain() = Message(
         attachmentUri?.let { listOf(MessageAttachment(it, mimeType ?: "application/octet-stream")) }
             ?: emptyList()
     },
-    isRead = isRead
+    isRead = isRead,
+    isStarred = isStarred
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -97,5 +101,6 @@ fun Message.toEntity() = MessageEntity(
     attachmentUri = attachmentUri,
     mimeType = mimeType,
     attachmentsJson = encodeAttachmentsJson(attachments),
-    isRead = isRead
+    isRead = isRead,
+    isStarred = isStarred
 )

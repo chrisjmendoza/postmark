@@ -121,6 +121,28 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       the conversation, so closing the viewer doesn't strand you wherever you were
       scrolled to before opening it. Reuses the same centered-scroll routine as
       search-jump (`scrollToMessageCentered()`, extracted so both share it).
+      **Google Messages-style action set (July 6 2026)** — header redesigned to
+      close/sender+friendly-timestamp/download/delete/⋮ overflow (Forward, Share,
+      Star, View details); adjacent images peek in from the pager's edges
+      (`contentPadding`/`pageSpacing` on `HorizontalPager`); a quick-reaction row at
+      the bottom reuses the same emoji set and toggle as long-pressing a bubble.
+      Download saves to `Pictures/Postmark` via `MediaStore` (runtime
+      `WRITE_EXTERNAL_STORAGE` request on API 26-28 only; none needed on 29+). Share
+      opens the system share sheet directly on the `content://mms/part/` URI — no
+      `FileProvider` copy needed, same permission-grant mechanism the platform's own
+      Messages app relies on. Delete is real (see "Real message delete" below, not a
+      Postmark-only hide). See "Forward message" and "Star an image" below for those
+      two.
+- [x] **Real message delete** (July 6 2026) — the action-bar Delete button and the
+      image viewer's trash icon previously did nothing (`onDelete` just dismissed the
+      popup — there was no `ContentResolver.delete()` anywhere in the codebase before
+      this). `ThreadViewModel.deleteMessage()` now removes both the Room row and, for
+      a real (non-optimistic) row, the underlying `content://sms` or `content://mms`
+      row — a genuine delete, not a Postmark-only hide, matching what Google Messages'
+      trash icon does. Requires being the default SMS app (shows the existing "set
+      default" dialog otherwise, same as sending). Both entry points confirm through
+      one shared "Delete message?" dialog before deleting — this is destructive and
+      irreversible, so it's never a single unconfirmed tap.
 - [x] **Tap video → player dialog** — `VideoPlayerDialog` composable with ExoPlayer
       (media3 1.5.1); auto-plays on open; `DisposableEffect` releases player on dismiss;
       tapping the video thumbnail in a bubble opens it.
@@ -376,10 +398,21 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       tap phone → dial dialog, tap address → Maps.
 - [ ] **Copy individual message** — already in action bar. Verify
       it copies plain text without timestamps.
-- [ ] **Forward message** — action bar Forward: opens share sheet
-      or internal compose with message body pre-filled.
+- [x] **Forward message** (July 6 2026) — full in-app forward, not just a share
+      sheet: new `ForwardPickerScreen`/`ForwardPickerViewModel` (`ui/forward/`) shows
+      recent conversations by default, live contact search once you type (same source
+      as `NewConversationViewModel`), and sends a fresh copy (body + attachments) to
+      whichever thread/contact is picked via `MmsManagerWrapper.sendMms()` /
+      `SmsManagerWrapper.sendTextMessage()`. Wired to both the action-bar Forward
+      button and the image viewer's overflow menu. **Known simplification:** the
+      forwarded copy's optimistic row has no PendingIntent (no fast delivery-status
+      callback) — it still sends and gets reconciled by the normal incremental sync,
+      just without the live-compose flow's immediate status update. Acceptable
+      trade-off for a secondary action; revisit if forwarded messages feel laggy on
+      delivery-status in practice.
 - [ ] **Message info** — wire up Info in action bar once delivery
-      timestamps are stored.
+      timestamps are stored. (The image viewer's "View details" is a separate,
+      already-shipped lightweight version — sender/timestamp/starred only, see below.)
 - [ ] **Selection mode — Copy format** — verify friendly plain text
       output matches the designed format:
         Conversation with [Name]
@@ -404,9 +437,24 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       Settings.
 
 ### Starred & pinned messages
-- [ ] **Star / pin a message** — long-press → "Pin" (Discord-style).
-      `isPinned` boolean on `MessageEntity`. Room migration required.
-      Wording TBD (pin / star / favorite — same underlying feature).
+- [x] **Star an image** (July 6 2026) — wording landed as "star," scoped to images
+      specifically rather than the originally-envisioned generic per-message "pin."
+      `isStarred` boolean on `MessageEntity` (schema v13→v14). Toggled from the
+      full-screen image viewer's overflow menu. A global cross-thread **Starred
+      images** gallery (`ui/starred/StarredImagesScreen.kt`, reachable from
+      Settings → General) lists every starred image, newest first; tapping one
+      navigates to its source thread and scrolls/highlights it (reuses the
+      search-jump `scrollToMessageId` mechanism rather than a third full-screen
+      viewer implementation). This satisfies the gallery half of the original ask;
+      the generic "pin any message (text or media), long-press → Pin, per-thread
+      panel" design below is still open as a distinct, broader feature — `isPinned`
+      would be a separate column from `isStarred`, not a rename of it, since they
+      cover different scopes (any message vs. images only) and different browsing
+      surfaces (per-thread panel vs. global gallery).
+- [ ] **Pin any message (text or media)** — long-press → "Pin" (Discord-style).
+      `isPinned` boolean on `MessageEntity`. Room migration required. Distinct from
+      the image-only `isStarred` above — covers text messages too, and the panel
+      below is per-thread, not a global gallery.
 - [ ] **Pinned messages panel** — accessible from thread toolbar icon
       or ⋮ menu. Scrollable list of pinned messages in this thread;
       tap jumps to that message in context.

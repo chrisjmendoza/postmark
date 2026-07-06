@@ -14,7 +14,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity],
  * [ThreadStatsEntity], [GlobalStatsEntity], [MessageFtsEntity].
  *
- * Current schema version: 13.
+ * Current schema version: 14.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -162,6 +162,16 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // JSON array of group MMS participant addresses (see MMS_AUDIT §2.3).
                 // Nullable, no default: existing rows and ordinary 1:1 threads keep NULL.
                 db.execSQL("ALTER TABLE threads ADD COLUMN participantsJson TEXT")
+            }
+        }
+
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Postmark-only favorite flag, surfaced in the global Starred Images
+                // gallery. Defaults 0 (false) so all existing rows start unstarred.
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN isStarred INTEGER NOT NULL DEFAULT 0"
+                )
             }
         }
 

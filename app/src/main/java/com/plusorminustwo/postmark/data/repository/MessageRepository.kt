@@ -143,4 +143,17 @@ class MessageRepository @Inject constructor(
      *  Used by ContactDetailScreen to populate the shared-media grid. */
     fun observeMediaMessages(threadId: Long): Flow<List<Message>> =
         messageDao.observeMediaMessages(threadId).map { list -> list.map { it.toDomain() } }
+
+    suspend fun updateStarred(messageId: Long, isStarred: Boolean) =
+        messageDao.updateStarred(messageId, isStarred)
+
+    /** Live list of starred messages that carry at least one image attachment, newest
+     *  first — backs the global Starred Images gallery. Filters to images specifically
+     *  (not video/audio) since that's what the gallery displays; a starred message with
+     *  e.g. only a video attachment simply doesn't appear here. */
+    fun observeStarredImages(): Flow<List<Message>> =
+        messageDao.observeStarredMedia().map { list ->
+            list.map { it.toDomain() }
+                .filter { msg -> msg.attachments.any { it.mimeType.startsWith("image/", ignoreCase = true) } }
+        }
 }

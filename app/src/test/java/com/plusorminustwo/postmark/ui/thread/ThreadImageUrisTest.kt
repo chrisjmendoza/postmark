@@ -15,9 +15,15 @@ import java.util.Date
  */
 class ThreadImageUrisTest {
 
-    private fun msg(id: Long, ts: Long, attachments: List<MessageAttachment> = emptyList()) = Message(
-        id = id, threadId = 1L, address = "+1", body = "", timestamp = ts, isSent = false,
-        type = 1, isMms = attachments.isNotEmpty(), attachments = attachments
+    private fun msg(
+        id: Long,
+        ts: Long,
+        attachments: List<MessageAttachment> = emptyList(),
+        isSent: Boolean = false,
+        isStarred: Boolean = false
+    ) = Message(
+        id = id, threadId = 1L, address = "+1", body = "", timestamp = ts, isSent = isSent,
+        type = 1, isMms = attachments.isNotEmpty(), attachments = attachments, isStarred = isStarred
     )
 
     private fun image(uri: String) = MessageAttachment(uri, "image/jpeg")
@@ -91,18 +97,36 @@ class ThreadImageUrisTest {
         assertEquals(listOf(10L, 20L), result.map { it.messageId })
     }
 
-    @Test fun `date label matches the same formatter used for date headers`() {
+    @Test fun `timestamp label matches the shared friendly-timestamp formatter`() {
         val ts = 1_700_000_000_000L
         val messages = listOf(msg(1, ts, listOf(image("content://mms/part/1"))))
-        val expectedLabel = DAY_FORMATTER.format(Date(ts))
-        assertEquals(expectedLabel, buildThreadImages(messages).single().dateLabel)
+        val expectedLabel = FRIENDLY_TIMESTAMP_FORMATTER.format(Date(ts))
+        assertEquals(expectedLabel, buildThreadImages(messages).single().timestampLabel)
     }
 
-    @Test fun `multiple images in the same message share that message's date label`() {
+    @Test fun `multiple images in the same message share that message's timestamp label`() {
         val ts = 1_700_000_000_000L
         val messages = listOf(msg(1, ts, listOf(image("content://mms/part/1"), image("content://mms/part/2"))))
         val result = buildThreadImages(messages)
         assertEquals(2, result.size)
-        assertEquals(result[0].dateLabel, result[1].dateLabel)
+        assertEquals(result[0].timestampLabel, result[1].timestampLabel)
+    }
+
+    @Test fun `isSent is carried from the owning message`() {
+        val messages = listOf(
+            msg(1, 0, listOf(image("content://mms/part/1")), isSent = true),
+            msg(2, 1000, listOf(image("content://mms/part/2")), isSent = false)
+        )
+        val result = buildThreadImages(messages)
+        assertEquals(listOf(true, false), result.map { it.isSent })
+    }
+
+    @Test fun `isStarred is carried from the owning message`() {
+        val messages = listOf(
+            msg(1, 0, listOf(image("content://mms/part/1")), isStarred = true),
+            msg(2, 1000, listOf(image("content://mms/part/2")), isStarred = false)
+        )
+        val result = buildThreadImages(messages)
+        assertEquals(listOf(true, false), result.map { it.isStarred })
     }
 }

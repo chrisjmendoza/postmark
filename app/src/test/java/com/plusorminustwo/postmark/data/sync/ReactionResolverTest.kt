@@ -243,6 +243,8 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun markAllRead(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
+    override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 /** ReactionDao backed by an in-memory list with real insert / count / delete semantics. */

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Star
 import com.plusorminustwo.postmark.BuildConfig
 import androidx.compose.material3.*
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -53,6 +54,7 @@ import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 fun SettingsScreen(
     onBackupSettingsClick: () -> Unit,
     onDevOptionsClick: () -> Unit,
+    onStarredImagesClick: () -> Unit = {},
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -133,6 +135,14 @@ fun SettingsScreen(
                 title = "Backup",
                 subtitle = "Schedule automatic backups",
                 onClick = onBackupSettingsClick
+            )
+            HorizontalDivider()
+
+            SettingsRow(
+                icon = { Icon(Icons.Default.Star, null) },
+                title = "Starred images",
+                subtitle = "View all starred photos",
+                onClick = onStarredImagesClick
             )
             HorizontalDivider()
 

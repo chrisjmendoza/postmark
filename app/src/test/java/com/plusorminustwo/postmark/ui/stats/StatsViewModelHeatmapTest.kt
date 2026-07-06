@@ -288,6 +288,8 @@ private class FakeMessageDao : MessageDao {
     override suspend fun markAllRead(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
+    override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 private class FakeThreadDao : ThreadDao {

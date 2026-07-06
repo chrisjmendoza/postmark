@@ -137,14 +137,24 @@ fun buildRenderState(messages: List<Message>): ThreadRenderState {
 
 /**
  * One image attachment across the whole thread, carrying enough context for the
- * full-screen viewer's date pill and "go to chat" jump action.
+ * full-screen viewer's header, "go to chat" jump action, and star/reaction state.
  *
- * @param dateLabel Same format as a date-header label (e.g. "July 6, 2026") — computed
- *                  with the identical [DAY_FORMATTER] used by [groupByDay], so it always
- *                  matches what [ThreadRenderState.messageIdToDate] would say for [messageId].
+ * @param timestampLabel "Sun 5:07 PM" — computed with the same [FRIENDLY_TIMESTAMP_FORMATTER]
+ *                        used elsewhere, so it's consistent with the rest of the app.
+ * @param isSent          True when this device sent the image — drives the "You" vs. contact
+ *                         name label in the viewer header.
+ * @param isStarred        Mirrors [Message.isStarred] at the moment [buildThreadImages] ran;
+ *                          stays live because it's rebuilt whenever the underlying message list
+ *                          changes (same combine block as [ThreadUiState.renderState]).
  */
 @Immutable
-data class ThreadImageRef(val messageId: Long, val uri: String, val dateLabel: String)
+data class ThreadImageRef(
+    val messageId: Long,
+    val uri: String,
+    val timestampLabel: String,
+    val isSent: Boolean,
+    val isStarred: Boolean
+)
 
 /**
  * Pure function: flattens every image attachment across the whole thread into a single
@@ -163,7 +173,9 @@ fun buildThreadImages(messages: List<Message>): List<ThreadImageRef> =
                 ThreadImageRef(
                     messageId = msg.id,
                     uri = att.uri,
-                    dateLabel = DAY_FORMATTER.format(java.util.Date(msg.timestamp))
+                    timestampLabel = FRIENDLY_TIMESTAMP_FORMATTER.format(java.util.Date(msg.timestamp)),
+                    isSent = msg.isSent,
+                    isStarred = msg.isStarred
                 )
             }
     }
