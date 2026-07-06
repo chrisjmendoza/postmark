@@ -9,15 +9,13 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkManager
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
+import com.plusorminustwo.postmark.data.sync.ReactionResolver
 import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
 import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
-import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
-import com.plusorminustwo.postmark.domain.model.previewText
-import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +40,7 @@ class DevOptionsViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val statsUpdater: StatsUpdater,
-    private val reactionParser: ReactionFallbackParser,
+    private val reactionResolver: ReactionResolver,
     private val syncLogger: SyncLogger,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -249,16 +247,15 @@ class DevOptionsViewModel @Inject constructor(
     }
 
     // ── Reprocess reactions (DEBUG) ────────────────────────────────────────────
-    /* Scans every stored message, converts any reaction fallback to a Reaction
-     * entity (deduped), and deletes the original so it no longer shows as a bubble. */
 
     /**
-     * Scans every stored message across all threads, converts reaction fallback
-     * messages to proper [Reaction] entities (deduped), and deletes the original
-     * fallback message so it no longer appears as a chat bubble.
+     * Manual repair tool: re-runs [ReactionResolver.resolveAll] over the full message
+     * set, converting reaction fallback messages to proper Reaction entities (deduped)
+     * and deleting the resolved fallback bubbles.
      *
-     * Processes one thread at a time to cap peak RAM usage (avoids an OOM that
-     * would occur from loading all ~160 K messages at once).
+     * The first-launch import already runs the same resolver after both the SMS and
+     * MMS syncs complete; this remains useful for edge cases such as originals that
+     * were outside the 100-message search window at import time.
      */
     fun reprocessReactions() {
         viewModelScope.launch {
@@ -270,79 +267,18 @@ class DevOptionsViewModel @Inject constructor(
                  * yield() between threads lets other coroutines (UI updates, etc.) run
                  * and prevents ANR-style lock-up on large message databases. */
                 withContext(Dispatchers.IO) {
-                    val allThreadIds = messageRepository.getAllThreadIds()
-                    val total = allThreadIds.size
-                    syncLogger.log("ReprocessReactions", "$total threads to scan")
-                    var inserted = 0
-                    var removed  = 0
-
-                    allThreadIds.forEachIndexed { index, threadId ->
-                        // Update the progress label on each thread so the UI stays responsive.
-                        _reprocessProgress.value = "Thread ${index + 1} / $total"
-
-                        val msgs = messageRepository.getByThread(threadId)
-
-                        // Pre-partition: reaction fallbacks must never be candidates for matching.
-                        val reactionMsgs = msgs.filter { reactionParser.isReactionFallback(it.body) }
-                        val normalMsgs   = msgs.filter { !reactionParser.isReactionFallback(it.body) }
-
-                        if (reactionMsgs.isNotEmpty()) {
-                            syncLogger.log("ReprocessReactions",
-                                "thread=$threadId: ${msgs.size} msgs, ${reactionMsgs.size} reaction fallbacks")
+                    val result = reactionResolver.resolveAll(
+                        log = { syncLogger.log("ReprocessReactions", it) },
+                        onThread = { index, total ->
+                            // Update the progress label on each thread so the UI stays responsive.
+                            _reprocessProgress.value = "Thread ${index + 1} / $total"
+                            yield()
                         }
-
-                        val toDelete = mutableListOf<Long>()
-                        reactionMsgs.forEach { msg ->
-                            val parsed = reactionParser.parse(msg.body) ?: return@forEach
-                            val senderAddress = if (msg.isSent) SELF_ADDRESS else msg.address
-                            val reaction = reactionParser.processIncomingMessage(msg, normalMsgs, senderAddress)
-
-                            if (reaction != null) {
-                                if (parsed.isRemoval) {
-                                    // Remove the reaction entity and delete the fallback bubble.
-                                    messageRepository.deleteReaction(reaction.messageId, reaction.senderAddress, reaction.emoji)
-                                    toDelete += msg.id
-                                    removed++
-                                    syncLogger.log("ReprocessReactions",
-                                        "removal: id=${msg.id} emoji=${parsed.emoji} deleted")
-                                } else if (!messageRepository.reactionExists(
-                                        reaction.messageId, reaction.senderAddress, reaction.emoji)) {
-                                    messageRepository.insertReaction(reaction)
-                                    inserted++
-                                    toDelete += msg.id
-                                    removed++
-                                    syncLogger.log("ReprocessReactions",
-                                        "matched: id=${msg.id} emoji=${parsed.emoji} → targetId=${reaction.messageId}")
-                                } else {
-                                    syncLogger.log("ReprocessReactions",
-                                        "duplicate: id=${msg.id} emoji=${parsed.emoji} already exists")
-                                }
-                            } else {
-                                // Original not found within 100-message window — leave as visible bubble.
-                                syncLogger.log("ReprocessReactions",
-                                    "no-match: id=${msg.id} emoji=${parsed.emoji} quote='${parsed.quotedText.take(40)}'")
-                            }
-                        }
-
-                        // Delete and fix thread preview per-thread rather than in one final pass —
-                        // this flushes incrementally and keeps peak RAM low.
-                        if (toDelete.isNotEmpty()) {
-                            toDelete.forEach { messageRepository.deleteById(it) }
-                            val latest = messageRepository.getLatestForThread(threadId)
-                            if (latest != null) {
-                                threadRepository.updateLastMessageAt(threadId, latest.timestamp)
-                                threadRepository.updateLastMessagePreview(threadId, latest.previewText)
-                            }
-                        }
-
-                        // Yield after each thread so other coroutines (especially UI) get CPU time.
-                        yield()
-                    }
-
+                    )
                     statsUpdater.recomputeAll()
                     syncLogger.log("ReprocessReactions",
-                        "done: inserted=$inserted removed=$removed")
-                    _feedback.value = "Reactions reprocessed: $inserted inserted, $removed fallbacks removed"
+                        "done: inserted=${result.inserted} removed=${result.removed}")
+                    _feedback.value = "Reactions reprocessed: ${result.inserted} inserted, ${result.removed} fallbacks removed"
                 }
             } catch (e: Exception) {
                 syncLogger.logError("ReprocessReactions", "CRASH during reprocessReactions", e)

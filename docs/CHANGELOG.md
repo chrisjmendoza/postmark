@@ -6,6 +6,64 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### Reactions not auto-resolved after first-launch import — resolution ran before MMS existed (July 5 2026)
+
+User-visible symptom: after a first install (or Wipe DB + re-import), emoji reactions
+show up as literal text bubbles (`👍 to "…"` / `Liked "…"`) instead of reaction pills,
+until the user manually runs Dev Options → Reprocess Reactions. Two gaps in
+`SmsHistoryImportWorker`, both timing/coverage — the parser and UI were fine
+(`observeByThread()` live-joins reactions, so pills appear the instant a Reaction row
+exists):
+
+1. **Ordering**: `doWork()` ran `syncAllSms()` → `syncAllMms()`, but the reaction
+   resolution pass lived *inside* `syncAllSms()`. Its candidate pool
+   (`messageRepository.getByThread()`) therefore contained zero MMS rows, so any
+   fallback quoting an MMS-originated message (e.g. reacting to a photo) could never
+   match and was left permanently as a visible bubble.
+2. **Coverage**: `syncAllMms()` never invoked the reaction parser at all — a fallback
+   that itself arrived as MMS was batch-inserted as a literal message and never
+   revisited, because incremental sync's `maxKnownId`/`maxRawId` watermarks had
+   already moved past it.
+
+Manual Reprocess Reactions "fixed" it purely by timing: it runs the same per-thread
+loop after both imports have settled, so the pool is complete.
+
+Fix: extracted that loop into `ReactionResolver` (`data/sync`, `@Singleton`, same DI
+shape as `StatsUpdater`) — the single source of truth for full-history resolution.
+`doWork()` now calls `resolveAll()` exactly once, after BOTH `syncAllSms()` and
+`syncAllMms()` have persisted; the premature block inside `syncAllSms()` is deleted
+(along with its inline `statsUpdater.recomputeAll()`, which also moved after the
+resolution pass — one recompute over complete data instead of one over SMS-only data).
+`DevOptionsViewModel.reprocessReactions()` now delegates to the same resolver (kept as
+a manual repair tool for edge cases like originals outside the parser's 100-message
+search window at import time), passing its progress label + `yield()` via the
+`onThread` callback and its `syncLogger` lines via the `log` callback. One deliberate
+semantic unification: the worker's old block deleted a *removal* fallback even when
+the original was never found; the resolver keeps the DevOptions behavior (unresolved
+fallbacks of either kind stay visible). `SmsSyncHandler`'s incremental paths were
+already correct and are untouched.
+
+Testability seam: `AppleReactionParser` needed a `Context` only to lazily load
+`assets/apple_reaction_patterns.json`; it now has an internal primary constructor
+taking a patterns provider, with the Hilt `@Inject` constructor delegating to it —
+so `ReactionResolver` is unit-tested on the JVM with the *real* parser chain and
+hand-written in-memory fake DAOs (no mocking libraries, per project convention).
+
+`ReactionResolverTest` (7 tests, all passing via `./gradlew test`): SMS fallback
+targeting an MMS original resolves; MMS-delivered fallback resolves instead of
+remaining a bubble; Apple-format fallback matches an MMS original; unresolved
+fallback stays visible; removal deletes the existing reaction; duplicate not
+inserted twice; thread preview repaired after fallback deletion.
+
+**Files changed**:
+- `data/sync/ReactionResolver.kt` (new) — shared `resolveAll()`/`resolveThread()` pass
+- `data/sync/SmsHistoryImportWorker.kt:126-136` — resolver + stats recompute run in `doWork()` after both imports; premature block removed from `syncAllSms()` (~45 lines deleted)
+- `ui/settings/DevOptionsViewModel.kt:263-295` — `reprocessReactions()` delegates to the resolver
+- `search/parser/AppleReactionParser.kt:32-40` — internal patterns-provider constructor; asset loading moved to companion `loadPatterns(context)`
+- `test …/data/sync/ReactionResolverTest.kt` (new) — 7 JVM tests with in-memory fake DAOs
+
+---
+
 ### Sent image vanishes when an SMS follows an MMS — optimistic-row cleanup not type-scoped (July 5 2026)
 
 Repro: send an MMS (image), then an SMS in the same thread seconds later — the image

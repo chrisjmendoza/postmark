@@ -26,13 +26,18 @@ data class ParsedReaction(
  * `Removed a heart from "Hello!"`.
  *
  * Verb-to-emoji mappings are loaded from `assets/apple_reaction_patterns.json`
- * at first use so new verbs can be added without code changes.
+ * at first use so new verbs can be added without code changes. The internal
+ * primary constructor accepts an arbitrary pattern provider so JVM unit tests
+ * can construct the parser without an Android [Context].
  */
 @Singleton
-class AppleReactionParser @Inject constructor(
-    @ApplicationContext private val context: Context
+class AppleReactionParser internal constructor(
+    patternsProvider: () -> List<ReactionPattern>
 ) {
-    private val patterns: List<ReactionPattern> by lazy { loadPatterns() }
+    /** Production constructor — loads patterns lazily from the app's assets. */
+    @Inject constructor(@ApplicationContext context: Context) : this({ loadPatterns(context) })
+
+    private val patterns: List<ReactionPattern> by lazy(patternsProvider)
 
     // Matches: Loved 'some text' or Loved "some text"
     // Quote class covers: " " ' ' „ " « » (all common keyboard/locale variants)
@@ -63,29 +68,31 @@ class AppleReactionParser @Inject constructor(
         return null
     }
 
-    private fun loadPatterns(): List<ReactionPattern> {
-        val json = context.assets.open("apple_reaction_patterns.json")
-            .bufferedReader()
-            .readText()
-        val root = JSONObject(json)
-        val array: JSONArray = root.getJSONArray("patterns")
-        return (0 until array.length()).map { i ->
-            val obj = array.getJSONObject(i)
-            ReactionPattern(
-                emoji = obj.getString("emoji"),
-                verbs = obj.getJSONArray("verbs").let { a ->
-                    (0 until a.length()).map { a.getString(it) }
-                },
-                removeVerbs = obj.getJSONArray("removeVerbs").let { a ->
-                    (0 until a.length()).map { a.getString(it) }
-                }
-            )
-        }
-    }
-
-    private data class ReactionPattern(
+    internal data class ReactionPattern(
         val emoji: String,
         val verbs: List<String>,
         val removeVerbs: List<String>
     )
+
+    private companion object {
+        fun loadPatterns(context: Context): List<ReactionPattern> {
+            val json = context.assets.open("apple_reaction_patterns.json")
+                .bufferedReader()
+                .readText()
+            val root = JSONObject(json)
+            val array: JSONArray = root.getJSONArray("patterns")
+            return (0 until array.length()).map { i ->
+                val obj = array.getJSONObject(i)
+                ReactionPattern(
+                    emoji = obj.getString("emoji"),
+                    verbs = obj.getJSONArray("verbs").let { a ->
+                        (0 until a.length()).map { a.getString(it) }
+                    },
+                    removeVerbs = obj.getJSONArray("removeVerbs").let { a ->
+                        (0 until a.length()).map { a.getString(it) }
+                    }
+                )
+            }
+        }
+    }
 }

@@ -419,6 +419,32 @@ WHAT IS WORKING (tested on device)
    (targeted the removed pre-recomputeAll() StatsUpdater API, dead in androidTest
    since that refactor since ./gradlew test never runs it; superseded by
    StatsAlgorithmsTest.kt).
+✅ Reactions auto-resolve after first-launch import — no manual Reprocess needed (July 5, 2026):
+   Symptom: after first install / Wipe DB + re-import, reactions stayed as literal
+   text bubbles (👍 to "…" / Liked "…") until Dev Options → Reprocess Reactions was
+   run by hand. Two gaps in SmsHistoryImportWorker (incremental sync in
+   SmsSyncHandler was already correct and untouched):
+   1. Ordering: doWork() ran syncAllSms() → syncAllMms(), but reaction resolution
+      lived inside syncAllSms() — its getByThread() candidate pool contained zero
+      MMS rows, so a fallback quoting an MMS-originated message (reacting to a
+      photo) could never match.
+   2. Coverage: syncAllMms() never called the reaction parser — a fallback that
+      itself arrived as MMS was batch-inserted as a literal bubble and never
+      revisited (incremental watermarks had already advanced past it).
+   Fix: per-thread resolution loop extracted from DevOptionsViewModel.reprocessReactions()
+   (which was correct purely because of WHEN it runs) into data/sync/ReactionResolver
+   (@Singleton, StatsUpdater DI shape) — single source of truth. doWork() calls
+   resolveAll() once after BOTH imports persist, then statsUpdater.recomputeAll()
+   (previously inside syncAllSms(), i.e. also premature). reprocessReactions() now
+   delegates to the resolver (kept as repair tool for >100-message-window edge cases);
+   progress label + yield() via onThread callback, syncLogger lines via log callback.
+   Semantic unification: unresolved removal fallbacks now stay visible (DevOptions
+   behavior) instead of being deleted (old worker behavior).
+   Testability: AppleReactionParser gained an internal patterns-provider constructor
+   (Hilt @Inject constructor delegates to it) so the real parser chain runs on the
+   JVM without Context/assets. ReactionResolverTest: 7 tests over in-memory fake
+   DAOs — cross-transport SMS→MMS and MMS-delivered fallback resolution, Apple
+   format, unresolved-stays-visible, removal, dedup, preview repair. All passing.
 ✅ Notifications show contact display name (not raw phone number):
    - SmsReceiver queries threadRepository.getDisplayNameByAddress(rawSender)
      before posting notification; falls back to raw number if thread not in Room

@@ -23,9 +23,6 @@ import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.Thread
-import com.plusorminustwo.postmark.domain.model.previewText
-import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
-import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
@@ -34,7 +31,8 @@ import dagger.assisted.AssistedInject
  * first launch (or after a sync-recovery reset).
  *
  * Reads every thread and message from the system content providers, writes them to
- * Room, re-parses reaction fallback messages, and triggers a stats recompute.
+ * Room, then — only after BOTH the SMS and MMS imports have persisted — resolves
+ * reaction fallback messages via [ReactionResolver] and triggers a stats recompute.
  * After the bulk import completes it calls [SmsSyncHandler.triggerCatchUp] to pick
  * up any messages that arrived during the import window.
  *
@@ -46,7 +44,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val reactionParser: ReactionFallbackParser,
+    private val reactionResolver: ReactionResolver,
     private val statsUpdater: StatsUpdater,
     private val smsSyncHandler: SmsSyncHandler,  // for post-sync catch-up of race-window messages
     private val syncLogger: SyncLogger
@@ -127,7 +125,15 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             syncLogger.log("Sync", "SMS done: ${smsResult.threadCount} threads, ${smsResult.messageCount} messages")
             postProgress("Syncing MMS\u2026", 0, 0)
             val mmsCount = syncAllMms { done, total, eta -> postProgress("Syncing MMS", done, total, eta) }
+            // Resolve reaction fallbacks only now that BOTH transports are fully persisted.
+            // An SMS reaction quoting an MMS-originated message (or a fallback that itself
+            // arrived as MMS) can only match once the candidate pool spans SMS and MMS;
+            // running this inside syncAllSms() (as before) permanently missed those.
+            postProgress("Resolving reactions\u2026", 0, 0)
+            val reactions = reactionResolver.resolveAll()
+            syncLogger.log("Sync", "Reactions: ${reactions.inserted} resolved, ${reactions.removed} fallbacks removed")
             postProgress("Wrapping up\u2026", 0, 0)
+            statsUpdater.recomputeAll()
             val status = "OK: ${smsResult.threadCount} threads, ${smsResult.messageCount} SMS + $mmsCount MMS"
             Log.i(TAG, "Sync complete — $status")
             syncLogger.log("Sync", "Complete: $status")
@@ -235,52 +241,8 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             onProgress(minOf((idx + 1) * 500, smsTotal), smsTotal)
         }
         Log.i(TAG, "Persist complete")
-
-        debugLog("Running reaction parser …")
-        val reactionMsgIds = mutableListOf<Long>()
-        threads.keys.forEach { threadId ->
-            val threadMsgs = messageRepository.getByThread(threadId)
-            // Pre-partition so reaction fallbacks are never candidates for matching.
-            val reactionMsgsInThread = threadMsgs.filter { reactionParser.isReactionFallback(it.body) }
-            val normalMsgs = threadMsgs.filter { !reactionParser.isReactionFallback(it.body) }
-            reactionMsgsInThread.forEach { msg ->
-                val parsed = reactionParser.parse(msg.body) ?: return@forEach
-                val senderAddress = if (msg.isSent) SELF_ADDRESS else msg.address
-                val reaction = reactionParser.processIncomingMessage(msg, normalMsgs, senderAddress)
-
-                if (reaction != null) {
-                    if (parsed.isRemoval) {
-                        messageRepository.deleteReaction(reaction.messageId, reaction.senderAddress, reaction.emoji)
-                        reactionMsgIds += msg.id
-                    } else if (!messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
-                        messageRepository.insertReaction(reaction)
-                        // Only delete the fallback when the reaction was successfully resolved.
-                        reactionMsgIds += msg.id
-                    }
-                }
-                // If reaction is null (original not found or > 100 messages away),
-                // leave the message in Room as a normal visible bubble (only for additions).
-                else if (parsed.isRemoval) {
-                    // Removal without original found: still delete the fallback message.
-                    reactionMsgIds += msg.id
-                }
-            }
-        }
-        if (reactionMsgIds.isNotEmpty()) {
-            reactionMsgIds.forEach { messageRepository.deleteById(it) }
-            debugLog("Removed ${reactionMsgIds.size} reaction fallback messages")
-            // Fix any thread whose last-message preview was a reaction fallback text.
-            threads.keys.forEach { threadId ->
-                val latest = messageRepository.getLatestForThread(threadId)
-                if (latest != null) {
-                    threadRepository.updateLastMessageAt(threadId, latest.timestamp)
-                    threadRepository.updateLastMessagePreview(threadId, latest.previewText)
-                }
-            }
-        }
-
-        debugLog("Computing thread stats …")
-        statsUpdater.recomputeAll()
+        // Reaction fallbacks are NOT resolved here — doWork() runs ReactionResolver once
+        // after syncAllMms() so the candidate pool spans both transports.
 
         return SyncResult(threads.size, messages.size)
     }
