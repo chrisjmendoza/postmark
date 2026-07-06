@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: July 5, 2026
+Last updated: July 6, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -428,6 +428,61 @@ WHAT IS WORKING (tested on device)
    byte-scans), AttachmentBudgetTest (9), MessageAttachmentCodecTest (8),
    MmsPartParsingTest rewritten for lists (15), DatabaseMigrationTest 11→12 (2).
    ./gradlew test: 409 passing; compileDebugAndroidTestSources clean.
+✅ Video attachments now compressed to fit the carrier MMS cap (July 6, 2026):
+   Real-device follow-up to the multi-attachment work above: a S24 Ultra/AT&T test send
+   of a ~17.5 MB video failed immediately because MmsManagerWrapper treated video as
+   non-compressible — allocateAttachmentBudgets() failed the whole send outright whenever
+   video alone exceeded the ~1 MB AT&T budget. Since virtually any real phone-shot video
+   is tens of MB, video was effectively unusable on every US carrier; there was zero
+   video compression anywhere in the app.
+   Fix: video/* is now compressible like image/*. Over-budget video runs through a new
+   compressVideo() using androidx.media3:media3-transformer (same 1.5.1 version as the
+   existing media3-exoplayer/media3-ui). Transcoding is expensive (real seconds-to-minutes
+   per pass) so it can't use compressImage's blind iterate-many-steps approach: the pure,
+   unit-tested planVideoTranscode() computes a target bitrate analytically from
+   (budgetBytes * 8 * 0.96) / durationSeconds — minus a 64 kbps reservation for the audio
+   track when present — and picks a resolution tier (1080p/720p/480p/360p) sized to that
+   bitrate, with at most one bounded retry (tighter budget, one tier down) if the first
+   pass overshoots. Transformer requires a thread with a Looper; a dedicated HandlerThread
+   is spun up per transcode and torn down after, so sendMms() stays on Dispatchers.IO
+   rather than blocking Dispatchers.Main for a multi-minute encode. A 120s timeout
+   (withTimeoutOrNull + Transformer.cancel() on cancellation) guarantees a corrupt/huge
+   file can't hang the coroutine. Any failure (undecodable source, no viable bitrate for
+   the duration+budget, encoder error, timeout) fails cleanly — compressVideo returns
+   null exactly like compressImage does. Audio is unchanged/out of scope (smaller, not
+   the reported failure) — it still fails cleanly if it alone exceeds the budget.
+   Tests: VideoTranscodePlanTest (+8) covers the pure planning function only — the actual
+   Transformer call has no unit test, same reasoning as compressImage's BitmapFactory
+   calls (neither runs outside a device). ./gradlew test: 417 passing;
+   compileDebugAndroidTestSources and assembleDebug both clean.
+   NOT YET VERIFIED: real on-device sending of a large video through this path (the
+   original S24 Ultra AT&T repro) — the Transformer API was confirmed against current
+   Media3 1.5.1 source/docs, not exercised on hardware.
+✅ 10-second video duration cap, enforced at picker-selection time (July 6, 2026):
+   Discussion-driven, not a bug fix: the carrier byte budget is an unreliable proxy for
+   "will this send" — getCarrierConfigValues() only reports the sender's own carrier's
+   outbound limit, never the recipient's carrier's inbound limit (no API exposes that),
+   and MMS carrier-to-carrier interconnect has a long history of being flakier than either
+   side's stated cap. A flat duration rule is a more honest contract than a byte cap that
+   silently varies by carrier and by how many other attachments share the message. 10s is
+   generous by historical MMS norms (the old 300KB/600KB 3GPP conformance profiles allowed
+   only a few seconds of watchable video) while still fitting T-Mobile/Verizon's ~3-3.5MB
+   caps at decent quality.
+   Enforced in ThreadViewModel.onAttachmentsSelected(), not at send time — rejecting an
+   over-length clip before the user composes a message around it beats discovering it only
+   after an actual compressVideo() transcode attempt. New MmsManagerWrapper.
+   videoDurationMs() reads duration via MediaMetadataRetriever; a video whose duration
+   can't be determined is let through rather than blocked (the send-time path still fails
+   cleanly on a genuinely bad file). Decision logic extracted to pure
+   ThreadViewModel.partitionAttachmentsByDuration() (companion, tested without
+   constructing the ViewModel); a new attachmentRejectedEvent SharedFlow (mirroring the
+   existing scrollToBottomEvent) tells ThreadScreen to show a Snackbar when videos are
+   dropped.
+   Tests: AttachmentDurationFilterTest (+9). ./gradlew test: 426 passing;
+   compileDebugAndroidTestSources and assembleDebug both clean; installed and launched
+   clean on device.
+   NOT YET VERIFIED: picking an actual >10s video through the real photo picker and
+   confirming the Snackbar fires — logic is unit-tested, not exercised through the picker.
 ✅ Sent image vanishes when an SMS follows an MMS — optimistic cleanup not type-scoped (July 5, 2026):
    Repro: send an MMS (image), then an SMS in the same thread seconds later — the
    image bubble disappears even though the recipient received it. Root cause: an

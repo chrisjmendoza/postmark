@@ -129,6 +129,10 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
 
+    // Media3 Transformer — video transcoding to fit MMS carrier size limits
+    implementation(libs.media3.transformer)
+    implementation(libs.media3.effect)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)

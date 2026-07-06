@@ -129,6 +129,11 @@ class ThreadViewModel @Inject constructor(
     private val _scrollToBottomEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val scrollToBottomEvent: SharedFlow<Unit> = _scrollToBottomEvent.asSharedFlow()
 
+    /** Fires when [onAttachmentsSelected] drops a video for exceeding
+     *  [MmsManagerWrapper.MAX_VIDEO_DURATION_MS] — the UI shows this as a Snackbar. */
+    private val _attachmentRejectedEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val attachmentRejectedEvent: SharedFlow<String> = _attachmentRejectedEvent.asSharedFlow()
+
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
     val activeDates: StateFlow<Set<LocalDate>> = messageRepository
@@ -386,10 +391,37 @@ class ThreadViewModel @Inject constructor(
      *
      * Triggers: user taps the attach button and picks photos/videos (multi-select
      * photo picker) or an audio file.
+     *
+     * Videos longer than [MmsManagerWrapper.MAX_VIDEO_DURATION_MS] are dropped here,
+     * before the user ever composes a message around them — failing at send time would
+     * mean waiting through an actual transcode attempt first. This is a UX-level cap
+     * independent of the byte-budget math in [MmsManagerWrapper]; retrying a previously
+     * accepted attachment never re-checks it, since it already passed this gate once.
      */
     fun onAttachmentsSelected(attachments: List<MessageAttachment>) {
-        _pendingAttachments.value = attachments
-        savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(attachments)
+        if (attachments.none { it.mimeType.startsWith("video/", ignoreCase = true) }) {
+            _pendingAttachments.value = attachments
+            savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(attachments)
+            return
+        }
+        viewModelScope.launch {
+            val videoDurationsMs = attachments
+                .filter { it.mimeType.startsWith("video/", ignoreCase = true) }
+                .associate { it.uri to mmsManagerWrapper.videoDurationMs(android.net.Uri.parse(it.uri)) }
+
+            val (accepted, rejectedCount) = partitionAttachmentsByDuration(
+                attachments, videoDurationsMs, MmsManagerWrapper.MAX_VIDEO_DURATION_MS
+            )
+            _pendingAttachments.value = accepted
+            savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(accepted)
+            if (rejectedCount > 0) {
+                val maxSec = MmsManagerWrapper.MAX_VIDEO_DURATION_MS / 1000
+                _attachmentRejectedEvent.tryEmit(
+                    if (rejectedCount == 1) "Video is longer than ${maxSec}s and wasn't attached"
+                    else "$rejectedCount videos are longer than ${maxSec}s and weren't attached"
+                )
+            }
+        }
     }
 
     /** Removes one pending attachment (user taps the × on its preview thumbnail). */
@@ -682,6 +714,34 @@ class ThreadViewModel @Inject constructor(
             val startMs = start.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
             val endMs   = end.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1
             return startMs to endMs
+        }
+
+        /**
+         * Splits [attachments] into (accepted, rejectedVideoCount) for [onAttachmentsSelected]'s
+         * duration cap. A video whose duration is known and exceeds [maxDurationMs] is rejected;
+         * everything else (non-video attachments, and videos whose duration [videoDurationsMs]
+         * doesn't resolve — e.g. an unreadable/corrupt file) is let through rather than blocked
+         * on an inconclusive check, matching the same "fail open, let the send-time path reject
+         * it properly" caution used elsewhere in this app.
+         *
+         * Extracted here so the decision logic can be tested without constructing the ViewModel.
+         */
+        internal fun partitionAttachmentsByDuration(
+            attachments: List<MessageAttachment>,
+            videoDurationsMs: Map<String, Long?>,
+            maxDurationMs: Long
+        ): Pair<List<MessageAttachment>, Int> {
+            val accepted = mutableListOf<MessageAttachment>()
+            var rejected = 0
+            for (attachment in attachments) {
+                val duration = videoDurationsMs[attachment.uri]
+                if (duration != null && duration > maxDurationMs) {
+                    rejected++
+                } else {
+                    accepted += attachment
+                }
+            }
+            return accepted to rejected
         }
     }
 }

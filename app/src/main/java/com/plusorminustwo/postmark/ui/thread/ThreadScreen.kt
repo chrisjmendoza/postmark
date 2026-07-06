@@ -212,6 +212,7 @@ fun ThreadScreen(
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
         scrollToBottomEvent = viewModel.scrollToBottomEvent,
+        attachmentRejectedEvent = viewModel.attachmentRejectedEvent,
         onBack = onBack,
         onViewContact = onViewContact,
         onViewStats = onViewStats,
@@ -271,6 +272,7 @@ private fun ThreadContent(
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
     scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
+    attachmentRejectedEvent: SharedFlow<String> = MutableSharedFlow(),
     onBack: () -> Unit,
     onViewContact: () -> Unit = {},
     onViewStats: () -> Unit,
@@ -308,6 +310,12 @@ private fun ThreadContent(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    LaunchedEffect(attachmentRejectedEvent) {
+        attachmentRejectedEvent.collect { message ->
+            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
+        }
+    }
 
     // RoleManager.createRequestRoleIntent MUST be launched via startActivityForResult;
     // a plain startActivity() is silently ignored on API 29+.

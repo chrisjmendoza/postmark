@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.media.MediaMetadataRetriever
+import android.os.Handler
+import android.os.HandlerThread
 import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayInputStream
 import android.net.Uri
@@ -11,11 +14,26 @@ import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import android.util.Log
 import androidx.core.content.FileProvider
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.effect.Presentation
+import androidx.media3.transformer.AudioEncoderSettings
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Effects
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.VideoEncoderSettings
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -136,24 +154,27 @@ class MmsManagerWrapper @Inject constructor(
         // ── 1c. Allocate the shared budget across ALL attachments ────────────
         /* The carrier cap applies to the whole PDU, so the media budget is divided
          * across every attachment collectively — three images each under the cap
-         * could otherwise sum to a PDU the MMSC rejects. Images already under their
-         * fair share keep their size and donate the surplus to larger ones; only
-         * images can be compressed, so if the fixed-size parts (video/audio) alone
-         * exceed the budget we fail cleanly. */
+         * could otherwise sum to a PDU the MMSC rejects. Images and video already
+         * under their fair share keep their size and donate the surplus to larger
+         * ones; audio is the only fixed-cost type left, so if it alone exceeds the
+         * budget we fail cleanly. */
+        fun isCompressible(mimeType: String) =
+            mimeType.startsWith("image/", ignoreCase = true) || mimeType.startsWith("video/", ignoreCase = true)
+
         val budgets = allocateAttachmentBudgets(
             sizes        = mediaBytesList.map { it.size },
-            compressible = attachments.map { it.mimeType.startsWith("image/", ignoreCase = true) },
+            compressible = attachments.map { isCompressible(it.mimeType) },
             totalBudget  = effectiveMediaLimit
         )
         if (budgets == null) {
             val totalFixed = mediaBytesList.indices
-                .filter { !attachments[it].mimeType.startsWith("image/", ignoreCase = true) }
+                .filter { !isCompressible(attachments[it].mimeType) }
                 .sumOf { mediaBytesList[it].size }
             syncLogger.logError(TAG, "sendMms FAILED — non-compressible media ($totalFixed bytes) exceeds effectiveMediaLimit=$effectiveMediaLimit for messageId=$messageId")
             return@withContext false
         }
 
-        // ── 1d. Compress images that exceed their allocated share ────────────
+        // ── 1d. Compress images/video that exceed their allocated share ──────
         val finalParts = ArrayList<MmsPduBuilder.MediaPart>(attachments.size)
         for (index in attachments.indices) {
             val mime  = attachments[index].mimeType.lowercase()
@@ -162,8 +183,18 @@ class MmsManagerWrapper @Inject constructor(
                 finalParts += MmsPduBuilder.MediaPart(bytes, mime)
                 continue
             }
-            // Only compressible (image/*) parts can be over budget here —
+            // Only compressible (image/*, video/*) parts can be over budget here —
             // allocateAttachmentBudgets fails fast otherwise.
+            if (mime.startsWith("video/")) {
+                val compressed = compressVideo(bytes, messageId, budgets[index])
+                if (compressed == null) {
+                    syncLogger.logError(TAG, "sendMms FAILED — could not compress video [$index] below budget=${budgets[index]} (of ${attachments.size} attachments) for messageId=$messageId")
+                    return@withContext false
+                }
+                // compressVideo always re-encodes as H.264/AAC in an MP4 container regardless of input format
+                finalParts += MmsPduBuilder.MediaPart(compressed, "video/mp4")
+                continue
+            }
             if (mime == "image/gif") {
                 // Animated GIFs are flattened to JPEG when over the limit — no GIF encoder available.
                 syncLogger.log(TAG, "sendMms: GIF [$index] over budget — animation will be lost (compressing as JPEG) for messageId=$messageId")
@@ -248,8 +279,35 @@ class MmsManagerWrapper @Inject constructor(
         return@withContext true
     }
 
+    /**
+     * Reads a video's duration from its content URI, or null if it can't be determined
+     * (corrupt file, revoked permission, unsupported format). Used at attachment-selection
+     * time to enforce [MAX_VIDEO_DURATION_MS] before the user ever composes a message —
+     * failing fast there is much better UX than discovering it's too long only after an
+     * expensive transcode attempt in [sendMms].
+     */
+    suspend fun videoDurationMs(uri: Uri): Long? = withContext(Dispatchers.IO) {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+        } catch (e: Exception) {
+            Log.e(TAG, "videoDurationMs: failed to read duration for uri=$uri", e)
+            null
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
+        }
+    }
+
     companion object {
         private const val TAG = "MmsManagerWrapper"
+        /* UX-level cap, independent of the byte-budget math: a hard duration limit gives
+         * the user a predictable rule of thumb ("keep clips short") instead of a cap that
+         * silently varies with carrier and how many other attachments are in the message.
+         * 10s is generous by historical MMS standards (the old 300KB/600KB 3GPP conformance
+         * profiles allowed only a few seconds at a watchable bitrate) while still comfortably
+         * fitting T-Mobile/Verizon's ~3-3.5MB caps at a decent bitrate. */
+        const val MAX_VIDEO_DURATION_MS = 10_000L
         /* 860 KB (860,160 bytes) is Signal's proven-safe default ceiling.
          * AT&T and Verizon hard-cap at 1,048,576 bytes (1 MB). Our previous
          * value of 1,200,000 bytes silently exceeded this, causing images just
@@ -262,6 +320,21 @@ class MmsManagerWrapper @Inject constructor(
          * total PDU never exceeds what the MMSC accepts. 5 KB is generous: the SMIL for
          * the max attachment count is < 1 KB and each part header is ~50 bytes. */
         private const val PDU_OVERHEAD_BYTES = 5_000
+
+        // ── Video compression tuning ──────────────────────────────────────────
+        /* Video transcoding is expensive (real seconds-to-minutes per pass on-device),
+         * unlike compressImage's cheap quality/dimension retries. We therefore compute
+         * a target bitrate/resolution analytically (see [planVideoTranscode]) rather
+         * than iterating blindly, and bound retries to a small fixed number of steps. */
+        /* One initial analytical pass, plus one bounded retry at a tighter budget if the
+         * encoder overshot the estimate — never an open-ended loop (transcoding is too
+         * expensive for that). */
+        private const val MAX_VIDEO_TRANSCODE_ATTEMPTS = 2
+        /* Each retry tightens the budget fed into the next analytical estimate. */
+        private const val VIDEO_RETRY_BUDGET_FACTOR = 0.8
+        /* Generous ceiling so a corrupt or huge file can't hang the coroutine indefinitely,
+         * while still allowing a real multi-minute clip to transcode on a slower device. */
+        private const val VIDEO_TRANSCODE_TIMEOUT_MS = 120_000L
 
         /**
          * The filesDir cache file holding the raw bytes of attachment [index] of message
@@ -353,6 +426,148 @@ class MmsManagerWrapper @Inject constructor(
         val scale = maxDim.toFloat() / maxOf(w, h)
         return Bitmap.createScaledBitmap(bitmap, (w * scale).toInt(), (h * scale).toInt(), true)
     }
+
+    // ── Video compression helper ──────────────────────────────────────────────
+    /* Transcodes via Media3 Transformer to guarantee the video fits within [maxBytes].
+     * Unlike compressImage's cheap quality/dimension cascade, a single transcode pass
+     * can take real seconds to over a minute, so we compute a target bitrate/resolution
+     * analytically from duration + budget ([planVideoTranscode]) instead of iterating
+     * blindly, with at most [MAX_VIDEO_TRANSCODE_ATTEMPTS] passes total.
+     * Returns null if the video can't be read/decoded, no viable bitrate exists for the
+     * budget, or every attempt fails/times out — mirroring compressImage's null-on-failure
+     * contract so the caller can fail the whole send cleanly. */
+    private suspend fun compressVideo(originalBytes: ByteArray, messageId: Long, maxBytes: Int): ByteArray? {
+        val inputFile = File(context.cacheDir, "mms_video_input_$messageId.mp4")
+        try {
+            inputFile.writeBytes(originalBytes)
+        } catch (e: IOException) {
+            Log.e(TAG, "compressVideo: failed to write temp input file", e)
+            syncLogger.logError(TAG, "compressVideo FAILED — could not write temp input file for messageId=$messageId", e)
+            return null
+        }
+        return try {
+            compressVideoFile(inputFile, messageId, maxBytes)
+        } finally {
+            inputFile.delete()
+        }
+    }
+
+    private suspend fun compressVideoFile(inputFile: File, messageId: Long, maxBytes: Int): ByteArray? {
+        val retriever = MediaMetadataRetriever()
+        val durationMs: Long
+        val hasAudio: Boolean
+        try {
+            retriever.setDataSource(inputFile.absolutePath)
+            durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            hasAudio = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
+        } catch (e: Exception) {
+            Log.e(TAG, "compressVideo: failed to read video metadata", e)
+            syncLogger.logError(TAG, "compressVideo FAILED — could not read video metadata for messageId=$messageId", e)
+            return null
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
+        }
+
+        var budget = maxBytes
+        for (attempt in 0 until MAX_VIDEO_TRANSCODE_ATTEMPTS) {
+            val plan = planVideoTranscode(durationMs, hasAudio, budget)
+            if (plan == null) {
+                syncLogger.logError(TAG, "compressVideo FAILED — no viable transcode plan (durationMs=$durationMs budget=$budget messageId=$messageId)")
+                return null
+            }
+            syncLogger.log(TAG, "compressVideo attempt $attempt: durationMs=$durationMs targetHeight=${plan.targetHeight}p targetVideoBitrate=${plan.targetVideoBitrate}bps targetAudioBitrate=${plan.targetAudioBitrate}bps budget=$budget messageId=$messageId")
+
+            val outputFile = File(context.cacheDir, "mms_video_output_${messageId}_$attempt.mp4")
+            outputFile.delete()
+            val transcodeOk = runVideoTransform(inputFile, outputFile, plan, messageId)
+            if (transcodeOk && outputFile.exists()) {
+                val bytes = try { outputFile.readBytes() } catch (e: IOException) { null }
+                outputFile.delete()
+                if (bytes != null && bytes.size <= maxBytes) {
+                    syncLogger.log(TAG, "compressVideo success: ${inputFile.length()} → ${bytes.size} bytes at ${plan.targetHeight}p/${plan.targetVideoBitrate}bps (messageId=$messageId)")
+                    return bytes
+                }
+                syncLogger.log(TAG, "compressVideo attempt $attempt over budget (${bytes?.size ?: -1} > $maxBytes) — stepping down (messageId=$messageId)")
+            } else {
+                outputFile.delete()
+                syncLogger.logError(TAG, "compressVideo FAILED — transcode pass $attempt failed or timed out for messageId=$messageId")
+            }
+            budget = (budget * VIDEO_RETRY_BUDGET_FACTOR).toInt()
+        }
+        return null
+    }
+
+    /**
+     * Runs one Media3 Transformer pass, writing an H.264/AAC MP4 to [outputFile].
+     *
+     * Transformer instances must be created and driven from a single thread that has a
+     * [android.os.Looper] — we spin up a dedicated [HandlerThread] for this so the
+     * surrounding suspend function (running on [Dispatchers.IO]) never has to hop to the
+     * main thread. [withTimeoutOrNull] + [kotlinx.coroutines.CancellableContinuation.invokeOnCancellation]
+     * cancel the in-flight transform and tear down the thread if it runs too long.
+     */
+    private suspend fun runVideoTransform(
+        inputFile: File,
+        outputFile: File,
+        plan: VideoTranscodePlan,
+        messageId: Long
+    ): Boolean = withTimeoutOrNull(VIDEO_TRANSCODE_TIMEOUT_MS) {
+        suspendCancellableCoroutine { cont ->
+            val thread = HandlerThread("MmsVideoTranscode-$messageId").apply { start() }
+            val handler = Handler(thread.looper)
+            handler.post {
+                fun finish(result: Boolean) {
+                    if (cont.isActive) cont.resume(result)
+                    thread.quitSafely()
+                }
+                try {
+                    val mediaItem = MediaItem.fromUri(Uri.fromFile(inputFile))
+                    val editedMediaItem = EditedMediaItem.Builder(mediaItem)
+                        .setEffects(Effects(emptyList(), listOf(Presentation.createForHeight(plan.targetHeight))))
+                        .build()
+
+                    val encoderFactoryBuilder = DefaultEncoderFactory.Builder(context)
+                        .setRequestedVideoEncoderSettings(
+                            VideoEncoderSettings.Builder().setBitrate(plan.targetVideoBitrate).build()
+                        )
+                        .setEnableFallback(true)
+                    if (plan.targetAudioBitrate > 0) {
+                        encoderFactoryBuilder.setRequestedAudioEncoderSettings(
+                            AudioEncoderSettings.Builder().setBitrate(plan.targetAudioBitrate).build()
+                        )
+                    }
+
+                    val transformer = Transformer.Builder(context)
+                        .setVideoMimeType(MimeTypes.VIDEO_H264)
+                        .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                        .setEncoderFactory(encoderFactoryBuilder.build())
+                        .setLooper(thread.looper)
+                        .addListener(object : Transformer.Listener {
+                            override fun onCompleted(composition: Composition, result: ExportResult) {
+                                finish(true)
+                            }
+                            override fun onError(composition: Composition, result: ExportResult, exception: ExportException) {
+                                Log.e(TAG, "video transcode error messageId=$messageId", exception)
+                                finish(false)
+                            }
+                        })
+                        .build()
+
+                    cont.invokeOnCancellation {
+                        handler.post {
+                            try { transformer.cancel() } catch (_: Exception) { }
+                            thread.quitSafely()
+                        }
+                    }
+
+                    transformer.start(editedMediaItem, outputFile.absolutePath)
+                } catch (e: Exception) {
+                    Log.e(TAG, "video transcode setup failed messageId=$messageId", e)
+                    finish(false)
+                }
+            }
+        }
+    } ?: false
 }
 
 // ── Attachment budget allocation ──────────────────────────────────────────────
@@ -398,6 +613,78 @@ internal fun allocateAttachmentBudgets(
         left--
     }
     return budgets.toList()
+}
+
+// ── Video transcode planning ───────────────────────────────────────────────────
+// File-scope (not companion-object) constants: shared by both the pure
+// [planVideoTranscode] function below and [MmsManagerWrapper]'s Transformer call site.
+private const val AUDIO_BITRATE_BPS = 64_000
+/* Below this the video is judged not worth sending — a slideshow of muddy macroblocks
+ * isn't a usable message. Failing cleanly (like compressImage does when even 800px/40%
+ * quality doesn't fit) is preferable to silently producing unwatchable output. */
+private const val MIN_VIDEO_BITRATE_BPS = 150_000
+private const val TIER_1080P_BITRATE_BPS = 2_500_000
+private const val TIER_720P_BITRATE_BPS  = 1_000_000
+private const val TIER_480P_BITRATE_BPS  = 400_000
+/* Reserve ~4% of the byte budget for MP4 container/muxer overhead so the analytical
+ * bitrate target lands safely under budget without a retry in the common case. */
+private const val CONTAINER_OVERHEAD_FACTOR = 0.96
+
+/**
+ * The analytical output of [planVideoTranscode]: what bitrate/resolution to request
+ * from Media3 Transformer for one pass.
+ */
+internal data class VideoTranscodePlan(
+    val targetVideoBitrate: Int,  // bits per second
+    val targetAudioBitrate: Int,  // bits per second; 0 means "no audio track to encode"
+    val targetHeight: Int         // output height in px; width scales proportionally (Presentation.createForHeight)
+)
+
+/**
+ * Computes the target bitrate and resolution tier for one video transcode pass, given
+ * the source's duration/audio track and the byte budget it must fit in.
+ *
+ * Pure function (unit-tested on the JVM — the actual `Transformer` call can't run
+ * outside a device, same reasoning as why `compressImage` has no unit test for its
+ * `BitmapFactory` calls). Video transcoding is expensive (real seconds-to-minutes per
+ * pass), so unlike `compressImage`'s cheap iterate-many-quality-steps cascade, this
+ * computes one target analytically: `targetBitrate ≈ (budgetBytes * 8) / durationSeconds`,
+ * minus a reservation for the audio track, then picks a resolution tier appropriate for
+ * that bitrate (a very low bitrate at 1080p looks like a mosaic of macroblocks — a lower
+ * resolution at the same bitrate looks fine).
+ *
+ * Returns null when no viable plan exists — an unknown/zero duration (can't compute a
+ * rate) or a budget so small that even the floor bitrate ([MmsManagerWrapper]'s
+ * `MIN_VIDEO_BITRATE_BPS`) doesn't fit. Failing cleanly here is the intended behavior:
+ * a slideshow of unwatchable macroblocks is not an acceptable substitute for the actual
+ * video, so the send fails the same way compressImage fails when even its smallest
+ * scale step is still too large.
+ */
+internal fun planVideoTranscode(
+    durationMs: Long,
+    hasAudio: Boolean,
+    budgetBytes: Int
+): VideoTranscodePlan? {
+    if (durationMs <= 0 || budgetBytes <= 0) return null
+    val durationSec = durationMs / 1000.0
+
+    val audioBitrate = if (hasAudio) AUDIO_BITRATE_BPS else 0
+    val totalBitsBudget = budgetBytes * 8.0 * CONTAINER_OVERHEAD_FACTOR
+    val videoBitrate = (totalBitsBudget / durationSec).toInt() - audioBitrate
+
+    if (videoBitrate < MIN_VIDEO_BITRATE_BPS) return null
+
+    val targetHeight = when {
+        videoBitrate >= TIER_1080P_BITRATE_BPS -> 1080
+        videoBitrate >= TIER_720P_BITRATE_BPS  -> 720
+        videoBitrate >= TIER_480P_BITRATE_BPS  -> 480
+        else                                    -> 360
+    }
+    return VideoTranscodePlan(
+        targetVideoBitrate = videoBitrate,
+        targetAudioBitrate = audioBitrate,
+        targetHeight       = targetHeight
+    )
 }
 
 // ── MmsPduBuilder ─────────────────────────────────────────────────────────────

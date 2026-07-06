@@ -4,6 +4,96 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-06
+
+### Video attachments now compressed to fit the carrier MMS cap
+
+Root cause of on-device failure (real AT&T S24 Ultra test): `MmsManagerWrapper.sendMms()`
+treated `video/*` as non-compressible, so `allocateAttachmentBudgets()` failed the whole
+send outright whenever a video attachment alone exceeded the carrier budget (~1 MB on
+AT&T/T-Mobile). Since virtually any real phone-shot video — even a few seconds of
+1080p/4K — is tens of MB, video attachments were effectively unusable on every US
+carrier, not just AT&T. There was zero video compression anywhere in the app.
+
+Fix: `video/*` is now compressible, same as `image/*`. Over-budget video goes through a
+new `compressVideo()` using `androidx.media3:media3-transformer` (same 1.5.1 version as
+the existing `media3-exoplayer`/`media3-ui`) instead of `compressImage()`'s JPEG
+quality/dimension cascade. Transcoding is expensive (real seconds-to-minutes per pass on
+real hardware) so it can't afford `compressImage`'s blind iterate-many-steps approach:
+`planVideoTranscode()` — a pure, unit-tested function — computes a target bitrate
+analytically from `(budgetBytes * 8 * 0.96) / durationSeconds`, reserving 64 kbps for the
+audio track when present, and picks a resolution tier (1080p/720p/480p/360p) sized to
+that bitrate so a very constrained budget doesn't request a resolution the bitrate can't
+actually support. At most one bounded retry (tighter budget, effectively one tier down)
+if the first pass overshoots — never an open-ended loop. `Transformer` requires being
+driven from a thread with a `Looper`; rather than hop to `Dispatchers.Main` (and block
+it for a multi-minute encode), a dedicated `HandlerThread` is spun up per transcode and
+torn down afterward, keeping the whole `sendMms()` call on `Dispatchers.IO`. A 120s
+timeout (`withTimeoutOrNull` + `Transformer.cancel()` on cancellation) guarantees a
+corrupt or huge file can't hang the coroutine indefinitely. Failure at any stage
+(unreadable/undecodable source, no viable bitrate for the duration+budget, encoder
+error, or timeout) fails cleanly — `compressVideo` returns null exactly like
+`compressImage` does, and the whole send is marked FAILED rather than crashing.
+
+Audio is explicitly out of scope (unchanged) — audio attachments are typically far
+smaller than video and weren't the reported failure; they still fail cleanly if they
+alone exceed the budget.
+
+Dependencies: added `media3-transformer` + `media3-effect` (for `Presentation`, used to
+cap output resolution) at version 1.5.1, matching the existing media3 libraries.
+
+Tests: `VideoTranscodePlanTest` (+8) covers the pure planning function — unknown/zero
+duration, non-positive budget, resolution tier selection as bitrate drops, audio
+reserving bitrate away from video, and budgets too small for any watchable output all
+fail cleanly rather than producing a slideshow of macroblocks. The actual `Transformer`
+call has no unit test, mirroring `compressImage`'s `BitmapFactory` calls — neither runs
+outside a device. `./gradlew test`: 417 passing; `compileDebugAndroidTestSources` and
+`assembleDebug` both clean.
+
+**Not yet verified: real on-device sending of a large video through this path** (the
+original S24 Ultra AT&T failure). The Transformer API surface was confirmed against
+current Media3 1.5.1 source/docs, not exercised on hardware.
+
+---
+
+### 10-second hard cap on video attachments, enforced at picker-selection time
+
+Discussion prompted this one, not a bug: the carrier byte budget is an unreliable proxy
+for "will this actually send" — `getCarrierConfigValues()` only reports the *sender's*
+carrier's outbound MMSC limit; there's no API to learn the *recipient's* carrier's inbound
+limit, and MMS's carrier-to-carrier interconnect has a long history of being flakier than
+either side's stated cap. A predictable duration rule ("keep clips short") is a more
+honest UX contract than a byte cap that silently varies by carrier and by how many other
+attachments share the message. 10s is generous by historical MMS standards — the old
+300KB/600KB 3GPP conformance profiles allowed only a few seconds of video at a watchable
+bitrate — while comfortably fitting T-Mobile/Verizon's ~3-3.5MB caps at decent quality.
+
+Enforced in `ThreadViewModel.onAttachmentsSelected()`, not at send time: reading a
+video's duration is cheap (`MediaMetadataRetriever` via new `MmsManagerWrapper.
+videoDurationMs()`), so rejecting an over-length clip immediately — before the user
+composes a message around it — is much better UX than discovering it only after an
+actual `compressVideo()` transcode attempt. Retrying a previously-accepted attachment
+never re-checks it, since it already passed this gate once; a video whose duration can't
+be determined (corrupt file, revoked permission) is let through rather than blocked on an
+inconclusive check — the send-time path in `MmsManagerWrapper` still fails cleanly on a
+genuinely bad file. The decision logic is a pure function,
+`ThreadViewModel.partitionAttachmentsByDuration()`, so it's tested without constructing
+the ViewModel; a `SharedFlow<String>` (`attachmentRejectedEvent`, mirroring the existing
+`scrollToBottomEvent` pattern) tells `ThreadScreen` to show a Snackbar when one or more
+videos are dropped.
+
+**Files changed**:
+- `service/sms/MmsManagerWrapper.kt` — `MAX_VIDEO_DURATION_MS` (10_000L), `videoDurationMs()`
+- `ui/thread/ThreadViewModel.kt` — `onAttachmentsSelected()` now async when a video is
+  present; `attachmentRejectedEvent`; `partitionAttachmentsByDuration()` (companion, pure)
+- `ui/thread/ThreadScreen.kt` — collects `attachmentRejectedEvent`, shows a Snackbar
+- `app/src/test/…/AttachmentDurationFilterTest.kt` (new) — 9 tests
+
+Tests: `./gradlew test` 426 passing; `compileDebugAndroidTestSources` and `assembleDebug`
+both clean; installed and launched clean on a physical device (no crash). Not yet
+verified: actually picking a video longer than 10s on-device and confirming the Snackbar
+fires — the logic is unit-tested but this hasn't been exercised through the real picker.
+
 ## 2026-07-05
 
 ### Multi-attachment MMS + video selectable in the picker
