@@ -122,6 +122,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import coil.compose.SubcomposeAsyncImage
@@ -2407,7 +2412,14 @@ private fun FullScreenImageViewer(
         initialPage = initialIndex.coerceIn(0, (uris.size - 1).coerceAtLeast(0))
     ) { uris.size }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        // Without this, the dialog window is constrained to the platform's default
+        // (non-fullscreen) size — Modifier.fillMaxSize() below only fills *that* smaller
+        // window, leaving the real screen edges (status bar, ThreadScreen's own top bar
+        // and bottom bubbles) visible around a smaller black box instead of covering them.
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -2472,20 +2484,34 @@ private fun ZoomableImage(uri: String) {
             .fillMaxSize()
             // Consume tap on the image itself so it doesn't fall through to the scrim.
             .clickable { /* absorb — don't dismiss when tapping the image */ }
-            // Pinch-to-zoom + pan gesture.
+            // Pinch-to-zoom + pan gesture. Hand-rolled instead of detectTransformGestures()
+            // because that consumes every single-finger drag unconditionally — including a
+            // plain swipe attempt — which starved the parent HorizontalPager of the gesture
+            // and made thread-wide swiping silently do nothing. Only consume (and treat as
+            // zoom/pan) when a second finger is actually down or the image is already
+            // zoomed in; a lone finger at 1× scale falls through untouched so the pager's
+            // own drag detection sees it and pages normally.
             .pointerInput(uri) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    // Clamp scale between 1× and 5×.
-                    scale = (scale * zoom).coerceIn(1f, 5f)
-                    // Pan only makes sense when zoomed in.
-                    if (scale > 1f) {
-                        offsetX += pan.x
-                        offsetY += pan.y
-                    } else {
-                        // Reset pan when fully zoomed out.
-                        offsetX = 0f
-                        offsetY = 0f
-                    }
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val isPinch = event.changes.size > 1
+                        if (isPinch || scale > 1f) {
+                            val zoom = event.calculateZoom()
+                            val pan = event.calculatePan()
+                            scale = (scale * zoom).coerceIn(1f, 5f)
+                            if (scale > 1f) {
+                                offsetX += pan.x
+                                offsetY += pan.y
+                            } else {
+                                // Reset pan when fully zoomed out.
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
                 }
             }
             .graphicsLayer(
