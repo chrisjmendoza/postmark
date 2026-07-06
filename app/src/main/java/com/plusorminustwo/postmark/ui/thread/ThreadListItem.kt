@@ -134,3 +134,17 @@ fun buildRenderState(messages: List<Message>): ThreadRenderState {
         Trace.endSection()
     }
 }
+
+/**
+ * Pure function: flattens every image attachment across the whole thread into a single
+ * chronologically-ordered list, for the full-screen image viewer to page across message
+ * boundaries (swipe to the next/previous image in the thread, not just within one message).
+ *
+ * [messages] is expected oldest-first (see [ThreadUiState.messages]'s doc comment) — the
+ * result preserves that order without an extra sort. Videos and audio are excluded; each
+ * keeps its own tap interaction (video player dialog / inline playback), not the pager.
+ */
+fun buildThreadImageUris(messages: List<Message>): List<String> =
+    messages.flatMap { it.attachments }
+        .filter { it.mimeType.startsWith("image/", ignoreCase = true) }
+        .map { it.uri }

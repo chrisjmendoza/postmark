@@ -73,7 +73,11 @@ data class ThreadUiState(
     val replyingToId: Long? = null,
     // Pre-computed flat render list + index maps — derived from messages, computed in the
     // ViewModel so the composable never re-derives them on the main thread.
-    val renderState: ThreadRenderState = ThreadRenderState()
+    val renderState: ThreadRenderState = ThreadRenderState(),
+    // Every image attachment across the whole thread, in chronological (message) order.
+    // Backs the full-screen image viewer so swiping moves to the next/previous image
+    // across message boundaries, not just within the tapped message's own attachments.
+    val threadImageUris: List<String> = emptyList()
 )
 
 /**
@@ -204,6 +208,7 @@ class ThreadViewModel @Inject constructor(
             messages = messages,
             // Build the flat render list off the main thread inside this combine block.
             renderState = buildRenderState(messages),
+            threadImageUris = buildThreadImageUris(messages),
             selectedMessageIds = selected,
             isSelectionMode = selectionMode,
             selectionScope = inner.selectionScope,

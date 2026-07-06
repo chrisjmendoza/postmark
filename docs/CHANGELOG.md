@@ -6,6 +6,32 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-06
 
+### Full-screen image viewer now swipes across the whole thread, not just one message
+
+Reported gap: tapping an image only ever showed that one message's own attachments —
+other messaging apps let you keep swiping left/right straight into the next/previous
+image anywhere in the conversation.
+
+Root cause: the viewer's page list (`imageUris`) and its open/closed state
+(`viewerStartIndex`) both lived inside `MessageBubble`, scoped to that one message's
+`attachments`. There was no path from a single bubble to the rest of the thread's images.
+
+Fix: added `buildThreadImageUris()` (pure, tested — `ThreadListItem.kt`), which flattens
+every image attachment across `uiState.messages` in chronological order (video/audio
+excluded, unaffected — still their own per-message dialogs). `ThreadUiState` gained a
+`threadImageUris` field computed alongside `renderState` in `ThreadViewModel`'s existing
+combine block, so it's derived off the main thread the same way the render list already
+is. The viewer's open/closed state moved out of `MessageBubble` and up to `ThreadContent`
+(`globalImageViewerIndex`) — a single shared `FullScreenImageViewer` instance now renders
+once for the whole screen instead of one potential instance per bubble. `MessageBubble`
+reports a tapped URI up via a new `onImageTap` callback; `ThreadContent` resolves that URI
+to its position in the thread-wide list and opens the viewer there. `FullScreenImageViewer`
+itself needed no changes — the "n / N" indicator already just reads `uris.size`.
+
+Tests: `ThreadImageUrisTest` (+7) — empty thread, no-attachment messages, single image,
+multi-message flattening order, video/audio exclusion, case-insensitive MIME matching,
+input-order preservation. `./gradlew test`: all passing.
+
 ### Build number visible in-app, matched to Firebase App Distribution release notes
 
 The versionCode/versionName/GIT_SHA derivation (git commit count + short SHA) already

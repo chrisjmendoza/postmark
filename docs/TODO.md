@@ -103,8 +103,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **MMS media in conversation list** — `previewText` extension returns "📷 Photo" /
       "🎥 Video" / "🎵 Audio message" when body is empty; used by both sync handlers.
 - [x] **Tap image → full-screen viewer** — `FullScreenImageViewer` Dialog with
-      pinch-to-zoom (1×–5×) + pan; now a `HorizontalPager` across all images in
-      the message with an "n / N" indicator (July 5 2026).
+      pinch-to-zoom (1×–5×) + pan; a `HorizontalPager` with an "n / N" indicator.
+      **Swipe scope widened to the whole thread (July 6 2026)** — swiping now pages
+      across every image in the conversation, not just the tapped message's own
+      attachments (matches Google Messages/iMessage). `ThreadUiState.threadImageUris`
+      (`buildThreadImageUris()`, pure + tested) flattens every image attachment across
+      `uiState.messages` in chronological order; the viewer state moved from per-
+      `MessageBubble` to `ThreadContent` so there's one shared pager instance keyed by
+      a thread-wide index. Video/audio unaffected — still per-message dialogs.
 - [x] **Tap video → player dialog** — `VideoPlayerDialog` composable with ExoPlayer
       (media3 1.5.1); auto-plays on open; `DisposableEffect` releases player on dismiss;
       tapping the video thumbnail in a bubble opens it.

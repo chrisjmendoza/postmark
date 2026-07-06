@@ -327,6 +327,17 @@ private fun ThreadContent(
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
     var showDateRangePicker by remember { mutableStateOf(false) }
 
+    // Index into uiState.threadImageUris the full-screen viewer opens at; null = closed.
+    // Lifted up here (rather than per-MessageBubble) so swiping pages across every image
+    // in the thread, not just the tapped message's own attachments.
+    var globalImageViewerIndex by remember { mutableStateOf<Int?>(null) }
+    val onImageTap = remember(uiState.threadImageUris) {
+        { uri: String ->
+            val index = uiState.threadImageUris.indexOf(uri)
+            if (index >= 0) globalImageViewerIndex = index
+        }
+    }
+
     // Live Y of the bubble currently selected for reaction.
     // Initialised from the ViewModel's snapshot Y (captured at long-press time),
     // then updated every layout pass by the selected bubble's onGloballyPositioned.
@@ -679,6 +690,7 @@ private fun ThreadContent(
                             isSelectionMode = uiState.isSelectionMode,
                             isHighlighted = item.message.id == uiState.highlightedMessageId,
                             onToggleSelect = { onToggleSelection(item.message.id) },
+                            onImageTap = onImageTap,
                             onLongClick = { y -> onShowReactionPicker(item.message.id, y) },
                             onReactionTargetYChanged = if (item.message.id == uiState.reactionPickerMessageId)
                                 { y -> liveBubbleY = y } else null,
@@ -700,6 +712,19 @@ private fun ThreadContent(
                             onToggleDay = { onToggleMessageIds(item.messageIds) }
                         )
                     }
+                }
+            }
+
+            // Full-screen image viewer — pages across every image in the thread, not just
+            // the tapped message's own attachments. Rendered once here (not per-bubble) so
+            // there's a single shared pager instance keyed by a thread-wide index.
+            globalImageViewerIndex?.let { startIndex ->
+                if (uiState.threadImageUris.isNotEmpty()) {
+                    FullScreenImageViewer(
+                        uris = uiState.threadImageUris,
+                        initialIndex = startIndex,
+                        onDismiss = { globalImageViewerIndex = null }
+                    )
                 }
             }
 
@@ -954,6 +979,9 @@ private fun MessageBubble(
     // Used by ThreadContent to keep liveBubbleY in sync so EmojiReactionPopup tracks the
     // bubble even after top-bar swaps or IME dismissals change the layout.
     onReactionTargetYChanged: ((Float) -> Unit)? = null,
+    // Tapping an image attachment reports its URI up to ThreadContent, which owns the
+    // single shared full-screen viewer and resolves the URI to a thread-wide page index.
+    onImageTap: (String) -> Unit = {},
     onReactionClick: (String) -> Unit,
     timestampPref: TimestampPreference,
     isTimestampExpanded: Boolean,
@@ -1087,14 +1115,9 @@ private fun MessageBubble(
                     .onSizeChanged { bubbleWidthPx = it.width }
             ) {
                 if (message.attachments.isNotEmpty()) {
-                    // Image index the full-screen viewer opens at; null = viewer closed.
-                    var viewerStartIndex by remember { mutableStateOf<Int?>(null) }
-                    // URI of the video being played; null = player closed.
+                    // URI of the video being played; null = player closed. Videos stay a
+                    // per-message dialog — only images page thread-wide (see onImageTap).
                     var playingVideoUri by remember { mutableStateOf<String?>(null) }
-                    // Images only — the full-screen viewer pages across these.
-                    val imageUris = remember(message.attachments) {
-                        message.attachments.filter { it.mimeType.startsWith("image/") }.map { it.uri }
-                    }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (message.attachments.size == 1) {
                             // Single attachment — full-width rendering (image, video, or audio).
@@ -1104,7 +1127,7 @@ private fun MessageBubble(
                                 mimeType = att.mimeType,
                                 // Only images are tappable; video/audio have their own interactions.
                                 onImageClick = if (att.mimeType.startsWith("image/"))
-                                    { { viewerStartIndex = 0 } } else null,
+                                    { { onImageTap(att.uri) } } else null,
                                 onVideoClick = if (att.mimeType.startsWith("video/"))
                                     { { playingVideoUri = att.uri } } else null
                             )
@@ -1122,7 +1145,7 @@ private fun MessageBubble(
                                             modifier = Modifier.weight(1f),
                                             onClick = {
                                                 if (att.mimeType.startsWith("image/")) {
-                                                    viewerStartIndex = imageUris.indexOf(att.uri).coerceAtLeast(0)
+                                                    onImageTap(att.uri)
                                                 } else {
                                                     playingVideoUri = att.uri
                                                 }
@@ -1163,16 +1186,6 @@ private fun MessageBubble(
                                             ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${it.item}")))
                                         }
                                 }
-                            )
-                        }
-                    }
-                    // Full-screen image viewer — pages across all images in this message.
-                    viewerStartIndex?.let { startIndex ->
-                        if (imageUris.isNotEmpty()) {
-                            FullScreenImageViewer(
-                                uris = imageUris,
-                                initialIndex = startIndex,
-                                onDismiss = { viewerStartIndex = null }
                             )
                         }
                     }
@@ -2374,11 +2387,13 @@ private fun linkifyText(text: String, linkColor: androidx.compose.ui.graphics.Co
  * Full-screen overlay that displays one or more MMS images with pinch-to-zoom support.
  *
  * The images are shown on a black scrim. The user can:
- *  - Swipe horizontally to page between the message's images (when more than one)
+ *  - Swipe horizontally to page between images (when more than one) — [uris] spans the
+ *    whole thread, not just the tapped message's own attachments, so paging can cross
+ *    message boundaries, matching the swipe-through-gallery behavior of other messaging apps.
  *  - Pinch to zoom (1× – 5×) and pan while zoomed
  *  - Tap the scrim or press Back to dismiss
  *
- * @param uris         content://mms/part/ URIs of every image in the message, in order.
+ * @param uris         content://mms/part/ URIs of every image in the thread, in chronological order.
  * @param initialIndex Index of the image the user tapped, shown first.
  * @param onDismiss    Called when the user closes the viewer.
  */
