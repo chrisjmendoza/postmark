@@ -369,6 +369,26 @@ WHAT IS WORKING (tested on device)
       already imported under the wrong thread). Decision logic extracted to pure
       fun mmsThreadIdNeedsRepair() (SentRowRepairTest).
    Repair is insert/update only — nothing is ever deleted from the providers.
+✅ CI: Firebase App Distribution on every push (July 5, 2026) — same pattern as ShaftSchematic:
+   .github/workflows/distribute.yml builds assembleDebug and uploads to Firebase App
+   Distribution (tester: chrisjmendoza@gmail.com) on push to master, fix/**, feat/**,
+   or manual dispatch. Signed with the already-committed app/debug.keystore so every
+   machine (dev or CI) produces the same signing cert — installs update in place
+   instead of requiring an uninstall first.
+   app/build.gradle.kts: versionCode/versionName were static (1 / "1.0"), which
+   Firebase App Distribution treats as a duplicate upload and silently drops after
+   the first release. Both are now derived from `git rev-list --count HEAD`
+   (versionCode = gitCount, versionName = "1.0.$gitCount"), plus a GIT_SHA
+   BuildConfig field for identifying exactly which commit is installed on-device.
+   Unlike ShaftSchematic's workflow, the checkout step here uses fetch-depth: 0 —
+   without it, GitHub Actions' default shallow clone makes `git rev-list --count`
+   return 1 for every CI build, silently reintroducing the same duplicate-versionCode
+   rejection this fix exists to solve.
+   Still needed (one-time, done via Firebase console / CLI, not in this repo):
+   create/select the Firebase project, register the Android app
+   (applicationId com.plusorminustwo.postmark) to get FIREBASE_APP_ID, create an
+   App Distribution Admin service account and add its JSON as the
+   FIREBASE_SERVICE_ACCOUNT repo secret alongside FIREBASE_APP_ID.
 ✅ Notifications show contact display name (not raw phone number):
    - SmsReceiver queries threadRepository.getDisplayNameByAddress(rawSender)
      before posting notification; falls back to raw number if thread not in Room

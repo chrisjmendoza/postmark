@@ -7,6 +7,21 @@ plugins {
     alias(libs.plugins.room)
 }
 
+// versionCode/versionName derived from git commit count so every build is
+// uniquely identified — Firebase App Distribution silently rejects re-uploads
+// that share a versionCode with a prior release.
+val gitSha: String = try {
+    providers.exec {
+        commandLine("git", "rev-parse", "--short", "HEAD")
+    }.standardOutput.asText.get().trim()
+} catch (_: Exception) { "unknown" }
+
+val gitCount: Int = try {
+    providers.exec {
+        commandLine("git", "rev-list", "--count", "HEAD")
+    }.standardOutput.asText.get().trim().toInt()
+} catch (_: Exception) { 1 }
+
 android {
     namespace = "com.plusorminustwo.postmark"
     compileSdk = 35
@@ -15,8 +30,9 @@ android {
         applicationId = "com.plusorminustwo.postmark"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = gitCount
+        versionName = "1.0.$gitCount"
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

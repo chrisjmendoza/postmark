@@ -6,6 +6,36 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### ci: Firebase App Distribution workflow (July 5 2026)
+
+Added `.github/workflows/distribute.yml`, mirroring the pattern already proven on
+ShaftSchematic: builds `assembleDebug` and uploads to Firebase App Distribution
+(tester: chrisjmendoza@gmail.com) on every push to `master`, `fix/**`, `feat/**`, or
+manual `workflow_dispatch`. Signed with the already-committed `app/debug.keystore` so
+CI and every dev machine share one signing cert — installs update in place.
+
+`app/build.gradle.kts` — `versionCode`/`versionName` were static (`1` / `"1.0"`);
+Firebase App Distribution treats a repeat `versionCode` as a duplicate and silently
+drops the upload. Both are now derived from `git rev-list --count HEAD`
+(`versionCode = gitCount`, `versionName = "1.0.$gitCount"`), plus a `GIT_SHA`
+`BuildConfig` field so the exact installed commit is identifiable on-device.
+
+One deliberate departure from the ShaftSchematic workflow: the checkout step here
+sets `fetch-depth: 0`. `actions/checkout`'s default shallow clone (depth 1) makes
+`git rev-list --count HEAD` return `1` on every CI run regardless of actual history,
+which would silently reproduce the exact duplicate-`versionCode` rejection this
+change exists to fix — every CI-built APK would still collide on `versionCode=1`.
+
+**Still required outside this repo** (Firebase console / CLI, one-time): create or
+select the Firebase project, register the Android app
+(`applicationId com.plusorminustwo.postmark`) to obtain `FIREBASE_APP_ID`, create an
+App Distribution Admin service account, and add its JSON key plus the app ID as the
+`FIREBASE_SERVICE_ACCOUNT` / `FIREBASE_APP_ID` GitHub repo secrets.
+
+**Files changed**: `.github/workflows/distribute.yml` (new), `app/build.gradle.kts`
+
+---
+
 ### Sent messages missing — round 3: write-side repair (July 5 2026)
 
 Third attempt at the June 2026 "sent messages missing" class of bug. Rounds 1 and 2
