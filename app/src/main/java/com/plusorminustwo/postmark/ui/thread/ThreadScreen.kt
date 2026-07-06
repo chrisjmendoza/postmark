@@ -69,6 +69,7 @@ import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import androidx.compose.ui.tooling.preview.Preview
@@ -81,7 +82,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -102,6 +106,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as lazyGridItems
+import androidx.compose.foundation.lazy.itemsIndexed as lazyRowItemsIndexed
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
@@ -190,8 +195,8 @@ fun ThreadScreen(
     val onToggleMessageIds        = remember(viewModel) { { ids: List<Long> -> viewModel.toggleMessageIds(ids) } }
     val onRetry                   = remember(viewModel) { { id: Long -> viewModel.retrySend(id) } }
     val onSelectByDateRange       = remember(viewModel) { { start: LocalDate, end: LocalDate -> viewModel.selectByDateRange(start, end) } }
-    val onAttachmentSelected      = remember(viewModel) { { uri: Uri, mimeType: String -> viewModel.onAttachmentSelected(uri, mimeType) } }
-    val onClearAttachment         = remember(viewModel) { { viewModel.clearAttachment() } }
+    val onAttachmentsSelected     = remember(viewModel) { { attachments: List<MessageAttachment> -> viewModel.onAttachmentsSelected(attachments) } }
+    val onRemoveAttachment        = remember(viewModel) { { index: Int -> viewModel.removeAttachment(index) } }
     val onSetReplyingTo           = remember(viewModel) { { id: Long -> viewModel.setReplyingTo(id) } }
     val onClearReplyingTo         = remember(viewModel) { { viewModel.clearReplyingTo() } }
     val onSearchInThread_         = remember(viewModel, threadId, onSearchInThread) { { onSearchInThread(threadId) } }
@@ -232,8 +237,8 @@ fun ThreadScreen(
         onToggleMessageIds = onToggleMessageIds,
         onRetry = onRetry,
         onSelectByDateRange = onSelectByDateRange,
-        onAttachmentSelected = onAttachmentSelected,
-        onClearAttachment = onClearAttachment,
+        onAttachmentsSelected = onAttachmentsSelected,
+        onRemoveAttachment = onRemoveAttachment,
         onSetReplyingTo = onSetReplyingTo,
         onClearReplyingTo = onClearReplyingTo,
         onSearchInThread = onSearchInThread_,
@@ -291,8 +296,8 @@ private fun ThreadContent(
     onToggleMessageIds: (List<Long>) -> Unit,
     onRetry: (Long) -> Unit = {},
     onSelectByDateRange: (LocalDate, LocalDate) -> Unit = { _, _ -> },
-    onAttachmentSelected: (Uri, String) -> Unit = { _, _ -> },
-    onClearAttachment: () -> Unit = {},
+    onAttachmentsSelected: (List<MessageAttachment>) -> Unit = {},
+    onRemoveAttachment: (Int) -> Unit = {},
     onSetReplyingTo: (Long) -> Unit = {},
     onClearReplyingTo: () -> Unit = {},
     onSearchInThread: () -> Unit = {},
@@ -634,15 +639,14 @@ private fun ThreadContent(
             // Scaffold doesn't resize and shift message positions.
             if (!uiState.isSelectionMode) {
                 ReplyBar(
-                    text                 = uiState.replyText,
-                    pendingAttachmentUri = uiState.pendingAttachmentUri,
-                    pendingMimeType      = uiState.pendingMimeType,
-                    replyingTo           = uiState.replyingToId?.let { id -> uiState.messages.find { it.id == id } },
-                    onTextChange         = { onReplyTextChanged(it) },
-                    onAttachmentSelected = onAttachmentSelected,
-                    onClearAttachment    = onClearAttachment,
-                    onClearReplyingTo    = onClearReplyingTo,
-                    onSend               = { onSendMessage() }
+                    text                  = uiState.replyText,
+                    pendingAttachments    = uiState.pendingAttachments,
+                    replyingTo            = uiState.replyingToId?.let { id -> uiState.messages.find { it.id == id } },
+                    onTextChange          = { onReplyTextChanged(it) },
+                    onAttachmentsSelected = onAttachmentsSelected,
+                    onRemoveAttachment    = onRemoveAttachment,
+                    onClearReplyingTo     = onClearReplyingTo,
+                    onSend                = { onSendMessage() }
                 )
             }
         }
@@ -1064,28 +1068,64 @@ private fun MessageBubble(
                     .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
                     .then(
                         // Tighter padding when an attachment fills the bubble edges.
-                        if (message.attachmentUri != null)
+                        if (message.attachments.isNotEmpty())
                             Modifier.padding(4.dp)
                         else
                             Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                     )
                     .onSizeChanged { bubbleWidthPx = it.width }
             ) {
-                if (message.attachmentUri != null) {
-                    // Track whether the full-screen image viewer is open.
-                    var showImageViewer by remember { mutableStateOf(false) }
-                    var showVideoPlayer by remember { mutableStateOf(false) }
+                if (message.attachments.isNotEmpty()) {
+                    // Image index the full-screen viewer opens at; null = viewer closed.
+                    var viewerStartIndex by remember { mutableStateOf<Int?>(null) }
+                    // URI of the video being played; null = player closed.
+                    var playingVideoUri by remember { mutableStateOf<String?>(null) }
+                    // Images only — the full-screen viewer pages across these.
+                    val imageUris = remember(message.attachments) {
+                        message.attachments.filter { it.mimeType.startsWith("image/") }.map { it.uri }
+                    }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        // Render the media attachment (image, video, or audio).
-                        MmsAttachment(
-                            uri = message.attachmentUri,
-                            mimeType = message.mimeType,
-                            // Only images are tappable; video/audio have their own interactions.
-                            onImageClick = if (message.mimeType?.startsWith("image/") == true)
-                                { { showImageViewer = true } } else null,
-                            onVideoClick = if (message.mimeType?.startsWith("video/") == true)
-                                { { showVideoPlayer = true } } else null
-                        )
+                        if (message.attachments.size == 1) {
+                            // Single attachment — full-width rendering (image, video, or audio).
+                            val att = message.attachments[0]
+                            MmsAttachment(
+                                uri = att.uri,
+                                mimeType = att.mimeType,
+                                // Only images are tappable; video/audio have their own interactions.
+                                onImageClick = if (att.mimeType.startsWith("image/"))
+                                    { { viewerStartIndex = 0 } } else null,
+                                onVideoClick = if (att.mimeType.startsWith("video/"))
+                                    { { playingVideoUri = att.uri } } else null
+                            )
+                        } else {
+                            // Multiple attachments — 2-column thumbnail grid for images/videos;
+                            // audio and unknown types render full-width below the grid.
+                            val (gridable, others) = message.attachments.partition {
+                                it.mimeType.startsWith("image/") || it.mimeType.startsWith("video/")
+                            }
+                            gridable.chunked(2).forEach { rowItems ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    rowItems.forEach { att ->
+                                        AttachmentThumbnail(
+                                            attachment = att,
+                                            modifier = Modifier.weight(1f),
+                                            onClick = {
+                                                if (att.mimeType.startsWith("image/")) {
+                                                    viewerStartIndex = imageUris.indexOf(att.uri).coerceAtLeast(0)
+                                                } else {
+                                                    playingVideoUri = att.uri
+                                                }
+                                            }
+                                        )
+                                    }
+                                    // Keep a lone last cell at half width.
+                                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                            others.forEach { att ->
+                                MmsAttachment(uri = att.uri, mimeType = att.mimeType)
+                            }
+                        }
                         // Show caption text below the attachment if present.
                         if (message.body.isNotEmpty()) {
                             val fontScale   = LocalBubbleFontScale.current
@@ -1115,18 +1155,21 @@ private fun MessageBubble(
                             )
                         }
                     }
-                    // Full-screen image viewer — shown when the user taps a photo.
-                    if (showImageViewer) {
-                        FullScreenImageViewer(
-                            uri = message.attachmentUri,
-                            onDismiss = { showImageViewer = false }
-                        )
+                    // Full-screen image viewer — pages across all images in this message.
+                    viewerStartIndex?.let { startIndex ->
+                        if (imageUris.isNotEmpty()) {
+                            FullScreenImageViewer(
+                                uris = imageUris,
+                                initialIndex = startIndex,
+                                onDismiss = { viewerStartIndex = null }
+                            )
+                        }
                     }
                     // Full-screen video player — shown when the user taps a video thumbnail.
-                    if (showVideoPlayer) {
+                    playingVideoUri?.let { videoUri ->
                         VideoPlayerDialog(
-                            uri = message.attachmentUri,
-                            onDismiss = { showVideoPlayer = false }
+                            uri = videoUri,
+                            onDismiss = { playingVideoUri = null }
                         )
                     }
                 } else {
@@ -1215,6 +1258,51 @@ private fun MessageBubble(
         }
         if (message.reactions.isNotEmpty() && (clusterPosition == ClusterPosition.BOTTOM || clusterPosition == ClusterPosition.SINGLE)) {
             Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+// ── AttachmentThumbnail ───────────────────────────────────────────────────────
+// One square cell of the multi-attachment grid inside a bubble: image thumbnail
+// (Coil) or a play-icon placeholder for video. Tap behaviour is supplied by the
+// caller (open the paged viewer for images, the player dialog for videos).
+
+@Composable
+private fun AttachmentThumbnail(
+    attachment: MessageAttachment,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val ctx = LocalContext.current
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (attachment.mimeType.startsWith("image/")) {
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(ctx)
+                    .data(Uri.parse(attachment.uri))
+                    // Grid cells are at most half the bubble width (~140dp); 280px
+                    // covers 2× density without decoding full-resolution bitmaps.
+                    .size(280, 280)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Photo",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            // Video cell — play icon over the placeholder background.
+            Icon(
+                imageVector = Icons.Default.PlayArrow,
+                contentDescription = "Video",
+                modifier = Modifier.size(40.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -1733,19 +1821,24 @@ private fun DeliveryStatusIndicator(
 }
 
 // ── ReplyBar ───────────────────────────────────────────────────────────────────
-// Bottom compose bar with text input, optional attachment preview chip,
-// attach button (photo / audio picker), and send button.
+// Bottom compose bar with text input, pending-attachment preview row,
+// attach button (photo/video multi-picker + audio picker), and send button.
+
+/** Maximum media items selectable per message. Carrier PDU caps (~300 KB – 1 MB)
+ *  mean far fewer full-quality photos actually fit — the aggregate size budget in
+ *  MmsManagerWrapper compresses each image to its share of the cap, so five is
+ *  already ambitious on stingy carriers. */
+private const val MAX_MMS_ATTACHMENTS = 5
 
 @Composable
 private fun ReplyBar(
     text: String,
-    pendingAttachmentUri: String?,
-    pendingMimeType: String?,
+    pendingAttachments: List<MessageAttachment>,
     // Non-null when the user has swiped to quote a message; drives the quote strip.
     replyingTo: Message? = null,
     onTextChange: (String) -> Unit,
-    onAttachmentSelected: (Uri, String) -> Unit,
-    onClearAttachment: () -> Unit,
+    onAttachmentsSelected: (List<MessageAttachment>) -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
     onClearReplyingTo: () -> Unit = {},
     onSend: () -> Unit,
     modifier: Modifier = Modifier
@@ -1753,27 +1846,33 @@ private fun ReplyBar(
     val context = LocalContext.current
     var showAttachMenu by remember { mutableStateOf(false) }
 
-    // Single launcher; the MIME filter is set per menu item.
-    val mediaLauncher = rememberLauncherForActivityResult(
+    /* Android Photo Picker (multi-select, images + video). Jetpack-backed with a
+     * Play Services shim below Android 13, so it works down to minSdk 26. Unlike the
+     * old GetContent flow it shows a proper selection surface instead of resolving
+     * straight to whichever app happens to be the default gallery. */
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = MAX_MMS_ATTACHMENTS)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onAttachmentsSelected(uris.map { uri ->
+                val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                MessageAttachment(uri.toString(), mimeType)
+            })
+        }
+    }
+
+    // Audio files aren't handled by the Photo Picker — keep the GetContent flow.
+    val audioLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
             val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-            onAttachmentSelected(uri, mimeType)
+            onAttachmentsSelected(listOf(MessageAttachment(uri.toString(), mimeType)))
         }
     }
 
-    // Friendly label for the attachment preview chip (used for audio/other only).
-    val attachLabel: String? = when {
-        pendingMimeType?.startsWith("image/") == true  -> null  // replaced by thumbnail
-        pendingMimeType?.startsWith("video/") == true  -> null  // replaced by thumbnail
-        pendingMimeType?.startsWith("audio/") == true  -> "🎵 Audio"
-        pendingAttachmentUri != null                    -> "📎 Attachment"
-        else                                            -> null
-    }
-
     // Only show the SMS counter when no attachment is pending (pure SMS mode).
-    val counterText = if (pendingAttachmentUri == null) {
+    val counterText = if (pendingAttachments.isEmpty()) {
         remember(text.length) { smsCounter(text.length) }
     } else null
 
@@ -1847,146 +1946,20 @@ private fun ReplyBar(
                         }
                     }
                 }
-                // Attachment preview — thumbnail for images/video, chip for audio/other.
-                if (pendingAttachmentUri != null && pendingMimeType?.startsWith("image/") == true) {
-                    /* Show a real thumbnail so the user can confirm which photo is attached
-                     * before hitting send. The × badge sits at the top-right corner. */
-                    Box(
-                        modifier = Modifier
-                            .padding(bottom = 6.dp)
-                            .size(80.dp)
+                // Pending-attachment previews — one 80 dp thumbnail per attachment,
+                // each with its own × badge, scrolling horizontally when several.
+                if (pendingAttachments.isNotEmpty()) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(bottom = 6.dp)
                     ) {
-                        SubcomposeAsyncImage(
-                            model               = Uri.parse(pendingAttachmentUri),
-                            contentDescription  = "Attachment preview",
-                            contentScale        = ContentScale.Crop,
-                            modifier            = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(10.dp))
-                        )
-                        // Close button overlaid at the top-right corner.
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .offset(x = 4.dp, y = (-4).dp)
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                                .clickable(onClick = onClearAttachment),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Remove attachment",
-                                modifier = Modifier.size(12.dp),
-                                tint     = MaterialTheme.colorScheme.onSurface
+                        lazyRowItemsIndexed(pendingAttachments) { index, attachment ->
+                            PendingAttachmentPreview(
+                                attachment = attachment,
+                                onRemove   = { onRemoveAttachment(index) }
                             )
                         }
                     }
-                } else if (pendingAttachmentUri != null && pendingMimeType?.startsWith("video/") == true) {
-                    /* Extract the first frame via MediaMetadataRetriever so the user can
-                     * see which video is attached. Runs on IO thread; shows a play-icon
-                     * placeholder while loading (or if extraction fails). */
-                    val videoThumb by produceState<Bitmap?>(null, pendingAttachmentUri) {
-                        value = withContext(Dispatchers.IO) {
-                            val retriever = MediaMetadataRetriever()
-                            var frame: Bitmap? = null
-                            try {
-                                retriever.setDataSource(context, Uri.parse(pendingAttachmentUri))
-                                frame = retriever.getFrameAtTime(0)
-                            } catch (e: Exception) {
-                                android.util.Log.w("VideoThumb", "Frame extraction failed", e)
-                            } finally {
-                                retriever.release()
-                            }
-                            frame
-                        }
-                    }
-                    Box(
-                        modifier = Modifier
-                            .padding(bottom = 6.dp)
-                            .size(80.dp)
-                    ) {
-                        if (videoThumb != null) {
-                            Image(
-                                bitmap             = videoThumb!!.asImageBitmap(),
-                                contentDescription = "Video preview",
-                                contentScale       = ContentScale.Crop,
-                                modifier           = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(10.dp))
-                            )
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector        = Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    modifier           = Modifier.size(32.dp),
-                                    tint               = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        // Semi-transparent play badge overlaid at centre to signal it's a video.
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.5f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector        = Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                modifier           = Modifier.size(16.dp),
-                                tint               = Color.White
-                            )
-                        }
-                        // Close button at top-right.
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .offset(x = 4.dp, y = (-4).dp)
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                                .clickable(onClick = onClearAttachment),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Remove attachment",
-                                modifier           = Modifier.size(12.dp),
-                                tint               = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                } else if (attachLabel != null) {
-                    // Non-image, non-video attachment (audio, generic file) — keep chip.
-                    InputChip(
-                        selected     = false,
-                        onClick      = {},
-                        label        = { Text(attachLabel, style = MaterialTheme.typography.bodySmall) },
-                        trailingIcon = {
-                            IconButton(
-                                onClick  = onClearAttachment,
-                                modifier = Modifier.size(18.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Remove attachment",
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        },
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
                 }
 
                 // Text input row: [attach] [field] [send]
@@ -2004,17 +1977,21 @@ private fun ReplyBar(
                             onDismissRequest = { showAttachMenu = false }
                         ) {
                             DropdownMenuItem(
-                                text    = { Text("Photo or video") },
+                                text    = { Text("Photos or videos") },
                                 onClick = {
                                     showAttachMenu = false
-                                    mediaLauncher.launch("image/*")
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(
+                                            ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                                        )
+                                    )
                                 }
                             )
                             DropdownMenuItem(
                                 text    = { Text("Audio file") },
                                 onClick = {
                                     showAttachMenu = false
-                                    mediaLauncher.launch("audio/*")
+                                    audioLauncher.launch("audio/*")
                                 }
                             )
                         }
@@ -2049,8 +2026,8 @@ private fun ReplyBar(
                     Spacer(Modifier.width(4.dp))
                     IconButton(
                         onClick  = onSend,
-                        // Enabled when there is text OR a media attachment is pending.
-                        enabled  = text.isNotBlank() || pendingAttachmentUri != null,
+                        // Enabled when there is text OR media attachments are pending.
+                        enabled  = text.isNotBlank() || pendingAttachments.isNotEmpty(),
                         colors   = IconButtonDefaults.iconButtonColors(
                             containerColor         = MaterialTheme.colorScheme.primary,
                             contentColor           = MaterialTheme.colorScheme.onPrimary,
@@ -2062,6 +2039,132 @@ private fun ReplyBar(
                     }
                 }
             }
+        }
+    }
+}
+
+// ── PendingAttachmentPreview ───────────────────────────────────────────────────
+
+/**
+ * One 80 dp preview tile in the reply bar's pending-attachment row: image thumbnail,
+ * video first-frame (with play badge), or a labelled placeholder for audio/other.
+ * The × badge at the top-right removes just this attachment.
+ */
+@Composable
+private fun PendingAttachmentPreview(
+    attachment: MessageAttachment,
+    onRemove: () -> Unit
+) {
+    val context = LocalContext.current
+    Box(modifier = Modifier.size(80.dp)) {
+        when {
+            attachment.mimeType.startsWith("image/") -> {
+                /* Real thumbnail so the user can confirm which photo is attached
+                 * before hitting send. */
+                SubcomposeAsyncImage(
+                    model               = Uri.parse(attachment.uri),
+                    contentDescription  = "Attachment preview",
+                    contentScale        = ContentScale.Crop,
+                    modifier            = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(10.dp))
+                )
+            }
+            attachment.mimeType.startsWith("video/") -> {
+                /* Extract the first frame via MediaMetadataRetriever so the user can
+                 * see which video is attached. Runs on IO thread; shows a play-icon
+                 * placeholder while loading (or if extraction fails). */
+                val videoThumb by produceState<Bitmap?>(null, attachment.uri) {
+                    value = withContext(Dispatchers.IO) {
+                        val retriever = MediaMetadataRetriever()
+                        var frame: Bitmap? = null
+                        try {
+                            retriever.setDataSource(context, Uri.parse(attachment.uri))
+                            frame = retriever.getFrameAtTime(0)
+                        } catch (e: Exception) {
+                            android.util.Log.w("VideoThumb", "Frame extraction failed", e)
+                        } finally {
+                            retriever.release()
+                        }
+                        frame
+                    }
+                }
+                if (videoThumb != null) {
+                    Image(
+                        bitmap             = videoThumb!!.asImageBitmap(),
+                        contentDescription = "Video preview",
+                        contentScale       = ContentScale.Crop,
+                        modifier           = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(10.dp))
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector        = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier           = Modifier.size(32.dp),
+                            tint               = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                // Semi-transparent play badge overlaid at centre to signal it's a video.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector        = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier           = Modifier.size(16.dp),
+                        tint               = Color.White
+                    )
+                }
+            }
+            else -> {
+                // Audio / generic file — labelled placeholder tile.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text  = if (attachment.mimeType.startsWith("audio/")) "🎵 Audio" else "📎 File",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        // Close button overlaid at the top-right corner.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = 4.dp, y = (-4).dp)
+                .size(20.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Remove attachment",
+                modifier = Modifier.size(12.dp),
+                tint     = MaterialTheme.colorScheme.onSurface
+            )
         }
     }
 }
@@ -2226,23 +2329,26 @@ private fun linkifyText(text: String, linkColor: androidx.compose.ui.graphics.Co
 // ── FullScreenImageViewer ─────────────────────────────────────────────────────
 
 /**
- * Full-screen overlay that displays an MMS image with pinch-to-zoom support.
+ * Full-screen overlay that displays one or more MMS images with pinch-to-zoom support.
  *
- * The image is shown on a black scrim. The user can:
- *  - Pinch to zoom (1× – 5×)
- *  - Pan while zoomed
+ * The images are shown on a black scrim. The user can:
+ *  - Swipe horizontally to page between the message's images (when more than one)
+ *  - Pinch to zoom (1× – 5×) and pan while zoomed
  *  - Tap the scrim or press Back to dismiss
  *
- * @param uri      content://mms/part/ URI for the image to display.
- * @param onDismiss Called when the user closes the viewer.
+ * @param uris         content://mms/part/ URIs of every image in the message, in order.
+ * @param initialIndex Index of the image the user tapped, shown first.
+ * @param onDismiss    Called when the user closes the viewer.
  */
 @Composable
-private fun FullScreenImageViewer(uri: String, onDismiss: () -> Unit) {
-    // Zoom and pan state — tracked as mutable floats so graphicsLayer can read them
-    // without triggering a full recomposition on every gesture frame.
-    var scale     by remember { mutableStateOf(1f) }
-    var offsetX   by remember { mutableStateOf(0f) }
-    var offsetY   by remember { mutableStateOf(0f) }
+private fun FullScreenImageViewer(
+    uris: List<String>,
+    initialIndex: Int,
+    onDismiss: () -> Unit
+) {
+    val pagerState = rememberPagerState(
+        initialPage = initialIndex.coerceIn(0, (uris.size - 1).coerceAtLeast(0))
+    ) { uris.size }
 
     Dialog(onDismissRequest = onDismiss) {
         Box(
@@ -2253,41 +2359,23 @@ private fun FullScreenImageViewer(uri: String, onDismiss: () -> Unit) {
                 .clickable(onClick = onDismiss),
             contentAlignment = Alignment.Center
         ) {
-            val ctx = LocalContext.current
-            SubcomposeAsyncImage(
-                model = ImageRequest.Builder(ctx)
-                    .data(Uri.parse(uri))
-                    .crossfade(true)
-                    .build(),
-                contentDescription = "Full-screen photo",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    // Consume tap on the image itself so it doesn't fall through to the scrim.
-                    .clickable { /* absorb — don't dismiss when tapping the image */ }
-                    // Pinch-to-zoom + pan gesture.
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            // Clamp scale between 1× and 5×.
-                            scale = (scale * zoom).coerceIn(1f, 5f)
-                            // Pan only makes sense when zoomed in.
-                            if (scale > 1f) {
-                                offsetX += pan.x
-                                offsetY += pan.y
-                            } else {
-                                // Reset pan when fully zoomed out.
-                                offsetX = 0f
-                                offsetY = 0f
-                            }
-                        }
-                    }
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offsetX,
-                        translationY = offsetY
-                    )
-            )
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                ZoomableImage(uri = uris[page])
+            }
+            // Page indicator — only relevant with multiple images.
+            if (uris.size > 1) {
+                Text(
+                    text = "${pagerState.currentPage + 1} / ${uris.size}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
             // Close button in the top-right corner as a fallback affordance.
             IconButton(
                 onClick = onDismiss,
@@ -2303,6 +2391,53 @@ private fun FullScreenImageViewer(uri: String, onDismiss: () -> Unit) {
             }
         }
     }
+}
+
+/** One page of [FullScreenImageViewer]: a Coil image with pinch-to-zoom and pan.
+ *  Zoom state is per-page, so paging to another image resets to 1×. */
+@Composable
+private fun ZoomableImage(uri: String) {
+    // Zoom and pan state — tracked as mutable floats so graphicsLayer can read them
+    // without triggering a full recomposition on every gesture frame.
+    var scale   by remember(uri) { mutableStateOf(1f) }
+    var offsetX by remember(uri) { mutableStateOf(0f) }
+    var offsetY by remember(uri) { mutableStateOf(0f) }
+
+    val ctx = LocalContext.current
+    SubcomposeAsyncImage(
+        model = ImageRequest.Builder(ctx)
+            .data(Uri.parse(uri))
+            .crossfade(true)
+            .build(),
+        contentDescription = "Full-screen photo",
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .fillMaxSize()
+            // Consume tap on the image itself so it doesn't fall through to the scrim.
+            .clickable { /* absorb — don't dismiss when tapping the image */ }
+            // Pinch-to-zoom + pan gesture.
+            .pointerInput(uri) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    // Clamp scale between 1× and 5×.
+                    scale = (scale * zoom).coerceIn(1f, 5f)
+                    // Pan only makes sense when zoomed in.
+                    if (scale > 1f) {
+                        offsetX += pan.x
+                        offsetY += pan.y
+                    } else {
+                        // Reset pan when fully zoomed out.
+                        offsetX = 0f
+                        offsetY = 0f
+                    }
+                }
+            }
+            .graphicsLayer(
+                scaleX = scale,
+                scaleY = scale,
+                translationX = offsetX,
+                translationY = offsetY
+            )
+    )
 }
 
 // ── VideoPlayerDialog ─────────────────────────────────────────────────────────

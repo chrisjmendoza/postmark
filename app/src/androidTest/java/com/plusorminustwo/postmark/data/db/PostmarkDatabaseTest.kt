@@ -333,8 +333,9 @@ class PostmarkDatabaseTest {
         assertEquals(-2000L, db.messageDao().getOptimisticSentId(1L, isMms = true))
         assertEquals(DELIVERY_STATUS_SENT,
             db.messageDao().getOptimisticSentDeliveryStatus(1L, isMms = true))
+        // The attachment transfer path reads the full row via getById(optimisticId).
         assertEquals("content://cache/img.jpg",
-            db.messageDao().getOptimisticSentAttachmentUri(1L, isMms = true))
+            db.messageDao().getById(-2000L)?.attachmentUri)
     }
 
     @Test
@@ -345,7 +346,6 @@ class PostmarkDatabaseTest {
 
         assertNull(db.messageDao().getOptimisticSentId(1L, isMms = true))
         assertNull(db.messageDao().getOptimisticSentDeliveryStatus(1L, isMms = true))
-        assertNull(db.messageDao().getOptimisticSentAttachmentUri(1L, isMms = true))
     }
 
     // ── MessageDao range queries (month-scoped heatmap) ────────────────────

@@ -18,9 +18,8 @@ import androidx.compose.runtime.Immutable
  *                        reaction phrases like "Liked \"hello\"" during sync.
  * @param isMms           True when this message came from `content://mms`; false for SMS.
  *                        IDs for MMS rows are offset by [MMS_ID_OFFSET] to avoid collisions.
- * @param attachmentUri   Content URI of the first MMS media part (e.g. `content://mms/part/42`),
- *                        or null for SMS and text-only MMS. Readable by the default SMS app.
- * @param mimeType        MIME type of the attachment (e.g. `image/jpeg`, `audio/mpeg`), or null.
+ * @param attachments     All MMS media parts of this message in PDU order (images, video,
+ *                        audio). Empty for SMS and text-only MMS.
  */
 @Immutable
 data class Message(
@@ -34,12 +33,18 @@ data class Message(
     val deliveryStatus: Int = 0,
     val reactions: List<Reaction> = emptyList(),
     val isMms: Boolean = false,
-    // MMS media attachment — null for SMS and text-only MMS.
-    val attachmentUri: String? = null,
-    val mimeType: String? = null,
+    // MMS media attachments — empty for SMS and text-only MMS.
+    val attachments: List<MessageAttachment> = emptyList(),
     // False for incoming messages not yet viewed; drives the unread badge.
     val isRead: Boolean = true
-)
+) {
+    /** Content URI of the first attachment — convenience accessor for single-media
+     *  call sites (previews, shared-media grid). Null when there are no attachments. */
+    val attachmentUri: String? get() = attachments.firstOrNull()?.uri
+
+    /** MIME type of the first attachment, or null when there are no attachments. */
+    val mimeType: String? get() = attachments.firstOrNull()?.mimeType
+}
 
 /** Offset added to raw MMS `_id` values before storing in Room, preventing
  *  collision with SMS IDs (which top out around 100M on real devices). */

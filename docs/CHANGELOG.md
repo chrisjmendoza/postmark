@@ -4,9 +4,89 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
-## [Unreleased]
+## 2026-07-05
 
-### Reactions not auto-resolved after first-launch import — resolution ran before MMS existed (July 5 2026)
+### Multi-attachment MMS + video selectable in the picker
+
+User-visible: the attach menu's "Photos or videos" item now opens the Android Photo
+Picker with multi-select (up to 5 items, images AND video), received multi-image MMS
+show every attachment instead of silently dropping all but the first, and the
+full-screen viewer swipes between a message's images. Three intertwined root causes:
+
+1. **Picker**: `GetContent("image/*")` was single-select, excluded `video/*` (so video
+   send — already working end-to-end in `MmsManagerWrapper` — was unreachable), and
+   resolved straight to the default gallery app. Replaced with
+   `ActivityResultContracts.PickMultipleVisualMedia(maxItems = 5)` +
+   `PickVisualMedia.ImageAndVideo` (Jetpack Photo Picker, Play-Services shim covers
+   minSdk 26). Fixing the picker also fixes the "defaults to Google Photos" complaint
+   as a side effect. The "Audio file" item keeps `GetContent("audio/*")` — the Photo
+   Picker doesn't do audio.
+2. **Data model** (root cause of the receive-side drop, `MMS_AUDIT.md` §5):
+   `Message`/`MessageEntity` had exactly one `attachmentUri`/`mimeType` pair. Design
+   decision: a JSON list column (`attachmentsJson`, schema v11→12, additive/nullable)
+   over a child `mms_parts` table — matches the existing `*Json` column convention
+   (`topEmojisJson` etc.) with far fewer moving parts than a new entity/DAO/join for a
+   list that always loads with its message. `Message.attachments: List<MessageAttachment>`
+   is the single source of truth; `attachmentUri`/`mimeType` became *computed*
+   first-attachment accessors, so every read site (`previewText`, ContactDetail
+   shared-media grid, `observeMediaMessages`'s `attachmentUri IS NOT NULL` query) kept
+   working untouched. Pre-v12 rows (NULL json) fall back to the singular columns in
+   `toDomain()`. The codec is hand-written (`MessageAttachment.kt`) rather than
+   `org.json` because org.json is an unmocked stub in JVM unit tests and the codec is
+   exactly the kind of pure function this project tests.
+3. **Aggregate size budget** (correctness on real carriers): the carrier cap from
+   `getCarrierConfigValues()` applies to the WHOLE PDU, so `sendMms()` now divides the
+   effective budget across all attachments via `allocateAttachmentBudgets()` — a pure
+   greedy smallest-first split where images already under their fair share donate the
+   surplus to larger ones; video/audio are fixed cost and fail cleanly when they alone
+   exceed the cap. Tradeoff: images that must shrink share the remainder equally rather
+   than proportionally — simpler, and the existing quality/dimension cascade absorbs
+   the difference. Three images each individually under the cap can no longer sum to a
+   PDU the MMSC rejects.
+
+Other layers: `MmsPduBuilder.buildPdu()` loops N media parts with unique Content-Ids
+(`<media0>`, `<media1>`, …) and filenames (`image0.jpg`, `video1.mp4`, …);
+`buildSmil()` emits one `<par>` slide per part (standard slideshow SMIL, caption on
+the first slide, shared "Media" region). Both receiving-side parsers were
+first-media-part-wins; `parseMmsRawParts()` now collects all parts in PDU order and
+`SmsHistoryImportWorker.getMmsBody()` delegates to it — its duplicated local
+`MmsParts` implementation (with its own `previewText()`) is deleted, leaving one
+parsing implementation. Retry/sync plumbing follows: per-attachment byte caches
+(`mms_attach_<id>.bin`, `mms_attach_<id>_1.bin`, … — index 0 keeps the legacy name so
+in-flight sends survive the upgrade) named by `MmsManagerWrapper.attachmentCacheFile()`,
+and `SmsSyncHandler`'s post-send attachment transfer re-pins every attachment on the
+real row via the new `updateAttachments()` (replacing `updateAttachmentUri()`; the
+provably-dead `getOptimisticSentAttachmentUri()` fallback — it queried the same row
+that had just returned null — is deleted along with its DAO/repo methods).
+
+Out of scope, unchanged: group MMS (separate TODO), audio picker flow.
+
+Tests (all JVM, hand-written fakes, `./gradlew test` 409 passing;
+`compileDebugAndroidTestSources` clean): `MmsPduBuilderTest` +13 (SMIL slide/region
+rules, unique Content-Ids and filenames via PDU byte-scans, text-part presence),
+`AttachmentBudgetTest` (9 — fit-as-is, equal split, surplus donation, fixed-cost
+failure, sum-never-exceeds invariant, order preservation), `MessageAttachmentCodecTest`
+(8 — round-trips incl. quotes/backslash/unicode, garbage tolerance),
+`MmsPartParsingTest` rewritten for lists (15, incl. the §2.2 regression),
+`DatabaseMigrationTest` 11→12 (2, direct-SQL pattern like 2→3).
+
+**Files changed**:
+- `domain/model/MessageAttachment.kt` (new) — data class + JSON codec (pure functions)
+- `domain/model/Message.kt` — `attachments` list; `attachmentUri`/`mimeType` now computed
+- `data/db/entity/MessageEntity.kt` — `attachmentsJson` column + fallback mapping
+- `data/db/PostmarkDatabase.kt` — v12 + `MIGRATION_11_12`; `di/DatabaseModule.kt` registers it
+- `data/db/dao/MessageDao.kt`, `data/repository/MessageRepository.kt` — `updateAttachments()` replaces `updateAttachmentUri()`/`getOptimisticSentAttachmentUri()`
+- `data/sync/MmsPartParsing.kt` — collects all media parts; absorbs `previewText`
+- `data/sync/SmsSyncHandler.kt:385-427` — multi-attachment transfer via `getById(optId)` + indexed cache files
+- `data/sync/SmsHistoryImportWorker.kt:524-548` — delegates to shared parser; `MmsParts` deleted
+- `service/sms/MmsManagerWrapper.kt` — list-based `sendMms()`, `allocateAttachmentBudgets()`, `attachmentCacheFile()`, list-driven `MmsPduBuilder`/`buildSmil()`
+- `ui/thread/ThreadViewModel.kt` — `pendingAttachments: List<MessageAttachment>`, per-index re-pinning, list-based retry
+- `ui/thread/ThreadScreen.kt` — Photo Picker launcher, per-attachment preview tiles, 2-column bubble grid, paged `FullScreenImageViewer`
+- tests: `MessageAttachmentCodecTest.kt` (new), `AttachmentBudgetTest.kt` (new), `MmsPduBuilderTest.kt`, `MmsPartParsingTest.kt`, `DatabaseMigrationTest.kt`, `PostmarkDatabaseTest.kt`, 5 fake DAOs
+
+---
+
+### Reactions not auto-resolved after first-launch import — resolution ran before MMS existed
 
 User-visible symptom: after a first install (or Wipe DB + re-import), emoji reactions
 show up as literal text bubbles (`👍 to "…"` / `Liked "…"`) instead of reaction pills,
@@ -64,7 +144,7 @@ inserted twice; thread preview repaired after fallback deletion.
 
 ---
 
-### Sent image vanishes when an SMS follows an MMS — optimistic-row cleanup not type-scoped (July 5 2026)
+### Sent image vanishes when an SMS follows an MMS — optimistic-row cleanup not type-scoped
 
 Repro: send an MMS (image), then an SMS in the same thread seconds later — the image
 bubble disappears from the thread even though the recipient got it. Root cause: MMS
@@ -111,7 +191,7 @@ superseded by `StatsAlgorithmsTest.kt`.
 
 ---
 
-### ci: Firebase App Distribution workflow (July 5 2026)
+### ci: Firebase App Distribution workflow
 
 Added `.github/workflows/distribute.yml`, mirroring the pattern already proven on
 ShaftSchematic: builds `assembleDebug` and uploads to Firebase App Distribution
@@ -141,7 +221,7 @@ App Distribution Admin service account, and add its JSON key plus the app ID as 
 
 ---
 
-### Sent messages missing — round 3: write-side repair (July 5 2026)
+### Sent messages missing — round 3: write-side repair
 
 Third attempt at the June 2026 "sent messages missing" class of bug. Rounds 1 and 2
 (supplemental `content://sms/sent` cursor, `msg_box IN (1,2,4)` filter) were read-side

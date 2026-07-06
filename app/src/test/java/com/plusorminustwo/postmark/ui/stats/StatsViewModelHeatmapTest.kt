@@ -275,9 +275,8 @@ private class FakeMessageDao : MessageDao {
     override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
     override suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? = null
-    override suspend fun getOptimisticSentAttachmentUri(threadId: Long, isMms: Boolean): String? = null
     override suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? = null
-    override suspend fun updateAttachmentUri(messageId: Long, uri: String) = Unit
+    override suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun getAllThreadIds(): List<Long> = emptyList()
     override suspend fun getAll(): List<MessageEntity> = emptyList()

@@ -12,6 +12,7 @@ import android.telephony.SubscriptionManager
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.plusorminustwo.postmark.data.sync.SyncLogger
+import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -22,7 +23,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Handles outgoing MMS messages (images, audio, video with optional text caption).
+ * Handles outgoing MMS messages (one or more images/audio/video with optional text caption).
  *
  * Builds an M-Send.req PDU, writes it to a temp file in the app cache, exposes
  * it via FileProvider, and calls [SmsManager.sendMultimediaMessage].
@@ -50,63 +51,71 @@ class MmsManagerWrapper @Inject constructor(
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Reads [attachmentUri] from the content resolver, builds an M-Send.req PDU,
-     * and sends it via the telephony stack.
+     * Reads every attachment from the content resolver, builds an M-Send.req PDU
+     * containing all of them, and sends it via the telephony stack.
      *
      * Returns `true` if the message was dispatched to the radio (MMSC result arrives
      * asynchronously via [MmsSentReceiver]). Returns `false` on any local failure
-     * (unreadable attachment, PDU build error, file I/O, or telephony exception) so
-     * the caller can immediately mark the optimistic message as FAILED.
+     * (unreadable attachment, combined size over the carrier limit even after image
+     * compression, PDU build error, file I/O, or telephony exception) so the caller
+     * can immediately mark the optimistic message as FAILED.
      *
-     * @param toAddress     Recipient phone number (E.164 or local format).
-     * @param textBody      Optional caption / text body to include alongside the media.
-     * @param attachmentUri Content URI of the media to send (image, audio, or video).
-     * @param mimeType      MIME type of the media (e.g. "image/jpeg", "audio/mpeg").
-     * @param messageId     Optimistic Room ID; used to name the temp PDU file and in logs.
-     * @param sentIntent    [android.app.PendingIntent] fired when the MMSC accepts/rejects the message.
+     * @param toAddress   Recipient phone number (E.164 or local format).
+     * @param textBody    Optional caption / text body to include alongside the media.
+     * @param attachments Media parts to send (image, audio, or video), in display order.
+     * @param messageId   Optimistic Room ID; used to name the temp PDU/cache files and in logs.
+     * @param sentIntent  [android.app.PendingIntent] fired when the MMSC accepts/rejects the message.
      */
     suspend fun sendMms(
         toAddress: String,
         textBody: String,
-        attachmentUri: Uri,
-        mimeType: String,
+        attachments: List<MessageAttachment>,
         messageId: Long,
         sentIntent: android.app.PendingIntent?
     ): Boolean = withContext(Dispatchers.IO) {
-        syncLogger.log(TAG, "sendMms start: to=$toAddress mimeType=$mimeType messageId=$messageId")
+        if (attachments.isEmpty()) {
+            syncLogger.logError(TAG, "sendMms FAILED — no attachments for messageId=$messageId")
+            return@withContext false
+        }
+        syncLogger.log(TAG, "sendMms start: to=$toAddress attachments=${attachments.size} messageId=$messageId")
 
         // ── 1. Read attachment bytes (with filesDir cache for retry resilience) ─
         /* Photo-picker URIs (content://media/picker_get_content/…) are only valid
          * within the originating Activity's lifecycle; a process restart revokes
          * the grant. We persist the raw bytes to filesDir after the first successful
-         * read so that retries after process death still work. The file is left in
-         * place after send so SmsSyncHandler can use it as the attachmentUri for the
-         * real Room row (keeping the image visible after the optimistic row is replaced). */
-        val attachmentCacheFile = File(context.filesDir, "mms_attach_$messageId.bin")
-        val mediaBytes: ByteArray = if (attachmentCacheFile.exists()) {
-            val cachedBytes = attachmentCacheFile.readBytes()
-            syncLogger.log(TAG, "sendMms: read ${cachedBytes.size} bytes from attachment cache for messageId=$messageId")
-            cachedBytes
-        } else {
-            val bytes = try {
-                context.contentResolver.openInputStream(attachmentUri)?.use { it.readBytes() }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to read attachment uri=$attachmentUri", e)
-                syncLogger.logError(TAG, "sendMms FAILED — could not read attachment uri=$attachmentUri messageId=$messageId", e)
-                return@withContext false
+         * read so that retries after process death still work. The files are left in
+         * place after send so SmsSyncHandler can use them as the attachment URIs for
+         * the real Room row (keeping the media visible after the optimistic row is
+         * replaced). One file per attachment: mms_attach_<id>.bin, mms_attach_<id>_1.bin, … */
+        val mediaBytesList = ArrayList<ByteArray>(attachments.size)
+        for ((index, attachment) in attachments.withIndex()) {
+            val cacheFile = attachmentCacheFile(context, messageId, index)
+            val bytes: ByteArray
+            if (cacheFile.exists()) {
+                bytes = cacheFile.readBytes()
+                syncLogger.log(TAG, "sendMms: read ${bytes.size} bytes from attachment cache [$index] for messageId=$messageId")
+            } else {
+                val read = try {
+                    context.contentResolver.openInputStream(Uri.parse(attachment.uri))?.use { it.readBytes() }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to read attachment uri=${attachment.uri}", e)
+                    syncLogger.logError(TAG, "sendMms FAILED — could not read attachment [$index] uri=${attachment.uri} messageId=$messageId", e)
+                    return@withContext false
+                }
+                if (read == null) {
+                    Log.e(TAG, "sendMms: null media bytes — aborting")
+                    syncLogger.logError(TAG, "sendMms FAILED — null media bytes [$index] for messageId=$messageId")
+                    return@withContext false
+                }
+                syncLogger.log(TAG, "sendMms: read ${read.size} bytes [$index] for messageId=$messageId")
+                // Persist to filesDir so the next retry can read bytes even after a process restart.
+                try { cacheFile.writeBytes(read) } catch (_: IOException) { }
+                bytes = read
             }
-            if (bytes == null) {
-                Log.e(TAG, "sendMms: null media bytes — aborting")
-                syncLogger.logError(TAG, "sendMms FAILED — null media bytes for messageId=$messageId")
-                return@withContext false
-            }
-            syncLogger.log(TAG, "sendMms: read ${bytes.size} bytes for messageId=$messageId")
-            // Persist to filesDir so the next retry can read bytes even after a process restart.
-            try { attachmentCacheFile.writeBytes(bytes) } catch (_: IOException) { }
-            bytes
+            mediaBytesList += bytes
         }
 
-        // ── 1b. Determine carrier size limit and compress if needed ─────────
+        // ── 1b. Determine carrier size limit ─────────────────────────────────
         /* Read the carrier's actual MMS message size cap from CarrierConfig so we
          * compress to a limit that's right for this SIM / carrier. If the config
          * is unavailable we fall back to DEFAULT_MAX_MMS_BYTES (860 KB), which is
@@ -118,40 +127,61 @@ class MmsManagerWrapper @Inject constructor(
             cfg.getInt(SmsManager.MMS_CONFIG_MAX_MESSAGE_SIZE, DEFAULT_MAX_MMS_BYTES)
                 .coerceIn(300_000, 2_000_000)  // sanity-clamp: 300 KB – 2 MB
         } catch (_: Exception) { DEFAULT_MAX_MMS_BYTES }
-        // Reserve headroom for PDU framing + SMIL part so the total PDU stays under
-        // the carrier cap. The carrier limit applies to the full PDU, not just media bytes.
+        // Reserve headroom for PDU framing + SMIL + per-part headers so the total PDU
+        // stays under the carrier cap. The carrier limit applies to the full PDU, not
+        // just media bytes.
         val effectiveMediaLimit = carrierMaxBytes - PDU_OVERHEAD_BYTES
         syncLogger.log(TAG, "sendMms: carrierMaxBytes=$carrierMaxBytes effectiveMediaLimit=$effectiveMediaLimit messageId=$messageId")
 
-        var effectiveMimeType = mimeType
-        val finalMediaBytes = when {
-            mimeType.startsWith("image/") && mediaBytes.size > effectiveMediaLimit -> {
-                // Animated GIFs are flattened to JPEG when over the carrier limit — no GIF encoder available.
-                if (mimeType.equals("image/gif", ignoreCase = true)) {
-                    syncLogger.log(TAG, "sendMms: GIF over carrier limit — animation will be lost (compressing as JPEG) for messageId=$messageId")
-                }
-                val compressed = compressImage(mediaBytes, mimeType, messageId, effectiveMediaLimit)
-                if (compressed == null) {
-                    syncLogger.logError(TAG, "sendMms FAILED — could not compress image below limit (effectiveMediaLimit=$effectiveMediaLimit) for messageId=$messageId")
-                    return@withContext false
-                }
-                // compressImage always re-encodes as JPEG regardless of input format
-                effectiveMimeType = "image/jpeg"
-                compressed
+        // ── 1c. Allocate the shared budget across ALL attachments ────────────
+        /* The carrier cap applies to the whole PDU, so the media budget is divided
+         * across every attachment collectively — three images each under the cap
+         * could otherwise sum to a PDU the MMSC rejects. Images already under their
+         * fair share keep their size and donate the surplus to larger ones; only
+         * images can be compressed, so if the fixed-size parts (video/audio) alone
+         * exceed the budget we fail cleanly. */
+        val budgets = allocateAttachmentBudgets(
+            sizes        = mediaBytesList.map { it.size },
+            compressible = attachments.map { it.mimeType.startsWith("image/", ignoreCase = true) },
+            totalBudget  = effectiveMediaLimit
+        )
+        if (budgets == null) {
+            val totalFixed = mediaBytesList.indices
+                .filter { !attachments[it].mimeType.startsWith("image/", ignoreCase = true) }
+                .sumOf { mediaBytesList[it].size }
+            syncLogger.logError(TAG, "sendMms FAILED — non-compressible media ($totalFixed bytes) exceeds effectiveMediaLimit=$effectiveMediaLimit for messageId=$messageId")
+            return@withContext false
+        }
+
+        // ── 1d. Compress images that exceed their allocated share ────────────
+        val finalParts = ArrayList<MmsPduBuilder.MediaPart>(attachments.size)
+        for (index in attachments.indices) {
+            val mime  = attachments[index].mimeType.lowercase()
+            val bytes = mediaBytesList[index]
+            if (bytes.size <= budgets[index]) {
+                finalParts += MmsPduBuilder.MediaPart(bytes, mime)
+                continue
             }
-            !mimeType.startsWith("image/") && mediaBytes.size > effectiveMediaLimit -> {
-                syncLogger.logError(TAG, "sendMms FAILED — $mimeType too large (${mediaBytes.size} bytes > effectiveMediaLimit=$effectiveMediaLimit) for messageId=$messageId")
+            // Only compressible (image/*) parts can be over budget here —
+            // allocateAttachmentBudgets fails fast otherwise.
+            if (mime == "image/gif") {
+                // Animated GIFs are flattened to JPEG when over the limit — no GIF encoder available.
+                syncLogger.log(TAG, "sendMms: GIF [$index] over budget — animation will be lost (compressing as JPEG) for messageId=$messageId")
+            }
+            val compressed = compressImage(bytes, messageId, budgets[index])
+            if (compressed == null) {
+                syncLogger.logError(TAG, "sendMms FAILED — could not compress image [$index] below budget=${budgets[index]} (of ${attachments.size} attachments) for messageId=$messageId")
                 return@withContext false
             }
-            else -> mediaBytes
+            // compressImage always re-encodes as JPEG regardless of input format
+            finalParts += MmsPduBuilder.MediaPart(compressed, "image/jpeg")
         }
 
         // ── 2. Build the MMS PDU ──────────────────────────────────────────────
         val pdu = try {
             MmsPduBuilder.buildPdu(
                 toAddress  = toAddress,
-                mediaBytes = finalMediaBytes,
-                mimeType   = effectiveMimeType,
+                mediaParts = finalParts,
                 textBody   = textBody
             )
         } catch (e: Exception) {
@@ -202,7 +232,7 @@ class MmsManagerWrapper @Inject constructor(
         try {
             smsManager.sendMultimediaMessage(context, pduUri, null, null, sentIntent)
             Log.i(TAG, "sendMms: sendMultimediaMessage dispatched for messageId=$messageId")
-            syncLogger.log(TAG, "sendMms dispatched to radio: to=$toAddress messageId=$messageId pduBytes=${pdu.size}")
+            syncLogger.log(TAG, "sendMms dispatched to radio: to=$toAddress messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
         } catch (e: Exception) {
             Log.e(TAG, "sendMultimediaMessage failed", e)
             syncLogger.logError(TAG, "sendMms FAILED — sendMultimediaMessage threw for messageId=$messageId", e)
@@ -227,21 +257,36 @@ class MmsManagerWrapper @Inject constructor(
          * MMSC closed the HTTP connection mid-transfer.
          * When carrier config is available, carrierMaxBytes takes precedence. */
         private const val DEFAULT_MAX_MMS_BYTES = 860_160
-        /* Estimated overhead of MMS PDU headers + SMIL part on top of raw media bytes.
-         * Subtracted from the carrier limit before compression so the total PDU never
-         * exceeds what the MMSC accepts. 5 KB is generous; typical overhead is ~1 KB. */
+        /* Estimated overhead of MMS PDU headers + SMIL part + per-part headers on top
+         * of raw media bytes. Subtracted from the carrier limit before budgeting so the
+         * total PDU never exceeds what the MMSC accepts. 5 KB is generous: the SMIL for
+         * the max attachment count is < 1 KB and each part header is ~50 bytes. */
         private const val PDU_OVERHEAD_BYTES = 5_000
+
+        /**
+         * The filesDir cache file holding the raw bytes of attachment [index] of message
+         * [messageId]. Index 0 keeps the pre-multi-attachment name (`mms_attach_<id>.bin`)
+         * so pending/failed sends from before the upgrade still find their cached bytes;
+         * later indices append `_<index>`. Shared with [ThreadViewModel] (URI re-pinning
+         * after dispatch) and [SmsSyncHandler] (attachment transfer to the real row).
+         */
+        fun attachmentCacheFile(context: Context, messageId: Long, index: Int): File =
+            File(
+                context.filesDir,
+                if (index == 0) "mms_attach_$messageId.bin"
+                else "mms_attach_${messageId}_$index.bin"
+            )
     }
 
     // ── Image compression helper ──────────────────────────────────────────────
-    /* Two-phase compression to guarantee the image fits within [MAX_MMS_BYTES]:
+    /* Two-phase compression to guarantee the image fits within [maxBytes]:
      *   Phase 1 — reduce JPEG quality in steps (85 → 70 → 55 → 40 %).
      *   Phase 2 — if quality reduction isn't enough, shrink pixel dimensions
      *             progressively (2000 → 1600 → 1280 → 960 → 800 px max side)
      *             and re-encode at quality=70.
      * Returns null only if the image cannot be decoded or is still too large
      * at the smallest scale step (genuinely unusable). */
-    private fun compressImage(originalBytes: ByteArray, mimeType: String, messageId: Long, maxBytes: Int = DEFAULT_MAX_MMS_BYTES): ByteArray? {
+    private fun compressImage(originalBytes: ByteArray, messageId: Long, maxBytes: Int): ByteArray? {
         // Read EXIF rotation before decoding so the compressed output has correct orientation.
         val rotationDegrees = try {
             ByteArrayInputStream(originalBytes).use { ExifInterface(it).rotationDegrees }
@@ -310,14 +355,59 @@ class MmsManagerWrapper @Inject constructor(
     }
 }
 
+// ── Attachment budget allocation ──────────────────────────────────────────────
+/**
+ * Divides [totalBudget] bytes across all attachments of one MMS.
+ *
+ * Pure function (unit-tested on the JVM). Rules:
+ *  - If everything already fits, each attachment keeps its own size — no compression.
+ *  - Non-compressible parts ([compressible] = false, i.e. video/audio) are fixed cost;
+ *    if their combined size alone exceeds the budget, returns null (send must fail).
+ *  - Compressible parts (images) split the remaining budget greedily, smallest first:
+ *    an image already under its fair share keeps its size and donates the surplus to
+ *    the larger images allocated after it. This avoids over-compressing small images
+ *    just because a large one is present, while guaranteeing the total stays in budget.
+ *
+ * Returns a per-attachment byte cap in the original order, or null when impossible.
+ * Tradeoff: images that must shrink share the remainder equally rather than
+ * proportionally to their size — simpler, and the quality cascade in compressImage
+ * absorbs the difference.
+ */
+internal fun allocateAttachmentBudgets(
+    sizes: List<Int>,
+    compressible: List<Boolean>,
+    totalBudget: Int
+): List<Int>? {
+    require(sizes.size == compressible.size) { "sizes and compressible must be parallel" }
+    if (sizes.sum() <= totalBudget) return sizes
+
+    val fixed = sizes.indices.sumOf { if (compressible[it]) 0 else sizes[it] }
+    if (fixed > totalBudget) return null
+
+    val budgets = IntArray(sizes.size)
+    for (i in sizes.indices) if (!compressible[i]) budgets[i] = sizes[i]
+
+    var remaining = totalBudget - fixed
+    val order = sizes.indices.filter { compressible[it] }.sortedBy { sizes[it] }
+    var left = order.size
+    for (i in order) {
+        val share = remaining / left
+        val alloc = minOf(sizes[i], share)
+        budgets[i] = alloc
+        remaining -= alloc
+        left--
+    }
+    return budgets.toList()
+}
+
 // ── MmsPduBuilder ─────────────────────────────────────────────────────────────
 /*
  * Encodes an M-Send.req PDU in WAP Binary format (OMA MMS 1.2 / WSP spec).
  *
  * Format: multipart/related — SMIL presentation part first, then the media
- * attachment, then an optional text caption. This matches the AOSP PduComposer
- * output format and is required by most carrier MMSCs; multipart/mixed without
- * SMIL is too minimal and frequently rejected.
+ * attachments in order, then an optional text caption. This matches the AOSP
+ * PduComposer output format and is required by most carrier MMSCs; multipart/mixed
+ * without SMIL is too minimal and frequently rejected.
  *
  * WAP Binary encoding quick-reference:
  *   Short-integer  : (value | 0x80)              — well-known field values ≤ 127
@@ -325,9 +415,14 @@ class MmsManagerWrapper @Inject constructor(
  *   Long-integer   : [length byte] [big-endian]
  *   Value-length   : 0–30 as a single byte; >30 as 0x1F + UintVar
  *   UintVar        : variable-length uint, MSB continuation bit 0x80
+ *
+ * internal (not private) so MmsPduBuilderTest can exercise buildPdu/buildSmil directly.
  */
 
-private object MmsPduBuilder {
+internal object MmsPduBuilder {
+
+    /** One media part of the outgoing PDU: raw bytes + (lowercase) MIME type. */
+    internal class MediaPart(val bytes: ByteArray, val mimeType: String)
 
     // ── Message-level header field IDs (OMA MMS 1.1 Table D.1) ───────────────
     private const val FIELD_MESSAGE_TYPE      = 0x8C  // X-Mms-Message-Type
@@ -379,12 +474,10 @@ private object MmsPduBuilder {
 
     fun buildPdu(
         toAddress: String,
-        mediaBytes: ByteArray,
-        mimeType: String,
+        mediaParts: List<MediaPart>,
         textBody: String
     ): ByteArray {
         val out = ByteArrayOutputStream()
-        val normalizedMime = mimeType.lowercase()
 
         // ── MMS headers ───────────────────────────────────────────────────────
         out.write(FIELD_MESSAGE_TYPE); out.write(VALUE_M_SEND_REQ)
@@ -431,14 +524,19 @@ private object MmsPduBuilder {
         writeValueLength(out, ctBody.size)
         out.write(ctBody)
 
-        // ── Multipart body: SMIL first, then media, then optional text ─────────
-        val mediaFilename = mediaFilenameForMime(normalizedMime)
-        val smilXml = buildSmil(mediaFilename, normalizedMime, textBody.isNotEmpty())
+        // ── Multipart body: SMIL first, then all media parts, then optional text ─
+        // Every media part gets a unique Content-Id (<media0>, <media1>, …) and a
+        // unique filename; the SMIL references each filename in order.
+        val normalizedMimes = mediaParts.map { it.mimeType.lowercase() }
+        val filenames = normalizedMimes.mapIndexed { index, mime -> mediaFilename(mime, index) }
+        val smilXml = buildSmil(filenames.zip(normalizedMimes), textBody.isNotEmpty())
 
         val parts = mutableListOf<ByteArray>()
         // SMIL must be first (it's the "start" part referenced in Content-Type)
         parts += encodePart("application/smil", smilXml.toByteArray(Charsets.UTF_8), SMIL_CONTENT_ID, "smil.xml")
-        parts += encodePart(normalizedMime,      mediaBytes,                           "<img>",         mediaFilename)
+        mediaParts.forEachIndexed { index, media ->
+            parts += encodePart(normalizedMimes[index], media.bytes, "<media$index>", filenames[index])
+        }
         if (textBody.isNotEmpty()) {
             parts += encodePart("text/plain", textBody.toByteArray(Charsets.UTF_8), "<txt>", "text.txt")
         }
@@ -452,38 +550,49 @@ private object MmsPduBuilder {
     // ── SMIL builder ──────────────────────────────────────────────────────────
 
     /**
-     * Builds a minimal SMIL XML document that references [mediaFilename] via
-     * its Content-Location name. SMIL is what tells the MMSC — and the recipient's
+     * Builds a SMIL XML document referencing every media part via its
+     * Content-Location filename. SMIL is what tells the MMSC — and the recipient's
      * device — how to present the message; most MMSCs require it.
+     *
+     * Layout: one shared "Media" region; each media item gets its own sequential
+     * `<par>` slide (the standard MMS slideshow form — simple and universally
+     * supported). The text caption rides on the first slide in a "Text" region.
+     *
+     * @param media  (filename, lowercase mimeType) pairs in part order.
      */
-    private fun buildSmil(mediaFilename: String, mimeType: String, hasText: Boolean): String {
+    internal fun buildSmil(media: List<Pair<String, String>>, hasText: Boolean): String {
         // Only image and video need a visible region; audio is presentation-only.
-        val needsRegion = mimeType.startsWith("image/") || mimeType.startsWith("video/")
-        val regionId    = if (mimeType.startsWith("image/")) "Image" else "Video"
+        val needsRegion = media.any { (_, mime) ->
+            mime.startsWith("image/") || mime.startsWith("video/")
+        }
         val mediaHeight = if (hasText) "80%" else "100%"
 
         val layout = buildString {
             append("""<root-layout width="320" height="480"/>""")
             if (needsRegion) {
-                append("""<region id="$regionId" width="100%" height="$mediaHeight" fit="meet"/>""")
+                append("""<region id="Media" width="100%" height="$mediaHeight" fit="meet"/>""")
             }
             if (hasText) {
                 append("""<region id="Text" width="100%" height="20%" fit="scroll"/>""")
             }
         }
 
-        val parBody = buildString {
-            when {
-                mimeType.startsWith("image/") -> append("""<img src="$mediaFilename" region="$regionId"/>""")
-                mimeType.startsWith("video/") -> append("""<video src="$mediaFilename" region="$regionId"/>""")
-                mimeType.startsWith("audio/") -> append("""<audio src="$mediaFilename"/>""")
-                else                          -> append("""<ref src="$mediaFilename"/>""")
+        val body = buildString {
+            media.forEachIndexed { index, (filename, mime) ->
+                val dur = if (mime.startsWith("audio/") || mime.startsWith("video/")) "indefinite" else "5000ms"
+                append("""<par dur="$dur">""")
+                when {
+                    mime.startsWith("image/") -> append("""<img src="$filename" region="Media"/>""")
+                    mime.startsWith("video/") -> append("""<video src="$filename" region="Media"/>""")
+                    mime.startsWith("audio/") -> append("""<audio src="$filename"/>""")
+                    else                      -> append("""<ref src="$filename"/>""")
+                }
+                if (hasText && index == 0) append("""<text src="text.txt" region="Text"/>""")
+                append("</par>")
             }
-            if (hasText) append("""<text src="text.txt" region="Text"/>""")
         }
 
-        val dur = if (mimeType.startsWith("audio/") || mimeType.startsWith("video/")) "indefinite" else "5000ms"
-        return """<smil><head><layout>$layout</layout></head><body><par dur="$dur">$parBody</par></body></smil>"""
+        return """<smil><head><layout>$layout</layout></head><body>$body</body></smil>"""
     }
 
     // ── Part encoding ─────────────────────────────────────────────────────────
@@ -553,19 +662,23 @@ private object MmsPduBuilder {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Returns a safe filename for this MIME type used in Content-Location and SMIL src. */
-    private fun mediaFilenameForMime(mimeType: String): String = when {
-        mimeType.startsWith("image/jpeg") || mimeType == "image/jpg" -> "image.jpg"
-        mimeType.startsWith("image/png")  -> "image.png"
-        mimeType.startsWith("image/gif")  -> "image.gif"
-        mimeType.startsWith("image/")     -> "image.jpg"
-        mimeType == "audio/mpeg" || mimeType == "audio/mp3" -> "audio.mp3"
-        mimeType.startsWith("audio/amr")  -> "audio.amr"
-        mimeType.startsWith("audio/")     -> "audio.mp4"
-        mimeType.startsWith("video/mp4")  -> "video.mp4"
-        mimeType.startsWith("video/3gpp") -> "video.3gp"
-        mimeType.startsWith("video/")     -> "video.mp4"
-        else                              -> "attachment.bin"
+    /** Returns a unique, safe filename for media part [index] used in
+     *  Content-Location and SMIL src (e.g. "image0.jpg", "video1.mp4"). */
+    internal fun mediaFilename(mimeType: String, index: Int): String {
+        val (base, ext) = when {
+            mimeType.startsWith("image/jpeg") || mimeType == "image/jpg" -> "image" to "jpg"
+            mimeType.startsWith("image/png")  -> "image" to "png"
+            mimeType.startsWith("image/gif")  -> "image" to "gif"
+            mimeType.startsWith("image/")     -> "image" to "jpg"
+            mimeType == "audio/mpeg" || mimeType == "audio/mp3" -> "audio" to "mp3"
+            mimeType.startsWith("audio/amr")  -> "audio" to "amr"
+            mimeType.startsWith("audio/")     -> "audio" to "mp4"
+            mimeType.startsWith("video/mp4")  -> "video" to "mp4"
+            mimeType.startsWith("video/3gpp") -> "video" to "3gp"
+            mimeType.startsWith("video/")     -> "video" to "mp4"
+            else                              -> "attachment" to "bin"
+        }
+        return "$base$index.$ext"
     }
 
     /**

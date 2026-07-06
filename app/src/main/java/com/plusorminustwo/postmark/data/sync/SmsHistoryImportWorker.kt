@@ -447,7 +447,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             // New row — run the slow sub-queries and queue for insert.
             val parts   = getMmsBody(rawId)
             val address = getMmsAddress(rawId, isSent)
-            debugMmsLog("processMmsCursor: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
+            debugMmsLog("processMmsCursor: rawId=$rawId  attachments=${parts.attachments.size}  firstMime=${parts.attachments.firstOrNull()?.mimeType}")
 
             val existing = threads[threadId]
             if (existing == null || timestamp > existing.lastMessageAt) {
@@ -457,7 +457,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                     displayName = displayName,
                     address = address,
                     lastMessageAt = timestamp,
-                    lastMessagePreview = parts.previewText(),
+                    lastMessagePreview = parts.previewText,
                     backupPolicy = BackupPolicy.GLOBAL
                 )
             }
@@ -471,8 +471,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                 isSent = isSent,
                 type = msgBox,
                 isMms = true,
-                attachmentUri = parts.attachmentUri,
-                mimeType = parts.mimeType
+                attachments = parts.attachments
             )
             inserted++
             if (inserted % 500 == 0) {
@@ -521,57 +520,31 @@ class SmsHistoryImportWorker @AssistedInject constructor(
     private fun computeEta(elapsedMs: Long, done: Int, total: Int) =
         Companion.computeEta(elapsedMs, done, total)
 
-    // Reads all parts of an MMS message and returns the text body plus the content URI
-    // of the first media attachment (image, video, or audio). The URI points to
-    // content://mms/part/{partId} which is stable and readable by the default SMS app.
-    // Returns MmsParts("[MMS]", null, null) when the cursor is unavailable.
-    private fun getMmsBody(mmsId: Long): MmsParts {
+    // Reads all parts of an MMS message and returns the text body plus stable
+    // content://mms/part/{partId} URIs for every media attachment (image, video, audio).
+    // Delegates the parsing rules to the shared parseMmsRawParts() — the same pure
+    // function used by SmsSyncHandler.getMmsBodyIncremental().
+    // Returns MmsParsedResult("[MMS]", emptyList()) when the cursor is unavailable.
+    private fun getMmsBody(mmsId: Long): MmsParsedResult {
         val cursor = applicationContext.contentResolver.query(
             Uri.withAppendedPath(Telephony.Mms.CONTENT_URI, "$mmsId/part"),
             arrayOf("_id", Telephony.Mms.Part.CONTENT_TYPE, Telephony.Mms.Part.TEXT), null, null, null
         ) ?: run {
             Log.w(TAG_MMS, "getMmsBody: parts cursor null for mmsId=$mmsId")
-            return MmsParts("[MMS]", null, null)
+            return MmsParsedResult("[MMS]", emptyList())
         }
         debugMmsLog("getMmsBody: mmsId=$mmsId  partCount=${cursor.count}")
-        val sb = StringBuilder()
-        var attachmentUri: String? = null
-        var mimeType: String? = null
+        val rawParts = mutableListOf<MmsRawPart>()
         cursor.use {
             val idIdx   = it.getColumnIndexOrThrow("_id")
             val ctIdx   = it.getColumnIndexOrThrow(Telephony.Mms.Part.CONTENT_TYPE)
             val textIdx = it.getColumnIndexOrThrow(Telephony.Mms.Part.TEXT)
             while (it.moveToNext()) {
-                val ct     = it.getString(ctIdx) ?: continue
-                val partId = it.getLong(idIdx)
-                when {
-                    // Accumulate text body from all text/plain parts.
-                    ct.equals("text/plain", ignoreCase = true) ->
-                        sb.append(it.getString(textIdx) ?: "")
-                    // Skip SMIL layout descriptor — not user-visible content.
-                    ct.equals("application/smil", ignoreCase = true) -> Unit
-                    // Store the first image/video/audio part URI (case-insensitive for
-                    // Samsung and other OEMs that use mixed-case MIME types like audio/AMR).
-                    ct.startsWith("image/", ignoreCase = true) ||
-                    ct.startsWith("video/", ignoreCase = true) ||
-                    ct.startsWith("audio/", ignoreCase = true) -> {
-                        debugMmsLog("getMmsBody: found media part ct=$ct  partId=$partId")
-                        if (attachmentUri == null) {
-                            attachmentUri = "content://mms/part/$partId"
-                            mimeType = ct
-                        }
-                    }
-                    else -> debugMmsLog("getMmsBody: skipping unknown part ct=$ct")
-                }
+                val ct = it.getString(ctIdx) ?: continue
+                rawParts += MmsRawPart(it.getLong(idIdx), ct, it.getString(textIdx))
             }
         }
-        // If there’s no text and no recognised media, fall back to the [MMS] placeholder.
-        val body = sb.toString().trim()
-        return MmsParts(
-            body = body,
-            attachmentUri = attachmentUri,
-            mimeType = mimeType
-        )
+        return parseMmsRawParts(rawParts)
     }
 
     // Returns the relevant address for an MMS message.
@@ -606,22 +579,6 @@ class SmsHistoryImportWorker @AssistedInject constructor(
     // Return value for processMmsCursor: inserted row count plus the minimum rawId seen
     // (used by syncAllMms to set the phase-2 boundary after the fast phase-1 seed).
     private data class CursorResult(val inserted: Int, val minRawId: Long)
-
-    // Carries the extracted text body and optional media attachment info for one MMS PDU.
-    private data class MmsParts(
-        val body: String,
-        val attachmentUri: String?,
-        val mimeType: String?
-    ) {
-        // Human-readable thread preview: emoji label for media-only messages.
-        fun previewText(): String = when {
-            body.isNotEmpty()                      -> body
-            mimeType?.startsWith("image/") == true -> "📷 Photo"
-            mimeType?.startsWith("video/") == true -> "🎥 Video"
-            mimeType?.startsWith("audio/") == true -> "🎵 Audio message"
-            else                                   -> "[MMS]"
-        }
-    }
 
     companion object {
         const val WORK_NAME  = "first_launch_sms_sync"

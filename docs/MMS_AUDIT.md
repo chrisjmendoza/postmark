@@ -100,7 +100,7 @@ content://mms/$mmsId/part  →  columns: _id, CONTENT_TYPE, TEXT
 - `application/smil` parts are skipped.
 - Everything else is logged and skipped.
 
-**Gap — Multi-image MMS drops all attachments after the first.** A received MMS with two photos displays only the first. The second is silently discarded at the data layer, not the display layer. The user receives no indication that content was truncated. Fixing this properly requires either a separate parts table (schema change) or storing multiple URIs as a JSON array.
+**Gap — Multi-image MMS drops all attachments after the first.** ~~A received MMS with two photos displays only the first. The second is silently discarded at the data layer, not the display layer. The user receives no indication that content was truncated. Fixing this properly requires either a separate parts table (schema change) or storing multiple URIs as a JSON array.~~ **FIXED (July 5 2026):** `parseMmsRawParts()` collects all media parts into `Message.attachments` (JSON-array column `attachmentsJson`, schema v12); both sync paths now share that one parser (`SmsHistoryImportWorker.getMmsBody()` delegates to it).
 
 **Note on `_DATA` field:** Android docs note that the `_DATA` field in `content://mms/part` may be null. The implementation does not read `_DATA` — it constructs `content://mms/part/$partId` URIs and passes them to Coil and `MediaPlayer`, which call `openInputStream()` internally. This is the correct spec-compliant approach.
 
@@ -197,9 +197,9 @@ If `getMmsBody()` returns a null cursor, it falls back to `MmsParts("[MMS]", nul
 
 **`MMS_ID_OFFSET = 10_000_000_000L`** — added to raw MMS `_id` values to prevent collision with SMS IDs in the Room `messages` table.
 
-**Fundamental limitation:** The single `attachmentUri` / `mimeType` pair in `Message` prevents multi-attachment MMS at the data-model level. This is the root cause of the silent attachment drop described in §2.2. The fix requires either:
+**Fundamental limitation — RESOLVED (July 5 2026):** The single `attachmentUri` / `mimeType` pair in `Message` prevented multi-attachment MMS at the data-model level (root cause of the §2.2 drop). Fixed with the second option below: `Message.attachments: List<MessageAttachment>` serialized as JSON in the `attachmentsJson` column (schema v12). `attachmentUri`/`mimeType` remain as computed first-attachment accessors (and mirrored entity columns) so single-media call sites and pre-v12 rows keep working. Original options considered:
 - A separate `mms_parts` table with a foreign key to `messages`, or
-- A `List<MmsPart>` serialized as JSON in a single column (simpler but less queryable).
+- A `List<MmsPart>` serialized as JSON in a single column (simpler but less queryable). ← chosen
 
 ---
 
@@ -236,7 +236,7 @@ Note: Emulator has no MMSC simulation — MMS testing requires a physical device
 | # | Issue | Severity | Effort | File | Fixed |
 |---|---|---|---|---|---|
 | 1 | Samsung `syncLatestMms()` has no fallback — silent failure | Critical | Medium | `SmsSyncHandler.kt` | [x] |
-| 2 | Multi-image MMS drops all but first attachment | Critical | High (schema) | `getMmsBody()` / `Message.kt` | [ ] |
+| 2 | Multi-image MMS drops all but first attachment | Critical | High (schema) | `getMmsBody()` / `Message.kt` | [x] |
 | 3 | Video/audio not size-checked before sending | Critical | Low | `MmsManagerWrapper.kt` | [x] |
 | 4 | EXIF orientation stripped on outgoing images | High | Low (dep) | `MmsManagerWrapper.kt` | [x] |
 | 5 | Audio `prepare()` on main thread (ANR risk) | High | Low | `ThreadScreen.kt` | [x] |

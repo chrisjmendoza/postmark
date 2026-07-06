@@ -4,11 +4,9 @@ import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
 import android.app.PendingIntent
-import android.net.Uri
 import android.os.Build
 import android.provider.Telephony
 import androidx.core.content.FileProvider
-import java.io.File
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -20,7 +18,10 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
+import com.plusorminustwo.postmark.domain.model.decodeAttachmentsJson
+import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
@@ -66,9 +67,8 @@ data class ThreadUiState(
     val reactionPickerMessageId: Long? = null,
     val reactionPickerBubbleY: Float = 0f,
     val highlightedMessageId: Long? = null,
-    // Pending outgoing MMS attachment (URI string + MIME type). Null when composing plain SMS.
-    val pendingAttachmentUri: String? = null,
-    val pendingMimeType: String? = null,
+    // Pending outgoing MMS attachments (URI + MIME type each). Empty when composing plain SMS.
+    val pendingAttachments: List<MessageAttachment> = emptyList(),
     // ID of the message being quoted via swipe-to-reply; null = no active quote.
     val replyingToId: Long? = null,
     // Pre-computed flat render list + index maps — derived from messages, computed in the
@@ -115,9 +115,11 @@ class ThreadViewModel @Inject constructor(
     private val _reactionPickerMessageId  = MutableStateFlow<Long?>(null)
     private val _reactionPickerBubbleY    = MutableStateFlow(0f)
     private val _highlightedMessageId     = MutableStateFlow<Long?>(null)
-    // URI string + MIME type of a pending outgoing MMS attachment; null when composing SMS.
-    private val _pendingAttachmentUri = MutableStateFlow(savedStateHandle.get<String>(DRAFT_ATTACHMENT_URI_KEY))
-    private val _pendingMimeType      = MutableStateFlow(savedStateHandle.get<String>(DRAFT_ATTACHMENT_MIME_KEY))
+    // Pending outgoing MMS attachments; empty when composing SMS. Persisted to
+    // SavedStateHandle as the same JSON encoding used by the Room column.
+    private val _pendingAttachments = MutableStateFlow(
+        decodeAttachmentsJson(savedStateHandle.get<String>(DRAFT_ATTACHMENTS_KEY))
+    )
     // ID of the message the user is replying to (swipe-to-reply); null = no active quote.
     private val _replyingToId         = MutableStateFlow<Long?>(null)
 
@@ -155,8 +157,7 @@ class ThreadViewModel @Inject constructor(
         val reactionPickerMessageId: Long?,
         val reactionPickerBubbleY: Float,
         val highlightedMessageId: Long?,
-        val pendingAttachmentUri: String?,
-        val pendingMimeType: String?,
+        val pendingAttachments: List<MessageAttachment>,
         // ID of the message being quoted via swipe-to-reply; null = no active quote.
         val replyingToId: Long?
     )
@@ -176,8 +177,7 @@ class ThreadViewModel @Inject constructor(
             _reactionPickerMessageId,
             _reactionPickerBubbleY,
             _highlightedMessageId,
-            _pendingAttachmentUri,
-            _pendingMimeType,
+            _pendingAttachments,
             _replyingToId
         ) { arr ->
             InnerState(
@@ -189,9 +189,8 @@ class ThreadViewModel @Inject constructor(
                 reactionPickerMessageId = arr[5] as Long?,
                 reactionPickerBubbleY   = arr[6] as Float,
                 highlightedMessageId    = arr[7] as Long?,
-                pendingAttachmentUri    = arr[8] as String?,
-                pendingMimeType         = arr[9] as String?,
-                replyingToId            = arr[10] as Long?
+                pendingAttachments      = arr[8] as List<MessageAttachment>,
+                replyingToId            = arr[9] as Long?
             )
         }
     ) { thread, messages, selected, selectionMode, inner ->
@@ -210,8 +209,7 @@ class ThreadViewModel @Inject constructor(
             reactionPickerMessageId = inner.reactionPickerMessageId,
             reactionPickerBubbleY   = inner.reactionPickerBubbleY,
             highlightedMessageId    = inner.highlightedMessageId,
-            pendingAttachmentUri    = inner.pendingAttachmentUri,
-            pendingMimeType         = inner.pendingMimeType,
+            pendingAttachments      = inner.pendingAttachments,
             replyingToId            = inner.replyingToId
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
@@ -382,24 +380,29 @@ class ThreadViewModel @Inject constructor(
     fun dismissDefaultSmsDialog() { _showDefaultSmsDialog.value = false }
 
     /**
-     * Stores the URI and MIME type of a media file the user has chosen to attach.
-     * Clears automatically after [sendMessage] picks it up, or via [clearAttachment].
+     * Stores the media files the user has chosen to attach, replacing any previous
+     * selection. Clears automatically after [sendMessage] picks them up, or via
+     * [clearAttachments].
      *
-     * Triggers: user taps the attach button and picks a photo/audio/video file.
+     * Triggers: user taps the attach button and picks photos/videos (multi-select
+     * photo picker) or an audio file.
      */
-    fun onAttachmentSelected(uri: Uri, mimeType: String) {
-        _pendingAttachmentUri.value = uri.toString()
-        _pendingMimeType.value      = mimeType
-        savedStateHandle[DRAFT_ATTACHMENT_URI_KEY]  = uri.toString()
-        savedStateHandle[DRAFT_ATTACHMENT_MIME_KEY] = mimeType
+    fun onAttachmentsSelected(attachments: List<MessageAttachment>) {
+        _pendingAttachments.value = attachments
+        savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(attachments)
     }
 
-    /** Clears any pending attachment (user taps the × on the preview chip). */
-    fun clearAttachment() {
-        _pendingAttachmentUri.value = null
-        _pendingMimeType.value      = null
-        savedStateHandle.remove<String>(DRAFT_ATTACHMENT_URI_KEY)
-        savedStateHandle.remove<String>(DRAFT_ATTACHMENT_MIME_KEY)
+    /** Removes one pending attachment (user taps the × on its preview thumbnail). */
+    fun removeAttachment(index: Int) {
+        val updated = _pendingAttachments.value.filterIndexed { i, _ -> i != index }
+        _pendingAttachments.value = updated
+        savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(updated)
+    }
+
+    /** Clears all pending attachments. */
+    fun clearAttachments() {
+        _pendingAttachments.value = emptyList()
+        savedStateHandle.remove<String>(DRAFT_ATTACHMENTS_KEY)
     }
 
     /**
@@ -420,11 +423,10 @@ class ThreadViewModel @Inject constructor(
      * the user sees the red-! retry indicator.
      */
     fun sendMessage() {
-        val text             = _replyText.value.trim()
-        val attachmentUri    = _pendingAttachmentUri.value
-        val mimeType         = _pendingMimeType.value
+        val text        = _replyText.value.trim()
+        val attachments = _pendingAttachments.value
         // Require at least text OR an attachment; also block re-entrant sends.
-        if ((text.isEmpty() && attachmentUri == null) || _isSending.value) return
+        if ((text.isEmpty() && attachments.isEmpty()) || _isSending.value) return
 
         if (!isDefaultSmsApp()) {
             _showDefaultSmsDialog.value = true
@@ -434,7 +436,7 @@ class ThreadViewModel @Inject constructor(
         val thread = uiState.value.thread ?: return
         _replyText.value = ""
         savedStateHandle.remove<String>(DRAFT_TEXT_KEY)
-        clearAttachment()
+        clearAttachments()
         clearReplyingTo()
 
         viewModelScope.launch {
@@ -444,9 +446,9 @@ class ThreadViewModel @Inject constructor(
             val now    = System.currentTimeMillis()
             val tempId = -now
 
-            if (attachmentUri != null && mimeType != null) {
+            if (attachments.isNotEmpty()) {
                 // ── MMS path ──────────────────────────────────────────────────
-                // Optimistic message shown immediately with attachment preview.
+                // Optimistic message shown immediately with attachment previews.
                 val optimistic = Message(
                     id             = tempId,
                     threadId       = threadId,
@@ -457,8 +459,7 @@ class ThreadViewModel @Inject constructor(
                     type           = Telephony.Mms.MESSAGE_BOX_SENT,
                     deliveryStatus = DELIVERY_STATUS_PENDING,
                     isMms          = true,
-                    attachmentUri  = attachmentUri,
-                    mimeType       = mimeType
+                    attachments    = attachments
                 )
                 messageRepository.insert(optimistic)
                 /* Signal scroll AFTER the insert so the message is already in the list
@@ -491,31 +492,33 @@ class ThreadViewModel @Inject constructor(
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )
                 val dispatched = mmsManagerWrapper.sendMms(
-                    toAddress     = thread.address,
-                    textBody      = text,
-                    attachmentUri = Uri.parse(attachmentUri),
-                    mimeType      = mimeType,
-                    messageId     = tempId,
-                    sentIntent    = sentIntent
+                    toAddress   = thread.address,
+                    textBody    = text,
+                    attachments = attachments,
+                    messageId   = tempId,
+                    sentIntent  = sentIntent
                 )
                 /* Local failure (bad URI, IO error, telephony exception): mark FAILED
                  * immediately so the message doesn't stay stuck as PENDING forever. */
                 if (!dispatched) {
                     messageRepository.updateDeliveryStatus(tempId, DELIVERY_STATUS_FAILED)
                 } else {
-                    /* Pin the optimistic row's attachmentUri to the stable filesDir cache
-                     * file written by MmsManagerWrapper. Samsung's content://mms/part/ data
+                    /* Pin the optimistic row's attachments to the stable filesDir cache
+                     * files written by MmsManagerWrapper. Samsung's content://mms/part/ data
                      * for sent messages is often empty — using our own cached bytes ensures
-                     * the image stays visible after SmsSyncHandler swaps the real row in. */
+                     * the media stays visible after SmsSyncHandler swaps the real row in. */
                     try {
-                        val cacheFile = File(context.filesDir, "mms_attach_$tempId.bin")
-                        if (cacheFile.exists()) {
-                            val stableUri = FileProvider.getUriForFile(
-                                context, "${context.packageName}.fileprovider", cacheFile
-                            ).toString()
-                            messageRepository.updateAttachmentUri(tempId, stableUri)
+                        val pinned = attachments.mapIndexed { index, att ->
+                            val cacheFile = MmsManagerWrapper.attachmentCacheFile(context, tempId, index)
+                            if (cacheFile.exists()) {
+                                val stableUri = FileProvider.getUriForFile(
+                                    context, "${context.packageName}.fileprovider", cacheFile
+                                ).toString()
+                                MessageAttachment(stableUri, att.mimeType)
+                            } else att
                         }
-                    } catch (_: Exception) { /* keep original picker URI on error */ }
+                        messageRepository.updateAttachments(tempId, pinned)
+                    } catch (_: Exception) { /* keep original picker URIs on error */ }
                 }
             } else {
                 // ── SMS path (existing behaviour) ─────────────────────────────
@@ -553,10 +556,10 @@ class ThreadViewModel @Inject constructor(
         if (message.deliveryStatus != DELIVERY_STATUS_FAILED) return
         viewModelScope.launch {
             messageRepository.updateDeliveryStatus(messageId, DELIVERY_STATUS_PENDING)
-            if (message.isMms && message.attachmentUri != null) {
+            if (message.isMms && message.attachments.isNotEmpty()) {
                 /* MMS retry: rebuild the sentIntent (the original was FLAG_ONE_SHOT and
                  * has already been consumed) then re-invoke MmsManagerWrapper with the
-                 * same attachment URI. */
+                 * same attachments. */
                 val reqCode = (messageId and 0x3FFF_FFFFL).toInt()
                 val beforeSendMaxId = try {
                     context.contentResolver.query(
@@ -577,12 +580,11 @@ class ThreadViewModel @Inject constructor(
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )
                 val dispatched = mmsManagerWrapper.sendMms(
-                    toAddress     = message.address,
-                    textBody      = message.body,
-                    attachmentUri = Uri.parse(message.attachmentUri),
-                    mimeType      = message.mimeType ?: "image/jpeg",
-                    messageId     = messageId,
-                    sentIntent    = sentIntent
+                    toAddress   = message.address,
+                    textBody    = message.body,
+                    attachments = message.attachments,
+                    messageId   = messageId,
+                    sentIntent  = sentIntent
                 )
                 if (!dispatched) {
                     messageRepository.updateDeliveryStatus(messageId, DELIVERY_STATUS_FAILED)
@@ -649,9 +651,8 @@ class ThreadViewModel @Inject constructor(
     }
 
     companion object {
-        private const val DRAFT_TEXT_KEY           = "draft_text"
-        private const val DRAFT_ATTACHMENT_URI_KEY = "draft_attachment_uri"
-        private const val DRAFT_ATTACHMENT_MIME_KEY = "draft_attachment_mime"
+        private const val DRAFT_TEXT_KEY        = "draft_text"
+        private const val DRAFT_ATTACHMENTS_KEY = "draft_attachments"
 
         val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "🔥")
 

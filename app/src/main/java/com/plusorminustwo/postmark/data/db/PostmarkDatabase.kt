@@ -14,7 +14,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity],
  * [ThreadStatsEntity], [GlobalStatsEntity], [MessageFtsEntity].
  *
- * Current schema version: 11.
+ * Current schema version: 12.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -145,6 +145,15 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // Postmark-only nickname column — nullable, no default. Existing rows
                 // get NULL (i.e. fall back to displayName in the UI).
                 db.execSQL("ALTER TABLE threads ADD COLUMN nickname TEXT")
+            }
+        }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // JSON list of ALL MMS media parts (multi-attachment support). Nullable,
+                // no default: existing rows keep NULL and fall back to the singular
+                // attachmentUri/mimeType pair added in MIGRATION_8_9.
+                db.execSQL("ALTER TABLE messages ADD COLUMN attachmentsJson TEXT")
             }
         }
 

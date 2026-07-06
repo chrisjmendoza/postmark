@@ -14,13 +14,14 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
+import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import androidx.core.content.FileProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -383,47 +384,43 @@ class SmsSyncHandler @Inject constructor(
             }
 
             /*
-             * Transfer the attachmentUri from the locally-cached compressed image to the
+             * Transfer the attachments from the locally-cached compressed media to the
              * real row. Samsung's content://mms/part/ data for SENT rows is typically empty,
-             * so we use our own filesDir cache to keep the image visible after the real row
+             * so we use our own filesDir cache to keep the media visible after the real row
              * replaces the optimistic one.
              *
-             * Primary strategy: look for the cache file at mms_attach_<tempId>.bin using the
-             * optimistic row's id (= tempId). This is immune to the race where ThreadViewModel
-             * hasn't yet updated the stored attachmentUri in Room (it does so after sendMms()
-             * returns, but the ContentObserver may fire before that DB update completes).
-             * The cache file is written by MmsManagerWrapper BEFORE sendMultimediaMessage()
-             * is called, so it is guaranteed to exist by the time the observer fires.
-             *
-             * Fallback: use the stored attachmentUri on the optimistic row.
+             * Strategy: read the optimistic row (id = tempId), then for each attachment
+             * index look for the cache file (mms_attach_<tempId>*.bin — written by
+             * MmsManagerWrapper BEFORE sendMultimediaMessage(), so guaranteed to exist by
+             * the time the observer fires) and build a stable FileProvider URI. Falls back
+             * per-attachment to the URI already stored on the optimistic row. Reading the
+             * row's own attachment list is immune to the race where ThreadViewModel hasn't
+             * yet re-pinned the stored URIs (it does so after sendMms() returns, but the
+             * ContentObserver may fire before that DB update completes).
              */
             val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
             if (sentMsg != null) {
                 val optId = messageRepository.getOptimisticSentId(threadId, isMms = true)
-                val transferUri: String? = if (optId != null) {
-                    // Derive the cache file path from the tempId stored as the optimistic row id.
-                    val cacheFile = File(context.filesDir, "mms_attach_$optId.bin")
-                    if (cacheFile.exists()) {
-                        try {
-                            // Build a FileProvider URI so Coil can load it within the app process.
-                            FileProvider.getUriForFile(
-                                context, "${context.packageName}.fileprovider", cacheFile
-                            ).toString()
-                        } catch (_: Exception) {
-                            // FileProvider lookup failed — fall back to the DB-stored URI.
-                            messageRepository.getOptimisticSentAttachmentUri(threadId, isMms = true)
+                val optAttachments = optId?.let { messageRepository.getById(it)?.attachments }.orEmpty()
+                if (optAttachments.isNotEmpty() && optId != null) {
+                    val transferred = optAttachments.mapIndexed { index, att ->
+                        val cacheFile = MmsManagerWrapper.attachmentCacheFile(context, optId, index)
+                        if (cacheFile.exists()) {
+                            try {
+                                // Build a FileProvider URI so Coil can load it within the app process.
+                                val uri = FileProvider.getUriForFile(
+                                    context, "${context.packageName}.fileprovider", cacheFile
+                                ).toString()
+                                MessageAttachment(uri, att.mimeType)
+                            } catch (_: Exception) {
+                                att // FileProvider lookup failed — keep the DB-stored URI.
+                            }
+                        } else {
+                            att // Cache file not found — keep whatever URI is stored on the row.
                         }
-                    } else {
-                        // Cache file not found — fall back to whatever URI is stored on the row.
-                        messageRepository.getOptimisticSentAttachmentUri(threadId, isMms = true)
                     }
-                } else {
-                    // No optimistic row found (already deleted or never existed) — try DB URI.
-                    messageRepository.getOptimisticSentAttachmentUri(threadId, isMms = true)
-                }
-                if (transferUri != null) {
-                    messageRepository.updateAttachmentUri(sentMsg.id, transferUri)
-                    syncLogger.log("IncrementalMms", "transferred attachmentUri to real row id=${sentMsg.id}")
+                    messageRepository.updateAttachments(sentMsg.id, transferred)
+                    syncLogger.log("IncrementalMms", "transferred ${transferred.size} attachment(s) to real row id=${sentMsg.id}")
                 }
             }
 
@@ -497,7 +494,7 @@ class SmsSyncHandler @Inject constructor(
             val timestamp = dateSec * 1000L
             val parts    = getMmsBodyIncremental(rawId)
             val address  = getMmsAddressIncremental(rawId, isSent)
-            debugLog("syncLatestMms: rawId=$rawId  mimeType=${parts.mimeType}  attachmentUri=${parts.attachmentUri}")
+            debugLog("syncLatestMms: rawId=$rawId  attachments=${parts.attachments.size}  firstMime=${parts.attachments.firstOrNull()?.mimeType}")
 
             if (threadId !in ensuredThreadIds) {
                 ensureThread(threadId, address, timestamp)
@@ -513,15 +510,14 @@ class SmsSyncHandler @Inject constructor(
                 isSent = isSent,
                 type = msgBox,
                 isMms = true,
-                attachmentUri = parts.attachmentUri,
-                mimeType = parts.mimeType,
+                attachments = parts.attachments,
                 isRead = isSent
             )
         }
     }
 
-    // Reads text body and first media attachment from the given MMS part table.
-    // Returns MmsParsedResult with a stable content://mms/part/{id} URI for image/video/audio.
+    // Reads text body and ALL media attachments from the given MMS part table.
+    // Returns MmsParsedResult with stable content://mms/part/{id} URIs for image/video/audio.
     private fun getMmsBodyIncremental(mmsId: Long): MmsParsedResult {
         val cursor = context.contentResolver.query(
             Uri.withAppendedPath(Telephony.Mms.CONTENT_URI, "$mmsId/part"),
@@ -529,7 +525,7 @@ class SmsSyncHandler @Inject constructor(
             null, null, null
         ) ?: run {
             Log.w(TAG, "getMmsBodyIncremental: parts cursor null for mmsId=$mmsId")
-            return MmsParsedResult("[MMS]", null, null)
+            return MmsParsedResult("[MMS]", emptyList())
         }
         debugLog("getMmsBodyIncremental: mmsId=$mmsId  partCount=${cursor.count}")
         val rawParts = mutableListOf<MmsRawPart>()

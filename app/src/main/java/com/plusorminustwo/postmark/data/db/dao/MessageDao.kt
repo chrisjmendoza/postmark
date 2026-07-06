@@ -75,8 +75,11 @@ interface MessageDao {
     @Query("UPDATE messages SET threadId = :threadId WHERE id = :messageId")
     suspend fun updateThreadId(messageId: Long, threadId: Long)
 
-    @Query("UPDATE messages SET attachmentUri = :uri WHERE id = :messageId")
-    suspend fun updateAttachmentUri(messageId: Long, uri: String)
+    /** Replaces a message's full attachment set. [attachmentsJson] is the encoded list
+     *  (see encodeAttachmentsJson); [firstUri]/[firstMime] mirror the first entry so the
+     *  singular columns (used by [observeMediaMessages] and pre-v12 fallback) stay in sync. */
+    @Query("UPDATE messages SET attachmentsJson = :attachmentsJson, attachmentUri = :firstUri, mimeType = :firstMime WHERE id = :messageId")
+    suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?)
 
     /** Deletes optimistic (negative-ID) rows of ONE transport in a thread.
      *  Scoped by [isMms] — mirroring [getMaxId]/[getMaxMmsId] — so the SMS sync path
@@ -93,17 +96,10 @@ interface MessageDao {
     @Query("SELECT deliveryStatus FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int?
 
-    /** Returns the attachmentUri of the most recent optimistic sent message of the given
-     *  transport in a thread. Used by [SmsSyncHandler.syncLatestMms] to transfer the
-     *  locally-cached image URI to the real row, since Samsung's content://mms/part/
-     *  data may be empty for sent rows. */
-    @Query("SELECT attachmentUri FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
-    suspend fun getOptimisticSentAttachmentUri(threadId: Long, isMms: Boolean): String?
-
     /** Returns the row id (negative tempId) of the most recent optimistic sent message of the
      *  given transport in a thread. Used by [SmsSyncHandler.syncLatestMms] to derive the
-     *  cache file name (mms_attach_<tempId>.bin) and build a stable FileProvider URI,
-     *  bypassing the race where [ThreadViewModel] hasn't yet updated the stored attachmentUri. */
+     *  cache file names (mms_attach_<tempId>*.bin) and build stable FileProvider URIs,
+     *  bypassing the race where [ThreadViewModel] hasn't yet updated the stored attachments. */
     @Query("SELECT id FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long?
 

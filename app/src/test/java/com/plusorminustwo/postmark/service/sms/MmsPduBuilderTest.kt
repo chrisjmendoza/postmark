@@ -1,11 +1,15 @@
 package com.plusorminustwo.postmark.service.sms
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 
 /**
- * Tests for the WAP Binary UintVar encoder used throughout MmsPduBuilder.
+ * Tests for MmsPduBuilder: the WAP Binary UintVar encoder, the SMIL builder,
+ * and multi-part PDU assembly.
  *
  * UintVar is the foundation of every field length in the PDU — an off-by-one
  * or wrong continuation-bit destroys all MMS sends silently.
@@ -71,5 +75,149 @@ class MmsPduBuilderTest {
         // 7-bit groups LSB→MSB: [64, 26, 12] → reversed with continuation: [0x8C, 0x9A, 0x40]
         // Verify: 12 * 128^2 + 26 * 128 + 64 = 196608 + 3328 + 64 = 200000 ✓
         assertArrayEquals(byteArrayOf(0x8C.toByte(), 0x9A.toByte(), 0x40), encodeUintVar(200_000))
+    }
+
+    // ── mediaFilename — unique Content-Location per part ────────────────────
+
+    @Test fun `mediaFilename embeds the part index for every mime family`() {
+        assertEquals("image0.jpg", MmsPduBuilder.mediaFilename("image/jpeg", 0))
+        assertEquals("image1.png", MmsPduBuilder.mediaFilename("image/png", 1))
+        assertEquals("image2.gif", MmsPduBuilder.mediaFilename("image/gif", 2))
+        assertEquals("video1.mp4", MmsPduBuilder.mediaFilename("video/mp4", 1))
+        assertEquals("video0.3gp", MmsPduBuilder.mediaFilename("video/3gpp", 0))
+        assertEquals("audio0.amr", MmsPduBuilder.mediaFilename("audio/amr", 0))
+        assertEquals("attachment3.bin", MmsPduBuilder.mediaFilename("application/pdf", 3))
+    }
+
+    @Test fun `mediaFilename is unique across parts of the same mime type`() {
+        val names = (0..4).map { MmsPduBuilder.mediaFilename("image/jpeg", it) }
+        assertEquals(names.size, names.toSet().size)
+    }
+
+    // ── buildSmil — multi-part presentation ─────────────────────────────────
+
+    @Test fun `smil references every media filename in order`() {
+        val smil = MmsPduBuilder.buildSmil(
+            listOf("image0.jpg" to "image/jpeg", "image1.png" to "image/png", "video2.mp4" to "video/mp4"),
+            hasText = false
+        )
+        val i0 = smil.indexOf("""<img src="image0.jpg" region="Media"/>""")
+        val i1 = smil.indexOf("""<img src="image1.png" region="Media"/>""")
+        val i2 = smil.indexOf("""<video src="video2.mp4" region="Media"/>""")
+        assertTrue(i0 >= 0); assertTrue(i1 > i0); assertTrue(i2 > i1)
+    }
+
+    @Test fun `smil emits one par slide per media part`() {
+        val smil = MmsPduBuilder.buildSmil(
+            listOf("image0.jpg" to "image/jpeg", "image1.jpg" to "image/jpeg"),
+            hasText = false
+        )
+        assertEquals(2, Regex("<par ").findAll(smil).count())
+    }
+
+    @Test fun `smil places the text caption on the first slide only`() {
+        val smil = MmsPduBuilder.buildSmil(
+            listOf("image0.jpg" to "image/jpeg", "image1.jpg" to "image/jpeg"),
+            hasText = true
+        )
+        assertEquals(1, Regex("<text ").findAll(smil).count())
+        val firstParEnd = smil.indexOf("</par>")
+        assertTrue(smil.indexOf("<text ") in 0 until firstParEnd)
+        assertTrue(smil.contains("""<region id="Text""""))
+    }
+
+    @Test fun `smil for images uses shared Media region and shrinks it when text present`() {
+        val noText = MmsPduBuilder.buildSmil(listOf("image0.jpg" to "image/jpeg"), hasText = false)
+        assertTrue(noText.contains("""<region id="Media" width="100%" height="100%""""))
+        val withText = MmsPduBuilder.buildSmil(listOf("image0.jpg" to "image/jpeg"), hasText = true)
+        assertTrue(withText.contains("""<region id="Media" width="100%" height="80%""""))
+    }
+
+    @Test fun `smil for audio-only has no visible region and indefinite duration`() {
+        val smil = MmsPduBuilder.buildSmil(listOf("audio0.amr" to "audio/amr"), hasText = false)
+        assertFalse(smil.contains("""<region id="Media""""))
+        assertTrue(smil.contains("""<par dur="indefinite"><audio src="audio0.amr"/></par>"""))
+    }
+
+    @Test fun `smil durations are 5s for images and indefinite for video`() {
+        val smil = MmsPduBuilder.buildSmil(
+            listOf("image0.jpg" to "image/jpeg", "video1.mp4" to "video/mp4"),
+            hasText = false
+        )
+        assertTrue(smil.contains("""<par dur="5000ms"><img src="image0.jpg""""))
+        assertTrue(smil.contains("""<par dur="indefinite"><video src="video1.mp4""""))
+    }
+
+    // ── buildPdu — N media parts with unique Content-Ids ────────────────────
+
+    private fun mediaPart(mime: String, marker: Byte) =
+        MmsPduBuilder.MediaPart(ByteArray(16) { marker }, mime)
+
+    /** Counts non-overlapping occurrences of [needle] (ASCII) in this byte array. */
+    private fun ByteArray.countOf(needle: String): Int {
+        val n = needle.toByteArray(Charsets.US_ASCII)
+        var count = 0
+        var i = 0
+        outer@ while (i <= size - n.size) {
+            for (j in n.indices) {
+                if (this[i + j] != n[j]) { i++; continue@outer }
+            }
+            count++; i += n.size
+        }
+        return count
+    }
+
+    @Test fun `pdu contains one uniquely numbered content-id per media part`() {
+        val pdu = MmsPduBuilder.buildPdu(
+            toAddress  = "+15551234567",
+            mediaParts = listOf(
+                mediaPart("image/jpeg", 0x11),
+                mediaPart("image/png",  0x22),
+                mediaPart("video/mp4",  0x33)
+            ),
+            textBody = ""
+        )
+        assertEquals(1, pdu.countOf("<media0>"))
+        assertEquals(1, pdu.countOf("<media1>"))
+        assertEquals(1, pdu.countOf("<media2>"))
+        assertEquals(0, pdu.countOf("<media3>"))
+    }
+
+    @Test fun `pdu contains each media payload and its unique filename`() {
+        val pdu = MmsPduBuilder.buildPdu(
+            toAddress  = "+15551234567",
+            mediaParts = listOf(mediaPart("image/jpeg", 0x5A), mediaPart("image/jpeg", 0x6B)),
+            textBody   = ""
+        )
+        // Content-Location filenames: once in the part header, once in the SMIL <img src=…>.
+        assertEquals(2, pdu.countOf("image0.jpg"))
+        assertEquals(2, pdu.countOf("image1.jpg"))
+        // Raw payloads present verbatim.
+        assertEquals(1, pdu.countOf(String(ByteArray(16) { 0x5A }, Charsets.US_ASCII)))
+        assertEquals(1, pdu.countOf(String(ByteArray(16) { 0x6B }, Charsets.US_ASCII)))
+    }
+
+    @Test fun `pdu includes text part only when caption present`() {
+        val withText = MmsPduBuilder.buildPdu(
+            "+15551234567", listOf(mediaPart("image/jpeg", 0x01)), "hello"
+        )
+        assertEquals(1, withText.countOf("<txt>"))
+        assertEquals(1, withText.countOf("hello"))
+        val noText = MmsPduBuilder.buildPdu(
+            "+15551234567", listOf(mediaPart("image/jpeg", 0x01)), ""
+        )
+        assertEquals(0, noText.countOf("<txt>"))
+    }
+
+    @Test fun `pdu smil start part is present exactly once`() {
+        val pdu = MmsPduBuilder.buildPdu(
+            "+15551234567",
+            listOf(mediaPart("image/jpeg", 0x01), mediaPart("video/mp4", 0x02)),
+            "caption"
+        )
+        // "application/smil" appears exactly twice: the top-level Content-Type "type"
+        // parameter and the SMIL part's own Content-Type (Extension-media string).
+        assertEquals(2, pdu.countOf("application/smil"))
+        assertEquals(1, pdu.countOf("smil.xml"))
     }
 }

@@ -5,7 +5,9 @@ import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.entity.toDomain
 import com.plusorminustwo.postmark.data.db.entity.toEntity
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
+import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.data.db.dao.UnreadCount
 import kotlinx.coroutines.flow.Flow
@@ -90,18 +92,21 @@ class MessageRepository @Inject constructor(
     suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? =
         messageDao.getOptimisticSentDeliveryStatus(threadId, isMms)
 
-    /** Returns the attachmentUri of the most recent temp sent row of a transport in a thread. */
-    suspend fun getOptimisticSentAttachmentUri(threadId: Long, isMms: Boolean): String? =
-        messageDao.getOptimisticSentAttachmentUri(threadId, isMms)
-
     /** Returns the negative tempId of the most recent temp sent row of a transport in a thread.
-     *  Used by [SmsSyncHandler] to derive the cache file name and bypass the race
-     *  where [ThreadViewModel] hasn't yet updated the stored attachmentUri. */
+     *  Used by [SmsSyncHandler] to derive the cache file names and bypass the race
+     *  where [ThreadViewModel] hasn't yet updated the stored attachments. */
     suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? =
         messageDao.getOptimisticSentId(threadId, isMms)
 
-    suspend fun updateAttachmentUri(messageId: Long, uri: String) =
-        messageDao.updateAttachmentUri(messageId, uri)
+    /** Replaces a message's attachment list, keeping the singular first-attachment
+     *  columns in sync (they back observeMediaMessages and pre-v12 fallback). */
+    suspend fun updateAttachments(messageId: Long, attachments: List<MessageAttachment>) =
+        messageDao.updateAttachments(
+            messageId,
+            encodeAttachmentsJson(attachments),
+            attachments.firstOrNull()?.uri,
+            attachments.firstOrNull()?.mimeType
+        )
 
     /** Deletes a single message by id (used to remove reaction fallback messages after parsing). */
     suspend fun deleteById(messageId: Long) = messageDao.deleteById(messageId)

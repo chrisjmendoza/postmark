@@ -5,6 +5,9 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.MessageAttachment
+import com.plusorminustwo.postmark.domain.model.decodeAttachmentsJson
+import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 
 // Delivery status constants — stored as Int on MessageEntity.deliveryStatus
 const val DELIVERY_STATUS_NONE = 0      // not yet tracked (older synced messages)
@@ -47,11 +50,16 @@ data class MessageEntity(
     // True when this row was sourced from content://mms rather than content://sms.
     // IDs for MMS rows are offset by MMS_ID_OFFSET to prevent primary-key collisions.
     val isMms: Boolean = false,
-    // Content URI pointing to the first media part of an MMS (e.g. content://mms/part/42).
-    // Null for SMS rows and text-only MMS. Readable by the default SMS app role.
+    // Content URI of the FIRST media part (e.g. content://mms/part/42). Null for SMS rows
+    // and text-only MMS. Kept in sync with attachmentsJson so single-attachment queries
+    // (observeMediaMessages) and pre-v12 rows keep working without a data migration.
     val attachmentUri: String? = null,
-    // MIME type of the attachment part (e.g. "image/jpeg", "audio/mpeg"). Null when no attachment.
+    // MIME type of the first attachment part. Null when no attachment.
     val mimeType: String? = null,
+    // JSON array of ALL media parts ([{"uri":...,"mimeType":...},...]) — see
+    // encodeAttachmentsJson(). Null for SMS, text-only MMS, and rows written before v12
+    // (those fall back to the singular attachmentUri/mimeType pair in toDomain()).
+    val attachmentsJson: String? = null,
     // False for received messages that have not yet been viewed (drives unread badge).
     // Defaults to true so existing synced rows never appear as unread after an upgrade.
     val isRead: Boolean = true
@@ -67,8 +75,12 @@ fun MessageEntity.toDomain() = Message(
     type = type,
     deliveryStatus = deliveryStatus,
     isMms = isMms,
-    attachmentUri = attachmentUri,
-    mimeType = mimeType,
+    // Rows written before schema v12 have a null attachmentsJson — fall back to the
+    // singular column pair so their (single) attachment stays visible.
+    attachments = decodeAttachmentsJson(attachmentsJson).ifEmpty {
+        attachmentUri?.let { listOf(MessageAttachment(it, mimeType ?: "application/octet-stream")) }
+            ?: emptyList()
+    },
     isRead = isRead
 )
 
@@ -84,5 +96,6 @@ fun Message.toEntity() = MessageEntity(
     isMms = isMms,
     attachmentUri = attachmentUri,
     mimeType = mimeType,
+    attachmentsJson = encodeAttachmentsJson(attachments),
     isRead = isRead
 )

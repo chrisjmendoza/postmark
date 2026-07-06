@@ -205,6 +205,57 @@ class DatabaseMigrationTest {
         db4.close()
     }
 
+    // ── MIGRATION 11 → 12 ─────────────────────────────────────────────────
+    // Adds the nullable attachmentsJson column (multi-attachment MMS). Uses the
+    // direct-SQL approach (same pattern as 2→3) since 12.json is generated only
+    // after the first successful KSP build at version 12.
+
+    @Test
+    fun migration11To12_addsNullAttachmentsJsonAndPreservesSingularColumns() {
+        val db11 = helper.createDatabase("test_m1112a", 11)
+        db11.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+        )
+        db11.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, isMms, attachmentUri, mimeType)" +
+            " VALUES (7, 1, '+1', '', 1000000, 0, 1, 1, 'content://mms/part/99', 'image/jpeg')"
+        )
+
+        PostmarkDatabase.MIGRATION_11_12.migrate(db11)
+
+        db11.query("SELECT attachmentsJson, attachmentUri, mimeType FROM messages WHERE id = 7").use { c ->
+            assertTrue(c.moveToFirst())
+            // New column defaults to NULL — pre-v12 rows fall back to the singular pair.
+            assertTrue(c.isNull(0))
+            assertEquals("content://mms/part/99", c.getString(1))
+            assertEquals("image/jpeg", c.getString(2))
+        }
+        db11.close()
+    }
+
+    @Test
+    fun migration11To12_acceptsAttachmentsJsonWrites() {
+        val db11 = helper.createDatabase("test_m1112b", 11)
+        db11.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+        )
+
+        PostmarkDatabase.MIGRATION_11_12.migrate(db11)
+
+        val json = """[{"uri":"content://mms/part/1","mimeType":"image/jpeg"},{"uri":"content://mms/part/2","mimeType":"video/mp4"}]"""
+        db11.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, isMms, attachmentUri, mimeType, attachmentsJson)" +
+            " VALUES (8, 1, '+1', '', 2000000, 0, 1, 1, 'content://mms/part/1', 'image/jpeg', '$json')"
+        )
+        db11.query("SELECT attachmentsJson FROM messages WHERE id = 8").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(json, c.getString(0))
+        }
+        db11.close()
+    }
+
     @Test
     fun migration4To5_addsTopReactionEmojisJsonToThreadStats() {
         val db4 = helper.createDatabase("test_m45c", 4)

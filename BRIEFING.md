@@ -65,9 +65,11 @@ Message
 - id, threadId, address, body, timestamp,
   isSent, type,
   isMms BOOLEAN (added v7),
-  attachmentUri TEXT nullable (added v9),
-  mimeType TEXT nullable (added v9),
-  isRead BOOLEAN DEFAULT true (added v10)
+  attachmentUri TEXT nullable (added v9, mirrors first attachment),
+  mimeType TEXT nullable (added v9, mirrors first attachment),
+  isRead BOOLEAN DEFAULT true (added v10),
+  attachmentsJson TEXT nullable (added v12 — JSON list of ALL media parts;
+    NULL rows fall back to the singular attachmentUri/mimeType pair)
 
 Reaction
 - id, messageId, senderAddress, emoji,
@@ -103,6 +105,7 @@ Migration 7→8: notificationsEnabled on threads
 Migration 8→9: attachmentUri + mimeType on messages
 Migration 9→10: isRead on messages
 Migration 10→11: nickname on threads
+Migration 11→12: attachmentsJson on messages
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -389,6 +392,42 @@ WHAT IS WORKING (tested on device)
    (applicationId com.plusorminustwo.postmark) to get FIREBASE_APP_ID, create an
    App Distribution Admin service account and add its JSON as the
    FIREBASE_SERVICE_ACCOUNT repo secret alongside FIREBASE_APP_ID.
+✅ Multi-attachment MMS + video in the picker (July 5, 2026):
+   Users can now attach up to 5 photos/videos per message via the Android Photo
+   Picker (PickMultipleVisualMedia, ImageAndVideo — Jetpack shim covers minSdk 26),
+   replacing the single-select GetContent("image/*") flow that made video
+   unreachable and resolved straight to the default gallery app. Side benefit:
+   a proper selection surface instead of Google Photos hijacking the intent.
+   Data model: Message.attachments: List<MessageAttachment> is the single source
+   of truth; attachmentUri/mimeType are now COMPUTED first-attachment accessors so
+   every existing read site (previewText, ContactDetail shared-media grid,
+   observeMediaMessages query) kept working. MessageEntity gains attachmentsJson
+   (schema v12, additive/nullable; hand-written pure-function codec in
+   MessageAttachment.kt because org.json is an unmocked stub in JVM tests);
+   NULL rows fall back to the singular v9 columns.
+   Send path: MmsManagerWrapper.sendMms() takes List<MessageAttachment>; the
+   carrier cap (whole-PDU, not per-part) is divided across ALL attachments by
+   allocateAttachmentBudgets() — pure greedy smallest-first split where small
+   images donate surplus budget to large ones; video/audio are fixed cost and
+   fail cleanly if they alone exceed the cap. Per-attachment byte caches
+   mms_attach_<id>.bin, mms_attach_<id>_1.bin, … (index 0 keeps the legacy name
+   so in-flight retries survive the upgrade) via attachmentCacheFile().
+   PDU: MmsPduBuilder.buildPdu() loops N media parts with unique Content-Ids
+   (<media0>, <media1>, …) and filenames (image0.jpg, video1.mp4, …); buildSmil()
+   emits one <par> slide per part (standard MMS slideshow SMIL), caption on the
+   first slide.
+   Receive path: parseMmsRawParts() collects ALL media parts (was first-part-wins,
+   MMS_AUDIT §2.2); SmsHistoryImportWorker.getMmsBody() now delegates to the same
+   shared parser (its duplicated MmsParts implementation deleted).
+   Display: bubble renders a 2-column thumbnail grid for 2+ attachments (single
+   attachment unchanged); FullScreenImageViewer is now a HorizontalPager across
+   the message's images with per-page pinch-zoom + "n / N" indicator; tapping a
+   video cell opens VideoPlayerDialog for that video. Reply bar shows one 80 dp
+   preview tile per pending attachment, each with its own ✕.
+   Tests: MmsPduBuilderTest (+13: SMIL slides, unique Content-Ids/filenames, PDU
+   byte-scans), AttachmentBudgetTest (9), MessageAttachmentCodecTest (8),
+   MmsPartParsingTest rewritten for lists (15), DatabaseMigrationTest 11→12 (2).
+   ./gradlew test: 409 passing; compileDebugAndroidTestSources clean.
 ✅ Sent image vanishes when an SMS follows an MMS — optimistic cleanup not type-scoped (July 5, 2026):
    Repro: send an MMS (image), then an SMS in the same thread seconds later — the
    image bubble disappears even though the recipient received it. Root cause: an

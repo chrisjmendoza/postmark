@@ -102,7 +102,9 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       label in `secondaryContainer` color. Tap-to-play not yet wired.
 - [x] **MMS media in conversation list** — `previewText` extension returns "📷 Photo" /
       "🎥 Video" / "🎵 Audio message" when body is empty; used by both sync handlers.
-- [ ] **Tap image → full-screen viewer** — `Dialog` or separate screen, pinch-to-zoom.
+- [x] **Tap image → full-screen viewer** — `FullScreenImageViewer` Dialog with
+      pinch-to-zoom (1×–5×) + pan; now a `HorizontalPager` across all images in
+      the message with an "n / N" indicator (July 5 2026).
 - [x] **Tap video → player dialog** — `VideoPlayerDialog` composable with ExoPlayer
       (media3 1.5.1); auto-plays on open; `DisposableEffect` releases player on dismiss;
       tapping the video thumbnail in a bubble opens it.
@@ -112,20 +114,19 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       **Done (different approach):** `GetContent` launcher with `image/*` / `audio/*` MIME
       filter, attach button with dropdown, attachment preview chip, MMS send path via
       `MmsManagerWrapper` + WAP Binary PDU. Camera capture still pending.
-- [ ] **Attachment picker gaps found testing against Google Messages** —
-      three related issues in the current `GetContent` attach flow:
-      1. Only single-select — `GetContent` (not `GetMultipleContents` /
-         `PickMultipleVisualMedia`) means one attachment per send. Real multi-image
-         MMS also needs the data-model fix already tracked above (single
-         `attachmentUri`/`mimeType` per `Message`) before multiple images per
-         message means anything on the receiving/display side too.
-      2. `video/*` isn't in the MIME filter passed to the picker, so videos don't
-         even show up as selectable, despite video send already being supported
-         end-to-end (`MmsManagerWrapper`, `VideoPlayerDialog` on the receive side).
-      3. The picker resolves straight to Google Photos instead of showing the
-         system chooser — use `Intent.createChooser()` (or `ACTION_OPEN_DOCUMENT`
-         with no default handler pre-selected) so the user can pick Files, other
-         gallery apps, etc.
+- [x] **Attachment picker gaps found testing against Google Messages** —
+      all three resolved (July 5 2026) by replacing `GetContent("image/*")` with
+      `ActivityResultContracts.PickMultipleVisualMedia(maxItems = 5)` +
+      `PickVisualMedia.ImageAndVideo`:
+      1. ~~Only single-select~~ — multi-select up to 5; the data-model fix landed
+         with it (`Message.attachments: List<MessageAttachment>`, `attachmentsJson`
+         column, schema v12), so multi-image MMS works on the send, receive
+         (`parseMmsRawParts` collects ALL parts — was first-part-wins, MMS_AUDIT
+         §2.2), and display sides (bubble grid + paged full-screen viewer).
+      2. ~~`video/*` not in the MIME filter~~ — Photo Picker requests ImageAndVideo.
+      3. ~~Resolves straight to Google Photos~~ — the system Photo Picker is its own
+         selection surface; no default-gallery hijack.
+      Audio keeps the `GetContent("audio/*")` flow (Photo Picker doesn't do audio).
 - [ ] **Group MMS** — multiple recipient addresses → single thread with comma-joined
       display name. Show sender name/avatar per bubble within group thread.
 
