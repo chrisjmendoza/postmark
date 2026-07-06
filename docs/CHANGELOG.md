@@ -6,6 +6,28 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-06
 
+### Nav-bar overlap fix #3 (works this time) + full date in the viewer header
+
+The `decorFitsSystemWindows` fix (previous entry below) turned out to be necessary but
+not sufficient — confirmed still broken on a real Samsung phone after that change
+shipped. `navigationBarsPadding()`/`.navigationBarsPadding()` computed inside the image
+viewer's and video player's own `Dialog` content kept reading **zero** bottom inset
+even with that flag forced, on-device. Rather than keep chasing why a Dialog's own
+Window won't reliably report `WindowInsets.navigationBars` (Compose-Dialog + OEM
+insets quirks are a known rabbit hole), switched to a more robust approach: read the
+nav-bar height once from the *Activity's* window — `ThreadContent`/`VideoPlayerDialog`
+are both hosted there, and the rest of the app has never had this problem, so that
+window's insets are known-good — and pass the resulting `Dp` value down as an explicit
+`.padding(bottom = ...)` instead of relying on the dialog's own insets reporting at
+all. Applied to both `FullScreenImageViewer` (new `navBarBottomPadding` parameter) and
+`VideoPlayerDialog` (computed locally, since nothing else needs it there).
+
+Also: the viewer header's timestamp only showed a weekday and time ("Sat 5:34 PM"),
+ambiguous for anything more than a few days old. `FRIENDLY_TIMESTAMP_FORMATTER` now
+includes the full date: "Sat, Jul 5, 2026 5:34 PM".
+
+`./gradlew test`: all passing. `assembleDebug`: clean.
+
 ### Fixed the recurring nav-bar overlap bug (root cause) + added EXIF photo details
 
 **Nav-bar overlap, actually fixed this time.** Reported again after the previous fix

@@ -362,6 +362,14 @@ private fun ThreadContent(
     // hoisted here too since the image viewer's header needs it for the "You"/contact label.
     val contactDisplayName = uiState.thread?.let { t -> t.nickname ?: formatPhoneNumber(t.displayName) } ?: ""
 
+    // Real navigation-bar height, read from THIS (Activity) window — not the image
+    // viewer/video player Dialogs' own windows, whose WindowInsets reporting proved
+    // unreliable on-device (navigationBarsPadding() inside those dialogs kept computing
+    // zero on a real Samsung phone even after forcing decorFitsSystemWindows = false).
+    // Passed down and applied as an explicit padding value instead of relying on
+    // *.navigationBarsPadding() inside the dialogs themselves.
+    val navBarBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
     // Index into uiState.threadImages the full-screen viewer opens at; null = closed.
     // Lifted up here (rather than per-MessageBubble) so swiping pages across every image
     // in the thread, not just the tapped message's own attachments.
@@ -768,6 +776,7 @@ private fun ThreadContent(
                         images = uiState.threadImages,
                         initialIndex = startIndex,
                         contactDisplayName = contactDisplayName,
+                        navBarBottomPadding = navBarBottomPadding,
                         quickReactionEmojis = quickReactionEmojis,
                         onToggleReaction = onToggleReaction,
                         onToggleStarred = onToggleStarred,
@@ -2502,6 +2511,12 @@ private fun FullScreenImageViewer(
     images: List<ThreadImageRef>,
     initialIndex: Int,
     contactDisplayName: String,
+    // Real nav-bar height read from the Activity window (see call site) — applied as an
+    // explicit padding value because navigationBarsPadding() computed inside this
+    // composable's own Dialog proved unreliable on-device (kept reading zero on a real
+    // Samsung phone even after forcing decorFitsSystemWindows = false on the dialog's
+    // own Window).
+    navBarBottomPadding: androidx.compose.ui.unit.Dp,
     quickReactionEmojis: List<String>,
     onToggleReaction: (Long, String) -> Unit,
     onToggleStarred: (Long) -> Unit,
@@ -2662,8 +2677,7 @@ private fun FullScreenImageViewer(
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 12.dp),
+                    .padding(bottom = navBarBottomPadding + 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -3047,6 +3061,11 @@ private fun ZoomableImage(uri: String) {
 @Composable
 private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
+    // Read from the Activity window (this composable's own hosting window, before the
+    // Dialog{} call below enters its own separate window) — see the identical comment
+    // on FullScreenImageViewer's navBarBottomPadding param for why this is more
+    // reliable than navigationBarsPadding() applied inside the dialog itself.
+    val navBarBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     // Playback state mirrored into Compose so the control bar recomposes correctly.
     var isPlaying  by remember { mutableStateOf(false) }
@@ -3113,7 +3132,7 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .navigationBarsPadding(),
+                .padding(bottom = navBarBottomPadding),
             verticalArrangement = Arrangement.Center
         ) {
             // Video surface — native controls hidden; we supply our own bar below.

@@ -12,10 +12,10 @@ internal val DAY_FORMATTER = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault(
     it.timeZone = java.util.TimeZone.getDefault()
 }
 
-/** "Sun 5:07 PM" — weekday + time, used by the full-screen image viewer's header
- *  (a message list full of "July 6, 2026" date labels doesn't need repeating per image,
- *  but knowing which day-of-week and what time a photo was sent is useful at a glance). */
-internal val FRIENDLY_TIMESTAMP_FORMATTER = SimpleDateFormat("EEE h:mm a", Locale.getDefault()).also {
+/** "Sat, Jul 5, 2026 5:34 PM" — full date + time, used by the full-screen image viewer's
+ *  header. An earlier version showed only weekday + time ("Sat 5:34 PM"), which was
+ *  ambiguous for anything more than a few days old — the full date removes that. */
+internal val FRIENDLY_TIMESTAMP_FORMATTER = SimpleDateFormat("EEE, MMM d, yyyy h:mm a", Locale.getDefault()).also {
     it.timeZone = java.util.TimeZone.getDefault()
 }
 
