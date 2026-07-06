@@ -6,6 +6,41 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-06
 
+### Build number visible in-app, matched to Firebase App Distribution release notes
+
+The versionCode/versionName/GIT_SHA derivation (git commit count + short SHA) already
+existed in `app/build.gradle.kts` and CI already pushed every branch build to Firebase
+App Distribution (`distribute.yml`) — but nothing on the phone ever showed which build
+was actually installed. With remote updates via Firebase coming next, that's the piece
+that matters most: no way to confirm a pushed update actually landed versus the app
+silently staying on a stale build.
+
+Added a "Version" row under a new About section at the bottom of `SettingsScreen` —
+`BuildConfig.VERSION_NAME (VERSION_CODE, GIT_SHA)`, tap to copy the full string to the
+clipboard for pasting into a bug report. `distribute.yml` gained a "Compute version info"
+step that derives the identical `1.0.<commit count> (<short sha>)` string via
+`$GITHUB_ENV` (env: block values don't run through a shell, so the derivation has to
+happen in a `run:` step, not inline in the `env:` block) and folds it into the Firebase
+release notes — so the string in the Firebase console and the string in Settings → About
+are always the same, letting a build be cross-checked between the two.
+
+Deliberately scoped to just the version row, not the full `docs/TODO.md` "About screen"
+item (licenses list, GitHub link) — those aren't relevant to verifying remote updates and
+would have been unrelated scope creep on this task.
+
+**Follow-up same day — fixed a real duplicate-versionCode collision:** merging
+`feat/group-mms` into `master` (fast-forward) triggered `distribute.yml` a second time
+for the exact same commit that had just been built on the feature branch — same commit
+count, same versionCode, two Firebase releases colliding. Plain commit count can't tell
+those two builds apart. Fixed by folding in `GITHUB_RUN_NUMBER` (always increasing,
+unique per workflow run, 0 for local builds) as a tiebreaker:
+`versionCode = commitCount * 100_000 + ciRunNumber`. The commit-count term stays
+dominant, so a new commit always outranks any number of reruns of an older one — no risk
+of Android refusing an "update" as a downgrade. `versionName` is untouched
+(`"1.0.<commit count>"`), so the human-readable string doesn't change, only the
+disambiguating integer behind it. `distribute.yml`'s release-notes derivation updated to
+match exactly.
+
 ### Group MMS — full participant roster kept and shown (receiving/display only)
 
 Root cause (MMS_AUDIT §2.3): `getMmsAddress()`/`getMmsAddressIncremental()` only ever

@@ -1,9 +1,12 @@
 package com.plusorminustwo.postmark.ui.settings
 
 import android.app.role.RoleManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Build
 import android.provider.Telephony
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,10 +21,12 @@ import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.FormatSize
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
+import com.plusorminustwo.postmark.BuildConfig
 import androidx.compose.material3.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -179,6 +184,41 @@ fun SettingsScreen(
                 onCheckedChange = viewModel::setPrivacyMode
             )
             HorizontalDivider()
+
+            SettingsSectionHeader(title = "About")
+            AboutRow(context = context)
+        }
+    }
+}
+
+// ── AboutRow ───────────────────────────────────────────────────────────────────
+// Shows the running build's version + git commit so it's possible to confirm,
+// after a Firebase App Distribution push, that the phone actually picked up the
+// new build rather than silently staying on a stale one. Tap copies the full
+// string to the clipboard for pasting into a bug report.
+@Composable
+private fun AboutRow(context: android.content.Context) {
+    val buildInfo = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}, ${BuildConfig.GIT_SHA})"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                val clipboard = context.getSystemService(ClipboardManager::class.java)
+                clipboard?.setPrimaryClip(ClipData.newPlainText("Postmark build", buildInfo))
+                Toast.makeText(context, "Build info copied", Toast.LENGTH_SHORT).show()
+            }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Info, contentDescription = null)
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Version", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                buildInfo,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

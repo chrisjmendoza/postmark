@@ -436,8 +436,13 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Storage usage screen** — show database size, attachment
       cache size, backup folder size. Button to clear attachment
       cache.
-- [ ] **About screen** — app version, build number, licenses,
-      link to GitHub.
+- [x] **Build number visible in-app** (July 6 2026) — Settings → About shows
+      `versionName (versionCode, gitSha)`, tap to copy to clipboard. Exists so
+      it's possible to confirm a Firebase App Distribution push actually landed
+      on the phone rather than silently staying on a stale build; CI's
+      `distribute.yml` release notes now carry the identical string for
+      cross-checking against the Firebase console. Still open: licenses list,
+      link to GitHub (this was a one-row addition, not a full About screen).
 - [ ] **Real app icon** — replace the placeholder envelope with
       proper branded artwork.
 - [ ] **Custom font selection** — Settings → Appearance; let user

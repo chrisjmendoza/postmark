@@ -29,6 +29,19 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      - name: Compute version info
+        # Same derivation as app/build.gradle.kts (commit count * 100_000 + run number,
+        # short SHA) so the release note below matches exactly what Settings → About
+        # shows on the phone — including the GITHUB_RUN_NUMBER tiebreaker that keeps
+        # versionCode unique even when the same commit gets built twice (e.g. a
+        # fast-forward merge triggers this workflow again on master right after it
+        # already ran on the feature branch).
+        run: |
+          COUNT=$(git rev-list --count HEAD)
+          echo "APP_VERSION_NAME=1.0.$COUNT" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=$((COUNT * 100000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "APP_GIT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
       - name: Build debug APK
         # The shared debug.keystore is committed to the repo so the APK is
         # signed consistently — Android treats each CI build as an update, not a reinstall.
@@ -38,7 +51,7 @@ jobs:
         env:
           FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
-          RELEASE_NOTES: "Branch: ${{ github.ref_name }} | ${{ github.event.head_commit.message }}"
+          RELEASE_NOTES: "${{ env.APP_VERSION_NAME }} (${{ env.APP_VERSION_CODE }}, ${{ env.APP_GIT_SHA }}) | Branch: ${{ github.ref_name }} | ${{ github.event.head_commit.message }}"
         run: |
           npm install -g firebase-tools
           echo "$FIREBASE_SA_JSON" > /tmp/sa.json

@@ -7,9 +7,20 @@ plugins {
     alias(libs.plugins.room)
 }
 
-// versionCode/versionName derived from git commit count so every build is
-// uniquely identified — Firebase App Distribution silently rejects re-uploads
-// that share a versionCode with a prior release.
+// versionCode/versionName derived from git commit count so every build is uniquely
+// identified — Firebase App Distribution treats two builds sharing a versionCode as
+// the same release, showing up as confusing duplicate "(1)", "(2)" entries in the
+// console instead of distinct ones. Commit count alone isn't quite enough: a
+// fast-forward merge (or a manual workflow re-run) can push the *same* commit through
+// CI under two different refs/runs, which would otherwise produce two builds sharing
+// a versionCode — exactly what happened merging feat/group-mms into master.
+//
+// ciRunNumber (GitHub Actions' GITHUB_RUN_NUMBER — always increasing, unique per
+// workflow run; 0 for local/non-CI builds) is folded in as a tiebreaker so every CI
+// build gets a distinct versionCode even when it re-builds a commit that was already
+// built before. Multiplying the commit count by 100_000 keeps it dominant, so a new
+// commit always outranks any number of reruns of an older one — no risk of Android
+// treating an update as a downgrade (which fails the install outright).
 val gitSha: String = try {
     providers.exec {
         commandLine("git", "rev-parse", "--short", "HEAD")
@@ -22,6 +33,9 @@ val gitCount: Int = try {
     }.standardOutput.asText.get().trim().toInt()
 } catch (_: Exception) { 1 }
 
+val ciRunNumber: Int =
+    providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull() ?: 0
+
 android {
     namespace = "com.plusorminustwo.postmark"
     compileSdk = 35
@@ -30,7 +44,7 @@ android {
         applicationId = "com.plusorminustwo.postmark"
         minSdk = 26
         targetSdk = 35
-        versionCode = gitCount
+        versionCode = gitCount * 100_000 + ciRunNumber
         versionName = "1.0.$gitCount"
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
