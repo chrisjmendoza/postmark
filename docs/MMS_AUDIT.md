@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-The MMS implementation is functional for the common case (single image or audio attachment, one recipient) but has several correctness gaps that will surface with real users: Samsung incremental sync silently fails, multi-image MMS drops everything after the first attachment, video/audio files have no size gate before hitting the carrier limit, and the entire MMS-specific codebase has essentially zero unit test coverage. Group MMS is not implemented at all.
+The MMS implementation is functional for the common case (single image or audio attachment, one recipient) but has several correctness gaps that will surface with real users: Samsung incremental sync silently fails, multi-image MMS drops everything after the first attachment, video/audio files have no size gate before hitting the carrier limit, and the entire MMS-specific codebase has essentially zero unit test coverage. Group MMS sending is not implemented; receiving/display now correctly shows the full participant roster (fixed July 6 2026 — see §1.4/§2.3).
 
 ---
 
@@ -62,7 +62,7 @@ This is spec-compliant but means common types like `video/mp4` and `audio/amr` a
 
 ### 1.4 Multi-Recipient / Group MMS
 
-**Not implemented.** `buildPdu()` writes a single `FIELD_TO` header. Sending to a group is not possible. The CarrierConfig key `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` is never checked.
+**Sending still not implemented.** `buildPdu()` writes a single `FIELD_TO` header. Sending to a group is not possible. The CarrierConfig key `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` is never checked. **Receiving/display fixed (July 6 2026)** — see §2.3 below. Because sending remains 1:1-only, replying inside a thread that now correctly displays as a group would silently reach only `thread.address` (one participant) rather than the group; `ThreadScreen`'s `ReplyBar` shows a warning banner ("Group replies aren't supported yet") whenever `thread.participants.size > 1` so this isn't a silent trap.
 
 ---
 
@@ -108,7 +108,7 @@ content://mms/$mmsId/part  →  columns: _id, CONTENT_TYPE, TEXT
 
 `getMmsAddress()` queries `content://mms/$mmsId/addr` for a single row matching PDU header type 137 (FROM, received) or 151 (TO, sent). These numeric values are correct per the WAP spec (`PduHeaders.FROM = 0x89`, `PduHeaders.TO = 0x97`).
 
-**Gap — Group MMS collapses to one address.** For a received group MMS, only the sender (type 137) is stored. The other recipients in the TO/CC list are dropped. The `Message` data model has a single `address` field. There is no concept of a group thread with multiple participants.
+**Gap — RESOLVED (July 6 2026) for the thread roster.** Both `getMmsAddress()`/`getMmsAddressIncremental()` still resolve only the per-message FROM/TO address (correct — that's the individual message's sender, unchanged), but a new `getMmsParticipants()` (mirrored in `SmsSyncHandler.kt` and `SmsHistoryImportWorker.kt`, pure-parsed by `parseMmsParticipants()` in `MmsPartParsing.kt`) queries `content://mms/$mmsId/addr` with no type filter and collects every distinct FROM/TO/CC row. When a group MMS thread is first created, `ensureThread()`/`processMmsCursor()` now store the full roster on `Thread.participants` (schema v13, `threads.participantsJson`) and comma-join contact names into `Thread.displayName` — matching the exact spec in `docs/TODO.md` ("multiple recipient addresses → single thread with comma-joined display name"). `Message.address` for each individual message is untouched — it remains that message's actual sender, which is what per-bubble attribution needs. Known limitations: (1) the roster can't reliably exclude the local device's own number (no addr row identifies "this is you"), so it may occasionally appear in the joined name; (2) the roster is captured once at thread-creation time and not re-derived if participants change later (e.g. someone added to the group); (3) per-bubble sender name/avatar for group threads (the other half of the TODO.md line) is not implemented — every bubble still renders the same as a 1:1 thread.
 
 ---
 
@@ -240,7 +240,7 @@ Note: Emulator has no MMSC simulation — MMS testing requires a physical device
 | 3 | Video/audio not size-checked before sending | Critical | Low | `MmsManagerWrapper.kt` | [x] |
 | 4 | EXIF orientation stripped on outgoing images | High | Low (dep) | `MmsManagerWrapper.kt` | [x] |
 | 5 | Audio `prepare()` on main thread (ANR risk) | High | Low | `ThreadScreen.kt` | [x] |
-| 6 | Group MMS — detection and sending not implemented | High | High | Multiple | [ ] |
+| 6 | Group MMS — receive/display roster fixed; sending still not implemented | High | High | Multiple | [~] |
 | 7 | Samsung fallback omits `NOT IN (3, 5)` filter | Medium | Trivial | `SmsHistoryImportWorker.kt` | [x] |
 | 8 | Manual PDU construction — no library backing | Medium | High | `MmsManagerWrapper.kt` | [ ] |
 | 9 | GIF animations destroyed by compression | Medium | Medium | `MmsManagerWrapper.kt` | [x] |

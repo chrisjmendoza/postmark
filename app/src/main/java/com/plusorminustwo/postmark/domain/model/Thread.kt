@@ -17,6 +17,12 @@ package com.plusorminustwo.postmark.domain.model
  * @param nickname                 Postmark-only display alias set by the user. When non-null
  *                                 this overrides [displayName] everywhere in the UI. Never
  *                                 written back to the system Contacts database.
+ * @param participants             Full roster of addresses for a group MMS thread (empty for
+ *                                 an ordinary 1:1 thread, including [address]). [displayName]
+ *                                 is already comma-joined from these at thread-creation time,
+ *                                 so most UI does not need to read this directly — it exists
+ *                                 for logic that needs to know "is this a group thread?"
+ *                                 (e.g. gating group-aware sending, which isn't implemented yet).
  */
 data class Thread(
     val id: Long,
@@ -29,5 +35,6 @@ data class Thread(
     val isPinned: Boolean = false,
     val notificationsEnabled: Boolean = true,
     // Postmark-only alias — null means fall back to displayName in the UI.
-    val nickname: String? = null
+    val nickname: String? = null,
+    val participants: List<String> = emptyList()
 )

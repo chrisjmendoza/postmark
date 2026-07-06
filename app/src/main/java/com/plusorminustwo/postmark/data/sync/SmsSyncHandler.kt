@@ -497,7 +497,7 @@ class SmsSyncHandler @Inject constructor(
             debugLog("syncLatestMms: rawId=$rawId  attachments=${parts.attachments.size}  firstMime=${parts.attachments.firstOrNull()?.mimeType}")
 
             if (threadId !in ensuredThreadIds) {
-                ensureThread(threadId, address, timestamp)
+                ensureThread(threadId, address, timestamp) { getMmsParticipants(rawId) }
                 ensuredThreadIds += threadId
             }
 
@@ -559,18 +559,58 @@ class SmsSyncHandler @Inject constructor(
         }
     }
 
-    private suspend fun ensureThread(threadId: Long, address: String, timestamp: Long) {
+    /*
+     * [participants] is a lazy provider (not a plain list) because computing it requires an
+     * extra content-resolver query (getMmsParticipants) that's only worth paying for the one
+     * time a thread is actually created — the early return below skips it entirely for every
+     * later message in an already-known thread.
+     */
+    private suspend fun ensureThread(
+        threadId: Long,
+        address: String,
+        timestamp: Long,
+        participants: () -> List<String> = { emptyList() }
+    ) {
         if (threadRepository.getById(threadId) != null) return
-        val displayName = lookupContactName(address) ?: address.ifEmpty { "Unknown" }
+        val roster = participants()
+        // Group MMS: comma-join contact names so the thread list/top bar show everyone
+        // without any UI change (MMS_AUDIT §2.3 — previously only one address was kept).
+        val displayName = if (roster.size > 1) {
+            roster.joinToString(", ") { lookupContactName(it) ?: it }
+        } else {
+            lookupContactName(address) ?: address.ifEmpty { "Unknown" }
+        }
         threadRepository.upsert(
             com.plusorminustwo.postmark.domain.model.Thread(
                 id = threadId,
                 displayName = displayName,
                 address = address,
                 lastMessageAt = timestamp,
-                backupPolicy = BackupPolicy.GLOBAL
+                backupPolicy = BackupPolicy.GLOBAL,
+                participants = if (roster.size > 1) roster else emptyList()
             )
         )
+    }
+
+    // Returns every distinct participant address (FROM/TO/CC) for a group MMS PDU.
+    // Ordinary 1:1 MMS also has exactly one row here — parseMmsParticipants collapses
+    // to a single-element (or empty) list in that case, same cost as before.
+    private fun getMmsParticipants(mmsId: Long): List<String> {
+        val cursor = context.contentResolver.query(
+            Uri.parse("content://mms/$mmsId/addr"),
+            arrayOf("address", "type"),
+            null, null, null
+        ) ?: return emptyList()
+        val rows = cursor.use {
+            val addrIdx = it.getColumnIndexOrThrow("address")
+            val typeIdx = it.getColumnIndexOrThrow("type")
+            val out = mutableListOf<MmsAddrRow>()
+            while (it.moveToNext()) {
+                out += MmsAddrRow(it.getString(addrIdx), it.getInt(typeIdx))
+            }
+            out
+        }
+        return parseMmsParticipants(rows)
     }
 
     private fun lookupContactName(address: String): String? {

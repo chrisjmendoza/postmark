@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: May 8, 2026
+Last updated: July 6, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -127,8 +127,26 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       3. ~~Resolves straight to Google Photos~~ — the system Photo Picker is its own
          selection surface; no default-gallery hijack.
       Audio keeps the `GetContent("audio/*")` flow (Photo Picker doesn't do audio).
-- [ ] **Group MMS** — multiple recipient addresses → single thread with comma-joined
-      display name. Show sender name/avatar per bubble within group thread.
+- [x] **Group MMS — receive/display** (July 6 2026) — a received group MMS's full
+      participant roster (FROM/TO/CC rows, previously only the first was kept — see
+      MMS_AUDIT §2.3) is now stored on `Thread.participants` (schema v13,
+      `threads.participantsJson`) and comma-joined into `Thread.displayName` at
+      thread-creation time, so `ConversationsScreen`/`ThreadScreen` needed no changes.
+      `ReplyBar` shows a warning when `participants.size > 1` since sending is still
+      1:1-only (see next item).
+- [ ] **Group MMS — sending** — `MmsPduBuilder.buildPdu()` still writes a single
+      `FIELD_TO` header; there's no way to originate a new outgoing group MMS or
+      have a reply inside an existing group thread reach everyone (it reaches only
+      `thread.address`, one participant). Needs multi-recipient PDU construction
+      (loop `FIELD_TO` per recipient, per WSP repeated-header rules) plus a
+      multi-select recipient picker in `NewConversationScreen`. Check
+      `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` — some carriers disable group MMS
+      and expect N separate 1:1 sends instead ("MMS broadcast" mode).
+- [ ] **Group MMS — per-bubble sender attribution** — show sender name/avatar per
+      bubble within a group thread (every bubble currently renders identically to a
+      1:1 thread's). `Message.address` already holds the correct per-message sender
+      for a received group MMS — this is a `ThreadScreen` bubble-rendering change,
+      not a sync-layer one.
 
 ### Contact integration
 - [ ] **Contact photo / profile picture in avatar** — currently all

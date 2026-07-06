@@ -77,7 +77,7 @@ fun decodeAttachmentsJson(json: String?): List<MessageAttachment> {
     return result
 }
 
-private fun escapeJson(s: String): String = buildString(s.length) {
+internal fun escapeJson(s: String): String = buildString(s.length) {
     for (c in s) when (c) {
         '\\' -> append("\\\\")
         '"'  -> append("\\\"")

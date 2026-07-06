@@ -650,6 +650,9 @@ private fun ThreadContent(
                     text                  = uiState.replyText,
                     pendingAttachments    = uiState.pendingAttachments,
                     replyingTo            = uiState.replyingToId?.let { id -> uiState.messages.find { it.id == id } },
+                    // Sending is still 1:1-only (MMS_AUDIT #6) — thread.address, not the
+                    // full roster. Warn rather than silently reply to just one participant.
+                    isGroupThread         = (uiState.thread?.participants?.size ?: 0) > 1,
                     onTextChange          = { onReplyTextChanged(it) },
                     onAttachmentsSelected = onAttachmentsSelected,
                     onRemoveAttachment    = onRemoveAttachment,
@@ -1844,6 +1847,9 @@ private fun ReplyBar(
     pendingAttachments: List<MessageAttachment>,
     // Non-null when the user has swiped to quote a message; drives the quote strip.
     replyingTo: Message? = null,
+    // True when the thread has more than one MMS participant. Sending a group MMS
+    // isn't implemented yet (MMS_AUDIT #6) — see the warning row rendered below.
+    isGroupThread: Boolean = false,
     onTextChange: (String) -> Unit,
     onAttachmentsSelected: (List<MessageAttachment>) -> Unit,
     onRemoveAttachment: (Int) -> Unit,
@@ -1893,6 +1899,34 @@ private fun ReplyBar(
                     .navigationBarsPadding()
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
+                // ── Group reply notice ───────────────────────────────────────────
+                // Group MMS sending isn't implemented — a reply here would silently
+                // go to only one participant, not the whole group. Warn instead.
+                if (isGroupThread) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.tertiaryContainer)
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Group replies aren't supported yet — this will only reply to one participant.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+                }
+
                 // ── Quote strip ──────────────────────────────────────────────────
                 // Shown when the user has swiped to reply to a specific message.
                 if (replyingTo != null) {

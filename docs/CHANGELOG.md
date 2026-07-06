@@ -6,6 +6,51 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-06
 
+### Group MMS — full participant roster kept and shown (receiving/display only)
+
+Root cause (MMS_AUDIT §2.3): `getMmsAddress()`/`getMmsAddressIncremental()` only ever
+queried `content://mms/$mmsId/addr` for a single FROM (received) or TO (sent) row via
+`moveToFirst()`. For a real group MMS the `addr` table has one row per participant
+(FROM for the sender, TO/CC for each recipient) — everyone past the first row was
+silently dropped, and the thread displayed as if it were a 1:1 conversation with
+whichever one address happened to win.
+
+Fix: a new pure function `parseMmsParticipants()` (`MmsPartParsing.kt`) collapses every
+FROM/TO/CC row into a deduplicated, ordered roster. A new `getMmsParticipants(mmsId)`
+(duplicated in `SmsSyncHandler.kt` and `SmsHistoryImportWorker.kt`, matching the existing
+`getMmsAddress`/`getMmsAddressIncremental` duplication in those files) queries `addr` with
+no type filter and feeds the rows through it. The roster is only fetched the one time a
+thread is actually created (`ensureThread()` takes it as a lazy `() -> List<String>` so
+the extra content-resolver query is never paid for messages in an already-known thread) —
+when the roster has more than one address, `Thread.displayName` becomes the comma-joined
+contact names (matching `docs/TODO.md`'s exact spec: "comma-joined display name"), and the
+full roster is stored on the new `Thread.participants` field. Because `displayName` already
+carries the joined names, `ConversationsScreen` and `ThreadScreen`'s top bar needed zero
+changes — this was the whole point of joining at write time instead of at render time.
+
+Schema: v12 → v13, `threads.participantsJson` (nullable TEXT, no default — same pattern
+as v11→v12's `attachmentsJson`). Codec (`ThreadParticipants.kt`): `encodeParticipantsJson`/
+`decodeParticipantsJson`, hand-written for the same reason as `MessageAttachment`'s codec
+(org.json is an unmocked stub in JVM unit tests). `MessageAttachment.escapeJson` made
+`internal` so both codecs share one escaper instead of duplicating it.
+
+**Sending is explicitly out of scope and unchanged** — `MmsPduBuilder.buildPdu()` still
+writes one `FIELD_TO` header, so a reply inside a thread that now correctly displays as
+a group would silently reach only `thread.address` (one participant), not everyone.
+`ReplyBar` now shows a warning banner ("Group replies aren't supported yet...") whenever
+`thread.participants.size > 1` so this gap is visible instead of a silent trap — actually
+implementing group sending is tracked separately in `docs/TODO.md`.
+
+Known limitations (documented in MMS_AUDIT §1.4/§2.3): the roster can't reliably exclude
+the local device's own number (no `addr` row identifies "this is you"); it's captured once
+at thread-creation and not re-derived if the group's membership changes later; per-bubble
+sender name/avatar within a group thread is not implemented (every bubble still renders
+as if 1:1) — `Message.address` already holds the correct per-message sender, so that's a
+`ThreadScreen` rendering change with no sync-layer work behind it.
+
+Tests: `MmsPartParsingTest` (+7, `parseMmsParticipants`) and new
+`ThreadParticipantsCodecTest` (+8, JSON round-trip). `./gradlew test`: 441 passing.
+
 ### Video attachments now compressed to fit the carrier MMS cap
 
 Root cause of on-device failure (real AT&T S24 Ultra test): `MmsManagerWrapper.sendMms()`

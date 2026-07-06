@@ -65,3 +65,34 @@ internal fun parseMmsRawParts(parts: List<MmsRawPart>): MmsParsedResult {
 
     return MmsParsedResult(sb.toString().trim(), attachments)
 }
+
+/** One row of content://mms/$id/addr: an address plus its PDU header type. */
+internal data class MmsAddrRow(val address: String?, val type: Int)
+
+// PduHeaders values relevant to MMS participants (WAP spec).
+internal const val PDU_HEADER_FROM = 137
+internal const val PDU_HEADER_TO   = 151
+internal const val PDU_HEADER_CC   = 130
+
+/**
+ * Pure function: collapses every FROM/TO/CC row for one MMS PDU into an ordered,
+ * deduplicated list of participant addresses — the full roster of a group MMS
+ * (MMS_AUDIT §2.3: previously only the first FROM/TO row was read, so every other
+ * participant was silently dropped).
+ *
+ * Filters the Samsung "insert-address-token" placeholder and blank addresses.
+ * Cannot reliably exclude the local device's own number — no row in the PDU's
+ * addr table identifies "this is you" — so it may occasionally appear in the
+ * roster. That's a cosmetic imperfection, not a correctness bug: every real
+ * participant is preserved, which is the property that matters here.
+ */
+internal fun parseMmsParticipants(rows: List<MmsAddrRow>): List<String> {
+    val seen = LinkedHashSet<String>()
+    for (row in rows) {
+        if (row.type != PDU_HEADER_FROM && row.type != PDU_HEADER_TO && row.type != PDU_HEADER_CC) continue
+        val addr = row.address
+        if (addr.isNullOrBlank() || addr == "insert-address-token") continue
+        seen += addr
+    }
+    return seen.toList()
+}

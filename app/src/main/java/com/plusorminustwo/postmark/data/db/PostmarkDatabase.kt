@@ -14,7 +14,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity],
  * [ThreadStatsEntity], [GlobalStatsEntity], [MessageFtsEntity].
  *
- * Current schema version: 12.
+ * Current schema version: 13.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -154,6 +154,14 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // no default: existing rows keep NULL and fall back to the singular
                 // attachmentUri/mimeType pair added in MIGRATION_8_9.
                 db.execSQL("ALTER TABLE messages ADD COLUMN attachmentsJson TEXT")
+            }
+        }
+
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // JSON array of group MMS participant addresses (see MMS_AUDIT §2.3).
+                // Nullable, no default: existing rows and ordinary 1:1 threads keep NULL.
+                db.execSQL("ALTER TABLE threads ADD COLUMN participantsJson TEXT")
             }
         }
 

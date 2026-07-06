@@ -451,14 +451,24 @@ class SmsHistoryImportWorker @AssistedInject constructor(
 
             val existing = threads[threadId]
             if (existing == null || timestamp > existing.lastMessageAt) {
-                val displayName = lookupContactName(address) ?: address
+                // Only queried on the (rare) message that actually creates/updates a thread's
+                // metadata, not on every row — same cost profile as before for the common case.
+                val roster = getMmsParticipants(rawId)
+                // Group MMS: comma-join contact names so the thread list/top bar show
+                // everyone without any UI change (MMS_AUDIT §2.3).
+                val displayName = if (roster.size > 1) {
+                    roster.joinToString(", ") { lookupContactName(it) ?: it }
+                } else {
+                    lookupContactName(address) ?: address
+                }
                 threads[threadId] = Thread(
                     id = threadId,
                     displayName = displayName,
                     address = address,
                     lastMessageAt = timestamp,
                     lastMessagePreview = parts.previewText,
-                    backupPolicy = BackupPolicy.GLOBAL
+                    backupPolicy = BackupPolicy.GLOBAL,
+                    participants = if (roster.size > 1) roster else emptyList()
                 )
             }
 
@@ -567,6 +577,27 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                 if (addr == "insert-address-token") "Unknown" else addr
             } else "Unknown"
         }
+    }
+
+    // Returns every distinct participant address (FROM/TO/CC) for a group MMS PDU.
+    // Mirrors SmsSyncHandler.getMmsParticipants() — see that copy for the rationale on
+    // why the two sync paths don't share a single content-resolver query here.
+    private fun getMmsParticipants(mmsId: Long): List<String> {
+        val cursor = applicationContext.contentResolver.query(
+            Uri.parse("content://mms/$mmsId/addr"),
+            arrayOf("address", "type"),
+            null, null, null
+        ) ?: return emptyList()
+        val rows = cursor.use {
+            val addrIdx = it.getColumnIndexOrThrow("address")
+            val typeIdx = it.getColumnIndexOrThrow("type")
+            val out = mutableListOf<MmsAddrRow>()
+            while (it.moveToNext()) {
+                out += MmsAddrRow(it.getString(addrIdx), it.getInt(typeIdx))
+            }
+            out
+        }
+        return parseMmsParticipants(rows)
     }
 
     private fun writeStatus(status: String) {

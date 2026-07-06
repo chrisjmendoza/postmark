@@ -4,6 +4,8 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.model.decodeParticipantsJson
+import com.plusorminustwo.postmark.domain.model.encodeParticipantsJson
 
 /**
  * Room entity for a conversation thread.
@@ -24,7 +26,9 @@ data class ThreadEntity(
     // When false the thread is fully silenced — no notification is posted for incoming messages.
     val notificationsEnabled: Boolean = true,
     // Postmark-only display alias — null means use displayName everywhere in the UI.
-    val nickname: String? = null
+    val nickname: String? = null,
+    // JSON array of group MMS participant addresses. Null for ordinary 1:1 threads.
+    val participantsJson: String? = null
 )
 
 /**
@@ -41,7 +45,8 @@ fun ThreadEntity.toDomain() = Thread(
     isMuted = isMuted,
     isPinned = isPinned,
     notificationsEnabled = notificationsEnabled,
-    nickname = nickname
+    nickname = nickname,
+    participants = decodeParticipantsJson(participantsJson)
 )
 
 /**
@@ -58,5 +63,6 @@ fun Thread.toEntity() = ThreadEntity(
     isMuted = isMuted,
     isPinned = isPinned,
     notificationsEnabled = notificationsEnabled,
-    nickname = nickname
+    nickname = nickname,
+    participantsJson = encodeParticipantsJson(participants)
 )

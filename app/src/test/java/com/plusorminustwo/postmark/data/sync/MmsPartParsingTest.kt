@@ -145,4 +145,60 @@ class MmsPartParsingTest {
         assertEquals("🎵 Audio message", parseMmsRawParts(listOf(part(1, "audio/amr"))).previewText)
         assertEquals("[MMS]", parseMmsRawParts(emptyList()).previewText)
     }
+
+    // ── parseMmsParticipants ────────────────────────────────────────────────
+
+    @Test fun `single FROM row for an ordinary 1-1 received MMS`() {
+        val result = parseMmsParticipants(listOf(MmsAddrRow("+15551234567", PDU_HEADER_FROM)))
+        assertEquals(listOf("+15551234567"), result)
+    }
+
+    @Test fun `single TO row for an ordinary 1-1 sent MMS`() {
+        val result = parseMmsParticipants(listOf(MmsAddrRow("+15551234567", PDU_HEADER_TO)))
+        assertEquals(listOf("+15551234567"), result)
+    }
+
+    @Test fun `group MMS collects every FROM TO and CC row`() {
+        // Regression for MMS_AUDIT §2.3: only the first row used to be kept.
+        val result = parseMmsParticipants(listOf(
+            MmsAddrRow("+15550000001", PDU_HEADER_FROM),
+            MmsAddrRow("+15550000002", PDU_HEADER_TO),
+            MmsAddrRow("+15550000003", PDU_HEADER_TO),
+            MmsAddrRow("+15550000004", PDU_HEADER_CC)
+        ))
+        assertEquals(
+            listOf("+15550000001", "+15550000002", "+15550000003", "+15550000004"),
+            result
+        )
+    }
+
+    @Test fun `duplicate addresses across rows are deduplicated`() {
+        val result = parseMmsParticipants(listOf(
+            MmsAddrRow("+15550000001", PDU_HEADER_FROM),
+            MmsAddrRow("+15550000001", PDU_HEADER_TO)
+        ))
+        assertEquals(listOf("+15550000001"), result)
+    }
+
+    @Test fun `unrelated PDU header types are ignored`() {
+        val result = parseMmsParticipants(listOf(
+            MmsAddrRow("+15550000001", PDU_HEADER_FROM),
+            MmsAddrRow("+15559999999", 999)
+        ))
+        assertEquals(listOf("+15550000001"), result)
+    }
+
+    @Test fun `null blank and Samsung placeholder addresses are skipped`() {
+        val result = parseMmsParticipants(listOf(
+            MmsAddrRow(null, PDU_HEADER_FROM),
+            MmsAddrRow("", PDU_HEADER_TO),
+            MmsAddrRow("insert-address-token", PDU_HEADER_TO),
+            MmsAddrRow("+15550000001", PDU_HEADER_CC)
+        ))
+        assertEquals(listOf("+15550000001"), result)
+    }
+
+    @Test fun `empty row list returns empty participant list`() {
+        assertTrue(parseMmsParticipants(emptyList()).isEmpty())
+    }
 }
