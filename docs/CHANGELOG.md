@@ -6,6 +6,59 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## [Unreleased]
 
+### Sent messages missing — round 3: write-side repair (July 5 2026)
+
+Third attempt at the June 2026 "sent messages missing" class of bug. Rounds 1 and 2
+(supplemental `content://sms/sent` cursor, `msg_box IN (1,2,4)` filter) were read-side
+fixes to how our sync queries the system providers. The decisive new clue: Windows
+Phone Link — which reads the phone's telephony providers independently of anything
+Postmark's UI does — was also missing the same sent messages. So the row in the shared
+system provider itself was wrong or missing. Two write-side gaps confirmed in code and
+fixed, both as defensive repairs at the sentIntent receivers where a successful send
+is already confirmed:
+
+**SMS — send transmits but the sent row is never written**
+`SmsManagerWrapper.sendTextMessage()` wraps the `content://sms/sent` insert in a
+catch-all (`SmsManagerWrapper.kt:47-69`) that leaves `smsRowId = -1` on any exception
+(transient `RemoteException`, or the default-SMS-app role silently reset by an OS
+update — provider writes throw `SecurityException` while `SEND_SMS` still transmits),
+and the radio send below it is unconditional. The message is delivered but no row ever
+exists in `content://sms` — invisible to Postmark's sync and to Phone Link; the
+optimistic Room row is deleted by `deleteOptimisticMessages()` on the thread's next sync.
+Fix: the final part's sent `PendingIntent` now carries `EXTRA_ADDRESS`/`EXTRA_BODY`
+(`SmsManagerWrapper.kt:83-104`). On `RESULT_OK` with `smsRowId <= 0`,
+`SmsSentDeliveryReceiver.recoverMissingSentRow()` re-creates the sent row (same
+ContentValues as the send path; `THREAD_ID` via `getOrCreateThreadId`; `STATUS_NONE`
+since the delivery intent can't reach the recovered row), awaits
+`smsSyncHandler.triggerCatchUp()`, then marks the new Room row SENT. Recovery decision
+extracted to pure `shouldRecoverSentRow()`.
+
+**MMS — platform-assigned `thread_id` never validated**
+Postmark never inserts into `content://mms` — the system MMS service persists the sent
+row after `SmsManager.sendMultimediaMessage()` and assigns `thread_id`. SMS sends get
+explicit `THREAD_ID` protection in `SmsManagerWrapper`; MMS had none, so a platform
+misassignment (wrong/stale/zero `thread_id`) orphans the sent MMS from its conversation
+for every reader — Room thread ids ARE the system thread ids (`ensureThread()`), so
+Postmark's thread view and Phone Link fail identically.
+Fix: `ThreadViewModel` passes `EXTRA_TO_ADDRESS` (send + retry); `MmsSentReceiver` now
+reads `thread_id` alongside `_id` when locating the real row and, via
+`repairThreadIdIfWrong()`, compares it against `getOrCreateThreadId(toAddress)` — on
+mismatch it updates both the provider row (fixes Phone Link and future syncs) and the
+Room copy via new `MessageDao.updateThreadId()` (fixes a row already imported under
+the wrong thread). Repair decision extracted to pure `mmsThreadIdNeedsRepair()`.
+
+Repair is insert/update only — nothing is deleted from the providers.
+
+**Files changed**:
+- `service/sms/SmsManagerWrapper.kt` — recovery payload on final-part sent intent
+- `service/sms/SmsSentDeliveryReceiver.kt` — `recoverMissingSentRow()`; `shouldRecoverSentRow()`
+- `service/sms/MmsSentReceiver.kt` — `repairThreadIdIfWrong()`; `mmsThreadIdNeedsRepair()`; `EXTRA_TO_ADDRESS`
+- `ui/thread/ThreadViewModel.kt` — `EXTRA_TO_ADDRESS` in send + retry sentIntents
+- `data/db/dao/MessageDao.kt` / `data/repository/MessageRepository.kt` — `updateThreadId()`
+- `app/src/test/…/SentRowRepairTest.kt` — 11 new unit tests (all passing)
+
+---
+
 ### MMS audit — round 2 (June 14 2026)
 
 **#9 — GIF over carrier limit logged explicitly**

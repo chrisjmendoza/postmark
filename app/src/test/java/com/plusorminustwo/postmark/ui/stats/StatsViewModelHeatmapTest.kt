@@ -272,6 +272,7 @@ private class FakeMessageDao : MessageDao {
     override suspend fun getLatestNForThread(threadId: Long, n: Int): List<MessageEntity> = emptyList()
     override suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity? = null
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
+    override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long) = Unit
     override suspend fun getOptimisticSentDeliveryStatus(threadId: Long): Int? = null
     override suspend fun getOptimisticSentAttachmentUri(threadId: Long): String? = null

@@ -70,6 +70,11 @@ interface MessageDao {
     @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :messageId")
     suspend fun updateDeliveryStatus(messageId: Long, status: Int)
 
+    /** Moves a message to another thread. Used by MmsSentReceiver to repair a sent MMS
+     *  the platform persisted with a wrong thread_id (Room ids mirror system thread ids). */
+    @Query("UPDATE messages SET threadId = :threadId WHERE id = :messageId")
+    suspend fun updateThreadId(messageId: Long, threadId: Long)
+
     @Query("UPDATE messages SET attachmentUri = :uri WHERE id = :messageId")
     suspend fun updateAttachmentUri(messageId: Long, uri: String)
 

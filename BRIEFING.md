@@ -1,6 +1,6 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: June 14, 2026
+Last updated: July 5, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
@@ -325,6 +325,50 @@ WHAT IS WORKING (tested on device)
    running Play Services v26.22+ (adb logcat | grep -i archival). If the action
    turns out to be the bare "GOOGLE_MESSAGES_ARCHIVAL_UPDATE" without namespace,
    update RcsArchivalReceiver.ACTION_ARCHIVAL_UPDATE and the manifest intent-filter.
+✅ Sent SMS/MMS rows missing/misattributed in the SYSTEM provider — write-side repair (July 2026):
+   Third round of the June 2026 "sent messages missing" bug. The two prior fixes
+   (supplemental content://sms/sent cursor; msg_box IN (1,2,4) filter) were both
+   READ-side — they fixed how our own sync queries the providers. Key new clue:
+   Windows Phone Link, which reads the phone's telephony providers independently
+   of Postmark's UI/Room, was ALSO missing the same sent messages — so the row in
+   the shared system provider itself was missing or misattributed. Two confirmed
+   write-side gaps, both repaired at the sentIntent receivers (the one point where
+   a successful send is already confirmed):
+   1. SMS — radio send succeeds but the sent row is never written:
+      SmsManagerWrapper.sendTextMessage() wraps the content://sms/sent insert in a
+      catch-all that leaves smsRowId = -1 on ANY exception (transient
+      RemoteException, or the default-SMS-app role being silently reset by an OS
+      update — provider writes then throw SecurityException while SEND_SMS still
+      transmits fine), and the radio send below it is unconditional. Result:
+      message genuinely delivered, zero rows in content://sms; the optimistic Room
+      row is later removed by deleteOptimisticMessages() on the next sync of that
+      thread, so the message vanishes everywhere.
+      Fix: SmsManagerWrapper adds EXTRA_ADDRESS + EXTRA_BODY to the FINAL part's
+      sent PendingIntent (one recovery per multipart message).
+      SmsSentDeliveryReceiver, on RESULT_OK with smsRowId <= 0, re-creates the
+      content://sms/sent row (same ContentValues as the send path, THREAD_ID via
+      getOrCreateThreadId; STATUS_NONE because the delivery PendingIntent carries
+      smsRowId=-1 and can never reach the recovered row), awaits
+      smsSyncHandler.triggerCatchUp() so the real Room row exists, then marks it
+      SENT. Decision logic extracted to pure fun shouldRecoverSentRow()
+      (SentRowRepairTest).
+   2. MMS — platform-assigned thread_id never validated:
+      Postmark never inserts into content://mms itself — the system MMS service
+      persists the row after SmsManager.sendMultimediaMessage() and assigns
+      whatever thread_id it derives. SMS sends are protected by the explicit
+      THREAD_ID written in SmsManagerWrapper; MMS had no equivalent, so a
+      platform-side misassignment (wrong/stale/zero thread_id) orphans the sent
+      MMS from its conversation for EVERY reader — Room thread ids ARE the system
+      thread ids (SmsSyncHandler.ensureThread), so Postmark's thread view and
+      Phone Link fail identically.
+      Fix: ThreadViewModel passes EXTRA_TO_ADDRESS (send + retry paths);
+      MmsSentReceiver reads thread_id alongside _id when it locates the real row,
+      compares against getOrCreateThreadId(toAddress), and on mismatch updates
+      BOTH the provider row (fixes Phone Link and all future syncs) and the Room
+      copy via new MessageDao.updateThreadId() (fixes a row incremental sync
+      already imported under the wrong thread). Decision logic extracted to pure
+      fun mmsThreadIdNeedsRepair() (SentRowRepairTest).
+   Repair is insert/update only — nothing is ever deleted from the providers.
 ✅ Notifications show contact display name (not raw phone number):
    - SmsReceiver queries threadRepository.getDisplayNameByAddress(rawSender)
      before posting notification; falls back to raw number if thread not in Room

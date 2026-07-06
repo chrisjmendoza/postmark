@@ -70,6 +70,9 @@ class MessageRepository @Inject constructor(
     suspend fun updateDeliveryStatus(messageId: Long, status: Int) =
         messageDao.updateDeliveryStatus(messageId, status)
 
+    suspend fun updateThreadId(messageId: Long, threadId: Long) =
+        messageDao.updateThreadId(messageId, threadId)
+
     // Marks all messages in a thread as read; called when the user opens the thread.
     suspend fun markAllRead(threadId: Long) = messageDao.markAllRead(threadId)
 

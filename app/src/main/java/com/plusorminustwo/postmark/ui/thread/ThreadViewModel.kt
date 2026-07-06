@@ -485,6 +485,8 @@ class ThreadViewModel @Inject constructor(
                         putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, tempId)
                         putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, now)
                         putExtra(MmsSentReceiver.EXTRA_BEFORE_SEND_MAX_ID, beforeSendMaxId)
+                        // Lets the receiver verify/repair the platform-assigned thread_id.
+                        putExtra(MmsSentReceiver.EXTRA_TO_ADDRESS, thread.address)
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )
@@ -569,6 +571,8 @@ class ThreadViewModel @Inject constructor(
                         putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, messageId)
                         putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, System.currentTimeMillis())
                         putExtra(MmsSentReceiver.EXTRA_BEFORE_SEND_MAX_ID, beforeSendMaxId)
+                        // Lets the receiver verify/repair the platform-assigned thread_id.
+                        putExtra(MmsSentReceiver.EXTRA_TO_ADDRESS, message.address)
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )

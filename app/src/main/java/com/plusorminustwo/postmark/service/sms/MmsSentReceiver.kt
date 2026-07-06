@@ -2,9 +2,12 @@ package com.plusorminustwo.postmark.service.sms
 
 import android.app.Activity
 import android.content.BroadcastReceiver
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Telephony
 import android.telephony.SmsManager
 import android.util.Log
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
@@ -46,6 +49,7 @@ class MmsSentReceiver : BroadcastReceiver() {
         val messageId       = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
         val sentAtMs        = intent.getLongExtra(EXTRA_SENT_AT_MS, -1L)
         val beforeSendMaxId = intent.getLongExtra(EXTRA_BEFORE_SEND_MAX_ID, -1L)
+        val toAddress       = intent.getStringExtra(EXTRA_TO_ADDRESS)
         if (messageId == -1L) return
 
         val status = if (resultCode == Activity.RESULT_OK) DELIVERY_STATUS_SENT else DELIVERY_STATUS_FAILED
@@ -101,7 +105,7 @@ class MmsSentReceiver : BroadcastReceiver() {
                         // immediately before sendMultimediaMessage was called.
                         context.contentResolver.query(
                             Uri.parse("content://mms"),
-                            arrayOf("_id"),
+                            arrayOf("_id", "thread_id"),
                             "_id > ? AND (msg_box = 2 OR msg_box = 4)",
                             arrayOf(beforeSendMaxId.toString()),
                             "_id ASC"
@@ -113,7 +117,7 @@ class MmsSentReceiver : BroadcastReceiver() {
                         val sentAtSec = sentAtMs / 1000L
                         context.contentResolver.query(
                             Uri.parse("content://mms"),
-                            arrayOf("_id"),
+                            arrayOf("_id", "thread_id"),
                             "((date >= ? AND date <= ?) OR (date >= ? AND date <= ?)) AND (msg_box = 2 OR msg_box = 4)",
                             arrayOf(
                                 (sentAtSec - 30L).toString(), (sentAtSec + 120L).toString(),       // seconds (AOSP)
@@ -125,11 +129,13 @@ class MmsSentReceiver : BroadcastReceiver() {
 
                     cursor?.use { c ->
                         if (c.moveToFirst()) {
-                            val rawId  = c.getLong(0)
-                            val roomId = MMS_ID_OFFSET + rawId
+                            val rawId       = c.getLong(0)
+                            val rowThreadId = c.getLong(1)
+                            val roomId      = MMS_ID_OFFSET + rawId
                             messageRepository.updateDeliveryStatus(roomId, status)
                             updatedCount++
                             syncLogger.log(TAG, "MmsSentReceiver: updated real MMS row to $statusLabel (attempt $attempt, rawId=$rawId)")
+                            repairThreadIdIfWrong(context, rawId, rowThreadId, toAddress)
                         }
                     } ?: syncLogger.log(TAG, "MmsSentReceiver: content://mms cursor was null (attempt $attempt)")
                 }
@@ -151,6 +157,50 @@ class MmsSentReceiver : BroadcastReceiver() {
         }
     }
 
+    /**
+     * Verifies the platform-assigned `thread_id` on the sent MMS row and repairs it
+     * if wrong. Postmark never inserts into content://mms itself — the system MMS
+     * service persists the row (via [SmsManager.sendMultimediaMessage]) and assigns
+     * whatever thread_id it derives. If that assignment is wrong, stale, or zero,
+     * the sent MMS is orphaned from its conversation for EVERY reader of the shared
+     * provider (Postmark's thread view groups by this id, and so do companion apps
+     * like Windows Phone Link). SMS sends already get this protection via the
+     * explicit THREAD_ID written in [SmsManagerWrapper]; this is the MMS equivalent,
+     * applied at the one point where we have both the real row and the recipient.
+     *
+     * Repairs both the provider row (fixes external readers and any future sync)
+     * and the Room copy (fixes a row incremental sync may already have imported
+     * under the wrong thread — Room thread ids ARE the system thread ids).
+     */
+    private suspend fun repairThreadIdIfWrong(
+        context: Context,
+        rawId: Long,
+        rowThreadId: Long,
+        toAddress: String?
+    ) {
+        if (toAddress.isNullOrEmpty()) return
+        // Same canonical-thread lookup SmsManagerWrapper uses for SMS; some OEMs
+        // throw on malformed addresses, so guard like SmsReceiver does.
+        val expectedThreadId = try {
+            Telephony.Threads.getOrCreateThreadId(context, toAddress)
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "getOrCreateThreadId failed for toAddress=$toAddress — cannot verify thread_id on rawId=$rawId", e)
+            return
+        }
+        if (!mmsThreadIdNeedsRepair(rowThreadId, expectedThreadId)) return
+        try {
+            context.contentResolver.update(
+                ContentUris.withAppendedId(Telephony.Mms.CONTENT_URI, rawId),
+                ContentValues().apply { put(Telephony.Mms.THREAD_ID, expectedThreadId) },
+                null, null
+            )
+            messageRepository.updateThreadId(MMS_ID_OFFSET + rawId, expectedThreadId)
+            syncLogger.log(TAG, "repaired thread_id on content://mms/$rawId: $rowThreadId → $expectedThreadId")
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "thread_id repair FAILED for rawId=$rawId ($rowThreadId → $expectedThreadId)", e)
+        }
+    }
+
     companion object {
         const val ACTION_MMS_SENT         = "com.plusorminustwo.postmark.MMS_SENT"
         const val EXTRA_MESSAGE_ID        = "extra_message_id"
@@ -159,6 +209,17 @@ class MmsSentReceiver : BroadcastReceiver() {
         /** Max content://mms _id snapshot taken immediately before sendMultimediaMessage.
          *  Used to find the real row without relying on the date field format. */
         const val EXTRA_BEFORE_SEND_MAX_ID = "extra_before_send_max_mms_id"
+        /** Recipient address; lets the receiver verify/repair the platform-assigned thread_id. */
+        const val EXTRA_TO_ADDRESS        = "extra_to_address"
         private const val TAG             = "MmsSentReceiver"
     }
 }
+
+/**
+ * True when the platform-assigned thread_id on a sent MMS row must be corrected to
+ * the canonical thread id for the recipient. An expected id ≤ 0 means the canonical
+ * thread could not be resolved — never "repair" toward an invalid id.
+ * Pure — unit-tested in SentRowRepairTest.
+ */
+internal fun mmsThreadIdNeedsRepair(rowThreadId: Long, expectedThreadId: Long): Boolean =
+    expectedThreadId > 0L && rowThreadId != expectedThreadId
