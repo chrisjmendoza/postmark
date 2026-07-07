@@ -387,12 +387,16 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `HapticFeedbackType.LongPress` when a reaction pill is tapped
       to add tactile confirmation and make the interaction feel
       premium.
-- [ ] **Full emoji picker for reactions** — the current emoji popup
-      shows only ~7 quick-pick reactions. Add a "＋" button that
-      opens a full bottom-sheet emoji picker (all categories, search
-      bar, recents row) matching the experience in Google Messages.
-      Use `androidx.emoji2` or a Compose emoji-picker library.
-      Users expect access to the full emoji set for reactions.
+- [x] **Full emoji picker for reactions** (July 6 2026) — the "＋" button (bubble
+      long-press popup and the image viewer's quick-reaction row) opens
+      `androidx.emoji2.emojipicker.EmojiPickerView` — the real system-style picker,
+      not a lookalike: full Unicode emoji set, category tabs, recents, long-press for
+      skin-tone/gender variants. An earlier attempt used a hand-curated ~47-emoji list
+      with keyword search (`EmojiData.kt`, now deleted) that only ever searched those
+      47 — this replaces it outright rather than extending it. One gap from the
+      original ask: `EmojiPickerView` has no public search/filter API, so there's no
+      search bar — browse-by-category-and-recents only, matching what the widget
+      itself actually offers.
 - [ ] **Bubble tap for link/phone detection** — auto-linkify URLs,
       phone numbers, addresses in message body. Tap URL → browser,
       tap phone → dial dialog, tap address → Maps.

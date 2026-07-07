@@ -6,6 +6,34 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-06
 
+### Real full emoji picker (androidx.emoji2.emojipicker), not a lookalike
+
+Asked why the "full" emoji picker ("+" button, previous entry below) still felt
+limited — because it was: `EmojiPickerBottomSheet` was backed by a hand-curated
+`ALL_EMOJI_SECTIONS` list in `EmojiData.kt` — 4 sections, ~47 emoji total, with a
+keyword-search `TextField` filtering only over those 47. Nowhere near "all," and
+nowhere near what a phone's actual emoji keyboard offers.
+
+Replaced the entire custom grid/search implementation with
+`androidx.emoji2.emojipicker.EmojiPickerView` (new dependency,
+`androidx.emoji2:emoji2-emojipicker:1.6.0`, the current stable release verified
+against Google's Maven metadata) — the real widget Google ships for exactly this:
+the complete Unicode emoji set, category tabs, recently-used tracking, and long-press
+for skin-tone/gender variants. It's an Android `View`, not Compose-native, so it's
+embedded via `AndroidView` inside the same `ModalBottomSheet` both call sites already
+used (the bubble long-press popup's "more" button, and the image viewer's new "+"
+button) — neither call site needed to change, only `EmojiPickerBottomSheet`'s
+internals. `EmojiData.kt` (the now-fully-unused hand-curated list) deleted rather than
+left as dead code.
+
+Note: `EmojiPickerView` exposes no public search/filter API (confirmed against its
+public API surface) — the picker is browse-by-category-and-recents, matching the
+`EmojiPickerView`'s own actual capabilities, not a lookalike with a search box that
+happened to only search 47 entries.
+
+Tests: 453 passing (unchanged — no pure-function surface here, this swaps a UI widget
+implementation). `./gradlew test` + `assembleDebug`: both clean.
+
 ### Image viewer quick-reactions: bigger, higher, full emoji picker
 
 Compared against Google Messages' viewer directly. Three changes to the reaction row:

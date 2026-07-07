@@ -3480,78 +3480,35 @@ private fun ThreadScreenPreview() {
 
 // ── EmojiPickerBottomSheet ────────────────────────────────────────────────────
 
+/**
+ * Full emoji picker — [androidx.emoji2.emojipicker.EmojiPickerView], the same widget
+ * Google ships for this exact purpose (category tabs, the complete Unicode emoji set,
+ * recents, long-press for skin-tone/gender variants). Replaces a hand-curated ~47-emoji
+ * list (four sections, keyword search over just those) that was a poor substitute for
+ * "the emoji keyboard my phone already has" — this is the real thing, not a lookalike.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EmojiPickerBottomSheet(
     onEmojiSelected: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-    var query by remember { mutableStateOf("") }
-
-    val filteredSections = remember(query) {
-        if (query.isEmpty()) {
-            ALL_EMOJI_SECTIONS
-        } else {
-            val q = query.trim().lowercase()
-            ALL_EMOJI_SECTIONS.mapNotNull { section ->
-                val filtered = section.emojis.filter { (_, keywords) -> keywords.contains(q) }
-                if (filtered.isNotEmpty()) section.copy(emojis = filtered) else null
-            }
-        }
-    }
-
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            TextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Search emoji...") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                singleLine = true,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    focusedIndicatorColor   = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor  = Color.Transparent,
-                ),
-                shape = RoundedCornerShape(12.dp)
-            )
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(8),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 300.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
-            ) {
-                filteredSections.forEach { section ->
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text(
-                            text = section.name.uppercase(Locale.getDefault()),
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                            color = Color(0xFF8E8E93),
-                            modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 12.dp, bottom = 4.dp)
-                        )
-                    }
-                    lazyGridItems(section.emojis) { (emoji, _) ->
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clickable { onEmojiSelected(emoji) },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(emoji, fontSize = 22.sp)
-                        }
-                    }
+        AndroidView(
+            factory = { context ->
+                androidx.emoji2.emojipicker.EmojiPickerView(context).apply {
+                    setOnEmojiPickedListener { item -> onEmojiSelected(item.emoji) }
                 }
-            }
-        }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 400.dp)
+                .navigationBarsPadding()
+        )
     }
 }
 

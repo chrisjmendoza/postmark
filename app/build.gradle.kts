@@ -147,6 +147,10 @@ dependencies {
     implementation(libs.media3.transformer)
     implementation(libs.media3.effect)
 
+    // Full system-style emoji picker (all Unicode emoji, categories, recents) for
+    // message reactions — replaces the ~47-emoji hand-curated picker.
+    implementation(libs.androidx.emoji2.emojipicker)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
