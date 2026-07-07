@@ -368,6 +368,7 @@ private fun HeatmapView(
     val fullDateFmt     = remember { DateTimeFormatter.ofPattern("EEEE, MMMM d") }
 
     val totalInMonth    = countByDay.values.sum()
+    val maxDayCount     = countByDay.values.maxOrNull() ?: 0
     val activeDaysCount = countByDay.count { it.value > 0 }
     val dailyAvg        = if (month.lengthOfMonth() > 0) totalInMonth.toFloat() / month.lengthOfMonth() else 0f
 
@@ -486,7 +487,7 @@ private fun HeatmapView(
                     } else {
                         val date      = LocalDate.parse(label)
                         val count     = countByDay[label] ?: 0
-                        val tier      = heatmapTierForCount(count)
+                        val tier      = heatmapTierForCount(count, maxDayCount)
                         val dayNum    = date.dayOfMonth
                         val isSelected = date in selectedDays
                         Box(
@@ -530,7 +531,7 @@ private fun HeatmapView(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text("Less", style = MaterialTheme.typography.labelSmall,
+                Text("0", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 HEATMAP_COLORS.forEach { color ->
                     Box(
@@ -540,7 +541,7 @@ private fun HeatmapView(
                             .background(color)
                     )
                 }
-                Text("More", style = MaterialTheme.typography.labelSmall,
+                Text(maxDayCount.toString(), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(12.dp))
