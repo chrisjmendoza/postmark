@@ -121,7 +121,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -1103,7 +1102,6 @@ private fun MessageBubble(
 
     val bubbleRootY = remember { FloatArray(1) }
     val density = LocalDensity.current
-    var bubbleWidthPx by remember { mutableIntStateOf(0) }
 
     // ── Swipe-to-reply gesture state ──────────────────────────────────────────
     // Animatable allows smooth spring-back after the user releases or crosses threshold.
@@ -1202,7 +1200,6 @@ private fun MessageBubble(
                         else
                             Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                     )
-                    .onSizeChanged { bubbleWidthPx = it.width }
             ) {
                 if (message.attachments.isNotEmpty()) {
                     // URI of the video being played; null = player closed. Videos stay a
@@ -1314,28 +1311,23 @@ private fun MessageBubble(
                     )
                 }
             }
+            if (message.reactions.isNotEmpty()) {
+                // Google Messages-style badge: always the bubble's own bottom-right
+                // corner, whether the bubble is sent or received, hanging half off
+                // the edge. Unconstrained in width so a pill row wider than a short
+                // bubble grows leftward past its edge instead of wrapping into a
+                // stack of single pills.
+                ReactionPills(
+                    reactions = message.reactions,
+                    isSent = message.isSent,
+                    onReactionClick = onReactionClick,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 6.dp, y = 10.dp)
+                )
+            }
         }  // end Box(widthIn+align)
         }  // end Box(fillMaxWidth) swipe wrapper
-        if (message.reactions.isNotEmpty()) {
-            ReactionPills(
-                reactions = message.reactions,
-                isSent = message.isSent,
-                onReactionClick = onReactionClick,
-                modifier = Modifier
-                    // Offset upward so pills badge the bubble's bottom edge rather
-                    // than floating disconnected below it.
-                    .offset(y = (-12).dp)
-                    .align(if (message.isSent) Alignment.Start else Alignment.End)
-                    .padding(
-                        start = if (message.isSent) 4.dp else 0.dp,
-                        end = if (message.isSent) 0.dp else 4.dp
-                    )
-                    .then(
-                        if (bubbleWidthPx > 0) Modifier.widthIn(max = with(density) { bubbleWidthPx.toDp() })
-                        else Modifier
-                    )
-            )
-        }
         if (showTimestamp || message.isSent) {
             Row(
                 modifier = Modifier
