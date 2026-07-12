@@ -1,16 +1,19 @@
 ﻿package com.plusorminustwo.postmark.ui.thread
 
 import android.app.role.RoleManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.app.PendingIntent
 import android.net.Uri
 import android.os.Build
+import android.provider.BlockedNumberContract
 import android.provider.Telephony
 import androidx.core.content.FileProvider
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
@@ -24,6 +27,7 @@ import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.decodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
+import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
@@ -32,6 +36,7 @@ import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -157,6 +162,23 @@ class ThreadViewModel @Inject constructor(
         .observeTopUserEmojis()
         .map { topEmojis -> buildQuickEmojiList(topEmojis) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DEFAULT_QUICK_EMOJIS)
+
+    /**
+     * address → contact display name for this thread's roster, resolved once per
+     * roster change on IO (each entry is a ContactsContract query). Empty for 1:1
+     * threads, so the UI can use `isNotEmpty()` as the "group thread — show
+     * per-bubble sender labels" signal.
+     */
+    val participantNames: StateFlow<Map<String, String>> = threadRepository
+        .observeById(threadId)
+        .map { it?.participants.orEmpty() }
+        .distinctUntilChanged()
+        .map { roster ->
+            if (roster.size <= 1) emptyMap()
+            else roster.associateWith { addr -> context.lookupContactName(addr) ?: formatPhoneNumber(addr) }
+        }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     // Named holder for the action-related sub-state to stay within combine's 5-arg limit.
     private data class InnerState(
@@ -705,6 +727,40 @@ class ThreadViewModel @Inject constructor(
         val current = uiState.value.thread?.isPinned ?: return
         viewModelScope.launch {
             threadRepository.updatePinned(threadId, !current)
+        }
+    }
+
+    // ── Block number ──────────────────────────────────────────────────────────
+
+    /** One-shot user-facing result of a block attempt — the UI shows this as a Snackbar. */
+    private val _blockResultEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val blockResultEvent: SharedFlow<String> = _blockResultEvent.asSharedFlow()
+
+    /**
+     * Adds this thread's address to the system [BlockedNumberContract] provider, so the
+     * platform rejects future calls and texts from it before they reach any app.
+     * Only the default SMS app (or dialer/carrier app) may write to the provider —
+     * when Postmark isn't default, the result message says so instead of failing silently.
+     */
+    fun blockNumber() {
+        val address = uiState.value.thread?.address?.takeIf { it.isNotEmpty() } ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val message = try {
+                if (BlockedNumberContract.canCurrentUserBlockNumbers(context)) {
+                    val values = ContentValues().apply {
+                        put(BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER, address)
+                    }
+                    context.contentResolver.insert(
+                        BlockedNumberContract.BlockedNumbers.CONTENT_URI, values
+                    )
+                    "Blocked $address — calls and texts from this number will be rejected"
+                } else {
+                    "Postmark must be your default SMS app to block numbers"
+                }
+            } catch (e: Exception) {
+                "Couldn't block $address"
+            }
+            _blockResultEvent.emit(message)
         }
     }
 

@@ -65,10 +65,10 @@ fun computeClusterPositions(messages: List<Message>): Map<Long, ClusterPosition>
         val prev = messages.getOrNull(i - 1)
         val next = messages.getOrNull(i + 1)
         val attachedToPrev = prev != null &&
-            prev.isSent == cur.isSent &&
+            sameVisualSender(prev, cur) &&
             cur.timestamp - prev.timestamp <= CLUSTER_GAP_MS
         val attachedToNext = next != null &&
-            next.isSent == cur.isSent &&
+            sameVisualSender(cur, next) &&
             next.timestamp - cur.timestamp <= CLUSTER_GAP_MS
         result[cur.id] = when {
             attachedToPrev && attachedToNext -> ClusterPosition.MIDDLE
@@ -79,3 +79,11 @@ fun computeClusterPositions(messages: List<Message>): Map<Long, ClusterPosition>
     }
     return result
 }
+
+/**
+ * Sent messages all render on the right regardless of their stored address, but
+ * received messages in a group thread carry the actual sender in [Message.address] —
+ * two participants texting back-to-back must not fuse into one bubble run.
+ */
+private fun sameVisualSender(a: Message, b: Message): Boolean =
+    a.isSent == b.isSent && (a.isSent || a.address == b.address)

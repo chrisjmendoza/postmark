@@ -185,6 +185,8 @@ fun ThreadScreen(
     val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
     // Bubble font scale — driven by pinch gesture, persisted across sessions.
     val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
+    // address → name for group threads; empty for 1:1 (doubles as the group signal).
+    val participantNames by viewModel.participantNames.collectAsState()
 
     // ── Stable lambdas ────────────────────────────────────────────────────────
     // Wrapped in remember(viewModel) so the same function reference is reused
@@ -203,6 +205,7 @@ fun ThreadScreen(
     val onExitSelectionMode       = remember(viewModel) { { viewModel.exitSelectionMode() } }
     val onSetSelectionScope       = remember(viewModel) { { scope: SelectionScope -> viewModel.setSelectionScope(scope) } }
     val onToggleMute              = remember(viewModel) { { viewModel.toggleMute() } }
+    val onBlockNumber             = remember(viewModel) { { viewModel.blockNumber() } }
     val onTogglePin               = remember(viewModel) { { viewModel.togglePin() } }
     val onToggleNotifications     = remember(viewModel) { { viewModel.toggleNotificationsEnabled() } }
     val onEnterSelectionMode      = remember(viewModel) { { viewModel.enterSelectionMode() } }
@@ -229,10 +232,12 @@ fun ThreadScreen(
         activeDates = activeDates,
         quickReactionEmojis = quickReactionEmojis,
         bubbleFontScale = bubbleFontScale,
+        participantNames = participantNames,
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
         scrollToBottomEvent = viewModel.scrollToBottomEvent,
         attachmentRejectedEvent = viewModel.attachmentRejectedEvent,
+        blockResultEvent = viewModel.blockResultEvent,
         onBack = onBack,
         onViewContact = onViewContact,
         onViewStats = onViewStats,
@@ -248,6 +253,7 @@ fun ThreadScreen(
         onExitSelectionMode = onExitSelectionMode,
         onSetSelectionScope = onSetSelectionScope,
         onToggleMute = onToggleMute,
+        onBlockNumber = onBlockNumber,
         onTogglePin = onTogglePin,
         onToggleNotifications = onToggleNotifications,
         onEnterSelectionMode = onEnterSelectionMode,
@@ -291,10 +297,13 @@ private fun ThreadContent(
     activeDates: Set<LocalDate>,
     quickReactionEmojis: List<String>,
     bubbleFontScale: Float = 1.0f,
+    // address → contact name for group threads; empty for 1:1 threads.
+    participantNames: Map<String, String> = emptyMap(),
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
     scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
     attachmentRejectedEvent: SharedFlow<String> = MutableSharedFlow(),
+    blockResultEvent: SharedFlow<String> = MutableSharedFlow(),
     onBack: () -> Unit,
     onViewContact: () -> Unit = {},
     onViewStats: () -> Unit,
@@ -310,6 +319,7 @@ private fun ThreadContent(
     onExitSelectionMode: () -> Unit,
     onSetSelectionScope: (SelectionScope) -> Unit,
     onToggleMute: () -> Unit,
+    onBlockNumber: () -> Unit = {},
     onTogglePin: () -> Unit,
     onToggleNotifications: () -> Unit,
     onEnterSelectionMode: () -> Unit,
@@ -341,6 +351,12 @@ private fun ThreadContent(
         }
     }
 
+    LaunchedEffect(blockResultEvent) {
+        blockResultEvent.collect { message ->
+            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
+        }
+    }
+
     // RoleManager.createRequestRoleIntent MUST be launched via startActivityForResult;
     // a plain startActivity() is silently ignored on API 29+.
     val roleRequestLauncher = rememberLauncherForActivityResult(
@@ -350,6 +366,8 @@ private fun ThreadContent(
     var showCalendarPicker by remember { mutableStateOf(false) }
     var showBackupPolicyDialog by remember { mutableStateOf(false) }
     var showDateRangePicker by remember { mutableStateOf(false) }
+    // Blocking is a system-wide, hard-to-discover-how-to-undo action, so it confirms first.
+    var showBlockConfirmDialog by remember { mutableStateOf(false) }
 
     // Non-null shows a "Delete message?" confirm dialog for this message id. Shared by the
     // action-bar Delete button and the image viewer's trash icon — deletion is real (removes
@@ -548,6 +566,29 @@ private fun ThreadContent(
         )
     }
 
+    if (showBlockConfirmDialog) {
+        val blockAddress = uiState.thread?.address ?: ""
+        AlertDialog(
+            onDismissRequest = { showBlockConfirmDialog = false },
+            title = { Text("Block $blockAddress?") },
+            text = {
+                Text(
+                    "Calls and texts from this number will be rejected by your phone. " +
+                        "You can unblock it later from your phone's blocked-numbers settings."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBlockConfirmDialog = false
+                    onBlockNumber()
+                }) { Text("Block") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBlockConfirmDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     if (showBackupPolicyDialog) {
         BackupPolicyDialog(
             currentPolicy = uiState.thread?.backupPolicy ?: BackupPolicy.GLOBAL,
@@ -694,10 +735,14 @@ private fun ThreadContent(
                                     text = { Text("Reset text size") },
                                     onClick = { menuExpanded = false; onResetFontScale() }
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("Block number") },
-                                    onClick = { menuExpanded = false }
-                                )
+                                // Hidden for group threads — "the number" is ambiguous when
+                                // the thread has multiple participants.
+                                if ((uiState.thread?.participants?.size ?: 0) <= 1) {
+                                    DropdownMenuItem(
+                                        text = { Text("Block number") },
+                                        onClick = { menuExpanded = false; showBlockConfirmDialog = true }
+                                    )
+                                }
                             }
                         }
                     }
@@ -753,7 +798,19 @@ private fun ThreadContent(
                             // Swipe-to-reply: disabled while in selection mode so the
                             // horizontal drag doesn't conflict with checkboxes.
                             onSwipeToReply = if (!uiState.isSelectionMode)
-                                { -> onSetReplyingTo(item.message.id) } else null
+                                { -> onSetReplyingTo(item.message.id) } else null,
+                            // Group threads only: label the first received bubble of each
+                            // sender's cluster. Roster misses (address formatting drift)
+                            // fall back to the formatted number rather than no label.
+                            senderName = if (
+                                participantNames.isNotEmpty() &&
+                                !item.message.isSent &&
+                                (item.clusterPosition == ClusterPosition.TOP ||
+                                    item.clusterPosition == ClusterPosition.SINGLE)
+                            ) {
+                                participantNames[item.message.address]
+                                    ?: formatPhoneNumber(item.message.address)
+                            } else null
                         )
                         is ThreadListItem.DateHeader -> DateHeader(
                             label = item.dateLabel,
@@ -1077,7 +1134,11 @@ private fun MessageBubble(
     onToggleTimestamp: () -> Unit,
     onRetry: () -> Unit = {},
     // Null = gesture disabled (e.g. while in selection mode).
-    onSwipeToReply: (() -> Unit)? = null
+    onSwipeToReply: (() -> Unit)? = null,
+    // Non-null only in group threads, for the first received bubble of a sender's
+    // cluster — rendered as a small name label above the bubble so participants
+    // are distinguishable (they otherwise all render identically to a 1:1 thread).
+    senderName: String? = null
 ) {
     val bubbleColor = if (message.isSent)
         MaterialTheme.colorScheme.primaryContainer
@@ -1168,6 +1229,16 @@ private fun MessageBubble(
             .padding(start = 12.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
         horizontalAlignment = alignment
     ) {
+        if (senderName != null) {
+            Text(
+                text = senderName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+            )
+        }
         // Wrap the bubble in a full-width Box so the reply icon can be positioned on the
         // opposite side while the bubble itself translates horizontally on swipe.
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -1912,18 +1983,32 @@ private fun DeliveryStatusIndicator(
     // Colored ticks: yellow = sent to carrier, green = delivered to device, red = failed.
     val sentColor      = Color(0xFFFFCC00)   // amber-yellow
     val deliveredColor = Color(0xFF4CAF50)   // material green
-    val (icon, tint) = when (status) {
-        DELIVERY_STATUS_PENDING   -> Icons.Default.Schedule to MaterialTheme.colorScheme.onSurfaceVariant
-        DELIVERY_STATUS_SENT      -> Icons.Default.Done to sentColor
-        DELIVERY_STATUS_DELIVERED -> Icons.Default.DoneAll to deliveredColor
-        DELIVERY_STATUS_FAILED    -> Icons.Default.Error to MaterialTheme.colorScheme.error
+    // The status is otherwise color-only — the contentDescription is the sole signal
+    // a screen-reader user gets that a message failed.
+    val (icon, tint, description) = when (status) {
+        DELIVERY_STATUS_PENDING   -> Triple(Icons.Default.Schedule, MaterialTheme.colorScheme.onSurfaceVariant, "Sending")
+        DELIVERY_STATUS_SENT      -> Triple(Icons.Default.Done, sentColor, "Sent")
+        DELIVERY_STATUS_DELIVERED -> Triple(Icons.Default.DoneAll, deliveredColor, "Delivered")
+        DELIVERY_STATUS_FAILED    -> Triple(Icons.Default.Error, MaterialTheme.colorScheme.error, "Failed to send. Tap to retry.")
         else -> return
     }
-    val clickableModifier = if (status == DELIVERY_STATUS_FAILED && onRetry != null)
-        modifier.size(12.dp).clickable(onClick = onRetry)
-    else
-        modifier.size(12.dp)
-    Icon(imageVector = icon, contentDescription = null, modifier = clickableModifier, tint = tint)
+    if (status == DELIVERY_STATUS_FAILED && onRetry != null) {
+        /* Failed is the only tappable state — minimumInteractiveComponentSize() reserves
+         * the 48dp accessibility touch target around the 12dp glyph, instead of asking
+         * users to hit a 12dp icon to recover a failed message. */
+        Box(
+            modifier = modifier
+                .minimumInteractiveComponentSize()
+                .clickable(onClick = onRetry),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(imageVector = icon, contentDescription = description,
+                modifier = Modifier.size(12.dp), tint = tint)
+        }
+    } else {
+        Icon(imageVector = icon, contentDescription = description,
+            modifier = modifier.size(12.dp), tint = tint)
+    }
 }
 
 // ── ReplyBar ───────────────────────────────────────────────────────────────────
