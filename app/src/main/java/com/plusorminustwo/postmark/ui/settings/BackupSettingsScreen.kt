@@ -105,6 +105,7 @@ fun BackupSettingsScreen(
                 Switch(checked = enabled, onCheckedChange = {
                     enabled = it
                     prefs.edit().putBoolean("enabled", it).apply()
+                    viewModel.applySchedule()
                 })
             }
 
@@ -118,6 +119,7 @@ fun BackupSettingsScreen(
                             onClick = {
                                 frequency = freq
                                 prefs.edit().putString("frequency", freq.name).apply()
+                                viewModel.applySchedule()
                             },
                             shape = SegmentedButtonDefaults.itemShape(index, BackupFrequency.entries.size),
                             label = { Text(freq.name.lowercase().replaceFirstChar { it.uppercase() }) }
@@ -132,6 +134,7 @@ fun BackupSettingsScreen(
                     Switch(checked = requireWifi, onCheckedChange = {
                         requireWifi = it
                         prefs.edit().putBoolean("require_wifi", it).apply()
+                        viewModel.applySchedule()
                     })
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -139,6 +142,7 @@ fun BackupSettingsScreen(
                     Switch(checked = requireCharging, onCheckedChange = {
                         requireCharging = it
                         prefs.edit().putBoolean("require_charging", it).apply()
+                        viewModel.applySchedule()
                     })
                 }
 

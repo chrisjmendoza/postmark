@@ -66,7 +66,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Wire "Back up now" button to `BackupScheduler.runNow()` via injected instance
 - [x] Show backup history list (scan `getExternalFilesDir("backups")`)
 - [x] `WorkManager` status observer — show live "Backup running…" indicator
-- [x] Backup restore (read JSON, apply to Room with migration version check)
+- [ ] Backup restore (read JSON, apply to Room with migration version check) — **not built**: `service/backup/` has no read path at all; also requires extending the backup format first, which currently serializes only id/body/timestamp/isSent (no attachments, reactions, isMms, or participants)
 
 ---
 

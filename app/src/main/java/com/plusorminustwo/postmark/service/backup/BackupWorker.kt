@@ -71,11 +71,13 @@ class BackupWorker @AssistedInject constructor(
         root.put("threads", threadsArray)
 
         val dir = applicationContext.getExternalFilesDir("backups") ?: return ""
-        pruneOldBackups(dir)
 
         val filename = "postmark_${dateStamp()}.json"
         val file = File(dir, filename)
         file.writeText(root.toString(2))
+        // Prune only after the new backup is safely on disk — pruning first could
+        // delete every existing backup and then fail the write, leaving zero backups.
+        pruneOldBackups(dir)
         return file.absolutePath
     }
 
@@ -104,7 +106,8 @@ class BackupWorker @AssistedInject constructor(
         val files = dir.listFiles { f -> f.name.startsWith("postmark_") && f.name.endsWith(".json") }
             ?.sortedByDescending { it.lastModified() }
             ?: return
-        files.drop(retention - 1).forEach { it.delete() }
+        // The just-written backup is in the list, so keep the `retention` newest.
+        files.drop(retention).forEach { it.delete() }
     }
 
     private fun dateStamp(): String =

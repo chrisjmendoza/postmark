@@ -80,6 +80,12 @@ class BackupSettingsViewModel @Inject constructor(
         backupScheduler.runNow()
     }
 
+    /** Re-syncs the periodic backup schedule with the persisted preferences.
+     *  Call after any settings change that affects scheduling. */
+    fun applySchedule() {
+        backupScheduler.syncWithPrefs()
+    }
+
     private fun loadBackupFiles(): List<BackupFileInfo> {
         val dir = context.getExternalFilesDir("backups") ?: return emptyList()
         return (dir.listFiles() ?: emptyArray())

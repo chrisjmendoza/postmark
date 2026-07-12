@@ -65,6 +65,27 @@ class BackupScheduler @Inject constructor(
         )
     }
 
+    /**
+     * Re-reads the persisted backup preferences and schedules or cancels the
+     * periodic work to match. Call on app startup (so the schedule survives
+     * pref changes made before this process started) and after any
+     * backup-settings change.
+     */
+    fun syncWithPrefs() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(KEY_ENABLED, true)) {
+            cancel()
+            return
+        }
+        schedule(
+            frequency = BackupFrequency.valueOf(
+                prefs.getString(KEY_FREQUENCY, BackupFrequency.DAILY.name)!!
+            ),
+            requireWifi = prefs.getBoolean(KEY_REQUIRE_WIFI, true),
+            requireCharging = prefs.getBoolean(KEY_REQUIRE_CHARGING, true)
+        )
+    }
+
     /** Cancels the periodic backup work. The next [schedule] call re-enables it. */
     fun cancel() {
         WorkManager.getInstance(context).cancelUniqueWork(BackupWorker.WORK_NAME)
@@ -105,5 +126,14 @@ class BackupScheduler @Inject constructor(
             }
         }
         return maxOf(0L, target.timeInMillis - now.timeInMillis)
+    }
+
+    companion object {
+        // Shared with BackupSettingsScreen (writes) and BackupWorker (retention_count).
+        const val PREFS_NAME           = "backup_prefs"
+        const val KEY_ENABLED          = "enabled"
+        const val KEY_FREQUENCY        = "frequency"
+        const val KEY_REQUIRE_WIFI     = "require_wifi"
+        const val KEY_REQUIRE_CHARGING = "require_charging"
     }
 }
