@@ -9,7 +9,13 @@ Newest entries on top. Each day is a journal of work completed.
 Worked through the critical tier of `docs/fable-analysis.md` (seven-persona review of
 the whole codebase, July 10) — the theme of that tier was "features that look done in
 the UI but are not connected underneath." All eight items landed, plus the two bounded
-group-messaging improvements from TODO.md. `./gradlew test`: 454 passing.
+group-messaging improvements from TODO.md. `./gradlew test`: 464 passing.
+
+Testing note for this batch: the cluster-splitting fix and the backup scheduling
+logic are covered by unit tests (see below); the notification-address fix, sync loop
+hardening, Block number, and the delivery-indicator changes live in
+receiver/ContentResolver/Compose surfaces this repo doesn't currently unit-test —
+those are the on-device verification items listed at the end of this entry.
 
 ### Automatic backups actually schedule now
 
@@ -33,6 +39,15 @@ backups *before* writing the new one, so retention=1 deleted every existing back
 and could then fail the write, leaving zero backups. It now writes first, then keeps
 the `retention` newest (the just-written file counts toward the total, so the drop
 changed from `retention - 1` to `retention`).
+
+Both pieces of backup-scheduling logic are now pure functions with tests
+(`BackupSchedulerLogicTest`): `selectBackupsToPrune()` pins the retention invariant
+(the just-written backup counts toward the total and is never deleted — a regression
+here is data loss), and `calculateInitialDelay()` gained an injectable `now` so the
+day/week/month rollover math is verifiable. Writing those tests surfaced a real
+`java.util.Calendar` footgun: `set(DAY_OF_WEEK)` on a calendar with unnormalised
+fields resolves against stale state, so the target calendar is now seeded from
+`now.timeInMillis` (forces a full field recompute) instead of `clone()`.
 
 Deliberately NOT built in this pass: restore. Doing it right requires extending the
 backup format first (it currently serializes only id/body/timestamp/isSent — no

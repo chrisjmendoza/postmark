@@ -104,10 +104,9 @@ class BackupWorker @AssistedInject constructor(
         val prefs = applicationContext.getSharedPreferences("backup_prefs", Context.MODE_PRIVATE)
         val retention = prefs.getInt("retention_count", 5)
         val files = dir.listFiles { f -> f.name.startsWith("postmark_") && f.name.endsWith(".json") }
-            ?.sortedByDescending { it.lastModified() }
             ?: return
-        // The just-written backup is in the list, so keep the `retention` newest.
-        files.drop(retention).forEach { it.delete() }
+        val doomed = selectBackupsToPrune(files.map { it.name to it.lastModified() }, retention)
+        files.filter { it.name in doomed }.forEach { it.delete() }
     }
 
     private fun dateStamp(): String =
@@ -117,3 +116,14 @@ class BackupWorker @AssistedInject constructor(
         const val WORK_NAME = "postmark_backup"
     }
 }
+
+/**
+ * Pure retention policy: given (name, lastModified) pairs for every backup file —
+ * including the one just written — returns the names to delete, keeping the
+ * [retention] newest. Called after the new backup is on disk, never before: pruning
+ * first could delete every existing backup and then fail the write.
+ */
+internal fun selectBackupsToPrune(files: List<Pair<String, Long>>, retention: Int): Set<String> =
+    files.sortedByDescending { it.second }
+        .drop(retention)
+        .mapTo(mutableSetOf()) { it.first }

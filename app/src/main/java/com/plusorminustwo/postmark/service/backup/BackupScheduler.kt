@@ -97,37 +97,6 @@ class BackupScheduler @Inject constructor(
         WorkManager.getInstance(context).enqueue(request)
     }
 
-    private fun calculateInitialDelay(
-        frequency: BackupFrequency,
-        hourOfDay: Int,
-        minuteOfHour: Int,
-        dayOfWeek: Int,
-        dayOfMonth: Int
-    ): Long {
-        val now = Calendar.getInstance()
-        val target = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, hourOfDay)
-            set(Calendar.MINUTE, minuteOfHour)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-
-            when (frequency) {
-                BackupFrequency.WEEKLY -> {
-                    set(Calendar.DAY_OF_WEEK, dayOfWeek)
-                    if (before(now)) add(Calendar.WEEK_OF_YEAR, 1)
-                }
-                BackupFrequency.MONTHLY -> {
-                    set(Calendar.DAY_OF_MONTH, dayOfMonth)
-                    if (before(now)) add(Calendar.MONTH, 1)
-                }
-                BackupFrequency.DAILY -> {
-                    if (before(now)) add(Calendar.DAY_OF_YEAR, 1)
-                }
-            }
-        }
-        return maxOf(0L, target.timeInMillis - now.timeInMillis)
-    }
-
     companion object {
         // Shared with BackupSettingsScreen (writes) and BackupWorker (retention_count).
         const val PREFS_NAME           = "backup_prefs"
@@ -136,4 +105,45 @@ class BackupScheduler @Inject constructor(
         const val KEY_REQUIRE_WIFI     = "require_wifi"
         const val KEY_REQUIRE_CHARGING = "require_charging"
     }
+}
+
+/**
+ * Pure delay calculation: milliseconds from [now] until the next occurrence of the
+ * configured backup time — later today (or this week/month) if it hasn't passed
+ * yet, otherwise rolled over one day/week/month. [now] is a parameter (rather than
+ * Calendar.getInstance() inline) so the rollover logic is unit-testable.
+ */
+internal fun calculateInitialDelay(
+    frequency: BackupFrequency,
+    hourOfDay: Int,
+    minuteOfHour: Int,
+    dayOfWeek: Int,
+    dayOfMonth: Int,
+    now: Calendar = Calendar.getInstance()
+): Long {
+    /* Seed from now.timeInMillis rather than clone() — assigning the millis forces
+     * a full field recompute, so the DAY_OF_WEEK set below always resolves against
+     * consistent fields even if the caller's Calendar has stale/unnormalised ones. */
+    val target = Calendar.getInstance(now.timeZone).apply {
+        timeInMillis = now.timeInMillis
+        set(Calendar.HOUR_OF_DAY, hourOfDay)
+        set(Calendar.MINUTE, minuteOfHour)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+
+        when (frequency) {
+            BackupFrequency.WEEKLY -> {
+                set(Calendar.DAY_OF_WEEK, dayOfWeek)
+                if (before(now)) add(Calendar.WEEK_OF_YEAR, 1)
+            }
+            BackupFrequency.MONTHLY -> {
+                set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                if (before(now)) add(Calendar.MONTH, 1)
+            }
+            BackupFrequency.DAILY -> {
+                if (before(now)) add(Calendar.DAY_OF_YEAR, 1)
+            }
+        }
+    }
+    return maxOf(0L, target.timeInMillis - now.timeInMillis)
 }
