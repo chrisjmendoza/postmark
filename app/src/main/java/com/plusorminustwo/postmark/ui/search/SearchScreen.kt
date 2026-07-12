@@ -148,6 +148,17 @@ fun SearchScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            } else if (uiState.results.isEmpty()) {
+                // A real query/filter with zero hits — say so, instead of a blank
+                // screen indistinguishable from broken search.
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text  = if (uiState.query.isBlank()) "No messages match these filters"
+                                else "No results for \"${uiState.query}\"",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(uiState.results, key = { it.id }) { message ->

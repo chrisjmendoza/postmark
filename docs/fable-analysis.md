@@ -43,48 +43,61 @@ Issues independently surfaced by two or more personas — the strongest signal i
 
 Organized like `docs/TODO.md`'s own tiering, so it can be merged directly.
 
+> **Status (July 11 2026, branch `fix/fable-critical`):** the entire 🔴 tier is done
+> (except restore itself — the false ROADMAP claim was corrected instead), plus #16,
+> #23, #26 (lookupContactName half), #28 (CLAUDE.md half), and TODO.md's group
+> per-bubble sender attribution. See `docs/CHANGELOG.md` 2026-07-11 for details.
+> Known infra issue found along the way: the `FIREBASE_SERVICE_ACCOUNT` repo secret
+> is missing, so every CI distribution since ~July 6 failed at upload — needs a new
+> service-account key set via `gh secret set FIREBASE_SERVICE_ACCOUNT`.
+
 ### 🔴 Fix before anything else (data loss / silent safety failure / ships-broken risk)
-1. Wire `BackupScheduler.schedule()` into app startup/settings-change so "Automatic backups" isn't decorative (`service/backup/BackupScheduler.kt`, `ui/settings/BackupSettingsViewModel.kt`).
-2. Build backup restore, or remove the ROADMAP claim that it exists — currently `service/backup/` has no read path at all.
-3. Fix `pruneOldBackups()` running *before* the new backup is written (`BackupWorker.kt:73-107`) — retention=1 can zero out all backups on a failed write.
-4. Either implement "Block number" or remove/disable the menu item with honest copy — a safety feature must never silently do nothing (`ThreadScreen.kt:697-700`).
-5. Fix the notification reply/mark-as-read address bug — thread `rawSender`, not `displayName`, into `EXTRA_ADDRESS` (`SmsReceiver.kt:99-106`, `DirectReplyReceiver.kt`, `MarkAsReadReceiver.kt`).
-6. Wrap `SmsSyncHandler`'s two channel-consumer loops in try/catch — one uncaught exception permanently stops incoming-message sync for the process lifetime (`SmsSyncHandler.kt:79-80`).
-7. Add a `./gradlew test` step to `distribute.yml` before `assembleDebug` — broken code currently reaches testers' phones.
-8. Give the failed-send delivery indicator a real `contentDescription` and a ≥48dp retry target (`ThreadScreen.kt:1906-1927`).
+- [x] 1. Wire `BackupScheduler.schedule()` into app startup/settings-change so "Automatic backups" isn't decorative (`service/backup/BackupScheduler.kt`, `ui/settings/BackupSettingsViewModel.kt`). *Done — `syncWithPrefs()` called from settings changes + `PostmarkApplication.onCreate`.*
+- [ ] 2. Build backup restore, or ~~remove the ROADMAP claim that it exists~~ — currently `service/backup/` has no read path at all. *ROADMAP claim corrected; restore itself still unbuilt and requires extending the lossy backup format first (only id/body/timestamp/isSent today).*
+- [x] 3. Fix `pruneOldBackups()` running *before* the new backup is written (`BackupWorker.kt:73-107`) — retention=1 can zero out all backups on a failed write. *Done — write first, prune after; retention invariant pinned in `BackupSchedulerLogicTest`.*
+- [x] 4. Either implement "Block number" or remove/disable the menu item with honest copy (`ThreadScreen.kt:697-700`). *Done — implemented for real via `BlockedNumberContract` with confirm dialog + Snackbar result; hidden for group threads. Needs on-device verification.*
+- [x] 5. Fix the notification reply/mark-as-read address bug — thread `rawSender`, not `displayName`, into `EXTRA_ADDRESS`. *Done; notification ID now keyed on address; `DirectReplyReceiver` also got `goAsync()` + IO.*
+- [x] 6. Wrap `SmsSyncHandler`'s two channel-consumer loops in try/catch (`SmsSyncHandler.kt:79-80`). *Done — per-iteration catch + SyncLogger, CancellationException rethrown.*
+- [x] 7. Add a `./gradlew test` step to `distribute.yml` before `assembleDebug`. *Done — verified working in run 29174914364.*
+- [x] 8. Give the failed-send delivery indicator a real `contentDescription` and a ≥48dp retry target (`ThreadScreen.kt:1906-1927`). *Done — descriptions for all four states; `minimumInteractiveComponentSize()` on the failed/retry state.*
 
 ### 🟡 Fix soon (correctness/perf/trust risk, not yet catastrophic)
-9. Resolve the stats split-brain: `StatsViewModel` computes live from the full messages table while `StatsUpdater` separately maintains pre-aggregated tables nothing reads — pick one system (root cause of the 150k-message heatmap slowness in TODO.md).
-10. Add `.flowOn(Dispatchers.Default)` to `ThreadViewModel`'s render-state combine — it currently runs on Main despite a comment claiming otherwise.
-11. Move blocking ContentResolver/telephony calls off Main in `SmsManagerWrapper.sendTextMessage()`, `ThreadViewModel.deleteMessage()/retrySend()`, and give `DirectReplyReceiver` a `goAsync()`.
-12. Add the missing Room migration tests (9 of 13 untested) and commit the missing `app/schemas/1.json`–`3.json` so `DatabaseMigrationTest` can actually run.
-13. Encrypt or relocate backup JSON — currently plaintext on USB-accessible external storage (`BackupWorker.kt:73-79`).
-14. Ship a release-signed build to testers instead of a debuggable debug-keystore APK, or accept the extraction risk explicitly (`distribute.yml` + `build.gradle.kts:53-63`).
-15. Fix `ContactDetailScreen`'s full-screen image viewer, which isn't actually full-screen — the fix already applied to `ThreadScreen`'s viewer was never ported (`ContactDetailScreen.kt:540`).
-16. Add a "no results" state to Search — a failed query currently renders an indistinguishable-from-broken blank screen (`SearchScreen.kt:142-162`).
-17. Add a confirmation or undo grace period to Forward — it currently sends immediately on row tap (`ForwardPickerScreen.kt:135,151`).
-18. Redact phone numbers/contact names from `SyncLogger`'s Logcat mirror and shareable log file, and gate the Logcat mirror to debug builds (`SyncLogger.kt`, `SmsReceiver.kt:67,102`).
-19. Update README's "Known Limitations" and "Currently in progress" sections — both describe a months-old state of the app and could actively mislead a contributor.
-20. Start the Play Store SMS-permissions-declaration and privacy-policy workstream now — its latency is external and currently unaddressed.
+- [ ] 9. Resolve the stats split-brain: `StatsViewModel` computes live from the full messages table while `StatsUpdater` separately maintains pre-aggregated tables nothing reads — pick one system (root cause of the 150k-message heatmap slowness in TODO.md).
+- [ ] 10. Add `.flowOn(Dispatchers.Default)` to `ThreadViewModel`'s render-state combine — it currently runs on Main despite a comment claiming otherwise.
+- [ ] 11. Move blocking ContentResolver/telephony calls off Main in `SmsManagerWrapper.sendTextMessage()`, `ThreadViewModel.deleteMessage()/retrySend()`~~, and give `DirectReplyReceiver` a `goAsync()`~~. *`DirectReplyReceiver` part done July 11; the rest remains.*
+- [ ] 12. Add the missing Room migration tests (9 of 13 untested) and commit the missing `app/schemas/1.json`–`3.json` so `DatabaseMigrationTest` can actually run.
+- [ ] 13. Encrypt or relocate backup JSON — currently plaintext on USB-accessible external storage (`BackupWorker.kt:73-79`).
+- [ ] 14. Ship a release-signed build to testers instead of a debuggable debug-keystore APK, or accept the extraction risk explicitly (`distribute.yml` + `build.gradle.kts:53-63`).
+- [ ] 15. Fix `ContactDetailScreen`'s full-screen image viewer, which isn't actually full-screen — the fix already applied to `ThreadScreen`'s viewer was never ported (`ContactDetailScreen.kt:540`).
+- [x] 16. Add a "no results" state to Search (`SearchScreen.kt:142-162`). *Done July 11 — distinct messages for zero-hit query vs. zero-hit filters.*
+- [ ] 17. Add a confirmation or undo grace period to Forward — it currently sends immediately on row tap (`ForwardPickerScreen.kt:135,151`).
+- [ ] 18. Redact phone numbers/contact names from `SyncLogger`'s Logcat mirror and shareable log file, and gate the Logcat mirror to debug builds (`SyncLogger.kt`, `SmsReceiver.kt:67,102`).
+- [ ] 19. Update README's "Known Limitations" and "Currently in progress" sections — both describe a months-old state of the app and could actively mislead a contributor.
+- [ ] 20. Start the Play Store SMS-permissions-declaration and privacy-policy workstream now — its latency is external and currently unaddressed.
 
 ### 🟢 Worth doing (quality, consistency, smaller risk)
-21. Reconcile ROADMAP.md (duplicate Phase 4 section, phases marked "in progress" that are 100% checked off, a "fuzzy containment" checkbox for matching logic that was deliberately removed) against TODO.md/code, or retire ROADMAP.md in favor of TODO.md.
-22. Delete `ui/theme/Theme.kt`'s `PostmarkColors`/`LocalPostmarkColors` system (zero consumers) or actually wire it in — bubbles currently don't use the documented `#378ADD` accent.
-23. Delete the orphaned `ExportBottomSheet.kt` (no call sites) or build the "Share as image" export README already advertises.
-24. Fix light-theme hardcoded-dark islands: heatmap tier-0 tiles, `EmojiReactionPopup` pill, delivery-tick amber contrast (`StatsScreen.kt:329-337`, `ThreadScreen.kt:3337-3339`, `ThreadScreen.kt:1913-1914`).
-25. Add a one-time coach mark for swipe-to-reply / long-press-for-reactions / pinch-to-zoom-text — currently zero in-app discovery path for the app's best gestures.
-26. Deduplicate `lookupContactName` (4+ copies) and `isDefaultSmsApp()` (2 copies) into shared extension functions.
-27. Delete dead DAO methods, `StatsAlgorithms.last56DayLabels()`, and the unused `SmsContentObserver.unregister()`; fix `getLatestNonReactionForThread`'s misleading name.
-28. Clean up the ten already-merged local/remote branches; convert CLAUDE.md to UTF-8 (currently UTF-16LE, unreadable by grep/most CI tooling).
-29. Delete the ~100 lines of duplicated sample data between `ConversationsViewModel` and `DevOptionsViewModel`; move "Load sample data" out of the production empty state.
-30. Resolve the "Postmark" trademark collision with the established Postmark email-delivery service before committing further to branding/icon work.
+- [ ] 21. Reconcile ROADMAP.md (duplicate Phase 4 section, phases marked "in progress" that are 100% checked off, a "fuzzy containment" checkbox for matching logic that was deliberately removed) against TODO.md/code, or retire ROADMAP.md in favor of TODO.md. *Only the false backup-restore checkbox was corrected July 11; the rest remains.*
+- [ ] 22. Delete `ui/theme/Theme.kt`'s `PostmarkColors`/`LocalPostmarkColors` system (zero consumers) or actually wire it in — bubbles currently don't use the documented `#378ADD` accent.
+- [x] 23. Delete the orphaned `ExportBottomSheet.kt` (no call sites) or build the "Share as image" export README already advertises. *Deleted July 11.*
+- [ ] 24. Fix light-theme hardcoded-dark islands: heatmap tier-0 tiles, `EmojiReactionPopup` pill, delivery-tick amber contrast (`StatsScreen.kt:329-337`, `ThreadScreen.kt:3337-3339`, `ThreadScreen.kt:1913-1914`).
+- [ ] 25. Add a one-time coach mark for swipe-to-reply / long-press-for-reactions / pinch-to-zoom-text — currently zero in-app discovery path for the app's best gestures.
+- [ ] 26. Deduplicate ~~`lookupContactName` (4+ copies)~~ and `isDefaultSmsApp()` (2 copies) into shared extension functions. *`lookupContactName` done July 11 (5 copies → `data/contacts/ContactNameLookup.kt`); `isDefaultSmsApp()` remains.*
+- [ ] 27. Delete dead DAO methods, `StatsAlgorithms.last56DayLabels()`, and the unused `SmsContentObserver.unregister()`; fix `getLatestNonReactionForThread`'s misleading name.
+- [ ] 28. Clean up the ten already-merged local/remote branches; ~~convert CLAUDE.md to UTF-8~~. *CLAUDE.md converted July 11; branch cleanup remains.*
+- [ ] 29. Delete the ~100 lines of duplicated sample data between `ConversationsViewModel` and `DevOptionsViewModel`; move "Load sample data" out of the production empty state.
+- [ ] 30. Resolve the "Postmark" trademark collision with the established Postmark email-delivery service before committing further to branding/icon work.
 
 ### 🔵 Housekeeping
-31. Standardize Toast vs. Snackbar usage (currently 4/4 split for near-identical actions); add haptic feedback (currently zero anywhere in `ui/`).
-32. Extract a `Dimens`/spacing-token object — corner radii alone span 9 distinct values with no evident scale.
-33. Rename/relocate `search/parser/` — it houses the three reaction parsers, which have nothing to do with search.
-34. Regenerate ARCHITECTURE.md's schema section (says v9, actual is v14) and DI table (says 5 DAOs, actual is 6).
-35. Sweep orphaned `mms_attach_*` cache files on message delete / app startup — they currently accrue forever.
+- [ ] 31. Standardize Toast vs. Snackbar usage (currently 4/4 split for near-identical actions); add haptic feedback (currently zero anywhere in `ui/`).
+- [ ] 32. Extract a `Dimens`/spacing-token object — corner radii alone span 9 distinct values with no evident scale.
+- [ ] 33. Rename/relocate `search/parser/` — it houses the three reaction parsers, which have nothing to do with search.
+- [ ] 34. Regenerate ARCHITECTURE.md's schema section (says v9, actual is v14) and DI table (says 5 DAOs, actual is 6).
+- [ ] 35. Sweep orphaned `mms_attach_*` cache files on message delete / app startup — they currently accrue forever.
+
+### Done outside this list (July 11 2026)
+- [x] Group threads: per-bubble sender labels (`ThreadViewModel.participantNames` + `MessageBubble`) — TODO.md's "per-bubble sender attribution" item.
+- [x] Cluster bug: `computeClusterPositions` fused different group senders into one bubble run; now splits received clusters per `Message.address` (3 new tests).
+- [x] Backup scheduling logic extracted pure + tested (`BackupSchedulerLogicTest`, 10 tests — prune retention invariant, initial-delay rollover).
 
 ---
 
