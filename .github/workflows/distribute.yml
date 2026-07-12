@@ -42,6 +42,10 @@ jobs:
           echo "APP_VERSION_CODE=$((COUNT * 100000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
           echo "APP_GIT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
+      - name: Run unit tests
+        # Gate distribution on the test suite — broken code must never reach testers' phones.
+        run: ./gradlew test --no-daemon
+
       - name: Build debug APK
         # The shared debug.keystore is committed to the repo so the APK is
         # signed consistently — Android treats each CI build as an update, not a reinstall.
