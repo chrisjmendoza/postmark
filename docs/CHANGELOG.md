@@ -4,6 +4,128 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-11
+
+Worked through the critical tier of `docs/fable-analysis.md` (seven-persona review of
+the whole codebase, July 10) — the theme of that tier was "features that look done in
+the UI but are not connected underneath." All eight items landed, plus the two bounded
+group-messaging improvements from TODO.md. `./gradlew test`: 454 passing.
+
+### Automatic backups actually schedule now
+
+`BackupScheduler.schedule()` had zero callers anywhere in the app — the "Automatic
+backups" toggle, frequency picker, and Wi-Fi/charging switches in
+`BackupSettingsScreen` all wrote prefs that nothing ever read back at scheduling time.
+Only the manual "Back up now" button was wired to anything. Three personas in the
+analysis converged on this independently.
+
+Fix: new `BackupScheduler.syncWithPrefs()` re-reads the persisted preferences and
+schedules or cancels the periodic work to match. Called from every scheduling-relevant
+settings change (via `BackupSettingsViewModel.applySchedule()`) and from
+`PostmarkApplication.onCreate()` — the startup call matters because the default is
+enabled=true, so users who never opened the settings screen still get backups, and
+because `ExistingPeriodicWorkPolicy.UPDATE` preserves the original enqueue time,
+re-syncing on every process start never resets a pending backup's timing. The pref
+keys are now shared constants on `BackupScheduler`.
+
+Also fixed the prune ordering in `BackupWorker.performBackup()`: it pruned old
+backups *before* writing the new one, so retention=1 deleted every existing backup
+and could then fail the write, leaving zero backups. It now writes first, then keeps
+the `retention` newest (the just-written file counts toward the total, so the drop
+changed from `retention - 1` to `retention`).
+
+Deliberately NOT built in this pass: restore. Doing it right requires extending the
+backup format first (it currently serializes only id/body/timestamp/isSent — no
+attachments, reactions, isMms, or participants). ROADMAP.md's claim that restore was
+done has been corrected instead — it was marked `[x]` with no read path existing
+anywhere in `service/backup/`.
+
+### Notification "Reply" and "Mark as read" were broken for every saved contact
+
+`SmsReceiver` resolved the sender's contact display name and then passed *that* into
+`EXTRA_ADDRESS` for both notification actions. `DirectReplyReceiver` would try to
+send an SMS to "John Smith"; `MarkAsReadReceiver` would run
+`WHERE address = 'John Smith'` and match nothing. The actions only worked for unknown
+numbers — broken exactly for the contacts a user actually replies to.
+
+Fix: `postIncomingNotification()` now takes `address` (raw number, threaded into both
+receiver extras) and `displayName` (title only) as separate parameters. The
+notification ID is now keyed on the address instead of the display name, so renaming
+a contact between two messages updates the same notification instead of forking into
+two. `DirectReplyReceiver` also got the `goAsync()` + `Dispatchers.IO` treatment every
+sibling receiver already had — it was doing the send's ContentResolver/telephony I/O
+on the main thread.
+
+### One exception could permanently kill incremental sync
+
+The two channel-consumer loops in `SmsSyncHandler`'s init block had no exception
+handling: a single `SQLiteException` (or any throw) inside `syncLatestSms()` ended
+the `for` loop for the process lifetime — no restart, no log line, and every
+subsequent incoming message silently unsynced. The worst possible failure mode for
+an SMS app. Each iteration is now individually try/caught and logged via `SyncLogger`;
+`CancellationException` is rethrown so scope cancellation still works.
+
+### "Block number" does something now
+
+The ⋮ menu item was `onClick = { menuExpanded = false }` — a safety control that
+closed the menu and did nothing else. It now confirms via AlertDialog, then inserts
+the thread's address into the system `BlockedNumberContract` provider (Postmark
+qualifies as the default SMS app, which is exactly who that API is for), so the
+platform rejects future calls and texts before they reach any app. Result is
+reported via Snackbar, including an honest "Postmark must be your default SMS app to
+block numbers" when the write isn't permitted. Hidden for group threads, where "the
+number" is ambiguous. A Blocked-numbers management screen (list/unblock) remains open
+in TODO.md — until then the dialog copy points at the phone's own blocked-numbers
+settings for unblocking.
+
+### CI now runs the test suite before shipping to testers
+
+`distribute.yml` built and uploaded the APK to Firebase App Distribution on every
+push with no test step anywhere — broken code reached real phones. `./gradlew test`
+now gates `assembleDebug`.
+
+### Failed-send indicator: accessible, and tappable by humans
+
+`DeliveryStatusIndicator` had `contentDescription = null` (delivery state was
+color-only — invisible to screen readers) and the retry action was a 12dp tap
+target. Every state now has a description ("Sending" / "Sent" / "Delivered" /
+"Failed to send. Tap to retry."), and the failed state — the only tappable one —
+wraps the 12dp glyph in `minimumInteractiveComponentSize()` for a 48dp touch target
+without inflating the other states' layout.
+
+### Group threads: per-bubble sender labels + cluster splitting per sender
+
+Two changes for received group MMS (sending group MMS remains open — that's
+multi-recipient PDU construction plus carrier `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL`
+handling, and wants on-device verification):
+
+- **Sender labels.** Every bubble in a group thread rendered identically to a 1:1
+  thread's, so participants were indistinguishable. New
+  `ThreadViewModel.participantNames` resolves the thread's roster
+  (address → contact name) once per roster change on IO; `MessageBubble` takes an
+  optional `senderName` and renders it as a small `labelSmall` line above the first
+  received bubble of each sender's cluster. Roster misses fall back to
+  `formatPhoneNumber(message.address)` rather than no label. 1:1 threads are
+  untouched (`participantNames` is empty for them, which doubles as the group
+  signal).
+- **Cluster bug found while implementing.** `computeClusterPositions` grouped by
+  `isSent` only, so two group participants texting back-to-back within the 3-minute
+  window fused into one visual bubble run — same corner-rounding, no boundary. New
+  `sameVisualSender()` splits received clusters per `Message.address`; sent messages
+  still cluster regardless of stored address (they all render on the right). Three
+  new cases in `MessageGroupingTest` cover the per-participant boundaries.
+
+Supporting cleanup: `lookupContactName` existed as five identical private copies
+(`SmsReceiver`, `SmsSyncHandler`, `SmsHistoryImportWorker`, `ForwardPickerViewModel`,
+`NewConversationViewModel`) and the sender-label work would have created a sixth.
+All five deleted in favor of one shared `Context.lookupContactName()` extension in
+`data/contacts/ContactNameLookup.kt` (fable-analysis item #26).
+
+Needs on-device verification: block-number end-to-end, sender labels against a real
+group thread, and the first scheduled backup actually firing.
+
+---
+
 ## 2026-07-06
 
 ### Real full emoji picker (androidx.emoji2.emojipicker), not a lookalike

@@ -180,11 +180,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       multi-select recipient picker in `NewConversationScreen`. Check
       `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` — some carriers disable group MMS
       and expect N separate 1:1 sends instead ("MMS broadcast" mode).
-- [ ] **Group MMS — per-bubble sender attribution** — show sender name/avatar per
-      bubble within a group thread (every bubble currently renders identically to a
-      1:1 thread's). `Message.address` already holds the correct per-message sender
-      for a received group MMS — this is a `ThreadScreen` bubble-rendering change,
-      not a sync-layer one.
+- [x] **Group MMS — per-bubble sender attribution** (July 11 2026) — group threads
+      now show a small sender-name label above the first received bubble of each
+      sender's cluster (`ThreadViewModel.participantNames` resolves the roster via
+      the new shared `Context.lookupContactName()`; label rendered in
+      `MessageBubble`). `computeClusterPositions` also splits received clusters per
+      `Message.address`, so two participants texting back-to-back no longer fuse
+      into one bubble run (tested in `MessageGroupingTest`). Avatars per bubble
+      remain a possible follow-up.
 
 ### Contact integration
 - [ ] **Contact photo / profile picture in avatar** — currently all
@@ -237,12 +240,16 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       already in the codebase.
 
 ### Blocking and spam (required for Play Store messaging category)
-- [ ] **Block number** — wire up existing stub in ⋮ menu.
-      Use Android `BlockedNumberContract` API for system-level
-      blocking. Blocked numbers go to a "Blocked" folder, not deleted.
-      Blocked threads must not generate notifications.
-- [ ] **Blocked conversations screen** — accessible from Settings.
-      Shows blocked threads with option to unblock.
+- [x] **Block number** (July 11 2026) — ⋮ menu item now confirms via dialog and
+      writes to `BlockedNumberContract` (`ThreadViewModel.blockNumber()`), so the
+      platform rejects calls/texts system-wide before they reach any app — which
+      also means no notifications and no "Blocked folder" needed: blocked messages
+      never arrive. Hidden for group threads (ambiguous target). Result reported
+      via Snackbar. Needs on-device verification.
+- [ ] **Blocked numbers screen** — accessible from Settings. Query
+      `BlockedNumberContract.BlockedNumbers.CONTENT_URI` to list blocked numbers
+      with an unblock action (delete the row). Until then, the block dialog points
+      users at the phone's own blocked-numbers settings.
 - [ ] **Spam detection + Spam folder** — "Report as spam" option in
       thread ⋮ menu (and inline on notifications from unknown numbers).
       Moves thread to a separate Spam folder visible in the nav drawer
@@ -534,8 +541,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🔵 TIER 4 — Infrastructure / Housekeeping
 
 ### CI and test hygiene
-- [ ] **GitHub Actions CI** — run unit tests on every push,
-      instrumented tests on merge to main. Badge in README.
+- [x] **Unit tests on every push** (July 11 2026) — `distribute.yml` now runs
+      `./gradlew test` before `assembleDebug`, so broken code can't reach testers.
+- [ ] **GitHub Actions CI — remaining** — instrumented tests on merge to
+      main. Badge in README.
 - [ ] **Replace `runBlocking` in instrumented tests** with `runTest`
       from `kotlinx-coroutines-test`.
 - [ ] **Add test size annotations** — `@SmallTest` / `@MediumTest` /
