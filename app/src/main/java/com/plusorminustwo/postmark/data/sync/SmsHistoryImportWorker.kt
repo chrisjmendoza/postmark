@@ -6,7 +6,7 @@ import android.content.pm.ServiceInfo
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
-import android.provider.ContactsContract
+import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import android.provider.Telephony
 import android.util.Log
 import android.app.PendingIntent
@@ -277,7 +277,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             val isSent   = type != Telephony.Sms.MESSAGE_TYPE_INBOX
 
             if (!threads.containsKey(threadId)) {
-                val displayName = lookupContactName(address) ?: address.ifEmpty { "Unknown" }
+                val displayName = applicationContext.lookupContactName(address) ?: address.ifEmpty { "Unknown" }
                 threads[threadId] = Thread(
                     id = threadId,
                     displayName = displayName,
@@ -294,29 +294,6 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             }
 
             messages.add(Message(id, threadId, address, body, date, isSent, type))
-        }
-    }
-
-    private fun lookupContactName(address: String): String? {
-        // An empty address would produce content://com.android.contacts/phone_lookup/ with no
-        // segment, which may match every contact on some ROMs. Skip the lookup entirely.
-        if (address.isEmpty()) return null
-        val uri = Uri.withAppendedPath(
-            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-            Uri.encode(address)
-        )
-        return try {
-            applicationContext.contentResolver.query(
-                uri,
-                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-                null, null, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst())
-                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
-                else null
-            }
-        } catch (_: SecurityException) {
-            null
         }
     }
 
@@ -457,9 +434,9 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                 // Group MMS: comma-join contact names so the thread list/top bar show
                 // everyone without any UI change (MMS_AUDIT §2.3).
                 val displayName = if (roster.size > 1) {
-                    roster.joinToString(", ") { lookupContactName(it) ?: it }
+                    roster.joinToString(", ") { applicationContext.lookupContactName(it) ?: it }
                 } else {
-                    lookupContactName(address) ?: address
+                    applicationContext.lookupContactName(address) ?: address
                 }
                 threads[threadId] = Thread(
                     id = threadId,

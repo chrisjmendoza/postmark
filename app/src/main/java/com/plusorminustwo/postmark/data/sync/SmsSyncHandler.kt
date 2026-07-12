@@ -2,10 +2,10 @@ package com.plusorminustwo.postmark.data.sync
 
 import android.content.Context
 import android.net.Uri
-import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
 import com.plusorminustwo.postmark.BuildConfig
+import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
@@ -22,6 +22,7 @@ import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
 import androidx.core.content.FileProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -75,9 +76,33 @@ class SmsSyncHandler @Inject constructor(
     private val mmsMutex = Mutex()
 
     init {
-        // Long-lived coroutines consume channel signals one at a time.
-        scope.launch { for (unit in smsWorkChannel) smsMutex.withLock { syncLatestSms() } }
-        scope.launch { for (unit in mmsWorkChannel) mmsMutex.withLock { syncLatestMms() } }
+        /* Long-lived coroutines consume channel signals one at a time. Each iteration
+         * is individually guarded: an uncaught exception here would otherwise end the
+         * for-loop and permanently stop incremental sync for the process lifetime —
+         * the worst possible silent failure for an SMS app. CancellationException is
+         * rethrown so scope cancellation still works. */
+        scope.launch {
+            for (unit in smsWorkChannel) {
+                try {
+                    smsMutex.withLock { syncLatestSms() }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    syncLogger.logError(TAG, "SMS sync pass failed — consumer loop continues", e)
+                }
+            }
+        }
+        scope.launch {
+            for (unit in mmsWorkChannel) {
+                try {
+                    mmsMutex.withLock { syncLatestMms() }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    syncLogger.logError(TAG, "MMS sync pass failed — consumer loop continues", e)
+                }
+            }
+        }
         // Startup marker — visible in end-of-day log review as a process restart boundary.
         syncLogger.log(TAG, "SmsSyncHandler initialized (process start)")
     }
@@ -576,9 +601,9 @@ class SmsSyncHandler @Inject constructor(
         // Group MMS: comma-join contact names so the thread list/top bar show everyone
         // without any UI change (MMS_AUDIT §2.3 — previously only one address was kept).
         val displayName = if (roster.size > 1) {
-            roster.joinToString(", ") { lookupContactName(it) ?: it }
+            roster.joinToString(", ") { context.lookupContactName(it) ?: it }
         } else {
-            lookupContactName(address) ?: address.ifEmpty { "Unknown" }
+            context.lookupContactName(address) ?: address.ifEmpty { "Unknown" }
         }
         threadRepository.upsert(
             com.plusorminustwo.postmark.domain.model.Thread(
@@ -611,29 +636,6 @@ class SmsSyncHandler @Inject constructor(
             out
         }
         return parseMmsParticipants(rows)
-    }
-
-    private fun lookupContactName(address: String): String? {
-        // An empty address would produce content://com.android.contacts/phone_lookup/ with no
-        // segment, which may match every contact on some ROMs. Skip the lookup entirely.
-        if (address.isEmpty()) return null
-        val uri = Uri.withAppendedPath(
-            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-            Uri.encode(address)
-        )
-        return try {
-            context.contentResolver.query(
-                uri,
-                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-                null, null, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst())
-                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
-                else null
-            }
-        } catch (_: SecurityException) {
-            null
-        }
     }
 
 }

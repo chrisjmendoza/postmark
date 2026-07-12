@@ -6,6 +6,7 @@ import android.provider.Telephony
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -92,7 +93,7 @@ class ForwardPickerViewModel @Inject constructor(
                     threadRepository.upsert(
                         Thread(
                             id = sysThreadId,
-                            displayName = lookupContactName(address) ?: address,
+                            displayName = context.lookupContactName(address) ?: address,
                             address = address,
                             lastMessageAt = 0L,
                             backupPolicy = BackupPolicy.GLOBAL
@@ -169,20 +170,4 @@ class ForwardPickerViewModel @Inject constructor(
             results
         }
 
-    private fun lookupContactName(address: String): String? {
-        if (address.isEmpty()) return null
-        val uri = android.net.Uri.withAppendedPath(
-            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-            android.net.Uri.encode(address)
-        )
-        return try {
-            context.contentResolver.query(
-                uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst())
-                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
-                else null
-            }
-        } catch (_: SecurityException) { null }
-    }
 }

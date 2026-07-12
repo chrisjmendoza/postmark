@@ -1,11 +1,11 @@
 package com.plusorminustwo.postmark.ui.conversations
 
 import android.content.Context
-import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Telephony
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Thread
@@ -109,7 +109,7 @@ class NewConversationViewModel @Inject constructor(
                 // we create the entity now so ThreadScreen can observe it
                 // immediately without a null flash.
                 if (threadRepository.getById(sysThreadId) == null) {
-                    val displayName = lookupContactName(address) ?: address
+                    val displayName = context.lookupContactName(address) ?: address
                     threadRepository.upsert(
                         Thread(
                             id           = sysThreadId,
@@ -170,23 +170,4 @@ class NewConversationViewModel @Inject constructor(
             results
         }
 
-    /** Reverse-lookup the contact display name for a given phone number. */
-    private fun lookupContactName(address: String): String? {
-        if (address.isEmpty()) return null
-        val uri = Uri.withAppendedPath(
-            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-            Uri.encode(address)
-        )
-        return try {
-            context.contentResolver.query(
-                uri,
-                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-                null, null, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst())
-                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
-                else null
-            }
-        } catch (_: SecurityException) { null }
-    }
 }
