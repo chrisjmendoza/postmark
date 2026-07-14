@@ -18,6 +18,7 @@ import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.data.sync.SyncLogger
+import com.plusorminustwo.postmark.domain.logging.redactPhone
 import com.plusorminustwo.postmark.ui.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -63,7 +64,7 @@ class SmsReceiver : BroadcastReceiver() {
 
                 /* Log broadcast receipt synchronously before goAsync() — if the process
                  * is killed mid-async we still have a "broadcast arrived" entry in the log. */
-                syncLogger.log("SmsReceiver", if (isDeliver) "DELIVER_ACTION from=$rawSender" else "RECEIVED_ACTION from=$rawSender")
+                syncLogger.log("SmsReceiver", if (isDeliver) "DELIVER_ACTION from=${rawSender.redactPhone()}" else "RECEIVED_ACTION from=${rawSender.redactPhone()}")
 
                 /* goAsync() extends the BroadcastReceiver lifetime so the OS does not
                  * reclaim the process before our IO and notification work is done. */
@@ -98,7 +99,7 @@ class SmsReceiver : BroadcastReceiver() {
                             val displayName = context.lookupContactName(rawSender)
                                 ?: threadRepository.getDisplayNameByAddress(rawSender)
                                 ?: sender
-                            syncLogger.log("SmsReceiver", "notification: address=$rawSender displayName=$displayName")
+                            syncLogger.log("SmsReceiver", "notification: address=${rawSender.redactPhone()} nameResolved=${displayName != sender}")
                             postIncomingNotification(
                                 context,
                                 address = rawSender,
@@ -135,7 +136,7 @@ class SmsReceiver : BroadcastReceiver() {
                 Telephony.Threads.getOrCreateThreadId(context, rawSender)
             else 0L
         } catch (e: Exception) {
-            Log.w(TAG, "getOrCreateThreadId failed for sender=$rawSender", e)
+            Log.w(TAG, "getOrCreateThreadId failed for sender=${rawSender.redactPhone()}", e)
             0L
         }
 
@@ -153,15 +154,12 @@ class SmsReceiver : BroadcastReceiver() {
         try {
             val uri = context.contentResolver.insert(Telephony.Sms.Inbox.CONTENT_URI, cv)
             if (uri != null) {
-                Log.d(TAG, "Wrote incoming SMS from=$rawSender → $uri")
-                syncLogger.log("SmsReceiver", "wrote inbox row: from=$rawSender threadId=$threadId uri=$uri")
+                syncLogger.log("SmsReceiver", "wrote inbox row: from=${rawSender.redactPhone()} threadId=$threadId uri=$uri")
             } else {
-                Log.e(TAG, "Insert to content://sms/inbox returned null for sender=$rawSender")
-                syncLogger.logError("SmsReceiver", "Insert returned null for sender=$rawSender — message may be lost")
+                syncLogger.logError("SmsReceiver", "Insert returned null for sender=${rawSender.redactPhone()} — message may be lost")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to write incoming SMS to content://sms/inbox", e)
-            syncLogger.logError("SmsReceiver", "Write to content://sms/inbox FAILED for sender=$rawSender", e)
+            syncLogger.logError("SmsReceiver", "Write to content://sms/inbox FAILED for sender=${rawSender.redactPhone()}", e)
         }
     }
 

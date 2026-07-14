@@ -27,6 +27,7 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
 import com.plusorminustwo.postmark.data.sync.SyncLogger
+import com.plusorminustwo.postmark.domain.logging.redactPhone
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -95,7 +96,7 @@ class MmsManagerWrapper @Inject constructor(
             syncLogger.logError(TAG, "sendMms FAILED — no attachments for messageId=$messageId")
             return@withContext false
         }
-        syncLogger.log(TAG, "sendMms start: to=$toAddress attachments=${attachments.size} messageId=$messageId")
+        syncLogger.log(TAG, "sendMms start: to=${toAddress.redactPhone()} attachments=${attachments.size} messageId=$messageId")
 
         // ── 1. Read attachment bytes (with filesDir cache for retry resilience) ─
         /* Photo-picker URIs (content://media/picker_get_content/…) are only valid
@@ -263,7 +264,7 @@ class MmsManagerWrapper @Inject constructor(
         try {
             smsManager.sendMultimediaMessage(context, pduUri, null, null, sentIntent)
             Log.i(TAG, "sendMms: sendMultimediaMessage dispatched for messageId=$messageId")
-            syncLogger.log(TAG, "sendMms dispatched to radio: to=$toAddress messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
+            syncLogger.log(TAG, "sendMms dispatched to radio: to=${toAddress.redactPhone()} messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
         } catch (e: Exception) {
             Log.e(TAG, "sendMultimediaMessage failed", e)
             syncLogger.logError(TAG, "sendMms FAILED — sendMultimediaMessage threw for messageId=$messageId", e)

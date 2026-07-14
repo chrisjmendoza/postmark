@@ -100,7 +100,7 @@ class ReactionResolver @Inject constructor(
                 }
             } else {
                 // Original not found within the 100-message window — leave as visible bubble.
-                log("no-match: id=${msg.id} emoji=${parsed.emoji} quote='${parsed.quotedText.take(40)}'")
+                log("no-match: id=${msg.id} emoji=${parsed.emoji} quoteLen=${parsed.quotedText.length}")
             }
         }
 

@@ -13,6 +13,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.data.sync.SyncLogger
+import com.plusorminustwo.postmark.domain.logging.redactPhone
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -162,14 +163,14 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
             context.contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
                 ?.let { ContentUris.parseId(it) } ?: -1L
         } catch (e: Exception) {
-            syncLogger.logError("SmsSentDelivery", "recovery insert FAILED for address=$address — sent row remains missing", e)
+            syncLogger.logError("SmsSentDelivery", "recovery insert FAILED for address=${address.redactPhone()} — sent row remains missing", e)
             return
         }
         if (newRowId <= 0L) {
-            syncLogger.logError("SmsSentDelivery", "recovery insert returned null uri for address=$address — sent row remains missing")
+            syncLogger.logError("SmsSentDelivery", "recovery insert returned null uri for address=${address.redactPhone()} — sent row remains missing")
             return
         }
-        syncLogger.log("SmsSentDelivery", "recovered missing sent row _id=$newRowId for address=$address")
+        syncLogger.log("SmsSentDelivery", "recovered missing sent row _id=$newRowId for address=${address.redactPhone()}")
         smsSyncHandler.triggerCatchUp()
         messageRepository.updateDeliveryStatus(newRowId, DELIVERY_STATUS_SENT)
     }

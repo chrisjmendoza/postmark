@@ -14,6 +14,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.sync.SyncLogger
+import com.plusorminustwo.postmark.domain.logging.redactPhone
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -184,7 +185,7 @@ class MmsSentReceiver : BroadcastReceiver() {
         val expectedThreadId = try {
             Telephony.Threads.getOrCreateThreadId(context, toAddress)
         } catch (e: Exception) {
-            syncLogger.logError(TAG, "getOrCreateThreadId failed for toAddress=$toAddress — cannot verify thread_id on rawId=$rawId", e)
+            syncLogger.logError(TAG, "getOrCreateThreadId failed for toAddress=${toAddress.redactPhone()} — cannot verify thread_id on rawId=$rawId", e)
             return
         }
         if (!mmsThreadIdNeedsRepair(rowThreadId, expectedThreadId)) return
