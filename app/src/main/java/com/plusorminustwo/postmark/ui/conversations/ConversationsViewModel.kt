@@ -64,8 +64,9 @@ class ConversationsViewModel @Inject constructor(
         viewModelScope.launch {
             val syncDone      = prefs.getBoolean("first_sync_completed", false)
             val threadsEmpty  = threadRepository.isEmpty()
-            val messagesEmpty = messageRepository.getMaxId() == null &&
-                                messageRepository.getMaxMmsId() == null
+            // EXISTS rather than the watermark queries: those exclude restored rows,
+            // and a device holding only restored history must not loop recovery.
+            val messagesEmpty = !messageRepository.hasAnyMessages()
             val needsRecovery = (syncDone && threadsEmpty) || (!threadsEmpty && messagesEmpty)
             if (needsRecovery) {
                 android.util.Log.w(

@@ -53,6 +53,13 @@ data class Message(
  *  collision with SMS IDs (which top out around 100M on real devices). */
 const val MMS_ID_OFFSET = 10_000_000_000L
 
+/** Start of the ID range used for messages inserted by backup restore. Restored rows
+ *  have no corresponding system-provider row, so they get synthetic IDs above the MMS
+ *  range. The sync watermark queries in MessageDao exclude this range — without that,
+ *  one restored row would become the incremental-sync watermark and every future real
+ *  message would be silently skipped. */
+const val RESTORED_ID_OFFSET = 20_000_000_000L
+
 /**
  * Human-readable preview text suitable for the conversation list.
  * Photo/video/audio messages show an emoji label instead of an empty string.

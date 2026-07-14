@@ -26,6 +26,7 @@ import com.plusorminustwo.postmark.ui.onboarding.OnboardingScreen
 import com.plusorminustwo.postmark.ui.search.SearchScreen
 import com.plusorminustwo.postmark.ui.settings.BackupSettingsScreen
 import com.plusorminustwo.postmark.ui.settings.DevOptionsScreen
+import com.plusorminustwo.postmark.ui.settings.export.ExportScreen
 import com.plusorminustwo.postmark.ui.settings.SettingsScreen
 import com.plusorminustwo.postmark.ui.settings.SyncLogScreen
 import com.plusorminustwo.postmark.ui.starred.StarredImagesScreen
@@ -67,6 +68,8 @@ sealed class Screen(val route: String) {
     data object Settings : Screen("settings")
     /** Backup & restore settings screen. */
     data object BackupSettings : Screen("settings/backup")
+    /** Selective export — pick conversations/date range, save an archive anywhere. */
+    data object ExportConversations : Screen("settings/backup/export")
     /** Developer options screen (hidden). */
     data object DevOptions : Screen("settings/dev")
     /** Full-screen sync log viewer. */
@@ -219,8 +222,13 @@ fun AppNavigation(showOnboarding: Boolean) {
 
         composable(Screen.BackupSettings.route) {
             BackupSettingsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onExportClick = { navController.navigate(Screen.ExportConversations.route) }
             )
+        }
+
+        composable(Screen.ExportConversations.route) {
+            ExportScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Screen.DevOptions.route) {

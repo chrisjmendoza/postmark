@@ -104,6 +104,11 @@ class BackupScheduler @Inject constructor(
         const val KEY_FREQUENCY        = "frequency"
         const val KEY_REQUIRE_WIFI     = "require_wifi"
         const val KEY_REQUIRE_CHARGING = "require_charging"
+        /** SAF tree URI of the user-chosen backup folder; null/absent = app dir. */
+        const val KEY_TREE_URI         = "backup_tree_uri"
+        /** Set by [BackupWorker] when the chosen folder was unusable and the backup
+         *  fell back to the app dir; cleared on the next successful folder write. */
+        const val KEY_TREE_FALLBACK    = "backup_tree_fallback"
     }
 }
 

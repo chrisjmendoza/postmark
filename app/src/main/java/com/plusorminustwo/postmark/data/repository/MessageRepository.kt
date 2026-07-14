@@ -134,6 +134,17 @@ class MessageRepository @Inject constructor(
     /** Returns the lowest stored MMS row id (offset by MMS_ID_OFFSET), or null. */
     suspend fun getMinMmsId(): Long? = messageDao.getMinMmsId()
 
+    /** True when any message row exists at all (restored rows included). */
+    suspend fun hasAnyMessages(): Boolean = messageDao.hasAnyMessages()
+
+    /** Highest id in the restored-row range, or null when nothing was ever restored. */
+    suspend fun getMaxRestoredId(): Long? = messageDao.getMaxRestoredId()
+
+    /** All reactions on messages of one thread — the backup writer's source
+     *  (the non-reactive [getByThread] deliberately doesn't join reactions). */
+    suspend fun getReactionsByThread(threadId: Long): List<Reaction> =
+        reactionDao.getByThread(threadId).map { it.toDomain() }
+
     suspend fun deleteAll() {
         reactionDao.deleteAll()
         messageDao.deleteAll()

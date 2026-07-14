@@ -132,14 +132,19 @@ interface MessageDao {
     fun observeUnreadCounts(): Flow<List<UnreadCount>>
 
     /** Highest SMS provider _id stored in Room (SMS only, excluding MMS offset rows).
-     *  Used by [SmsSyncHandler] to bound incremental queries to rows not yet imported. */
-    @Query("SELECT MAX(id) FROM messages WHERE isMms = 0")
+     *  Used by [SmsSyncHandler] to bound incremental queries to rows not yet imported.
+     *  The `id < 20000000000` (RESTORED_ID_OFFSET) guard excludes rows inserted by
+     *  backup restore — those have no provider row, and letting one become the
+     *  watermark would make every future real message silently unsynced. */
+    @Query("SELECT MAX(id) FROM messages WHERE isMms = 0 AND id < 20000000000")
     suspend fun getMaxId(): Long?
 
     /** Highest stored MMS row id (already offset by MMS_ID_OFFSET).
      *  Subtract MMS_ID_OFFSET to get the raw content-provider `_id`.
-     *  Used by [SmsSyncHandler] to bound incremental MMS queries. */
-    @Query("SELECT MAX(id) FROM messages WHERE isMms = 1")
+     *  Used by [SmsSyncHandler] to bound incremental MMS queries.
+     *  Excludes restored rows (id >= RESTORED_ID_OFFSET) for the same watermark
+     *  reason as [getMaxId]. */
+    @Query("SELECT MAX(id) FROM messages WHERE isMms = 1 AND id < 20000000000")
     suspend fun getMaxMmsId(): Long?
 
     /** Lowest stored MMS row id (already offset by MMS_ID_OFFSET).
@@ -148,9 +153,24 @@ interface MessageDao {
      *  The `id > 0` guard excludes optimistic sent-MMS rows (which have negative IDs
      *  like `-System.currentTimeMillis()`). Without it, a live optimistic row would make
      *  resumeBeforeRawId go deeply negative, causing `rawId >= resumeBeforeRawId` to be
-     *  true for every positive rawId and silently skipping the entire MMS import. */
-    @Query("SELECT MIN(id) FROM messages WHERE isMms = 1 AND id > 0")
+     *  true for every positive rawId and silently skipping the entire MMS import.
+     *  The `id < 20000000000` guard excludes restored rows, which aren't provider rows
+     *  and must not influence the resume watermark. */
+    @Query("SELECT MIN(id) FROM messages WHERE isMms = 1 AND id > 0 AND id < 20000000000")
     suspend fun getMinMmsId(): Long?
+
+    /** True when any message row exists, including restored rows. Used by
+     *  [ConversationsViewModel]'s recovery check — unlike the watermark queries above,
+     *  restored rows COUNT as messages here, otherwise a device holding only restored
+     *  history would re-trigger the full provider import on every launch. */
+    @Query("SELECT EXISTS(SELECT 1 FROM messages)")
+    suspend fun hasAnyMessages(): Boolean
+
+    /** Highest id in the restored-row range (RESTORED_ID_OFFSET and above), or null.
+     *  Seeds the id sequence of a new restore so it can't collide with rows an
+     *  earlier (possibly interrupted) restore already inserted. */
+    @Query("SELECT MAX(id) FROM messages WHERE id >= 20000000000")
+    suspend fun getMaxRestoredId(): Long?
 
     /** Used for the 8-week activity heatmap (all threads). */
     @Query("SELECT * FROM messages WHERE timestamp >= :startMs ORDER BY timestamp ASC")

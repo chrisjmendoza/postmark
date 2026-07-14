@@ -240,6 +240,8 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun getMaxId(): Long? = null
     override suspend fun getMaxMmsId(): Long? = null
     override suspend fun getMinMmsId(): Long? = null
+    override suspend fun hasAnyMessages(): Boolean = rows.isNotEmpty()
+    override suspend fun getMaxRestoredId(): Long? = null
     override suspend fun markAllRead(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())

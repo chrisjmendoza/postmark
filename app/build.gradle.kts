@@ -139,6 +139,9 @@ dependencies {
     // ExifInterface — read EXIF rotation before image compression
     implementation(libs.androidx.exifinterface)
 
+    // DocumentFile — SAF backup folder (write backups to a user-chosen tree)
+    implementation(libs.androidx.documentfile)
+
     // Media3 ExoPlayer — video playback in thread view
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
