@@ -54,7 +54,6 @@ class SmsSyncHandler @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val reactionParser: ReactionFallbackParser,
-    private val statsUpdater: StatsUpdater,
     private val syncLogger: SyncLogger
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -275,9 +274,6 @@ class SmsSyncHandler @Inject constructor(
             .filter { it !in normalThreadIds }
             .forEach { messageRepository.deleteOptimisticMessages(it, isMms = false) }
 
-        // One stats recompute covers all affected threads.
-        statsUpdater.recomputeAll()
-
         /* Resolve reaction fallback messages into Reaction entities (deduped).
          * If the original message cannot be found within 100 messages, insert the
          * fallback as a normal visible bubble rather than silently dropping it. */
@@ -463,8 +459,6 @@ class SmsSyncHandler @Inject constructor(
         reactionMsgs.map { it.threadId }.distinct()
             .filter { it !in normalThreadIds }
             .forEach { messageRepository.deleteOptimisticMessages(it, isMms = true) }
-
-        statsUpdater.recomputeAll()
 
         /* Resolve MMS reaction fallback messages into Reaction entities (deduped).
          * Mirrors the same logic used in syncLatestSms(). If the original message

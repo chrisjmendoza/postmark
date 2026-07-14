@@ -13,7 +13,7 @@ internal const val MAX_RESPONSE_GAP_MS = 24L * 3600_000L
 
 /**
  * Pure thread statistics — no JSON, no Room dependencies.
- * Produced by [buildThreadStatsData] and consumed by [StatsUpdater] which serialises to Room.
+ * Produced by [buildThreadStatsData] and consumed live by the Stats screen ViewModel.
  */
 internal data class ThreadStatsData(
     val totalMessages: Int = 0,

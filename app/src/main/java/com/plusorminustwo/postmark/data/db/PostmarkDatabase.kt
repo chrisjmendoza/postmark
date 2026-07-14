@@ -11,10 +11,9 @@ import com.plusorminustwo.postmark.data.db.entity.*
 /**
  * Room database for Postmark.
  *
- * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity],
- * [ThreadStatsEntity], [GlobalStatsEntity], [MessageFtsEntity].
+ * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity].
  *
- * Current schema version: 14.
+ * Current schema version: 15.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -23,11 +22,9 @@ import com.plusorminustwo.postmark.data.db.entity.*
         ThreadEntity::class,
         MessageEntity::class,
         ReactionEntity::class,
-        ThreadStatsEntity::class,
-        GlobalStatsEntity::class,
         MessageFtsEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -36,8 +33,6 @@ abstract class PostmarkDatabase : RoomDatabase() {
     abstract fun threadDao(): ThreadDao
     abstract fun messageDao(): MessageDao
     abstract fun reactionDao(): ReactionDao
-    abstract fun threadStatsDao(): ThreadStatsDao
-    abstract fun globalStatsDao(): GlobalStatsDao
     abstract fun searchDao(): SearchDao
 
     companion object {
@@ -172,6 +167,17 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE messages ADD COLUMN isStarred INTEGER NOT NULL DEFAULT 0"
                 )
+            }
+        }
+
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // The pre-aggregated stats tables were write-only: StatsUpdater maintained
+                // them on every sync but the Stats screen always computed live from the
+                // messages table. Dropping the parallel system — these are derived caches,
+                // not user data, so this stays within the no-destructive-migration rule.
+                db.execSQL("DROP TABLE IF EXISTS thread_stats")
+                db.execSQL("DROP TABLE IF EXISTS global_stats")
             }
         }
 

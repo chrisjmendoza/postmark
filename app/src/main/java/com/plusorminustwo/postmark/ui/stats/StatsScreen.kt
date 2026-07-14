@@ -61,7 +61,6 @@ fun StatsScreen(
     val heatmapMessages     by viewModel.heatmapMessages.collectAsState()
     val directThreadNavigation by viewModel.directThreadNavigation.collectAsState()
     val responseBuckets by viewModel.responseBuckets.collectAsState()
-    val isRecomputing by viewModel.isRecomputing.collectAsState()
 
     val isInDrilldown = selectedScope == StatsScope.PER_THREAD && selectedThreadId != null
     val isInThreadList = selectedScope == StatsScope.PER_THREAD && selectedThreadId == null
@@ -127,10 +126,6 @@ fun StatsScreen(
                         )
                     }
                 }
-            }
-
-            if (isRecomputing) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
             when {

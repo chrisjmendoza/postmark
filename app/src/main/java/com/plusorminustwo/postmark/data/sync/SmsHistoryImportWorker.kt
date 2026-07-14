@@ -45,7 +45,6 @@ class SmsHistoryImportWorker @AssistedInject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val reactionResolver: ReactionResolver,
-    private val statsUpdater: StatsUpdater,
     private val smsSyncHandler: SmsSyncHandler,  // for post-sync catch-up of race-window messages
     private val syncLogger: SyncLogger
 ) : CoroutineWorker(context, params) {
@@ -132,8 +131,6 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             postProgress("Resolving reactions\u2026", 0, 0)
             val reactions = reactionResolver.resolveAll()
             syncLogger.log("Sync", "Reactions: ${reactions.inserted} resolved, ${reactions.removed} fallbacks removed")
-            postProgress("Wrapping up\u2026", 0, 0)
-            statsUpdater.recomputeAll()
             val status = "OK: ${smsResult.threadCount} threads, ${smsResult.messageCount} SMS + $mmsCount MMS"
             Log.i(TAG, "Sync complete — $status")
             syncLogger.log("Sync", "Complete: $status")
