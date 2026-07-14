@@ -39,7 +39,7 @@ The app stores its own copy of SMS data in a Room database. This allows fast, of
 
 ## Database Schema
 
-Current Room schema **version 9** (`PostmarkDatabase.kt`).
+Current Room schema **version 15** (`PostmarkDatabase.kt`).
 
 ### Tables
 
@@ -48,8 +48,11 @@ Current Room schema **version 9** (`PostmarkDatabase.kt`).
 | `threads` | One row per SMS conversation |
 | `messages` | Individual SMS messages |
 | `reactions` | Apple reaction fallback texts parsed into emoji |
-| `thread_stats` | Pre-aggregated stats — never computed on the fly |
 | `messages_fts` | FTS4 virtual table mirroring `messages.body` |
+
+> The pre-aggregated `thread_stats`/`global_stats` tables (and their DAOs) were
+> removed in schema v15 — nothing read them, and stats are now computed live.
+> See **Stats** below.
 
 ### FTS4 Sync
 
@@ -74,7 +77,6 @@ JOIN messages_fts ON m.id = messages_fts.rowid
 
 - `messages.threadId` → FK to `threads.id` (CASCADE DELETE)
 - `reactions.messageId` → FK to `messages.id` (CASCADE DELETE)
-- `thread_stats.threadId` → FK to `threads.id` (CASCADE DELETE)
 
 ---
 
@@ -82,7 +84,7 @@ JOIN messages_fts ON m.id = messages_fts.rowid
 
 | Module | Provides |
 |--------|---------|
-| `DatabaseModule` | `PostmarkDatabase`, all 5 DAOs |
+| `DatabaseModule` | `PostmarkDatabase`, all 4 DAOs (`ThreadDao`, `MessageDao`, `ReactionDao`, `SearchDao`) |
 | `RepositoryModule` | `ThreadRepository`, `MessageRepository`, `SearchRepository` |
 
 `AndroidReactionParser`, `AppleReactionParser`, `ReactionFallbackParser`,
@@ -174,24 +176,48 @@ The JSON asset makes it easy to add new languages without a code change.
 
 ---
 
-## Backup
+## Backup & Restore
 
-`BackupWorker` (WorkManager `PeriodicWorkRequest`) serializes all threads/messages (filtered by `BackupPolicy`) to a versioned JSON file under `getExternalFilesDir("backups")/`. The `version` field in the JSON enables future migration logic.
+Backups use a **v2 archive format** (`domain/backup/`): a streamed zip whose entries
+are a JSON manifest plus newline-delimited thread/message/reaction records and the raw
+attachment bytes. Records are serialized one line at a time and attachment bytes are
+copied stream-to-stream, so memory stays bounded by a single thread's message list
+regardless of total size. The manifest carries a `version` field (enabling future
+migration) and a reserved `encryption` field (content is plaintext today — see
+`docs/TODO.md` #13).
 
-**Retention**: after writing, old files beyond the configured count are pruned by modification date.
+- **`BackupArchiveExporter`** — the shared write engine for any `BackupSelection`.
+- **`BackupWorker`** (WorkManager `PeriodicWorkRequest`) — scheduled full backup of all
+  included threads. Writes the new archive **first**, then prunes older files beyond the
+  configured retention count (so a failed write can't zero out existing backups).
+- **`ExportWorker`** — user-initiated export of a slice (picked threads and/or a date
+  range), including a human-readable transcript via `ReadableExportWriter`.
+- **`RestoreWorker`** — reads a v2 (or legacy v1) archive back into Room. Merge-only and
+  idempotent: records are fingerprint-deduped against existing rows, restored into a
+  reserved id range excluded from sync watermarks, so restoring never deletes or
+  double-inserts and never disturbs the content-provider sync path.
 
-**Per-thread policy** (`GLOBAL` / `ALWAYS_INCLUDE` / `NEVER_INCLUDE`) is stored on `ThreadEntity` and evaluated by `ThreadRepository.getThreadsForBackup()` at backup time.
+Backups can be written to a user-chosen **SAF folder** so they survive app uninstall.
+
+**Per-thread policy** (`GLOBAL` / `ALWAYS_INCLUDE` / `NEVER_INCLUDE`) is stored on
+`ThreadEntity` and evaluated by `ThreadRepository.getThreadsForBackup()` at backup time.
 
 ---
 
 ## Stats
 
-Stats are **always read from `ThreadStatsEntity`**, never computed on demand. This is a
-hard requirement — stats queries run in O(1) regardless of message count.
+Stats are **computed live** in `StatsViewModel` from the `messages`/`reactions`/`threads`
+tables via the pure functions in `data/sync/StatsAlgorithms.kt` (`buildThreadStatsData` /
+`buildGlobalStatsData`). The ViewModel `combine`s the observed message and reaction flows
+and derives streak, active days, average response time, emoji counts, by-day-of-week, and
+by-month on each change.
 
-`StatsUpdater` computes stats incrementally when messages are inserted or deleted, and
-is also called by `DevOptionsViewModel.reprocessReactions()` for full recomputation.
-Global stats are derived by aggregating `SUM()` over `thread_stats`.
+There is deliberately **no persisted stats table**. An earlier design pre-aggregated into
+`thread_stats`/`global_stats`, but nothing ever read those tables (the screen always
+computed live), so the write-only tables — and their `StatsUpdater` full-table-scan
+recompute on every sync/import/restore — were removed in schema v15. The one remaining
+performance concern (heatmap at 150k+ messages) is tracked separately in `docs/TODO.md`
+and never depended on those tables.
 
 **Two emoji stat categories are tracked separately** (users use them differently):
 - **Top emoji (messages)** — emoji extracted from message body text
@@ -206,6 +232,6 @@ Global stats are derived by aggregating `SUM()` over `thread_stats`.
 | Own Room DB instead of querying system provider directly | System provider has no FTS, no reactions, no backup policy, unpredictable performance |
 | FTS4 standalone (not content table) | Avoids KSP cross-reference bug in Room 2.6.1 with `@Fts5`; triggers provide equivalent sync |
 | Reactions as a separate table | Independently queryable by emoji; not a column that would need JSON parsing at query time |
-| Pre-aggregated stats | Stats screen must load instantly; no table scans allowed |
+| Stats computed live from `messages`/`reactions` (no stats table) | The screen always computed live; the parallel persisted tables were write-only dead weight and a full-scan cost on every sync — removed in v15 |
 | Word-start FTS (`^"term"*`) not substring | Less noise; users find it more predictable than mid-word matches |
 | BackupPolicy on ThreadEntity | Privacy-sensitive threads excluded at query time, not in the serializer |

@@ -256,19 +256,6 @@ internal fun heatmapTierForCount(count: Int, maxCount: Int): Int {
     return ceil(count.toFloat() / maxCount.toFloat() * 6).toInt().coerceIn(1, 6)
 }
 
-/**
- * Build a sorted list of 56 "yyyy-MM-dd" day labels covering the last 8 weeks,
- * ending today (inclusive).
- */
-internal fun last56DayLabels(): List<String> {
-    val fmt = localDayFormatter()
-    val cal = Calendar.getInstance()
-    return (55 downTo 0).map { daysBack ->
-        cal.timeInMillis = System.currentTimeMillis() - daysBack * 86_400_000L
-        fmt.format(cal.time)
-    }
-}
-
 /** Groups messages into a date→count map using local-timezone day boundaries. */
 internal fun groupMessagesByDay(messages: List<MessageEntity>): Map<String, Int> {
     val fmt = localDayFormatter()

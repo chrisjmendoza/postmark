@@ -1,12 +1,10 @@
 ﻿package com.plusorminustwo.postmark.ui.thread
 
-import android.app.role.RoleManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.app.PendingIntent
 import android.net.Uri
-import android.os.Build
 import android.provider.BlockedNumberContract
 import android.provider.Telephony
 import androidx.core.content.FileProvider
@@ -14,6 +12,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.contacts.lookupContactName
+import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
@@ -358,7 +357,7 @@ class ThreadViewModel @Inject constructor(
      * immediately and unconditionally once called.
      */
     fun deleteMessage(messageId: Long) {
-        if (!isDefaultSmsApp()) {
+        if (!context.isDefaultSmsApp()) {
             _showDefaultSmsDialog.value = true
             return
         }
@@ -385,6 +384,11 @@ class ThreadViewModel @Inject constructor(
                 }
             }
             messageRepository.deleteById(messageId)
+            // Remove the outgoing-MMS media this message cached in filesDir so it doesn't
+            // leak (no-op for SMS / received MMS — those carry no mms_attach_* cache files).
+            withContext(Dispatchers.IO) {
+                MmsManagerWrapper.deleteAttachmentCacheFiles(context, message.attachments)
+            }
         }
     }
 
@@ -538,7 +542,7 @@ class ThreadViewModel @Inject constructor(
         // Require at least text OR an attachment; also block re-entrant sends.
         if ((text.isEmpty() && attachments.isEmpty()) || _isSending.value) return
 
-        if (!isDefaultSmsApp()) {
+        if (!context.isDefaultSmsApp()) {
             _showDefaultSmsDialog.value = true
             return
         }
@@ -708,16 +712,6 @@ class ThreadViewModel @Inject constructor(
                 smsManagerWrapper.sendTextMessage(message.address, message.body, messageId)
             }
         }
-    }
-
-    private fun isDefaultSmsApp(): Boolean {
-        /* On Android 10+ the RoleManager is the authoritative source —
-         * getDefaultSmsPackage can lag after the role is granted via the system dialog. */
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val rm = context.getSystemService(RoleManager::class.java)
-            if (rm.isRoleHeld(RoleManager.ROLE_SMS)) return true
-        }
-        return Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
     }
 
     // ── Backup policy ─────────────────────────────────────────────────────────

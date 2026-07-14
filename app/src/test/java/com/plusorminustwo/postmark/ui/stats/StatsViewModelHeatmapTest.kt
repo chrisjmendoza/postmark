@@ -261,9 +261,6 @@ private class FakeMessageDao : MessageDao {
     override suspend fun countByThread(threadId: Long): Int = 0
     override suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity> = emptyList()
     override suspend fun getActiveDatesForThread(threadId: Long): List<String> = emptyList()
-    override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
-    override suspend fun getLatestNForThread(threadId: Long, n: Int): List<MessageEntity> = emptyList()
-    override suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity? = null
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
     override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
@@ -279,10 +276,11 @@ private class FakeMessageDao : MessageDao {
     override suspend fun hasAnyMessages(): Boolean = false
     override suspend fun getMaxRestoredId(): Long? = null
     override suspend fun deleteById(messageId: Long) = Unit
-    override suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity? = null
+    override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
     override suspend fun markAllRead(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
     override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
     override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
 }

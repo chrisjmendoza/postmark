@@ -98,7 +98,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -120,6 +119,7 @@ import androidx.compose.foundation.lazy.itemsIndexed as lazyRowItemsIndexed
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -140,8 +140,6 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
-
-private val PILL_HIDE_DELAY_MS = 1_800L
 
 /**
  * CompositionLocal carrying the current bubble font-scale multiplier (0.8 – 1.6).
@@ -445,9 +443,6 @@ private fun ThreadContent(
     // effect inside the inner Box can drive the same FAB state.
     var fabVisible by remember { mutableStateOf(false) }
 
-    // ── Floating date pill ────────────────────────────────────────────────────
-    var pillVisible by remember { mutableStateOf(false) }
-
     // Scroll effects — each isolated in its own helper composable so unrelated
     // state changes don't trigger other effects unnecessarily.
     ThreadScrollToBottomEffect(scrollToBottomEvent, listState)
@@ -455,10 +450,6 @@ private fun ThreadContent(
         messageCount = uiState.messages.size,
         listState    = listState,
         onFabVisible = { fabVisible = it }
-    )
-    ThreadFloatingDatePillEffect(
-        listState = listState,
-        onPillVisible = { pillVisible = it }
     )
 
     // ── Derived display state ─────────────────────────────────────────────────
@@ -482,8 +473,26 @@ private fun ThreadContent(
         }
     }
 
+    // Newest day's label (index 0 = newest message). Seeds the pill so opening a thread shows
+    // the current day's date immediately, instead of an empty oval, in the window before the
+    // list has laid out and `visibleDate` can resolve from the top visible item.
+    val newestDayLabel = when (val first = uiState.renderState.items.firstOrNull()) {
+        is ThreadListItem.Bubble     -> uiState.renderState.messageIdToDate[first.message.id] ?: ""
+        is ThreadListItem.DateHeader -> first.dateLabel
+        null                         -> ""
+    }
+
     var pillDateLabel by remember { mutableStateOf("") }
-    if (visibleDate.isNotEmpty()) pillDateLabel = visibleDate
+    when {
+        visibleDate.isNotEmpty() -> pillDateLabel = visibleDate
+        pillDateLabel.isEmpty()  -> pillDateLabel = newestDayLabel
+    }
+
+    // Measured height of the sticky date header. The message list reserves exactly this much
+    // space at its top edge (derived from layout, not a hardcoded value, so it adapts to font
+    // scale) so no message ever scrolls behind the header.
+    var datePillHeightPx by remember { mutableStateOf(0) }
+    val datePillHeight = with(LocalDensity.current) { datePillHeightPx.toDp() }
 
     fun scrollToDateLabel(label: String) {
         uiState.renderState.dateToHeaderIndex[label]?.let { headerIdx ->
@@ -774,7 +783,11 @@ private fun ThreadContent(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                // Reserve space for the sticky date header at the top edge so messages scroll
+                // beneath it rather than behind it. datePillHeight is measured (see below).
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = datePillHeight),
                 state = listState,
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
@@ -877,11 +890,16 @@ private fun ThreadContent(
                 )
             }
 
+            // Permanent sticky date header pinned under the top bar. Always visible while the
+            // thread has messages; `pillDateLabel` tracks the day of the top-of-viewport item
+            // (via `visibleDate`), so it updates as day separators scroll past the top edge.
             FloatingDatePill(
                 dateLabel = pillDateLabel,
-                visible = pillVisible,
+                visible = pillDateLabel.isNotEmpty(),
                 onClick = { showCalendarPicker = true },
-                modifier = Modifier.align(Alignment.TopCenter)
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .onGloballyPositioned { datePillHeightPx = it.size.height }
             )
 
             val scrolledUp by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
@@ -1924,9 +1942,13 @@ private fun DeliveryStatusIndicator(
     onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    // Colored ticks: yellow = sent to carrier, green = delivered to device, red = failed.
-    val sentColor      = Color(0xFFFFCC00)   // amber-yellow
-    val deliveredColor = Color(0xFF4CAF50)   // material green
+    // Colored ticks: amber = sent to carrier, green = delivered to device, red = failed.
+    // The bright shades read well on the dark theme but fail contrast on the light theme's
+    // near-white background (the ticks render beside the timestamp, not on the bubble), so
+    // pick darker shades when the surface is light.
+    val lightTheme     = MaterialTheme.colorScheme.surface.luminance() > 0.5f
+    val sentColor      = if (lightTheme) Color(0xFFB26A00) else Color(0xFFFFCC00)  // amber
+    val deliveredColor = if (lightTheme) Color(0xFF2E7D32) else Color(0xFF4CAF50)  // green
     // The status is otherwise color-only — the contentDescription is the sole signal
     // a screen-reader user gets that a message failed.
     val (icon, tint, description) = when (status) {
@@ -3375,9 +3397,11 @@ private fun EmojiReactionPopup(
     // IME or top-bar offset compensation is needed here.
     val pillTopPx = reactionPillTopPx(bubbleBottomY, pillHeightPx, gapPx, maxPillTopPx)
 
-    val pillBg     = Color(0xFF2C2C2E)
-    val pillBorder = Color(0xFF3A3A3C)
-    val moreTint   = Color(0xFF8E8E93)
+    // Theme-driven so the pill matches the app theme instead of always rendering dark
+    // (it previously used near-black literals that looked wrong on the Always-Light theme).
+    val pillBg     = MaterialTheme.colorScheme.surfaceContainerHigh
+    val pillBorder = MaterialTheme.colorScheme.outlineVariant
+    val moreTint   = MaterialTheme.colorScheme.onSurfaceVariant
 
     Box(Modifier.fillMaxSize()) {
         // Scrim — covers only below the action bar so the action bar stays
@@ -3626,7 +3650,7 @@ private fun ThreadScrollToBottomEffect(
 
 /**
  * Watches the total message count. If the user is already near the bottom, auto-scrolls
- * to show the new message. Otherwise raises the FAB for [PILL_HIDE_DELAY_MS]-ish ms.
+ * to show the new message. Otherwise raises the scroll-to-bottom FAB briefly (~3 s).
  */
 @Composable
 private fun ThreadNewMessageScrollEffect(
@@ -3643,23 +3667,5 @@ private fun ThreadNewMessageScrollEffect(
             kotlinx.coroutines.delay(3_000)
             onFabVisible(false)
         }
-    }
-}
-
-/**
- * Shows the floating date pill while the list is scrolling, then hides it
- * after [PILL_HIDE_DELAY_MS] of inactivity.
- */
-@Composable
-private fun ThreadFloatingDatePillEffect(
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    onPillVisible: (Boolean) -> Unit
-) {
-    LaunchedEffect(Unit) {
-        snapshotFlow { listState.isScrollInProgress }
-            .collectLatest { scrolling ->
-                if (scrolling) onPillVisible(true)
-                else { kotlinx.coroutines.delay(PILL_HIDE_DELAY_MS); onPillVisible(false) }
-            }
     }
 }

@@ -4,7 +4,7 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.previewText
-import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
+import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import javax.inject.Inject
 import javax.inject.Singleton
 

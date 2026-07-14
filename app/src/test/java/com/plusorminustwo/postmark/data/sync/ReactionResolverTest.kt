@@ -13,9 +13,9 @@ import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
-import com.plusorminustwo.postmark.search.parser.AndroidReactionParser
-import com.plusorminustwo.postmark.search.parser.AppleReactionParser
-import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
+import com.plusorminustwo.postmark.data.reaction.AndroidReactionParser
+import com.plusorminustwo.postmark.data.reaction.AppleReactionParser
+import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -210,7 +210,7 @@ private class InMemoryMessageDao : MessageDao {
         rows.values.filter { it.threadId == threadId }.sortedBy { it.timestamp }
     override suspend fun getAllThreadIds(): List<Long> = rows.values.map { it.threadId }.distinct()
     override suspend fun deleteById(messageId: Long) { rows.remove(messageId) }
-    override suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity? =
+    override suspend fun getLatestForThread(threadId: Long): MessageEntity? =
         rows.values.filter { it.threadId == threadId }.maxByOrNull { it.timestamp }
     override suspend fun insert(message: MessageEntity): Long { rows[message.id] = message; return message.id }
     override suspend fun insertAll(messages: List<MessageEntity>) = messages.forEach { rows[it.id] = it }
@@ -226,9 +226,6 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun countByThread(threadId: Long): Int = 0
     override suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity> = emptyList()
     override suspend fun getActiveDatesForThread(threadId: Long): List<String> = emptyList()
-    override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
-    override suspend fun getLatestNForThread(threadId: Long, n: Int): List<MessageEntity> = emptyList()
-    override suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity? = null
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
     override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
     override suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?) = Unit
@@ -245,6 +242,7 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun markAllRead(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
     override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
     override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
 }

@@ -1,4 +1,4 @@
-package com.plusorminustwo.postmark.search.parser
+package com.plusorminustwo.postmark.data.reaction
 
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Reaction

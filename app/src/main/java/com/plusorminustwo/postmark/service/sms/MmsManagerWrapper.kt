@@ -350,6 +350,47 @@ class MmsManagerWrapper @Inject constructor(
                 if (index == 0) "mms_attach_$messageId.bin"
                 else "mms_attach_${messageId}_$index.bin"
             )
+
+        /**
+         * Deletes the filesDir cache files (`mms_attach_*.bin`) backing [attachments] of an
+         * outgoing MMS. Received-MMS attachments carry `content://mms/part` URIs whose last
+         * segment isn't a cache-file name, so they're skipped; any non-cache URI is a no-op.
+         * Call after a message is deleted so its cached media doesn't leak.
+         */
+        fun deleteAttachmentCacheFiles(context: Context, attachments: List<MessageAttachment>) {
+            attachments.forEach { att ->
+                val name = Uri.parse(att.uri).lastPathSegment ?: return@forEach
+                if (name.startsWith("mms_attach_") && name.endsWith(".bin")) {
+                    runCatching { File(context.filesDir, name).delete() }
+                }
+            }
+        }
+
+        /**
+         * Deletes `mms_attach_*.bin` cache files in filesDir that no live message references.
+         * Each sent-MMS row (and any still-pending optimistic row) references its own cache
+         * file via a FileProvider URI, so a file whose name is absent from [referencedNames]
+         * is a leftover from a superseded/failed/deleted send. A file is only removed once
+         * [nowMs] − its mtime exceeds [minAgeMs], so a file an in-flight send just wrote but
+         * hasn't yet attached to a row is never swept. Returns the number of files deleted.
+         */
+        fun sweepOrphanedAttachmentCache(
+            context: Context,
+            referencedNames: Set<String>,
+            nowMs: Long,
+            minAgeMs: Long = 60 * 60 * 1000L
+        ): Int {
+            val files = context.filesDir.listFiles { f ->
+                f.name.startsWith("mms_attach_") && f.name.endsWith(".bin")
+            } ?: return 0
+            var deleted = 0
+            files.forEach { f ->
+                if (f.name !in referencedNames && nowMs - f.lastModified() > minAgeMs) {
+                    if (runCatching { f.delete() }.getOrDefault(false)) deleted++
+                }
+            }
+            return deleted
+        }
     }
 
     // ── Image compression helper ──────────────────────────────────────────────

@@ -19,7 +19,7 @@ import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
-import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
+import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import androidx.core.content.FileProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException

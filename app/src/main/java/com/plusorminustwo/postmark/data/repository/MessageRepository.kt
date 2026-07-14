@@ -113,10 +113,14 @@ class MessageRepository @Inject constructor(
 
     /** Returns the latest message in a thread (used to refresh thread preview after reaction cleanup). */
     suspend fun getLatestForThread(threadId: Long): Message? =
-        messageDao.getLatestNonReactionForThread(threadId)?.toDomain()
+        messageDao.getLatestForThread(threadId)?.toDomain()
 
     /** Returns all messages ordered by timestamp (used by reprocessReactions debug tool). */
     suspend fun getAll(): List<Message> = messageDao.getAll().map { it.toDomain() }
+
+    /** Returns every message carrying a media attachment; used by the orphaned MMS-cache sweep. */
+    suspend fun getMessagesWithAttachments(): List<Message> =
+        messageDao.getAllWithAttachments().map { it.toDomain() }
 
     /** Returns all distinct thread IDs in the messages table; used for batched iteration. */
     suspend fun getAllThreadIds(): List<Long> = messageDao.getAllThreadIds()

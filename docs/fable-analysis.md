@@ -43,12 +43,19 @@ Issues independently surfaced by two or more personas — the strongest signal i
 
 Organized like `docs/TODO.md`'s own tiering, so it can be merged directly.
 
-> **Status (July 12 2026, branch `fix/fable-critical`):** the entire 🔴 tier is done —
+> **Status (July 14 2026, branch `fix/fable-critical`):** the entire 🔴 tier is done —
 > including #2, backup format v2 + restore — plus selective export (July 12), and
 > 7 of the 12 🟡 items (#9, #11, #12, #15, #16, #17, #18, #19) as of July 12's
 > second batch. Still open in 🟡: #10 (flowOn — attempted, reverted after an on-device selection regression), #13 (encryption — needs a passphrase-UX decision),
 > #14 (release signing — needs owner-created keystore/secrets), #20 (Play Store
-> workstream — external). See `docs/CHANGELOG.md` 2026-07-11/12 for details.
+> workstream — external).
+>
+> **July 14 batch (🟢/🔵 quality tier):** #21, #24, #26, #27, #29, #33, #34, #35 done
+> (docs reconciliation, light-theme islands, `isDefaultSmsApp()` dedup, dead-code
+> removal, duplicated sample data, reaction-parser relocation, ARCHITECTURE.md regen,
+> orphaned-MMS-cache sweep). All unit tests green (`./gradlew test`). #22 (PostmarkColors)
+> deliberately skipped at owner's request; #24 and #35 touch UI/MMS surfaces that still
+> want on-device verification. See `docs/CHANGELOG.md` 2026-07-14 for details.
 > Known infra issue found along the way: the `FIREBASE_SERVICE_ACCOUNT` repo secret
 > is missing, so every CI distribution since ~July 6 failed at upload — needs a new
 > service-account key set via `gh secret set FIREBASE_SERVICE_ACCOUNT`.
@@ -78,23 +85,23 @@ Organized like `docs/TODO.md`'s own tiering, so it can be merged directly.
 - [ ] 20. Start the Play Store SMS-permissions-declaration and privacy-policy workstream now — its latency is external and currently unaddressed.
 
 ### 🟢 Worth doing (quality, consistency, smaller risk)
-- [ ] 21. Reconcile ROADMAP.md (duplicate Phase 4 section, phases marked "in progress" that are 100% checked off, a "fuzzy containment" checkbox for matching logic that was deliberately removed) against TODO.md/code, or retire ROADMAP.md in favor of TODO.md. *Only the false backup-restore checkbox was corrected July 11; the rest remains.*
+- [x] 21. Reconcile ROADMAP.md (duplicate Phase 4 section, phases marked "in progress" that are 100% checked off, a "fuzzy containment" checkbox for matching logic that was deliberately removed) against TODO.md/code, or retire ROADMAP.md in favor of TODO.md. *Done July 14 — removed the duplicate Phase 4 block, corrected the "fuzzy containment" tier to "exact → normalized → prefix" with a do-not-reintroduce note, replaced the stale backup-restore/`ThreadStatsEntity`/`StatsUpdater` entries with the v2-restore + live-stats reality, and marked the fully-checked Phase 2 as Done. (Kept the file rather than retiring it — that's an owner call.)*
 - [ ] 22. Delete `ui/theme/Theme.kt`'s `PostmarkColors`/`LocalPostmarkColors` system (zero consumers) or actually wire it in — bubbles currently don't use the documented `#378ADD` accent.
 - [x] 23. Delete the orphaned `ExportBottomSheet.kt` (no call sites) or build the "Share as image" export README already advertises. *Deleted July 11.*
-- [ ] 24. Fix light-theme hardcoded-dark islands: heatmap tier-0 tiles, `EmojiReactionPopup` pill, delivery-tick amber contrast (`StatsScreen.kt:329-337`, `ThreadScreen.kt:3337-3339`, `ThreadScreen.kt:1913-1914`).
+- [x] 24. Fix light-theme hardcoded-dark islands: heatmap tier-0 tiles, `EmojiReactionPopup` pill, delivery-tick amber contrast (`StatsScreen.kt:329-337`, `ThreadScreen.kt:3337-3339`, `ThreadScreen.kt:1913-1914`). *Done July 14 — heatmap tier-0 now uses `surfaceVariant` via a `heatmapTierColor()` helper (tile + legend); the reaction pill uses `surfaceContainerHigh`/`outlineVariant`/`onSurfaceVariant`; the sent/delivered ticks pick darker amber/green when the surface is light (luminance-gated). Blue heatmap tiers 1–6 left as-is (read on both themes). Needs on-device visual verification.*
 - [ ] 25. Add a one-time coach mark for swipe-to-reply / long-press-for-reactions / pinch-to-zoom-text — currently zero in-app discovery path for the app's best gestures.
-- [ ] 26. Deduplicate ~~`lookupContactName` (4+ copies)~~ and `isDefaultSmsApp()` (2 copies) into shared extension functions. *`lookupContactName` done July 11 (5 copies → `data/contacts/ContactNameLookup.kt`); `isDefaultSmsApp()` remains.*
-- [ ] 27. Delete dead DAO methods, `StatsAlgorithms.last56DayLabels()`, and the unused `SmsContentObserver.unregister()`; fix `getLatestNonReactionForThread`'s misleading name.
+- [x] 26. Deduplicate ~~`lookupContactName` (4+ copies)~~ and ~~`isDefaultSmsApp()` (2 copies)~~ into shared extension functions. *`lookupContactName` done July 11 (5 copies → `data/contacts/ContactNameLookup.kt`); `isDefaultSmsApp()` done July 14 (3 copies → `util/DefaultSmsApp.kt`, unified on the robust RoleManager-or-package-match semantics; `ConversationsViewModel`/`SettingsScreen`/`ThreadViewModel` now call the shared extension).*
+- [x] 27. Delete dead DAO methods, `StatsAlgorithms.last56DayLabels()`, and the unused `SmsContentObserver.unregister()`; fix `getLatestNonReactionForThread`'s misleading name. *Done July 14 — removed three genuinely-dead `MessageDao` queries (`getLatestForThread` duplicate, `getLatestNForThread`, `getLatestBeforeForThread`) plus their 5 test-fake overrides each; deleted `last56DayLabels()` (unused, DST-broken) and `SmsContentObserver.unregister()` (no callers); renamed the misnamed `getLatestNonReactionForThread` → `getLatestForThread` (identical query, no reaction filter). Re-verified usage against current code rather than the July-10 counts.*
 - [ ] 28. Clean up the ten already-merged local/remote branches; ~~convert CLAUDE.md to UTF-8~~. *CLAUDE.md converted July 11; branch cleanup remains.*
-- [ ] 29. Delete the ~100 lines of duplicated sample data between `ConversationsViewModel` and `DevOptionsViewModel`; move "Load sample data" out of the production empty state.
+- [x] 29. Delete the ~100 lines of duplicated sample data between `ConversationsViewModel` and `DevOptionsViewModel`; move "Load sample data" out of the production empty state. *Done July 14 — deleted `ConversationsViewModel.loadSampleData()` (+ its `msg()` helper, ~115 lines) and removed the "Load sample data" button from the production empty state in `ConversationsScreen`; `DevOptionsViewModel` keeps the single remaining copy behind Dev Options. Orphaned imports cleaned up.*
 - [ ] 30. Resolve the "Postmark" trademark collision with the established Postmark email-delivery service before committing further to branding/icon work.
 
 ### 🔵 Housekeeping
 - [ ] 31. Standardize Toast vs. Snackbar usage (currently 4/4 split for near-identical actions); add haptic feedback (currently zero anywhere in `ui/`).
 - [ ] 32. Extract a `Dimens`/spacing-token object — corner radii alone span 9 distinct values with no evident scale.
-- [ ] 33. Rename/relocate `search/parser/` — it houses the three reaction parsers, which have nothing to do with search.
-- [ ] 34. Regenerate ARCHITECTURE.md's schema section (says v9, actual is v14) and DI table (says 5 DAOs, actual is 6).
-- [ ] 35. Sweep orphaned `mms_attach_*` cache files on message delete / app startup — they currently accrue forever.
+- [x] 33. Rename/relocate `search/parser/` — it houses the three reaction parsers, which have nothing to do with search. *Done July 14 — moved `AndroidReactionParser`/`AppleReactionParser`/`ReactionFallbackParser` (+ their tests) to `data/reaction/` via `git mv`; `search/parser/` now holds only `FtsQueryBuilder`, which genuinely parses search queries.*
+- [x] 34. Regenerate ARCHITECTURE.md's schema section (says v9, actual is v14) and DI table (says 5 DAOs, actual is 6). *Done July 14 — schema now v15; dropped the `thread_stats` table/FK and the `StatsUpdater`/pre-aggregated-stats sections (removed in #9), rewrote Stats as live-compute, DI table now lists the 4 real DAOs, and the Backup section was rewritten for v2 archive + `RestoreWorker` + SAF.*
+- [x] 35. Sweep orphaned `mms_attach_*` cache files on message delete / app startup — they currently accrue forever. *Done July 14 — `deleteMessage()` now deletes the deleted row's own cache files; `ConversationsViewModel.init` runs a one-shot startup sweep that deletes only `mms_attach_*.bin` files no live message references (each sent/pending row points at its own via a FileProvider URI) and only past a 1-hour mtime guard (protects an in-flight send). New `MessageDao.getAllWithAttachments()` backs the referenced-set. **Touches the fragile sent-MMS path — needs on-device verification.***
 
 ### Done outside this list (July 11 2026)
 - [x] Group threads: per-bubble sender labels (`ThreadViewModel.participantNames` + `MessageBubble`) — TODO.md's "per-bubble sender attribution" item.

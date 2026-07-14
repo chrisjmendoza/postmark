@@ -4,6 +4,117 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-14 (feature) — permanent sticky date header in the thread
+
+Reworked the transient floating date pill into a **permanent sticky date header** pinned
+under the top bar (centered). It's always visible while a thread has messages and shows the
+day of the top-of-viewport item, updating live as day separators scroll past the top edge —
+so the current day is always on screen, whether scrolling up into history, back down, or
+jumping via the calendar picker (tapping the header still opens it).
+
+Two parts:
+- **Empty-oval bug fixed first:** `pillDateLabel` started as `""` and was only assigned from
+  `visibleDate` (a `derivedStateOf` over `listState.layoutInfo.visibleItemsInfo`, which is
+  empty on the first frames before layout settles). It now seeds from the newest day's label
+  (`renderState.items[0]`) whenever it would otherwise be empty, so it's never a blank oval.
+- **Made permanent:** the pill's visibility is now `pillDateLabel.isNotEmpty()` instead of
+  scroll-driven. Deleted the now-dead `ThreadFloatingDatePillEffect` (scroll-to-show +
+  1.8 s-idle-hide), the `PILL_HIDE_DELAY_MS` constant, the `pillVisible` state, and the
+  orphaned `collectLatest` import.
+- **Content offset (no overlap):** the header's height is measured via `onGloballyPositioned`
+  and reserved as top padding on the `LazyColumn`, so messages scroll *beneath* the header
+  rather than behind it. Height is derived from layout (not hardcoded), so it adapts to font
+  scale per the repo's no-hardcoded-pixels rule.
+
+`ThreadScreen.kt` only; compiles clean. Compose state — verify on-device.
+
+---
+
+## 2026-07-14 — fable-analysis 🟢/🔵 quality tier: 8 items closed
+
+Worked through the "Worth doing" and "Housekeeping" tiers of `docs/fable-analysis.md`.
+All eight are refactors/cleanups/docs — no behavioral feature changes — and `./gradlew
+test` stays green throughout. #22 (the dead `PostmarkColors` system) was deliberately
+skipped at the owner's request. Two items (#24, #35) touch UI/MMS surfaces that a unit
+test can't exercise and still want on-device verification.
+
+### #27 — Dead code removed; a misleading DAO name fixed
+
+Re-verified usage against the *current* code (the July-10 "five unused methods" count
+predated the stats/restore changes) and removed only what's genuinely dead:
+- Three `MessageDao` queries with no production callers: `getLatestForThread` (a verbatim
+  duplicate of another query), `getLatestNForThread`, and `getLatestBeforeForThread` —
+  plus the matching override in each of the 5 hand-rolled fake DAOs.
+- `StatsAlgorithms.last56DayLabels()` (unused, and DST-broken via fixed-86.4M-ms
+  arithmetic) and `SmsContentObserver.unregister()` (no callers; the observer is torn
+  down with the process).
+- Renamed `getLatestNonReactionForThread` → `getLatestForThread`. The old name implied a
+  reaction filter it never had; its query is identical to the dead duplicate above, so
+  the rename both collapses the duplication and tells the truth.
+
+### #26 — `isDefaultSmsApp()` deduplicated
+
+Three near-identical default-SMS-role checks (`ConversationsViewModel`, `SettingsScreen`,
+`ThreadViewModel`) collapsed into one `Context.isDefaultSmsApp()` extension in a new
+`util/` package. Unified on the most robust of the three semantics — `RoleManager`
+role-held **or** `getDefaultSmsPackage` match — which the `ThreadViewModel` copy already
+used; the other two now inherit that fallback. Orphaned `RoleManager`/`Build` imports
+cleaned up.
+
+### #29 — Duplicated sample data deleted
+
+`ConversationsViewModel.loadSampleData()` (+ its `msg()` helper, ~115 lines) was a verbatim
+twin of `DevOptionsViewModel`'s. Deleted it and removed the "Load sample data" button from
+the production empty state in `ConversationsScreen` — seeding sample data now lives only in
+Dev Options, where it belongs. `DevOptionsViewModel` keeps the single surviving copy.
+
+### #33 — Reaction parsers moved out of `search/parser/`
+
+`AndroidReactionParser`, `AppleReactionParser`, and `ReactionFallbackParser` (and their
+tests) `git mv`'d to `data/reaction/`. They had nothing to do with search. `search/parser/`
+now holds only `FtsQueryBuilder`, which genuinely parses FTS queries.
+
+### #35 — Orphaned outgoing-MMS cache files swept
+
+`mms_attach_<id>.bin` files in `filesDir` (the permanent FileProvider-backed source for a
+sent MMS image) accrued forever. Two-part fix:
+- On message delete, `deleteMessage()` now deletes that message's own cache files (parsed
+  from its attachment URIs; no-op for SMS / received MMS).
+- A one-shot startup sweep in `ConversationsViewModel.init` deletes only `mms_attach_*.bin`
+  files that **no** live message references — every sent/pending row points at its own via
+  a FileProvider URI, so the referenced-set is built from all attachment-bearing messages
+  (new `MessageDao.getAllWithAttachments()`). A 1-hour mtime guard protects a file an
+  in-flight send just wrote but hasn't attached to a row yet.
+
+This touches the fragile sent-MMS pipeline — the reasoning above keeps referenced files
+safe, but it needs on-device verification.
+
+### #24 — Light-theme hardcoded-dark islands
+
+- Heatmap tier-0 (empty) tiles rendered near-black on the light theme's white card (they
+  looked like the *busiest* day). Now resolved through a `heatmapTierColor()` helper that
+  returns `surfaceVariant` for tier 0; the blue tiers 1–6 (which read on both themes) are
+  unchanged. Tile and legend both go through the helper so they stay consistent.
+- The emoji reaction popup pill used near-black literals; now `surfaceContainerHigh` /
+  `outlineVariant` / `onSurfaceVariant`.
+- The sent (amber) / delivered (green) delivery ticks render beside the timestamp on the
+  screen background, so the bright shades failed contrast on light theme. They now pick
+  darker amber/green when the surface luminance is high.
+
+### #34 / #21 — Docs reconciled with reality
+
+- **ARCHITECTURE.md** regenerated: schema v9 → v15; dropped the `thread_stats` table/FK and
+  the `StatsUpdater`/pre-aggregated-stats sections (removed in #9); rewrote Stats as
+  live-compute; DI table now lists the 4 real DAOs; Backup section rewritten for the v2
+  archive + `RestoreWorker` + SAF folder.
+- **ROADMAP.md** reconciled: removed the duplicated Phase 4 block; corrected the "fuzzy
+  containment" matching tier to "exact → normalized → prefix" with a do-not-reintroduce
+  note (it self-matched and was deliberately removed); replaced the stale
+  backup-restore/`ThreadStatsEntity`/`StatsUpdater` entries with the v2-restore + live-stats
+  reality; marked the fully-checked Phase 2 as Done.
+
+---
+
 ## 2026-07-12 (third batch) — thread bubble long-press / selection regression
 
 ### Long-press selection + emoji reaction popup restored

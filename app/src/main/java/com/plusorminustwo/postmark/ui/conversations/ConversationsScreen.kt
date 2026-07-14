@@ -195,9 +195,6 @@ fun ConversationsScreen(
                                 Button(onClick = { viewModel.triggerSync() }) {
                                     Text("Sync messages")
                                 }
-                                OutlinedButton(onClick = { viewModel.loadSampleData() }) {
-                                    Text("Load sample data")
-                                }
                                 syncStatus?.let {
                                     SyncStatusBar(it)
                                 }

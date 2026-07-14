@@ -25,7 +25,7 @@ Build order follows the spec. Each phase depends on the previous.
 
 ---
 
-## Phase 2 — Thread View 🚧 In Progress
+## Phase 2 — Thread View ✅ Done
 
 - [x] `LazyColumn` with `reverseLayout = true`
 - [x] Message bubbles (sent/received, colored by sender)
@@ -66,7 +66,10 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Wire "Back up now" button to `BackupScheduler.runNow()` via injected instance
 - [x] Show backup history list (scan `getExternalFilesDir("backups")`)
 - [x] `WorkManager` status observer — show live "Backup running…" indicator
-- [ ] Backup restore (read JSON, apply to Room with migration version check) — **not built**: `service/backup/` has no read path at all; also requires extending the backup format first, which currently serializes only id/body/timestamp/isSent (no attachments, reactions, isMms, or participants)
+- [x] **Backup format v2** — streamed zip with full thread/message/reaction fidelity + attachment bytes (replaces the lossy id/body/timestamp/isSent-only v1 JSON); manifest carries `version` + reserved `encryption` fields
+- [x] **Backup restore** (`RestoreWorker`) — reads v2 (and legacy v1) archives back into Room; merge-only, fingerprint-deduped, idempotent, restored into a reserved id range excluded from sync watermarks
+- [x] **SAF backup folder** — user-chosen location so backups survive app uninstall
+- [ ] **Backup encryption** — content is still plaintext; needs a passphrase-UX decision (see `docs/TODO.md` #13)
 
 ---
 
@@ -103,21 +106,11 @@ Build order follows the spec. Each phase depends on the previous.
 
 ---
 
-## Phase 4 — Export 🚧 In Progress
-
-- [x] `ExportFormatter.formatForCopy()` — clean labeled transcript per spec
-- [x] `ExportBottomSheet` — Copy + Share buttons
-- [ ] **Rendered image export** — draw conversation to `Canvas`, convert to `Bitmap`, share via `FileProvider` + `ACTION_SEND`
-- [x] Wire selection → `ExportBottomSheet` from `ThreadScreen`
-- [ ] AI Export as distinct format option (same as Copy but labelled separately in sheet)
-
----
-
 ## Phase 5 — Stats ✅ Core done, 🚧 polish remaining
 
 - [x] `StatsScreen` with three-way segmented toggle (Numbers / Charts / Heatmap)
-- [x] Numbers view — global totals from `ThreadStatsEntity`
-- [x] **`StatsUpdater`** — full compute after `SmsHistoryImportWorker`, incremental update from `SmsSyncHandler`; streak, active days, avg response time, emoji counts, by-day-of-week, by-month; comprehensive integration test suite
+- [x] Numbers view — global totals computed live in `StatsViewModel` (no persisted stats table)
+- [x] **Live stats compute** — `StatsAlgorithms.buildThreadStatsData`/`buildGlobalStatsData` derive streak, active days, avg response time, emoji counts, by-day-of-week, by-month directly from `messages`/`reactions`; the earlier write-only `StatsUpdater`/`thread_stats` system was removed in schema v15
 - [x] **Charts view** — monthly bar chart (Jan–Dec) and day-of-week bar chart; month-scoped DOW data derived from `heatmapMessages`
 - [x] **Heatmap view** — month-navigation calendar grid with 7 intensity tiers; day-tap detail panel; multi-day selection; month/thread scoped; summary cards
 - [x] **Per-thread drilldown** — tap thread in Numbers view → same three-style view filtered to that thread; back restores correct origin scope (GLOBAL or PER_THREAD list)
@@ -147,7 +140,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Regex pattern matching for reaction verb + quoted text
 - [x] Verb → emoji mapping from JSON asset
 - [x] Removal phrase detection (`"Removed a heart from '...'"`)
-- [x] Three-tier matching: exact → prefix → fuzzy containment
+- [x] Three-tier matching: exact → normalized → prefix (a `.contains()`/"fuzzy containment" tier was deliberately **removed** — it self-matched the reaction body; do not reintroduce)
 - [x] Stored as `ReactionEntity`, not as a message
 - [x] Run on every incoming message via `SmsSyncHandler`
 - [x] Run on all historical messages during `SmsHistoryImportWorker`
