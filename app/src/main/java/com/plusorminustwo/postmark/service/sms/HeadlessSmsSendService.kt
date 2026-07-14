@@ -6,6 +6,9 @@ import android.os.IBinder
 import android.telephony.SmsMessage
 import android.util.Log
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -52,14 +55,18 @@ class HeadlessSmsSendService : Service() {
             }
 
         // ── Send — use 0 as a placeholder message ID (no optimistic DB insert) ───
-        Log.d(TAG, "Sending headless SMS to $dest (${messages.length} chars)")
-        try {
-            smsManager.sendTextMessage(dest, messages, 0L)
-        } catch (e: Exception) {
-            Log.e(TAG, "Headless send failed: ${e.message}", e)
+        Log.d(TAG, "Sending headless SMS (${messages.length} chars)")
+        // sendTextMessage suspends onto IO; stopSelf only after the send completes so
+        // the OS doesn't reclaim the service mid-send. stopSelf is thread-safe.
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                smsManager.sendTextMessage(dest, messages, 0L)
+            } catch (e: Exception) {
+                Log.e(TAG, "Headless send failed: ${e.message}", e)
+            } finally {
+                stopSelf(startId)
+            }
         }
-
-        stopSelf(startId)
         return START_NOT_STICKY
     }
 

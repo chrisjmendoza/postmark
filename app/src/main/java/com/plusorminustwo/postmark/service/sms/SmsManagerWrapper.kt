@@ -10,6 +10,8 @@ import android.telephony.SmsManager
 import android.util.Log
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -37,8 +39,11 @@ class SmsManagerWrapper @Inject constructor(
      *
      * @param messageId The optimistic Room row ID; used as the request code for
      *   PendingIntents so the receiver can identify which message to update.
+     *
+     * Suspends onto IO internally (same contract as [MmsManagerWrapper.sendMms]):
+     * getOrCreateThreadId and the provider insert are blocking binder/disk calls.
      */
-    fun sendTextMessage(destinationAddress: String, text: String, messageId: Long) {
+    suspend fun sendTextMessage(destinationAddress: String, text: String, messageId: Long) = withContext(Dispatchers.IO) {
         // SmsManager transmits over the radio; as default SMS app we must write the row
         // to content://sms/sent so other apps can see it. We also capture the assigned
         // row ID so SmsSentDeliveryReceiver can update the correct Room row (the optimistic

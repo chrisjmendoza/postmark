@@ -22,6 +22,7 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
+import com.plusorminustwo.postmark.domain.model.RESTORED_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
@@ -40,6 +41,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -246,7 +248,12 @@ class ThreadViewModel @Inject constructor(
             pendingAttachments      = inner.pendingAttachments,
             replyingToId            = inner.replyingToId
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
+    }
+        // NOTE: deliberately NOT .flowOn(Dispatchers.Default). It was added July 12
+        // (fable-analysis #10) and reverted the same day: with it, on-device message
+        // selection stopped responding (mode entered but taps never applied). Root
+        // cause not yet isolated — re-attempt only with on-device verification.
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
     // ── Selection ─────────────────────────────────────────────────────────────
 
@@ -358,19 +365,23 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             val message = messageRepository.getById(messageId) ?: return@launch
             // Negative IDs are optimistic (not-yet-synced) rows — no system row exists yet.
-            if (message.id > 0) {
+            // Restored rows (id >= RESTORED_ID_OFFSET) exist only in Room by construction,
+            // so there is no provider row to delete for them either.
+            if (message.id in 1 until RESTORED_ID_OFFSET) {
                 val uri = if (message.isMms) {
                     Uri.parse("content://mms/${message.id - MMS_ID_OFFSET}")
                 } else {
                     Uri.parse("content://sms/${message.id}")
                 }
-                try {
-                    context.contentResolver.delete(uri, null, null)
-                } catch (_: Exception) {
-                    // System provider delete failed (e.g. race with sync) — still remove
-                    // the local row below so the UI doesn't show a message the user just
-                    // asked to delete; a future resync can't resurrect a row that no
-                    // longer exists in Room even if the system row somehow survived.
+                withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.delete(uri, null, null)
+                    } catch (_: Exception) {
+                        // System provider delete failed (e.g. race with sync) — still remove
+                        // the local row below so the UI doesn't show a message the user just
+                        // asked to delete; a future resync can't resurrect a row that no
+                        // longer exists in Room even if the system row somehow survived.
+                    }
                 }
             }
             messageRepository.deleteById(messageId)
@@ -572,12 +583,14 @@ class ThreadViewModel @Inject constructor(
                 /* Snapshot the max MMS _id before sending so MmsSentReceiver can find
                  * the real content://mms row without relying on the date field format
                  * (seconds vs milliseconds varies by device/OEM). */
-                val beforeSendMaxId = try {
-                    context.contentResolver.query(
-                        android.net.Uri.parse("content://mms"),
-                        arrayOf("_id"), null, null, "_id DESC LIMIT 1"
-                    )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
-                } catch (_: Exception) { 0L }
+                val beforeSendMaxId = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.query(
+                            android.net.Uri.parse("content://mms"),
+                            arrayOf("_id"), null, null, "_id DESC LIMIT 1"
+                        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
+                    } catch (_: Exception) { 0L }
+                }
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
@@ -660,12 +673,14 @@ class ThreadViewModel @Inject constructor(
                  * has already been consumed) then re-invoke MmsManagerWrapper with the
                  * same attachments. */
                 val reqCode = (messageId and 0x3FFF_FFFFL).toInt()
-                val beforeSendMaxId = try {
-                    context.contentResolver.query(
-                        android.net.Uri.parse("content://mms"),
-                        arrayOf("_id"), null, null, "_id DESC LIMIT 1"
-                    )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
-                } catch (_: Exception) { 0L }
+                val beforeSendMaxId = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.query(
+                            android.net.Uri.parse("content://mms"),
+                            arrayOf("_id"), null, null, "_id DESC LIMIT 1"
+                        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
+                    } catch (_: Exception) { 0L }
+                }
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
