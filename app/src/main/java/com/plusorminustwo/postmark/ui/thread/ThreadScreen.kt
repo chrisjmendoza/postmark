@@ -49,7 +49,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.foundation.text.ClickableText
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -72,6 +73,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
+import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -661,8 +663,9 @@ private fun ThreadContent(
                     onCopy = {
                         val text = ExportFormatter.formatForCopy(
                             uiState.messages.filter { it.id in uiState.selectedMessageIds },
-                            uiState.thread?.displayName ?: "",
-                            ""
+                            uiState.thread?.let { t -> t.nickname ?: t.displayName } ?: "",
+                            "",
+                            uiState.thread?.address ?: ""
                         )
                         val cb = context.getSystemService(ClipboardManager::class.java)
                         cb.setPrimaryClip(ClipData.newPlainText("Postmark export", text))
@@ -982,49 +985,8 @@ private fun SelectionTopBar(
     }
 }
 
-// ── DateRangeBottomSheet ──────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DateRangeBottomSheet(
-    onSelect: (LocalDate, LocalDate) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val pickerState = rememberDateRangePickerState()
-    val sheetState  = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
-        DateRangePicker(
-            state    = pickerState,
-            headline = null,
-            showModeToggle = false,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(480.dp)
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
-        ) {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-            Button(
-                onClick = {
-                    val startMs = pickerState.selectedStartDateMillis ?: return@Button
-                    val endMs   = pickerState.selectedEndDateMillis   ?: return@Button
-                    val start = Instant.ofEpochMilli(startMs).atZone(ZoneOffset.UTC).toLocalDate()
-                    val end   = Instant.ofEpochMilli(endMs).atZone(ZoneOffset.UTC).toLocalDate()
-                    onSelect(start, end)
-                },
-                enabled = pickerState.selectedStartDateMillis != null &&
-                          pickerState.selectedEndDateMillis   != null
-            ) { Text("Select") }
-        }
-    }
-}
+// DateRangeBottomSheet moved to ui/components/DateRangeSheet.kt — shared with the
+// backup Export screen.
 
 // ── ScrollToLatestButton ─────────────────────────────────────────────────────────
 
@@ -1325,25 +1287,16 @@ private fun MessageBubble(
                             val textColor   = LocalContentColor.current
                             val baseStyle   = MaterialTheme.typography.bodyMedium
                             val ctx         = LocalContext.current
-                            val annotated   = remember(message.body, linkColor) {
-                                linkifyText(message.body, linkColor)
+                            val annotated   = remember(message.body, linkColor, ctx) {
+                                linkifyText(message.body, linkColor, ctx)
                             }
-                            ClickableText(
+                            Text(
                                 text = annotated,
                                 style = baseStyle.copy(
                                     fontSize = baseStyle.fontSize * fontScale,
                                     color = textColor
                                 ),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                onClick = { offset ->
-                                    annotated.getStringAnnotations("URL", offset, offset)
-                                        .firstOrNull()?.let {
-                                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it.item)))
-                                        } ?: annotated.getStringAnnotations("PHONE", offset, offset)
-                                        .firstOrNull()?.let {
-                                            ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${it.item}")))
-                                        }
-                                }
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )
                         }
                     }
@@ -1361,24 +1314,15 @@ private fun MessageBubble(
                     val textColor  = LocalContentColor.current
                     val baseStyle  = MaterialTheme.typography.bodyMedium
                     val ctx        = LocalContext.current
-                    val annotated  = remember(message.body, linkColor) {
-                        linkifyText(message.body, linkColor)
+                    val annotated  = remember(message.body, linkColor, ctx) {
+                        linkifyText(message.body, linkColor, ctx)
                     }
-                    ClickableText(
+                    Text(
                         text = annotated,
                         style = baseStyle.copy(
                             fontSize = baseStyle.fontSize * fontScale,
                             color = textColor
-                        ),
-                        onClick = { offset ->
-                            annotated.getStringAnnotations("URL", offset, offset)
-                                .firstOrNull()?.let {
-                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it.item)))
-                                } ?: annotated.getStringAnnotations("PHONE", offset, offset)
-                                .firstOrNull()?.let {
-                                    ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${it.item}")))
-                                }
-                        }
+                        )
                     )
                 }
             }
@@ -2514,7 +2458,18 @@ private fun smsCounter(length: Int): String? {
  * @param text      Raw message body.
  * @param linkColor Colour applied to detected links; pass [MaterialTheme.colorScheme.primary].
  */
-private fun linkifyText(text: String, linkColor: androidx.compose.ui.graphics.Color): androidx.compose.ui.text.AnnotatedString {
+private fun linkifyText(
+    text: String,
+    linkColor: androidx.compose.ui.graphics.Color,
+    context: android.content.Context,
+): androidx.compose.ui.text.AnnotatedString {
+    // Links are attached with addLink(LinkAnnotation, …) rather than a plain string
+    // annotation + onClick. This is what lets the surrounding Text stay a normal Text:
+    // link ranges claim only taps that land on them, so long-press and taps on the rest
+    // of the bubble still reach the parent combinedClickable (selection / emoji popup).
+    val linkStyles = TextLinkStyles(
+        style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+    )
     return buildAnnotatedString {
         append(text)
 
@@ -2525,11 +2480,10 @@ private fun linkifyText(text: String, linkColor: androidx.compose.ui.graphics.Co
             val start = urlMatcher.start()
             val end   = urlMatcher.end()
             urlRanges += start until end
-            addStyle(
-                SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
-                start = start, end = end
-            )
-            addStringAnnotation("URL", annotation = urlMatcher.group(), start = start, end = end)
+            // WEB_URL matches schemeless hosts (e.g. "example.com"); ACTION_VIEW needs a scheme.
+            val raw = urlMatcher.group()
+            val url = if (raw.startsWith("http", ignoreCase = true)) raw else "http://$raw"
+            addLink(LinkAnnotation.Url(url, linkStyles), start, end)
         }
 
         // ── Phone numbers ─────────────────────────────────────────────────────
@@ -2539,11 +2493,13 @@ private fun linkifyText(text: String, linkColor: androidx.compose.ui.graphics.Co
             val end   = phoneMatcher.end()
             // Skip phone matches that overlap a URL match (e.g. number in a URL path).
             if (urlRanges.any { start < it.last && end > it.first }) continue
-            addStyle(
-                SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
-                start = start, end = end
+            val number = phoneMatcher.group()
+            addLink(
+                LinkAnnotation.Clickable("PHONE", linkStyles) {
+                    context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")))
+                },
+                start, end
             )
-            addStringAnnotation("PHONE", annotation = phoneMatcher.group(), start = start, end = end)
         }
     }
 }
