@@ -10,13 +10,15 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Migration tests for PostmarkDatabase.
+ * Migration tests for PostmarkDatabase — every migration in the chain has at least one
+ * test, plus a full 1→15 chain test. Schemas 1.json–3.json were regenerated July 2026
+ * by building the historical commits at those versions, so `helper.createDatabase(n)`
+ * works for every version.
  *
- * MIGRATION_1_2: uses full MigrationTestHelper schema validation (1.json + 2.json both exist).
- * MIGRATION_2_3: applies migration SQL directly to a v2 SupportSQLiteDatabase and verifies
- *   the new column, because 3.json is generated only after the first successful KSP build
- *   at version 3 — run `./gradlew assembleDebug` once to produce it, then
- *   runMigrationsAndValidate can replace the direct-SQL approach below.
+ * Most tests use the direct-migrate pattern (createDatabase(n) → seed → migrate() →
+ * query) rather than runMigrationsAndValidate: the migrations add columns with SQL
+ * DEFAULT clauses that the entities deliberately don't declare via @ColumnInfo, and
+ * strict schema validation flags that mismatch even though it is harmless at runtime.
  */
 @RunWith(AndroidJUnit4::class)
 class DatabaseMigrationTest {
@@ -31,43 +33,46 @@ class DatabaseMigrationTest {
 
     @Test
     fun migration1To2_addsLastMessagePreviewWithEmptyDefault() {
-        helper.createDatabase("test_m12a", 1).apply {
+        val db = helper.createDatabase("test_m12a", 1)
+        db.apply {
             execSQL(
                 "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
                 " VALUES (1, 'Alice', '+1555', 1000000, 'GLOBAL')"
             )
-            close()
         }
 
-        val db = helper.runMigrationsAndValidate("test_m12a", 2, true, PostmarkDatabase.MIGRATION_1_2)
+        PostmarkDatabase.MIGRATION_1_2.migrate(db)
         db.query("SELECT lastMessagePreview FROM threads WHERE id = 1").use { c ->
             assertTrue(c.moveToFirst())
             assertEquals("", c.getString(0))
         }
+        db.close()
     }
 
     @Test
     fun migration1To2_preservesExistingThreadData() {
-        helper.createDatabase("test_m12b", 1).apply {
+        val db = helper.createDatabase("test_m12b", 1)
+        db.apply {
             execSQL(
                 "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
                 " VALUES (1, 'Bob', '+1999', 2000000, 'GLOBAL')"
             )
-            close()
         }
 
-        val db = helper.runMigrationsAndValidate("test_m12b", 2, true, PostmarkDatabase.MIGRATION_1_2)
+        PostmarkDatabase.MIGRATION_1_2.migrate(db)
         db.query("SELECT displayName, address, lastMessageAt FROM threads WHERE id = 1").use { c ->
             assertTrue(c.moveToFirst())
             assertEquals("Bob", c.getString(0))
             assertEquals("+1999", c.getString(1))
             assertEquals(2_000_000L, c.getLong(2))
         }
+        db.close()
     }
 
     @Test
     fun migration1To2_preservesExistingMessages() {
-        helper.createDatabase("test_m12c", 1).apply {
+        val db = helper.createDatabase("test_m12c", 1)
+        db.apply {
             execSQL(
                 "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
                 " VALUES (1, 'Alice', '+1', 1000000, 'GLOBAL')"
@@ -76,22 +81,19 @@ class DatabaseMigrationTest {
                 "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type)" +
                 " VALUES (42, 1, '+1', 'hello migration', 1000000, 1, 2)"
             )
-            close()
         }
 
-        val db = helper.runMigrationsAndValidate("test_m12c", 2, true, PostmarkDatabase.MIGRATION_1_2)
+        PostmarkDatabase.MIGRATION_1_2.migrate(db)
         db.query("SELECT body FROM messages WHERE id = 42").use { c ->
             assertTrue(c.moveToFirst())
             assertEquals("hello migration", c.getString(0))
         }
+        db.close()
     }
 
     // ── MIGRATION 2 → 3 ───────────────────────────────────────────────────
-    // Applies migration SQL to a raw SupportSQLiteDatabase at v2 and verifies
-    // the deliveryStatus column appears with default value 0.
-    // Once 3.json is generated (after `./gradlew assembleDebug`), replace
-    // PostmarkDatabase.MIGRATION_2_3.migrate(db2) with:
-    //   helper.runMigrationsAndValidate("test_m23x", 3, true, PostmarkDatabase.MIGRATION_2_3)
+    // Applies migration SQL to a v2 SupportSQLiteDatabase and verifies the
+    // deliveryStatus column appears with default value 0.
 
     @Test
     fun migration2To3_addsDeliveryStatusColumnWithDefaultZero() {
@@ -213,13 +215,16 @@ class DatabaseMigrationTest {
     @Test
     fun migration11To12_addsNullAttachmentsJsonAndPreservesSingularColumns() {
         val db11 = helper.createDatabase("test_m1112a", 11)
+        // Room-created tables carry no SQL defaults, so every NOT NULL column at v11
+        // must be supplied explicitly (isMuted/isPinned/notificationsEnabled on threads;
+        // deliveryStatus/isRead on messages).
         db11.execSQL(
-            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
-            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
         )
         db11.execSQL(
-            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, isMms, attachmentUri, mimeType)" +
-            " VALUES (7, 1, '+1', '', 1000000, 0, 1, 1, 'content://mms/part/99', 'image/jpeg')"
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead, attachmentUri, mimeType)" +
+            " VALUES (7, 1, '+1', '', 1000000, 0, 1, 0, 1, 1, 'content://mms/part/99', 'image/jpeg')"
         )
 
         PostmarkDatabase.MIGRATION_11_12.migrate(db11)
@@ -238,16 +243,16 @@ class DatabaseMigrationTest {
     fun migration11To12_acceptsAttachmentsJsonWrites() {
         val db11 = helper.createDatabase("test_m1112b", 11)
         db11.execSQL(
-            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
-            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
         )
 
         PostmarkDatabase.MIGRATION_11_12.migrate(db11)
 
         val json = """[{"uri":"content://mms/part/1","mimeType":"image/jpeg"},{"uri":"content://mms/part/2","mimeType":"video/mp4"}]"""
         db11.execSQL(
-            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, isMms, attachmentUri, mimeType, attachmentsJson)" +
-            " VALUES (8, 1, '+1', '', 2000000, 0, 1, 1, 'content://mms/part/1', 'image/jpeg', '$json')"
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead, attachmentUri, mimeType, attachmentsJson)" +
+            " VALUES (8, 1, '+1', '', 2000000, 0, 1, 0, 1, 1, 'content://mms/part/1', 'image/jpeg', '$json')"
         )
         db11.query("SELECT attachmentsJson FROM messages WHERE id = 8").use { c ->
             assertTrue(c.moveToFirst())
@@ -276,5 +281,266 @@ class DatabaseMigrationTest {
             assertEquals("[]", c.getString(0))
         }
         db4.close()
+    }
+
+    // ── MIGRATIONS 3→4 through 13→14 ──────────────────────────────────────
+    // Direct-migrate pattern (same as 2→3 / 4→5): create the versioned schema from
+    // its committed JSON, seed rows naming every NOT NULL column at that version
+    // (Room-created tables carry no SQL defaults), apply the migration, verify the
+    // new column's default and that existing data survived.
+
+    @Test
+    fun migration3To4_createsGlobalStatsTable() {
+        val db3 = helper.createDatabase("test_m34", 3)
+
+        PostmarkDatabase.MIGRATION_3_4.migrate(db3)
+
+        db3.query("SELECT name FROM sqlite_master WHERE type='table' AND name='global_stats'").use { c ->
+            assertTrue(c.moveToFirst())
+        }
+        // Single-row table is writable with just the id — every column has a default.
+        db3.execSQL("INSERT INTO global_stats (id) VALUES (1)")
+        db3.query("SELECT totalMessages FROM global_stats WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+        }
+        db3.close()
+    }
+
+    @Test
+    fun migration5To6_addsIsPinnedWithDefaultFalse() {
+        val db5 = helper.createDatabase("test_m56", 5)
+        db5.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 1)"
+        )
+
+        PostmarkDatabase.MIGRATION_5_6.migrate(db5)
+
+        db5.query("SELECT isPinned, isMuted FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+            assertEquals(1, c.getInt(1))
+        }
+        db5.close()
+    }
+
+    @Test
+    fun migration6To7_addsIsMmsWithDefaultFalse() {
+        val db6 = helper.createDatabase("test_m67", 6)
+        db6.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0)"
+        )
+        db6.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus)" +
+            " VALUES (5, 1, '+1', 'plain sms', 1000000, 1, 2, 0)"
+        )
+
+        PostmarkDatabase.MIGRATION_6_7.migrate(db6)
+
+        db6.query("SELECT isMms, body FROM messages WHERE id = 5").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+            assertEquals("plain sms", c.getString(1))
+        }
+        db6.close()
+    }
+
+    @Test
+    fun migration7To8_addsNotificationsEnabledWithDefaultTrue() {
+        val db7 = helper.createDatabase("test_m78", 7)
+        db7.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0)"
+        )
+
+        PostmarkDatabase.MIGRATION_7_8.migrate(db7)
+
+        db7.query("SELECT notificationsEnabled FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1, c.getInt(0))
+        }
+        db7.close()
+    }
+
+    @Test
+    fun migration8To9_addsNullableAttachmentColumns() {
+        val db8 = helper.createDatabase("test_m89", 8)
+        db8.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
+        )
+        db8.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms)" +
+            " VALUES (5, 1, '+1', 'sms', 1000000, 1, 2, 0, 0)"
+        )
+
+        PostmarkDatabase.MIGRATION_8_9.migrate(db8)
+
+        db8.query("SELECT attachmentUri, mimeType FROM messages WHERE id = 5").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+            assertTrue(c.isNull(1))
+        }
+        db8.close()
+    }
+
+    @Test
+    fun migration9To10_addsIsReadWithDefaultTrue() {
+        val db9 = helper.createDatabase("test_m910", 9)
+        db9.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
+        )
+        db9.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms)" +
+            " VALUES (5, 1, '+1', 'sms', 1000000, 0, 1, 0, 0)"
+        )
+
+        PostmarkDatabase.MIGRATION_9_10.migrate(db9)
+
+        // Existing synced rows are treated as already read — no unread-badge flood.
+        db9.query("SELECT isRead FROM messages WHERE id = 5").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1, c.getInt(0))
+        }
+        db9.close()
+    }
+
+    @Test
+    fun migration10To11_addsNullableNickname() {
+        val db10 = helper.createDatabase("test_m1011", 10)
+        db10.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
+        )
+
+        PostmarkDatabase.MIGRATION_10_11.migrate(db10)
+
+        db10.query("SELECT nickname FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+        }
+        db10.execSQL("UPDATE threads SET nickname = 'Ally' WHERE id = 1")
+        db10.query("SELECT nickname FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Ally", c.getString(0))
+        }
+        db10.close()
+    }
+
+    @Test
+    fun migration12To13_addsNullableParticipantsJson() {
+        val db12 = helper.createDatabase("test_m1213", 12)
+        db12.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Group', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
+        )
+
+        PostmarkDatabase.MIGRATION_12_13.migrate(db12)
+
+        // Ordinary 1:1 threads keep NULL; only group MMS sync populates the roster.
+        db12.query("SELECT participantsJson FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+        }
+        db12.close()
+    }
+
+    @Test
+    fun migration13To14_addsIsStarredWithDefaultFalse() {
+        val db13 = helper.createDatabase("test_m1314", 13)
+        db13.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
+        )
+        db13.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead)" +
+            " VALUES (5, 1, '+1', 'sms', 1000000, 0, 1, 0, 0, 1)"
+        )
+
+        PostmarkDatabase.MIGRATION_13_14.migrate(db13)
+
+        db13.query("SELECT isStarred FROM messages WHERE id = 5").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+        }
+        db13.close()
+    }
+
+    // ── Full chain 1 → 15 ─────────────────────────────────────────────────
+
+    @Test
+    fun fullMigrationChain_v1DataSurvivesToV15() {
+        val db = helper.createDatabase("test_chain", 1)
+        db.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
+            " VALUES (1, 'Alice', '+1555', 1000000, 'GLOBAL')"
+        )
+        db.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type)" +
+            " VALUES (42, 1, '+1555', 'oldest message', 1000000, 1, 2)"
+        )
+
+        listOf(
+            PostmarkDatabase.MIGRATION_1_2, PostmarkDatabase.MIGRATION_2_3,
+            PostmarkDatabase.MIGRATION_3_4, PostmarkDatabase.MIGRATION_4_5,
+            PostmarkDatabase.MIGRATION_5_6, PostmarkDatabase.MIGRATION_6_7,
+            PostmarkDatabase.MIGRATION_7_8, PostmarkDatabase.MIGRATION_8_9,
+            PostmarkDatabase.MIGRATION_9_10, PostmarkDatabase.MIGRATION_10_11,
+            PostmarkDatabase.MIGRATION_11_12, PostmarkDatabase.MIGRATION_12_13,
+            PostmarkDatabase.MIGRATION_13_14, PostmarkDatabase.MIGRATION_14_15
+        ).forEach { it.migrate(db) }
+
+        db.query(
+            "SELECT m.body, m.deliveryStatus, m.isMms, m.isRead, m.isStarred, t.isPinned, t.notificationsEnabled" +
+            " FROM messages m JOIN threads t ON t.id = m.threadId WHERE m.id = 42"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("oldest message", c.getString(0))
+            assertEquals(0, c.getInt(1))  // deliveryStatus NONE
+            assertEquals(0, c.getInt(2))  // not MMS
+            assertEquals(1, c.getInt(3))  // read
+            assertEquals(0, c.getInt(4))  // not starred
+            assertEquals(0, c.getInt(5))  // not pinned
+            assertEquals(1, c.getInt(6))  // notifications on
+        }
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_stats','global_stats')").use { c ->
+            assertFalse(c.moveToFirst())
+        }
+        db.close()
+    }
+
+    // ── MIGRATION 14 → 15 ─────────────────────────────────────────────────
+
+    @Test
+    fun migration14To15_dropsStatsTablesAndPreservesUserData() {
+        helper.createDatabase("test_m1415", 14).apply {
+            execSQL(
+                "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
+                " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+            )
+            execSQL(
+                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type)" +
+                " VALUES (42, 1, '+1', 'survives the drop', 1000000, 1, 2)"
+            )
+            execSQL(
+                "INSERT INTO thread_stats (threadId, totalMessages, sentCount, receivedCount, firstMessageAt, " +
+                "lastMessageAt, activeDayCount, longestStreakDays, avgResponseTimeMs, topEmojisJson, " +
+                "topReactionEmojisJson, byDayOfWeekJson, byMonthJson, lastUpdatedAt)" +
+                " VALUES (1, 5, 2, 3, 0, 1000000, 1, 1, 0, '[]', '[]', '{}', '{}', 0)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate("test_m1415", 15, true, PostmarkDatabase.MIGRATION_14_15)
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_stats','global_stats')").use { c ->
+            assertFalse(c.moveToFirst())
+        }
+        db.query("SELECT body FROM messages WHERE id = 42").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("survives the drop", c.getString(0))
+        }
     }
 }
