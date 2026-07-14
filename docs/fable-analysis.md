@@ -43,17 +43,19 @@ Issues independently surfaced by two or more personas — the strongest signal i
 
 Organized like `docs/TODO.md`'s own tiering, so it can be merged directly.
 
-> **Status (July 11 2026, branch `fix/fable-critical`):** the entire 🔴 tier is done
-> (except restore itself — the false ROADMAP claim was corrected instead), plus #16,
-> #23, #26 (lookupContactName half), #28 (CLAUDE.md half), and TODO.md's group
-> per-bubble sender attribution. See `docs/CHANGELOG.md` 2026-07-11 for details.
+> **Status (July 12 2026, branch `fix/fable-critical`):** the entire 🔴 tier is done —
+> including #2, backup format v2 + restore — plus selective export (July 12), and
+> 7 of the 12 🟡 items (#9, #11, #12, #15, #16, #17, #18, #19) as of July 12's
+> second batch. Still open in 🟡: #10 (flowOn — attempted, reverted after an on-device selection regression), #13 (encryption — needs a passphrase-UX decision),
+> #14 (release signing — needs owner-created keystore/secrets), #20 (Play Store
+> workstream — external). See `docs/CHANGELOG.md` 2026-07-11/12 for details.
 > Known infra issue found along the way: the `FIREBASE_SERVICE_ACCOUNT` repo secret
 > is missing, so every CI distribution since ~July 6 failed at upload — needs a new
 > service-account key set via `gh secret set FIREBASE_SERVICE_ACCOUNT`.
 
 ### 🔴 Fix before anything else (data loss / silent safety failure / ships-broken risk)
 - [x] 1. Wire `BackupScheduler.schedule()` into app startup/settings-change so "Automatic backups" isn't decorative (`service/backup/BackupScheduler.kt`, `ui/settings/BackupSettingsViewModel.kt`). *Done — `syncWithPrefs()` called from settings changes + `PostmarkApplication.onCreate`.*
-- [ ] 2. Build backup restore, or ~~remove the ROADMAP claim that it exists~~ — currently `service/backup/` has no read path at all. *ROADMAP claim corrected; restore itself still unbuilt and requires extending the lossy backup format first (only id/body/timestamp/isSent today).*
+- [x] 2. Build backup restore, or ~~remove the ROADMAP claim that it exists~~ — currently `service/backup/` has no read path at all. *Done July 11 (second batch) — backup format v2 (streamed zip: full thread/message/reaction fidelity + attachment bytes) and `RestoreWorker` (merge-only, fingerprint-deduped, idempotent; Room-only with a reserved id range excluded from sync watermarks). Includes SAF backup folder so backups survive uninstall (#13's encryption remains open; the v2 manifest carries an `encryption` field so adding it won't need a format break). Needs on-device verification.*
 - [x] 3. Fix `pruneOldBackups()` running *before* the new backup is written (`BackupWorker.kt:73-107`) — retention=1 can zero out all backups on a failed write. *Done — write first, prune after; retention invariant pinned in `BackupSchedulerLogicTest`.*
 - [x] 4. Either implement "Block number" or remove/disable the menu item with honest copy (`ThreadScreen.kt:697-700`). *Done — implemented for real via `BlockedNumberContract` with confirm dialog + Snackbar result; hidden for group threads. Needs on-device verification.*
 - [x] 5. Fix the notification reply/mark-as-read address bug — thread `rawSender`, not `displayName`, into `EXTRA_ADDRESS`. *Done; notification ID now keyed on address; `DirectReplyReceiver` also got `goAsync()` + IO.*
@@ -62,17 +64,17 @@ Organized like `docs/TODO.md`'s own tiering, so it can be merged directly.
 - [x] 8. Give the failed-send delivery indicator a real `contentDescription` and a ≥48dp retry target (`ThreadScreen.kt:1906-1927`). *Done — descriptions for all four states; `minimumInteractiveComponentSize()` on the failed/retry state.*
 
 ### 🟡 Fix soon (correctness/perf/trust risk, not yet catastrophic)
-- [ ] 9. Resolve the stats split-brain: `StatsViewModel` computes live from the full messages table while `StatsUpdater` separately maintains pre-aggregated tables nothing reads — pick one system (root cause of the 150k-message heatmap slowness in TODO.md).
-- [ ] 10. Add `.flowOn(Dispatchers.Default)` to `ThreadViewModel`'s render-state combine — it currently runs on Main despite a comment claiming otherwise.
-- [ ] 11. Move blocking ContentResolver/telephony calls off Main in `SmsManagerWrapper.sendTextMessage()`, `ThreadViewModel.deleteMessage()/retrySend()`~~, and give `DirectReplyReceiver` a `goAsync()`~~. *`DirectReplyReceiver` part done July 11; the rest remains.*
-- [ ] 12. Add the missing Room migration tests (9 of 13 untested) and commit the missing `app/schemas/1.json`–`3.json` so `DatabaseMigrationTest` can actually run.
-- [ ] 13. Encrypt or relocate backup JSON — currently plaintext on USB-accessible external storage (`BackupWorker.kt:73-79`).
+- [x] 9. Resolve the stats split-brain: ~~pick one system~~. *Done July 12 — the persisted system was write-only, so it was deleted outright: StatsUpdater, both stats entities/DAOs, and the O(N) `recomputeAll()` on every sync/import/restore. Schema v15 drops the tables. Stats screen unchanged (it always computed live). The TIER-2 heatmap perf item remains and never needed these tables.*
+- [ ] 10. Add `.flowOn(Dispatchers.Default)` to `ThreadViewModel`'s render-state combine. *Attempted July 12 and REVERTED the same day: with it in place, on-device message selection stopped responding (selection mode entered, but bubble taps never applied). Root cause not isolated — re-attempt only with on-device verification, and treat this as evidence the combine has a hidden main-thread coupling.*
+- [x] 11. Move blocking ContentResolver/telephony calls off Main. *Done — `DirectReplyReceiver` July 11; July 12: `sendTextMessage()` is now suspend-on-IO (fixes all callers), `deleteMessage()`'s provider delete and both `beforeSendMaxId` queries moved to IO, `HeadlessSmsSendService` got a coroutine.*
+- [x] 12. Add the missing Room migration tests and commit `app/schemas/1.json`–`3.json`. *Done July 12 — schemas regenerated by building the historical v1–v3 commits; tests added for all 9 untested migrations plus 14→15 and a full 1→15 chain; latent NOT-NULL insert bugs in the 11→12 tests fixed. Instrumented — still needs a `connectedAndroidTest` run on a device.*
+- [ ] 13. Encrypt or relocate backup JSON — currently plaintext on USB-accessible external storage (`BackupWorker.kt:73-79`). *Partially mitigated July 11: backups are now zip archives, optionally written to a user-chosen SAF folder, and the v2 manifest reserves an `encryption` field — but content is still plaintext; encryption itself remains open. *Design note (July 12): Keystore-bound keys would make backups unreadable after uninstall/on a new device — defeating restore's whole purpose — so this needs passphrase-derived encryption (user sets a passphrase; forgotten passphrase = unrecoverable backup), which is a UX decision for the owner.*
 - [ ] 14. Ship a release-signed build to testers instead of a debuggable debug-keystore APK, or accept the extraction risk explicitly (`distribute.yml` + `build.gradle.kts:53-63`).
-- [ ] 15. Fix `ContactDetailScreen`'s full-screen image viewer, which isn't actually full-screen — the fix already applied to `ThreadScreen`'s viewer was never ported (`ContactDetailScreen.kt:540`).
+- [x] 15. Fix `ContactDetailScreen`'s full-screen image viewer. *Done July 12 — full edge-to-edge fix ported (DialogProperties + decorFitsSystemWindows + inset-padded close button).*
 - [x] 16. Add a "no results" state to Search (`SearchScreen.kt:142-162`). *Done July 11 — distinct messages for zero-hit query vs. zero-hit filters.*
-- [ ] 17. Add a confirmation or undo grace period to Forward — it currently sends immediately on row tap (`ForwardPickerScreen.kt:135,151`).
-- [ ] 18. Redact phone numbers/contact names from `SyncLogger`'s Logcat mirror and shareable log file, and gate the Logcat mirror to debug builds (`SyncLogger.kt`, `SmsReceiver.kt:67,102`).
-- [ ] 19. Update README's "Known Limitations" and "Currently in progress" sections — both describe a months-old state of the app and could actively mislead a contributor.
+- [x] 17. Add a confirmation to Forward. *Done July 12 — confirm dialog in front of all four send entry points (thread row, contact row, keyboard Go, send icon).*
+- [x] 18. Redact phone numbers/contact names from `SyncLogger` and gate the Logcat mirror to debug builds. *Done July 12 — `redactPhone()` at every address-logging call site, display names and quoted bodies dropped from log lines, mirror is BuildConfig.DEBUG-only.*
+- [x] 19. Update README's "Known Limitations" and "Currently in progress" sections. *Done July 12 — plus FTS5→FTS4, the dead "Share as image" claim, the stale backup section, and the package tree.*
 - [ ] 20. Start the Play Store SMS-permissions-declaration and privacy-policy workstream now — its latency is external and currently unaddressed.
 
 ### 🟢 Worth doing (quality, consistency, smaller risk)

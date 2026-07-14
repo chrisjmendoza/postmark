@@ -4,6 +4,362 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-12 (third batch) — thread bubble long-press / selection regression
+
+### Long-press selection + emoji reaction popup restored
+
+Long-pressing a text message stopped selecting it or opening the emoji reaction
+popup, and tapping messages after "Select messages" no longer toggled selection.
+Root cause: the auto-linkify commit (`16ce390`) swapped the bubble body from a plain
+`Text` to `ClickableText`, which installs its own gesture detector over the whole
+message body. Because a child that claims a pointer event wins over its parent, that
+detector swallowed taps **and** long-presses before they could reach the bubble's
+parent `combinedClickable` — the modifier that actually drives selection and the
+reaction popup. The text fills nearly the whole bubble, so almost every touch hit
+`ClickableText` first.
+
+Fix: reverted to a plain `Text` and moved link handling into the `AnnotatedString`
+itself via the modern `LinkAnnotation` API (the intended replacement for the now-
+deprecated `ClickableText`). `linkifyText` now attaches links with
+`addLink(LinkAnnotation.Url(…))` for URLs and `addLink(LinkAnnotation.Clickable(…))`
+for phone numbers. Link ranges claim only taps that land on them, so long-press and
+taps on the rest of the bubble fall through to the parent — selection and the popup
+work again, while tapping a real URL/phone still opens the browser/dialer. Deleted
+the two `onClick`/`getStringAnnotations` handler blocks (net simplification) and added
+an `http://` scheme fallback so schemeless URLs like `example.com` actually open.
+`ThreadScreen.kt` only; `./gradlew test` green. Gesture behavior isn't unit-testable —
+verify on-device.
+
+---
+
+## 2026-07-12 (second batch) — fable-analysis 🟡 tier: 8 of 12 items closed
+
+Worked through `docs/fable-analysis.md`'s "Fix soon" tier. `./gradlew test`: 545
+passing (+9); `assembleDebug` + `compileDebugAndroidTestKotlin` clean.
+
+### #9 — Stats split-brain resolved by deletion
+
+The pre-aggregated stats system (`StatsUpdater`, `ThreadStatsEntity`/`GlobalStatsEntity`,
+their DAOs) was **write-only**: `recomputeAll()` did a full-table scan on every
+incremental sync, first-import, and restore to maintain tables with zero readers —
+`StatsViewModel` has always computed live from the messages table. Per CLAUDE.md
+(prefer deletion; no parallel data structures), the persisted system is gone:
+6 production files deleted, schema v15 (`MIGRATION_14_15` drops `thread_stats`/
+`global_stats` — derived caches, not user data), and every sync/restore no longer
+pays an O(N) recompute tax. Dev Options lost its now-meaningless "Recalculate stats"
+row; the Stats screen behavior is unchanged (it never read the tables). The TIER-2
+heatmap-performance item stands on its own — its fix (month-window query + index)
+never needed these tables.
+
+### #12 — Migration test debt cleared (needs a device run)
+
+Schemas `1.json`–`3.json` were never committed, so six existing migration tests threw
+FileNotFoundException. Regenerated all three by building the historical commits at
+those schema versions in a git worktree (`6bcfb3c`, its parent, and `7ed808b~1`).
+Added tests for all 9 previously-untested migrations (3→4 through 13→14), a 14→15
+test, and a full 1→15 chain test. Also fixed latent failures in the existing 11→12
+tests (INSERTs omitted NOT-NULL columns — Room-created tables carry no SQL defaults)
+and converted the 1→2 tests off `runMigrationsAndValidate` (the migrations' DEFAULT
+clauses aren't declared as `@ColumnInfo(defaultValue=)`, which strict validation
+flags). These are instrumented tests — they compile but need `connectedAndroidTest`
+on a device to execute.
+
+### #18 — Sync log no longer leaks PII
+
+New pure `String.redactPhone()` (`domain/logging/`, 8 tests): numbers → "…1234",
+emails → "…@domain", 5–6-digit short codes pass through (they identify services,
+and masking them would hide carrier bugs). Applied at every SyncLogger call site
+that logged an address (SmsReceiver, SmsSentDeliveryReceiver, MmsManagerWrapper,
+MmsSentReceiver); the notification log line no longer records the contact's display
+name (logs `nameResolved=` instead) and ReactionResolver's no-match line logs quote
+*length*, not the quoted text. SyncLogger's Logcat mirror is now debug-only.
+Deliberately call-site (not a central regex): an 11-digit MMS row id is
+indistinguishable from a phone number to a regex, and masking ids would cripple
+the exact debugging this log exists for.
+
+### #11 — Blocking I/O off Main
+
+`SmsManagerWrapper.sendTextMessage()` is now `suspend` + `withContext(IO)` (same
+contract as `sendMms`), which fixes every caller at once; `HeadlessSmsSendService`
+grew the coroutine it needed (stopSelf after send completes).
+`ThreadViewModel.deleteMessage()`'s provider delete and both `beforeSendMaxId`
+provider queries (send + retry paths) moved to IO.
+
+### Smaller fixes
+
+- **#10 — REVERTED same day.** `.flowOn(Dispatchers.Default)` was added to
+  `ThreadViewModel.uiState`'s combine, and on-device message selection stopped
+  responding (selection mode entered, but bubble taps never applied; long-press
+  also dead). It is the only working-tree change in that screen's reactive path,
+  so it was reverted on the regression report without an isolated root cause —
+  a NOTE in the code marks it do-not-reintroduce without on-device verification.
+  Fallout fix kept: `ExportFormatter`'s shared `SimpleDateFormat`s (not
+  thread-safe) are now created per call, since the readable export legitimately
+  calls the formatter from worker threads while Copy uses it on Main.
+- **#15** — `ContactDetailScreen`'s viewer got the full edge-to-edge fix from
+  ThreadScreen (`usePlatformDefaultWidth = false` + `decorFitsSystemWindows` +
+  close button `statusBarsPadding`).
+- **#17** — Forward now confirms before sending ("Forward message? Send a copy to
+  X?") on all four entry points: thread row, contact row, keyboard Go, send icon.
+- **#19** — README rewritten where it lied: Known Limitations (RCS silence now
+  documented, group-MMS-send and local-only reactions stated), "currently in
+  progress" list, FTS5→FTS4, dead "Share as image" claim, stale backup section,
+  package-structure tree, Android Studio version.
+- **Export screen inset bug** (on-device report): the bottom "Export N conversations"
+  button sat behind the 3-button nav bar — `navigationBarsPadding()` on the
+  bottomBar content (Scaffold doesn't inset custom bottom bars).
+- **Copy header now carries the phone number** (user request): "Conversation with
+  Sarah (206) 555-1234" so the number is verifiable from the paste alone. Skipped
+  when it would just repeat the name (unknown contacts). Header also honors the
+  Postmark nickname now, matching the thread top bar. 4 new `ExportFormatterTest`
+  cases; `docs/OWNER-ACTIONS.md` created for the three items needing owner input
+  (#13 encryption decision, #14 keystore/secrets, #20 Play Store workstream).
+
+### Readable export — "text + media" format (user request, same day)
+
+On-device feedback: unzipping an export yields `data.jsonl` + SHA-named blobs — a
+machine format when the expectation was files you can open. Rather than bending
+the backup format both ways (pretty names would break content-addressed dedup),
+`ExportScreen` now offers two formats. **"Readable text + media"** (the new
+default) writes a zip of: `README.txt` (what this is, and that it is *not*
+restorable); one `ConversationName.txt` per thread — the exact Copy transcript
+format, so the phone-number header lands here too — and
+`media/ConversationName/` holding every attachment as a regular file named
+`2026-05-01_1432.jpg` (message date + MIME-derived extension). Transcript lines
+reference the exact media files (`[Attachment: media/Sarah/…]`), which also fixes
+the "photo-only messages export as blank lines" end-user finding for this path.
+**"Postmark backup"** remains the restorable v2 archive, unchanged.
+
+Mechanics: naming rules (filesystem-safe sanitization, case-insensitive dedup
+with " (2)" suffixes placed before the extension, MIME→extension table) and the
+zip writer are pure in `domain/backup/ReadableExport.kt` — 17 new tests including
+a zip round-trip. `ReadableExportWriter` (service) contributes only queries +
+ContentResolver reads, reusing the selection plumbing via a shared
+`exportableMessagesFor()` extracted from `BackupArchiveExporter`.
+`ExportFormatter` gained an optional per-message `attachmentNote` lambda (3 more
+tests). Both formats keep the `postmark_export_` filename prefix so retention
+pruning never eats them (readable files are `postmark_export_readable_<stamp>.zip`).
+Unreadable attachment bytes are skipped but still named in the transcript — a
+visible gap beats a silent one. `./gradlew test`: 559 passing (+10).
+
+Needs on-device verification: export 2 conversations with photos/video in
+readable format, unzip on a computer, confirm the txt opens with the number in
+the header and every media file opens on double-click; confirm a photo-only
+message shows its `[Attachment: …]` line; confirm the backup-format option still
+restores.
+
+### Still open from the 🟡 tier
+
+**#13** (backup encryption — needs a passphrase-UX decision: Keystore-bound keys
+would defeat restore-after-uninstall by design), **#14** (release-signed tester
+builds — needs a keystore + CI secrets only the owner can create), **#20** (Play
+Store declaration/privacy-policy workstream — external). See fable-analysis.md.
+
+---
+
+## 2026-07-12 — Selective export: chosen conversations, optional date range
+
+Follow-up to yesterday's backup v2 + restore. The scheduled backup is global (minus
+per-thread NEVER_INCLUDE opt-outs); the user goal was selective options — export
+only certain numbers, or a date-range slice, to a file of their choosing. The v2
+format was designed for exactly this (files are selection-agnostic; restore is a
+fingerprint-keyed merge), so this landed as a writer-side selection layer + an
+Export screen with **zero format or restore changes**. Scheduled backup behavior is
+untouched. `./gradlew test`: 536 passing (+12); `assembleDebug` clean.
+
+### Selection layer (pure, tested)
+
+`BackupSelection(threadIds?, startMs, endMs)` in `domain/backup/`, with the rules
+pinned in `BackupSelectionTest`:
+
+- **Explicit picks are exact** — deliberately checking a conversation exports it
+  even if its backupPolicy is NEVER_INCLUDE (a deliberate export beats a standing
+  policy). **Select-all still honors NEVER_INCLUDE**, keeping that setting's
+  "always excluded from backups" promise for whole-corpus runs.
+- Date filtering runs in SQL via the existing `getByThreadAndDateRange` (inclusive
+  BETWEEN). Threads with no in-range messages are skipped entirely; the
+  whole-corpus backup keeps empty threads so their metadata survives.
+- `localDateRangeToMillisBounds()` converts picked calendar days (Material3's
+  DateRangePicker hands back UTC-midnight day markers) to inclusive local-zone
+  epoch bounds — end-of-day inclusive, zone injectable for tests.
+- **Prune-safety catch:** exports are named `postmark_export_<stamp>.zip`, and
+  `isBackupFileName()` now excludes that prefix — without this, an export saved
+  into the backup folder would have been **eaten by retention pruning** (matched
+  `postmark_*.zip`). Both directions pinned in `RestoreMergeTest`.
+
+### Shared writer + ExportWorker
+
+The archive engine moved out of `BackupWorker` into `BackupArchiveExporter`
+(@Singleton) — pass-A attachment hashing, manifest, blobs, records, now
+parameterized by selection with a progress callback. `BackupWorker` kept its
+destination/prune/prefs logic and delegates the writing (behavior-neutral
+refactor). New `ExportWorker` (unique work `postmark_export`, foreground id 1003,
+same progress plumbing as RestoreWorker) writes to a user-chosen SAF document.
+On failure it best-effort-deletes the document it was writing (CreateDocument
+creates the file up front; a half-written archive left behind would look
+restorable) and does **not** retry — the destination grant is interactive context,
+so the error surfaces and the user re-runs.
+
+### Export UI
+
+Backup settings gained an "Export conversations…" entry → new `ExportScreen`
+(route `settings/backup/export`), modeled on the ForwardPicker: searchable
+conversation list (in-memory filter over nickname/name/address —
+`filterThreadsForExport`, pure), checkbox multi-select with select-all-visible,
+optional date range via the DateRangePicker bottom sheet (extracted from
+ThreadScreen's private copy to `ui/components/DateRangeSheet.kt`, now shared),
+destination via the system `CreateDocument` dialog (persistable grant taken before
+enqueue), live progress + last-outcome row (the RestoreStatus mapper generalized
+with label parameters instead of a duplicate). Exported files restore through the
+existing restore picker unchanged — and because restore merges, overlapping
+slices and full backups coexist without duplicates.
+
+Needs on-device verification: export a 2-conversation + 1-month slice and restore
+it (dedup against existing history), the DateRangePicker flow, the CreateDocument
+grant surviving to the worker, retention pruning leaving `postmark_export_*` files
+alone when saved into the backup folder, and the export progress notification.
+
+---
+
+## 2026-07-11 (second batch) — Backup format v2 + restore
+
+The last 🔴 item from `docs/fable-analysis.md` (#2): backup was lossy, OOM-prone, and
+had no read path at all. This batch replaces the format, builds restore from scratch,
+and moves backups somewhere uninstall can't erase. `./gradlew test`: 524 passing
+(+60 over the morning batch); `assembleDebug` clean.
+
+### Backup format v2 — a streamed zip that actually contains your data
+
+v1 serialized only id/body/timestamp/isSent per message — no attachments, reactions,
+isMms, participants, or any thread metadata — and built the whole document as one
+in-memory pretty-printed `JSONObject` (a guaranteed OOM at the 620-thread/159k-message
+scale this app is dogfooded at). v2 is a zip archive (`postmark_<stamp>.zip`) with a
+fixed entry order:
+
+1. `manifest.json` — version, export time, thread/message/attachment counts (drives
+   the restore confirmation dialog), and an `encryption` field reserved for item #13
+   so adding encryption later won't need a format break (always `"none"` today).
+2. `attachments/<sha256>` — one entry per unique attachment blob, content-addressed
+   (identical media stored once), bytes streamed from the content resolver. Each
+   blob is read twice (hash pass, then copy pass) so nothing large is ever buffered.
+3. `data.jsonl` — one compact JSON record per line: a thread record (nickname,
+   pin/mute/notifications, backupPolicy, participants, preview) followed by its
+   message records (full fidelity: type, deliveryStatus, isMms, isRead, isStarred,
+   attachment refs, inline reactions). **No local row ids** — they're device-local
+   provider ids, meaningless across a reinstall; identity is a content fingerprint.
+
+Everything streams both ways (`BackupArchiveWriter`/`BackupArchiveReader` in
+`domain/backup/` — plain-JVM, so the full round-trip is unit-tested). Serialization
+is a new hand-rolled minimal JSON codec (`BackupJson.kt`) for the established reason
+(org.json is an unmocked stub in JVM tests) — unlike the existing single-purpose
+codecs it does full RFC 8259 escaping, because message bodies contain newlines and
+data.jsonl framing dies without `\n` escaping. Optimistic (`id < 0`) rows are now
+excluded from backups (v1 wrote them). The archive is written to a `.tmp` name and
+renamed only when complete, so a mid-write crash can't leave a half-file that looks
+like a real backup. v1 `.json` files remain readable (magic-byte detection, `PK` vs
+`{`) and share the retention pool with `.zip` so they age out normally.
+
+### Restore — merge-only, fingerprint-deduped, idempotent (`RestoreWorker`)
+
+The hard design problem: Room message ids are system-provider `_id`s (MMS offset by
+10^10) and thread ids are system thread ids — none of it survives a reinstall, and
+the incremental-sync watermarks are `MAX(id)` queries over Room. Decisions, all
+pinned by JVM tests in `RestoreMergeTest`:
+
+- **Room-only.** No message writes to the system providers (an MMS provider insert
+  means hand-building part/addr rows, and historical inserts race the live
+  watermarks). Room is Postmark's source of truth, and the next v2 backup includes
+  restored data, so nothing is stranded. The one provider interaction is
+  `Telephony.Threads.getOrCreateThreadId()` (precedent: `SmsManagerWrapper`) — a
+  restored thread gets its *real* system thread id, so a future text from that
+  person lands in the same conversation instead of forking (synthetic thread ids
+  would collide with provider-assigned ids later — worst case, strangers' messages
+  merged into one thread). Fallback on OEM failure: stable negative id from the
+  normalized address.
+- **Restored rows live in a reserved id range** (`RESTORED_ID_OFFSET = 2×10^10`).
+  The three watermark queries (`getMaxId`/`getMaxMmsId`/`getMinMmsId`) now exclude
+  that range — otherwise the first restored row would become the watermark and
+  every future incoming message would be silently skipped, the app's worst failure
+  mode. Found in the same sweep: `ConversationsViewModel`'s recovery check used
+  `getMaxId()==null && getMaxMmsId()==null` as "no messages", which (with the new
+  guards) would have re-triggered the full provider import *on every launch* on a
+  device holding only restored history — now an `EXISTS` query (`hasAnyMessages()`)
+  that counts restored rows. `ThreadViewModel.deleteMessage` also skips the
+  provider-delete for restored-range ids (no provider row exists by construction).
+- **Dedup is a content fingerprint** — (transport, direction, timestamp, normalized
+  address, body), held as a *multiset* per thread so genuinely identical messages
+  keep their multiplicity. Address normalization (last-10-digits) matches across
+  formatting differences ("+12065551234" vs "206-555-1234"). Memory is bounded by
+  the largest single thread, never the corpus.
+- **Merge semantics: nothing is ever deleted or overwritten.** Zero
+  `ContentResolver.delete`, zero Room deletes of user data. Existing threads keep
+  every user-made choice — backup metadata (nickname, pin, mute, notifications,
+  backupPolicy) is applied only where the local value is still the default
+  (`mergeThreadMetadata`, pure). Reactions merge onto both restored *and*
+  already-present messages, deduped on (messageId, sender, emoji). Restored
+  messages are forced `isRead=true` (no unread-badge flood from years of history)
+  and PENDING/FAILED delivery statuses normalize to NONE (a restored PENDING spins
+  forever; a restored FAILED offers a retry button that would re-send a years-old
+  text). SENT/DELIVERED are kept.
+- **Idempotent by construction** — rerunning after a crash skips fingerprint
+  matches, already-extracted blobs, and duplicate reactions; the restored-id
+  sequence reseeds from `getMaxRestoredId()`. WorkManager retries are therefore
+  safe (same retry-3 policy as the import worker).
+- **Attachments** are extracted to `filesDir/restored_attachments/<sha256>` and
+  stored as FileProvider URIs — not `file://`, which `shareImage`'s `EXTRA_STREAM`
+  would reject with `FileUriExposedException` on API 24+ (`file_paths.xml` already
+  exposes all of filesDir, and same-process Coil + share + save-to-gallery all have
+  in-repo precedent with FileProvider URIs). Blob extraction is content-addressed
+  and skip-if-exists; blobs this run extracted that no record ended up referencing
+  are cleaned up at the end.
+- v1 files restore too (SMS-only, fields synthesized; documented best-effort).
+- Worker plumbing mirrors `SmsHistoryImportWorker`: foreground on `CHANNEL_SYNC`
+  (own notification id 1002), `setProgress` phase/done/total, `Result.retry()` up
+  to 3 attempts, `statsUpdater.recomputeAll()` at the end. FTS needs nothing —
+  the existing Room triggers index restored rows on insert.
+
+### Backups can now survive uninstall — optional SAF backup folder
+
+`getExternalFilesDir("backups")` is erased on uninstall, which defeated the entire
+point of a backup. New "Backup folder" row in Backup settings: pick any folder via
+the system tree picker (`ACTION_OPEN_DOCUMENT_TREE` + persistable permission), and
+`BackupWorker` writes *and prunes* there via DocumentFile (new dependency
+`androidx.documentfile:1.1.0`). If the folder or its permission disappears, the
+backup falls back to app storage and the screen shows a warning instead of failing
+silently. Default behavior (no folder chosen) is unchanged.
+
+### Restore UI (BackupSettingsScreen)
+
+"Restore from backup file…" opens the system file picker (persistable read grant
+taken before enqueueing, since a one-shot grant wouldn't survive to the worker);
+each row in the backup history list also gained a restore icon. Both paths stage a
+confirmation dialog that quotes the manifest ("contains 620 conversations and
+159,000 messages") and states the merge contract plainly: *adds what's missing,
+deletes and overwrites nothing, skips what you already have.* Progress renders as a
+phase label + determinate bar driven by the worker's WorkInfo progress (same
+pattern as the first-sync banner), and the last restore's outcome stays visible as
+a status row (`RestoreStatus.kt`, pure mapper + tests, mirroring `BackupStatus`).
+
+### Tests
+
++60 across six files: `BackupJsonTest` (escaping incl. control chars/surrogates,
+round-trips, malformed input), `BackupRecordCodecTest` (record round-trips, v1
+parsing + synthesized fields, forward-compat unknown record types),
+`BackupArchiveTest` (in-memory zip round-trip, entry ordering invariant, skipped
+blobs, unknown entries), `RestoreMergeTest` (normalization, fingerprint multiset,
+metadata merge rules, status sanitization, id sequencing, filename filter),
+`RestoreStatusTest`, plus `hasAnyMessages`/`getMaxRestoredId` on the five fake
+MessageDaos.
+
+Needs on-device verification: a scheduled v2 backup at real scale (620 threads /
+159k+ messages — pass-A hashing time is the thing to watch), a full restore
+round-trip on a second device or after a wipe (attachment rendering + share from
+restored FileProvider URIs, thread convergence when the restored contact texts
+back), SAF folder persistence across an uninstall/reinstall, and the restore
+progress notification.
+
+---
+
 ## 2026-07-11
 
 Worked through the critical tier of `docs/fable-analysis.md` (seven-persona review of

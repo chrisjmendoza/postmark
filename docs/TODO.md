@@ -344,9 +344,25 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Backup history list** — done.
 - [x] **WorkManager status indicator** — done.
 - [x] **Per-thread backup policy dialog** — done.
-- [ ] **Backup restore** — read JSON, validate version field,
-      apply to Room with migration version check. Show progress.
-      Warn user that restore merges with existing data.
+- [x] **Backup restore** — done July 11: format v2 (streamed zip with
+      attachments/reactions/thread metadata), `RestoreWorker` merge-only
+      restore with fingerprint dedup + progress + confirm dialog, SAF
+      backup folder + restore picker. Needs on-device verification.
+- [x] **Selective export** — done July 12: pick conversations (searchable
+      multi-select) and/or a date range, save the same v2 archive anywhere
+      via CreateDocument (`ExportScreen` + `ExportWorker`); restores through
+      the normal restore flow. Needs on-device verification.
+- [x] **Readable export format** — done July 12 (same day as the feedback):
+      `ExportScreen` now has a format choice — **"Readable text + media"**
+      (default): a zip with `README.txt`, one `ConversationName.txt` transcript
+      per thread (the Copy format, phone number in the header, photo-only
+      messages emit `[Attachment: media/…/2026-05-01_1432.jpg]` lines instead of
+      blanks), and `media/ConversationName/` files with date-stamped,
+      extension-correct names — vs **"Postmark backup"** (the restorable v2
+      archive). One-way nature stated in the UI and README.txt. Pure naming/zip
+      layout in `domain/backup/ReadableExport.kt` (17 tests); Android side in
+      `ReadableExportWriter`. Needs on-device verification.
+      Possible follow-up: `index.html` with inline thumbnails.
 
 ---
 
@@ -404,9 +420,15 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       original ask: `EmojiPickerView` has no public search/filter API, so there's no
       search bar — browse-by-category-and-recents only, matching what the widget
       itself actually offers.
-- [ ] **Bubble tap for link/phone detection** — auto-linkify URLs,
-      phone numbers, addresses in message body. Tap URL → browser,
-      tap phone → dial dialog, tap address → Maps.
+- [x] **Bubble tap for link/phone detection** (July 12 2026) — auto-linkify URLs
+      and phone numbers in the message body: tap URL → browser, tap phone → dial
+      dialog. Addresses → Maps not done. Links are attached as `LinkAnnotation`s on
+      the `AnnotatedString` and rendered with a plain `Text` — **not** `ClickableText`.
+      `ClickableText` was the first attempt (commit `16ce390`); its whole-body gesture
+      detector swallowed taps/long-presses before they reached the bubble's parent
+      `combinedClickable`, breaking message selection and the emoji reaction popup
+      (fixed same day — see CHANGELOG 2026-07-12 third batch). Rule: link handling in
+      a bubble must stay scoped to link ranges (`LinkAnnotation`), never wrap the body.
 - [ ] **Copy individual message** — already in action bar. Verify
       it copies plain text without timestamps.
 - [x] **Forward message** (July 6 2026) — full in-app forward, not just a share
