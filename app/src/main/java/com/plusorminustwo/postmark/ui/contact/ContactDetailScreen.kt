@@ -25,10 +25,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
@@ -537,7 +541,18 @@ private fun ContactFullScreenViewer(uri: String, onDismiss: () -> Unit) {
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        // Without this, the dialog window is constrained to the platform's default
+        // (non-fullscreen) size — see the identical fix in ThreadScreen's viewers.
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        // See FullScreenImageViewer in ThreadScreen — the dialog's own Window must stop
+        // fitting system windows for it to actually draw edge-to-edge behind the bars.
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
+        }
         val context = LocalContext.current
         Box(
             modifier = Modifier
@@ -581,6 +596,7 @@ private fun ContactFullScreenViewer(uri: String, onDismiss: () -> Unit) {
                 onClick  = onDismiss,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
+                    .statusBarsPadding()
                     .padding(8.dp)
             ) {
                 Icon(
