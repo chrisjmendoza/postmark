@@ -4,6 +4,22 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-15 (ui) — date pill straddles the top bar edge; messages scroll behind it
+
+Per feedback from on-device use: the floating date pill now sits half in the top bar,
+half in the conversation area, instead of floating fully below the bar. Moved from the
+content Box into the Scaffold `topBar` slot (a wrapping Box) — Scaffold draws topBar
+above body content, so the pill's overhanging half renders over the message list; the
+old placement would have hidden a translated pill behind the opaque bar. Bottom-anchored
+and pushed down half its height via lambda `graphicsLayer` (draw-phase only — topBar
+measured height unchanged, overhang stays tappable). Confirmed on device, then
+follow-up in the same session: the list no longer reserves any space for the pill —
+messages deliberately slide up behind the overhang, so the whole measured-height
+apparatus (`datePillHeightPx`, `onGloballyPositioned`, the reserved LazyColumn top
+padding) and the pill's internal 8 dp top gap were deleted.
+
+---
+
 ## 2026-07-15 (search fix) — FTS4 word-prefix matching restored in global search
 
 The correctness bug filed in performance-analysis.md §🐞 is fixed: `FtsQueryBuilder`

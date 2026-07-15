@@ -499,12 +499,6 @@ private fun ThreadContent(
         }
     }
 
-    // Measured height of the sticky date header. The message list reserves exactly this much
-    // space at its top edge (derived from layout, not a hardcoded value, so it adapts to font
-    // scale) so no message ever scrolls behind the header.
-    var datePillHeightPx by remember { mutableStateOf(0) }
-    val datePillHeight = with(LocalDensity.current) { datePillHeightPx.toDp() }
-
     fun scrollToDateLabel(label: String) {
         uiState.renderState.dateToHeaderIndex[label]?.let { headerIdx ->
             scope.launch {
@@ -654,6 +648,11 @@ private fun ThreadContent(
         modifier = Modifier.imePadding(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
+            // The date pill lives in the topBar slot (not the content Box) so it can
+            // straddle the bar's bottom edge: Scaffold draws topBar above body content,
+            // so the pill's overhanging half renders over the message list rather than
+            // disappearing behind the bar.
+            Box {
             when {
                 uiState.reactionPickerMessageId != null -> MessageActionTopBar(
                     onCancel  = { onDismissReactionPicker() },
@@ -771,6 +770,21 @@ private fun ThreadContent(
                     }
                 )
             }
+            // Half-in, half-out of the top bar: bottom-anchored to the bar, then pushed
+            // down by half its own height at draw time. graphicsLayer keeps the shift
+            // out of layout, so the pill never changes the measured topBar height (and
+            // hit testing follows the layer, so the overhanging half stays tappable).
+            // Messages deliberately scroll behind the overhang — the list reserves no
+            // space for it.
+            FloatingDatePill(
+                dateLabel = pillDateLabel,
+                visible = pillDateLabel.isNotEmpty(),
+                onClick = { showCalendarPicker = true },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .graphicsLayer { translationY = size.height / 2f }
+            )
+            }
         },
         bottomBar = {
             // Keep ReplyBar in layout even when picker is open (alpha=0) so the
@@ -800,11 +814,7 @@ private fun ThreadContent(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
-                // Reserve space for the sticky date header at the top edge so messages scroll
-                // beneath it rather than behind it. datePillHeight is measured (see below).
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(top = datePillHeight),
+                modifier = Modifier.fillMaxSize(),
                 state = listState,
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
@@ -922,18 +932,6 @@ private fun ThreadContent(
                     }
                 )
             }
-
-            // Permanent sticky date header pinned under the top bar. Always visible while the
-            // thread has messages; `pillDateLabel` tracks the day of the top-of-viewport item
-            // (via `visibleDate`), so it updates as day separators scroll past the top edge.
-            FloatingDatePill(
-                dateLabel = pillDateLabel,
-                visible = pillDateLabel.isNotEmpty(),
-                onClick = { showCalendarPicker = true },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .onGloballyPositioned { datePillHeightPx = it.size.height }
-            )
 
             // Auto-hide the FAB 3 s after the user stops scrolling.
             // fabVisible is hoisted to the outer scope so the message-arrival
@@ -1087,8 +1085,7 @@ private fun FloatingDatePill(
             shape = RoundedCornerShape(50),
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
             tonalElevation = 3.dp,
-            shadowElevation = 2.dp,
-            modifier = Modifier.padding(top = 8.dp)
+            shadowElevation = 2.dp
         ) {
             Text(
                 text = dateLabel,
