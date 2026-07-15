@@ -150,7 +150,6 @@ fun AppNavigation(showOnboarding: Boolean) {
                 onBack            = { navController.popBackStack() },
                 onViewContact     = { navController.navigate(Screen.ContactDetail.route(threadId)) },
                 onViewStats       = { navController.navigate(Screen.Stats.navRoute(threadId)) },
-                onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) },
                 onSearchInThread  = { id -> navController.navigate(Screen.Search.navRoute(id)) },
                 onForwardMessage  = { messageId -> navController.navigate(Screen.ForwardMessage.route(messageId)) }
             )

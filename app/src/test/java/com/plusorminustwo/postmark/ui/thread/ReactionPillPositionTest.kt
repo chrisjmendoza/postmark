@@ -12,16 +12,15 @@ import org.junit.Test
  *  - **Clamped** (bubble near screen bottom): `maxPillTopPx`
  *
  * Uses concrete pixel values (dp-to-px conversion is Compose-specific; tests work in raw px).
- * Default reference values: pillHeightPx=64f, gapPx=8f, maxPillTopPx=900f.
+ * Default reference values: gapPx=8f, maxPillTopPx=900f.
  */
 class ReactionPillPositionTest {
 
     // Default geometry
-    private val pill = 64f
     private val gap  = 8f
     private val max  = 900f  // maxPillTopPx — screen height minus pill and margin
 
-    private fun pos(bubbleBottomY: Float) = reactionPillTopPx(bubbleBottomY, pill, gap, max)
+    private fun pos(bubbleBottomY: Float) = reactionPillTopPx(bubbleBottomY, gap, max)
 
     // ── normal below-bubble placement ────────────────────────────────────────
 
@@ -80,12 +79,12 @@ class ReactionPillPositionTest {
     @Test
     fun `custom gap is respected`() {
         // bottomY=300, gap=20, max=900 → 300+20=320
-        assertEquals(320f, reactionPillTopPx(300f, 64f, 20f, 900f), 0.001f)
+        assertEquals(320f, reactionPillTopPx(300f, 20f, 900f), 0.001f)
     }
 
     @Test
     fun `custom maxPillTopPx clamps correctly`() {
         // bottomY=200, gap=10, max=100 → desired=210 > max=100, clamped to 100
-        assertEquals(100f, reactionPillTopPx(200f, 64f, 10f, 100f), 0.001f)
+        assertEquals(100f, reactionPillTopPx(200f, 10f, 100f), 0.001f)
     }
 }

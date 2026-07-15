@@ -41,6 +41,8 @@ A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark 
 ### Apple Reaction Parsing
 - Automatically converts Apple's SMS reaction fallback texts into emoji
 - Supports English, Dutch, French, German, and Spanish keyboard locales
+- Handles the six named tapbacks plus iOS 17+ **custom-emoji tapbacks** (any emoji,
+  carried literally in the fallback text — e.g. `Reacted 😎 to "…"`)
 - Handles un-react ("Removed a heart from...") correctly
 - Stored as reactions, not messages — fully searchable and exportable
 

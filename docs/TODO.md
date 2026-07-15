@@ -96,8 +96,11 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       skips SMIL. Room schema v9 adds `attachmentUri` + `mimeType` columns.
 - [x] **Inline image display** — `AsyncImage` (Coil 2.7.0) in `MmsAttachment` composable,
       `fillMaxWidth`, `ContentScale.Crop`, max 240 dp height, rounded 8 dp corners.
-- [x] **Inline video display** — `Box` with `PlayArrow` icon overlay, 120 dp height,
-      `surfaceVariant` background, rounded corners. Tap-to-play not yet wired.
+- [x] **Inline video display** — real first-frame still (extracted off-thread via
+      `MediaMetadataRetriever`) under a translucent play badge, 160 dp height, rounded
+      corners; falls back to the badge-over-`surfaceVariant` placeholder while decoding.
+      Same treatment in the single-attachment bubble and the multi-attachment grid.
+      (Was: bare `PlayArrow` icon over a blank tile — updated July 15.)
 - [x] **Audio message chip** — `Surface` chip with `MusicNote` icon and "Audio message"
       label in `secondaryContainer` color. Tap-to-play not yet wired.
 - [x] **MMS media in conversation list** — `previewText` extension returns "📷 Photo" /
@@ -145,7 +148,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       irreversible, so it's never a single unconfirmed tap.
 - [x] **Tap video → player dialog** — `VideoPlayerDialog` composable with ExoPlayer
       (media3 1.5.1); auto-plays on open; `DisposableEffect` releases player on dismiss;
-      tapping the video thumbnail in a bubble opens it.
+      tapping the video thumbnail in a bubble opens it. **July 15:** player fills the
+      frame at the video's true aspect ratio (portrait clips use full height, no more
+      16:9 letterbox); tap anywhere on the frame toggles play/pause with a center
+      icon-flash cue; player state hoisted to screen scope so it survives rotation.
 - [x] **Audio playback controls** — `MediaPlayer` play/pause on audio chip in `ThreadScreen`.
 - [ ] **Rich media in reply bar** — ~~attachment button left of text field. Image picker
       (`PickVisualMedia`), camera capture. Requires `READ_MEDIA_IMAGES` / `CAMERA`.~~
