@@ -3270,6 +3270,19 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
     var position   by remember { mutableStateOf(0f) }
     var durationMs by remember { mutableLongStateOf(0L) }
 
+    // Center flash cue: each tap-to-toggle pops the new-state icon in the middle of the
+    // video and fades it out, so the user sees confirmation beyond the frame just
+    // starting/stopping. flashTick bumps on every tap to (re)trigger the fade.
+    var flashIcon by remember { mutableStateOf(Icons.Default.PlayArrow) }
+    var flashTick by remember { mutableStateOf(0) }
+    val flashAlpha = remember { Animatable(0f) }
+    LaunchedEffect(flashTick) {
+        if (flashTick == 0) return@LaunchedEffect   // no flash on first composition
+        flashAlpha.snapTo(1f)
+        delay(350)
+        flashAlpha.animateTo(0f, animationSpec = tween(durationMillis = 250))
+    }
+
     // Build and prepare the player once.
     val player = remember {
         ExoPlayer.Builder(ctx).build().apply {
@@ -3358,9 +3371,37 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            if (player.isPlaying) player.pause() else player.play()
+                            val willPlay = !player.isPlaying
+                            if (willPlay) player.play() else player.pause()
+                            flashIcon = if (willPlay) Icons.Default.PlayArrow else Icons.Default.Pause
+                            flashTick++
                         }
                 )
+                // Momentary play/pause cue from tapping the frame. No pointer modifier, so
+                // it never intercepts taps — they fall through to the layer above. Hidden
+                // (alpha 0) at rest; the fade pops it up briefly on each toggle.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(76.dp)
+                        .graphicsLayer {
+                            alpha = flashAlpha.value
+                            // Gentle pop-out: grows slightly as it fades.
+                            val s = 1f + (1f - flashAlpha.value) * 0.25f
+                            scaleX = s
+                            scaleY = s
+                        }
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.45f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = flashIcon,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(44.dp)
+                    )
+                }
                 // Close button in top-right corner.
                 IconButton(
                     onClick = onDismiss,

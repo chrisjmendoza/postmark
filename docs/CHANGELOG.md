@@ -4,6 +4,85 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-15 (feature) — video attachments: thumbnails, portrait-aware player, tap-to-pause; iOS custom-emoji tapbacks; ThreadScreen housekeeping
+
+A day of user-driven video-attachment work (all reported from real conversations on a
+Samsung device), plus one reaction-parser feature and a ThreadScreen dead-code sweep.
+Everything compiles clean and `./gradlew test` stays green; the on-device behaviors were
+confirmed by the owner as each landed.
+
+### Video bubbles now show a real still
+
+In-thread video attachments rendered only a bare `PlayArrow` icon over a blank tile — no
+way to tell what the video was. Both the single-attachment bubble (`MmsAttachment`) and the
+multi-attachment grid cell (`AttachmentThumbnail`) now extract the first frame off the main
+thread via `MediaMetadataRetriever` (the same pattern the send-preview already used) and draw
+it under a translucent play badge, falling back to the badge-over-`surfaceVariant` placeholder
+while decoding or on failure. Bubble height bumped 120→160 dp to give the still some presence.
+
+### Full-screen player is portrait-aware
+
+The player forced its `PlayerView` into a hard-coded `16f/9f` box, so a portrait clip got
+letterboxed into a tiny center strip. The surface now fills the space left above the control
+bar and lets `PlayerView`'s default `RESIZE_MODE_FIT` preserve the video's own aspect ratio —
+portrait clips use the full height.
+
+### Rotation: portrait-locked app, rotatable media viewers — and a state-hoist fix
+
+Requested behavior: the app stays portrait, but a landscape/portrait video (or a full-screen
+photo) can be rotated by turning the phone. Three parts:
+- **Manifest:** `MainActivity` is now `screenOrientation="portrait"` with
+  `configChanges="orientation|screenSize|screenLayout|keyboardHidden"`. The `configChanges`
+  is load-bearing — without it, rotating recreated the activity, which tore down the video
+  dialog and dumped the user back to the chat.
+- **Opt-in rotation:** a small `AllowScreenRotationWhileVisible()` helper flips the activity to
+  `SCREEN_ORIENTATION_FULL_USER` (honors the system auto-rotate toggle) while the
+  `VideoPlayerDialog` / `FullScreenImageViewer` are open, and restores the portrait lock on
+  dispose.
+- **State hoist (the real rotation bug):** even with `configChanges`, rotating a portrait video
+  still dropped back to chat, because `playingVideoUri` lived *inside the per-message bubble* —
+  a `LazyColumn` item whose composition is disposed during the rotation relayout, taking the
+  dialog with it. Hoisted the video-player state up to the screen scope (mirroring how the
+  image viewer already works) so the dialog is hosted once, outside the list, and survives.
+
+### Tap-to-play/pause with a center flash cue
+
+The corner control-bar button is a small target; industry standard is tapping the video itself.
+Added a transparent tap layer over the frame (above the `PlayerView`, below the close ✕, no
+ripple) that toggles play/pause. On each tap a center **flash indicator** pops the new-state
+icon (▶ / ⏸) in a translucent circle and fades out (`Animatable` alpha keyed on a tap counter,
+~350 ms hold + 250 ms fade, gentle scale-up), so there's a visible cue beyond the frame just
+starting/stopping. The overlay carries no pointer modifier, so taps still fall through to the
+tap layer.
+
+### iOS 17+ custom-emoji tapbacks
+
+`AppleReactionParser` handled only the six named reactions. iOS 17+ tapbacks with any other
+emoji carry it literally in the fallback verb (`Reacted 😎 to "…"` / `Removed a 😎 reaction
+from "…"`) rather than an English word. Added two regexes matched against the captured verb,
+guarded on a non-ASCII leading char so real sentences ("Reacted … to") don't parse as
+reactions. New `AppleReactionParserCustomEmojiTest`.
+
+### ThreadScreen dead-code housekeeping
+
+`ThreadScreen.kt` is the largest file in the app; trimmed genuinely dead/unused code flagged by
+the IDE (each verified before removal):
+- 8 unused imports (`LetterAvatar`, `Instant`, `ZoneOffset`, the four `lazy.grid.*` symbols,
+  `geometry.Offset`).
+- The **`onBackupSettingsClick` dead plumbing** — threaded `ThreadScreen → ThreadContent` and
+  never consumed (a thread has no reason to open Backup Settings). Removed the param, its
+  pass-through, the preview arg, and the live `navController.navigate(...)` in `AppNavigation`
+  (SettingsScreen's identical-looking one is genuinely used — left alone).
+- The unused `pillHeightPx` param on the pure `reactionPillTopPx()` (the height is already
+  folded into `maxPillTopPx` by the caller); updated the caller and its test.
+- Shortened redundant `Color`/`Context` qualifiers and fixed an unresolvable KDoc link.
+
+Left the purely-stylistic lints (KTX `toUri`, `Long`→`Duration` overloads, modifier-ordering,
+`Locale` static) alone — churn, not dead code — and noted the "frequently-changing-state read
+in composable" warning as a real perf-smell worth a *separate* deliberate look.
+
+---
+
 ## 2026-07-14 (feature) — permanent sticky date header in the thread
 
 Reworked the transient floating date pill into a **permanent sticky date header** pinned
