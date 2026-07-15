@@ -17,6 +17,12 @@
 
     <!-- Storage for backups (no permission needed for app-specific external storage on API 26+) -->
 
+    <!-- Saving an MMS image to the public Pictures gallery on API 26-28 only; API 29+
+         scoped storage needs no permission for the app's own MediaStore inserts. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- Network state for backup constraints -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
@@ -39,6 +45,8 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

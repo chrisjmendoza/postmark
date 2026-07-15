@@ -7,6 +7,9 @@ import android.content.Intent
 import androidx.core.app.RemoteInput
 import com.plusorminustwo.postmark.PostmarkApplication
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -39,22 +42,33 @@ class DirectReplyReceiver : BroadcastReceiver() {
             ?.toString()?.trim()
             ?.takeIf { it.isNotEmpty() } ?: return
 
-        smsManagerWrapper.sendTextMessage(address, replyText, -System.currentTimeMillis())
+        // goAsync() extends the receiver lifetime so the send's ContentResolver and
+        // telephony I/O runs on Dispatchers.IO instead of the main thread — the same
+        // pattern as SmsReceiver and MarkAsReadReceiver.
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                smsManagerWrapper.sendTextMessage(address, replyText, -System.currentTimeMillis())
+            } finally {
+                val nm = context.getSystemService(NotificationManager::class.java)
 
-        val nm = context.getSystemService(NotificationManager::class.java)
+                // ── Dismiss the individual thread notification ────────────────────
+                nm.cancel(notifId)
 
-        // ── Dismiss the individual thread notification ────────────────────────────
-        nm.cancel(notifId)
+                // ── Dismiss the group summary if no members remain ────────────────
+                // After cancelling the individual notification, check whether any
+                // other SMS notifications are still active. If none are, cancel the
+                // summary row too.
+                val remaining = nm.activeNotifications.filter { sbn ->
+                    sbn.notification.group == PostmarkApplication.GROUP_KEY_SMS &&
+                        sbn.id != PostmarkApplication.NOTIF_ID_SMS_SUMMARY
+                }
+                if (remaining.isEmpty()) {
+                    nm.cancel(PostmarkApplication.NOTIF_ID_SMS_SUMMARY)
+                }
 
-        // ── Dismiss the group summary if no members remain ────────────────────────
-        // After cancelling the individual notification, check whether any other SMS
-        // notifications are still active. If none are, cancel the summary row too.
-        val remaining = nm.activeNotifications.filter { sbn ->
-            sbn.notification.group == PostmarkApplication.GROUP_KEY_SMS &&
-                sbn.id != PostmarkApplication.NOTIF_ID_SMS_SUMMARY
-        }
-        if (remaining.isEmpty()) {
-            nm.cancel(PostmarkApplication.NOTIF_ID_SMS_SUMMARY)
+                pendingResult.finish()
+            }
         }
     }
 

@@ -21,12 +21,15 @@ import androidx.navigation.navArgument
 import com.plusorminustwo.postmark.ui.conversations.ConversationsScreen
 import com.plusorminustwo.postmark.ui.conversations.NewConversationScreen
 import com.plusorminustwo.postmark.ui.contact.ContactDetailScreen
+import com.plusorminustwo.postmark.ui.forward.ForwardPickerScreen
 import com.plusorminustwo.postmark.ui.onboarding.OnboardingScreen
 import com.plusorminustwo.postmark.ui.search.SearchScreen
 import com.plusorminustwo.postmark.ui.settings.BackupSettingsScreen
 import com.plusorminustwo.postmark.ui.settings.DevOptionsScreen
+import com.plusorminustwo.postmark.ui.settings.export.ExportScreen
 import com.plusorminustwo.postmark.ui.settings.SettingsScreen
 import com.plusorminustwo.postmark.ui.settings.SyncLogScreen
+import com.plusorminustwo.postmark.ui.starred.StarredImagesScreen
 import com.plusorminustwo.postmark.ui.stats.StatsScreen
 import com.plusorminustwo.postmark.ui.thread.ThreadScreen
 
@@ -65,6 +68,8 @@ sealed class Screen(val route: String) {
     data object Settings : Screen("settings")
     /** Backup & restore settings screen. */
     data object BackupSettings : Screen("settings/backup")
+    /** Selective export — pick conversations/date range, save an archive anywhere. */
+    data object ExportConversations : Screen("settings/backup/export")
     /** Developer options screen (hidden). */
     data object DevOptions : Screen("settings/dev")
     /** Full-screen sync log viewer. */
@@ -75,6 +80,12 @@ sealed class Screen(val route: String) {
     data object ContactDetail : Screen("contact/{threadId}") {
         fun route(threadId: Long) = "contact/$threadId"
     }
+    /** "Forward to..." destination picker for one message (text or image). */
+    data object ForwardMessage : Screen("forward/{messageId}") {
+        fun route(messageId: Long) = "forward/$messageId"
+    }
+    /** Global (cross-thread) gallery of every starred image — reached from Settings. */
+    data object StarredImages : Screen("starred_images")
 }
 
 private val SLIDE_IN  = tween<IntOffset>(280)
@@ -140,7 +151,8 @@ fun AppNavigation(showOnboarding: Boolean) {
                 onViewContact     = { navController.navigate(Screen.ContactDetail.route(threadId)) },
                 onViewStats       = { navController.navigate(Screen.Stats.navRoute(threadId)) },
                 onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) },
-                onSearchInThread  = { id -> navController.navigate(Screen.Search.navRoute(id)) }
+                onSearchInThread  = { id -> navController.navigate(Screen.Search.navRoute(id)) },
+                onForwardMessage  = { messageId -> navController.navigate(Screen.ForwardMessage.route(messageId)) }
             )
         }
 
@@ -178,14 +190,45 @@ fun AppNavigation(showOnboarding: Boolean) {
             SettingsScreen(
                 onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) },
                 onDevOptionsClick = { navController.navigate(Screen.DevOptions.route) },
+                onStarredImagesClick = { navController.navigate(Screen.StarredImages.route) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.StarredImages.route) {
+            StarredImagesScreen(
+                onImageClick = { threadId, messageId ->
+                    navController.navigate(Screen.Thread.route(threadId, messageId))
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Screen.ForwardMessage.route,
+            arguments = listOf(navArgument("messageId") { type = NavType.LongType })
+        ) {
+            ForwardPickerScreen(
+                onForwarded = { destThreadId ->
+                    // Pop the picker so back from the destination thread returns to the
+                    // source thread the forward started from, not the picker.
+                    navController.navigate(Screen.Thread.route(destThreadId)) {
+                        popUpTo(Screen.ForwardMessage.route) { inclusive = true }
+                    }
+                },
                 onBack = { navController.popBackStack() }
             )
         }
 
         composable(Screen.BackupSettings.route) {
             BackupSettingsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onExportClick = { navController.navigate(Screen.ExportConversations.route) }
             )
+        }
+
+        composable(Screen.ExportConversations.route) {
+            ExportScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Screen.DevOptions.route) {

@@ -113,10 +113,14 @@ class MessageRepository @Inject constructor(
 
     /** Returns the latest message in a thread (used to refresh thread preview after reaction cleanup). */
     suspend fun getLatestForThread(threadId: Long): Message? =
-        messageDao.getLatestNonReactionForThread(threadId)?.toDomain()
+        messageDao.getLatestForThread(threadId)?.toDomain()
 
     /** Returns all messages ordered by timestamp (used by reprocessReactions debug tool). */
     suspend fun getAll(): List<Message> = messageDao.getAll().map { it.toDomain() }
+
+    /** Returns every message carrying a media attachment; used by the orphaned MMS-cache sweep. */
+    suspend fun getMessagesWithAttachments(): List<Message> =
+        messageDao.getAllWithAttachments().map { it.toDomain() }
 
     /** Returns all distinct thread IDs in the messages table; used for batched iteration. */
     suspend fun getAllThreadIds(): List<Long> = messageDao.getAllThreadIds()
@@ -134,6 +138,17 @@ class MessageRepository @Inject constructor(
     /** Returns the lowest stored MMS row id (offset by MMS_ID_OFFSET), or null. */
     suspend fun getMinMmsId(): Long? = messageDao.getMinMmsId()
 
+    /** True when any message row exists at all (restored rows included). */
+    suspend fun hasAnyMessages(): Boolean = messageDao.hasAnyMessages()
+
+    /** Highest id in the restored-row range, or null when nothing was ever restored. */
+    suspend fun getMaxRestoredId(): Long? = messageDao.getMaxRestoredId()
+
+    /** All reactions on messages of one thread — the backup writer's source
+     *  (the non-reactive [getByThread] deliberately doesn't join reactions). */
+    suspend fun getReactionsByThread(threadId: Long): List<Reaction> =
+        reactionDao.getByThread(threadId).map { it.toDomain() }
+
     suspend fun deleteAll() {
         reactionDao.deleteAll()
         messageDao.deleteAll()
@@ -143,4 +158,17 @@ class MessageRepository @Inject constructor(
      *  Used by ContactDetailScreen to populate the shared-media grid. */
     fun observeMediaMessages(threadId: Long): Flow<List<Message>> =
         messageDao.observeMediaMessages(threadId).map { list -> list.map { it.toDomain() } }
+
+    suspend fun updateStarred(messageId: Long, isStarred: Boolean) =
+        messageDao.updateStarred(messageId, isStarred)
+
+    /** Live list of starred messages that carry at least one image attachment, newest
+     *  first — backs the global Starred Images gallery. Filters to images specifically
+     *  (not video/audio) since that's what the gallery displays; a starred message with
+     *  e.g. only a video attachment simply doesn't appear here. */
+    fun observeStarredImages(): Flow<List<Message>> =
+        messageDao.observeStarredMedia().map { list ->
+            list.map { it.toDomain() }
+                .filter { msg -> msg.attachments.any { it.mimeType.startsWith("image/", ignoreCase = true) } }
+        }
 }

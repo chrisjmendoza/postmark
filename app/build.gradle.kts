@@ -139,6 +139,9 @@ dependencies {
     // ExifInterface — read EXIF rotation before image compression
     implementation(libs.androidx.exifinterface)
 
+    // DocumentFile — SAF backup folder (write backups to a user-chosen tree)
+    implementation(libs.androidx.documentfile)
+
     // Media3 ExoPlayer — video playback in thread view
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
@@ -146,6 +149,10 @@ dependencies {
     // Media3 Transformer — video transcoding to fit MMS carrier size limits
     implementation(libs.media3.transformer)
     implementation(libs.media3.effect)
+
+    // Full system-style emoji picker (all Unicode emoji, categories, recents) for
+    // message reactions — replaces the ~47-emoji hand-curated picker.
+    implementation(libs.androidx.emoji2.emojipicker)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

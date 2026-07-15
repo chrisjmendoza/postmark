@@ -7,18 +7,18 @@ import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import com.plusorminustwo.postmark.PostmarkApplication
 import com.plusorminustwo.postmark.R
+import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.data.sync.SyncLogger
+import com.plusorminustwo.postmark.domain.logging.redactPhone
 import com.plusorminustwo.postmark.ui.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -64,7 +64,7 @@ class SmsReceiver : BroadcastReceiver() {
 
                 /* Log broadcast receipt synchronously before goAsync() — if the process
                  * is killed mid-async we still have a "broadcast arrived" entry in the log. */
-                syncLogger.log("SmsReceiver", if (isDeliver) "DELIVER_ACTION from=$rawSender" else "RECEIVED_ACTION from=$rawSender")
+                syncLogger.log("SmsReceiver", if (isDeliver) "DELIVER_ACTION from=${rawSender.redactPhone()}" else "RECEIVED_ACTION from=${rawSender.redactPhone()}")
 
                 /* goAsync() extends the BroadcastReceiver lifetime so the OS does not
                  * reclaim the process before our IO and notification work is done. */
@@ -96,12 +96,15 @@ class SmsReceiver : BroadcastReceiver() {
                              * always current even for contacts added after the initial sync
                              * (which can leave a stale phone number in Room's displayName).
                              * Falls back to Room's stored name, then to the raw number. */
-                            val displayName = lookupContactName(context, rawSender)
+                            val displayName = context.lookupContactName(rawSender)
                                 ?: threadRepository.getDisplayNameByAddress(rawSender)
                                 ?: sender
-                            syncLogger.log("SmsReceiver", "notification: address=$rawSender displayName=$displayName")
+                            syncLogger.log("SmsReceiver", "notification: address=${rawSender.redactPhone()} nameResolved=${displayName != sender}")
                             postIncomingNotification(
-                                context, displayName, body,
+                                context,
+                                address = rawSender,
+                                displayName = displayName,
+                                body = body,
                                 privacyMode = privacyModeRepository.isEnabled()
                             )
                         }
@@ -133,7 +136,7 @@ class SmsReceiver : BroadcastReceiver() {
                 Telephony.Threads.getOrCreateThreadId(context, rawSender)
             else 0L
         } catch (e: Exception) {
-            Log.w(TAG, "getOrCreateThreadId failed for sender=$rawSender", e)
+            Log.w(TAG, "getOrCreateThreadId failed for sender=${rawSender.redactPhone()}", e)
             0L
         }
 
@@ -151,24 +154,37 @@ class SmsReceiver : BroadcastReceiver() {
         try {
             val uri = context.contentResolver.insert(Telephony.Sms.Inbox.CONTENT_URI, cv)
             if (uri != null) {
-                Log.d(TAG, "Wrote incoming SMS from=$rawSender → $uri")
-                syncLogger.log("SmsReceiver", "wrote inbox row: from=$rawSender threadId=$threadId uri=$uri")
+                syncLogger.log("SmsReceiver", "wrote inbox row: from=${rawSender.redactPhone()} threadId=$threadId uri=$uri")
             } else {
-                Log.e(TAG, "Insert to content://sms/inbox returned null for sender=$rawSender")
-                syncLogger.logError("SmsReceiver", "Insert returned null for sender=$rawSender — message may be lost")
+                syncLogger.logError("SmsReceiver", "Insert returned null for sender=${rawSender.redactPhone()} — message may be lost")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to write incoming SMS to content://sms/inbox", e)
-            syncLogger.logError("SmsReceiver", "Write to content://sms/inbox FAILED for sender=$rawSender", e)
+            syncLogger.logError("SmsReceiver", "Write to content://sms/inbox FAILED for sender=${rawSender.redactPhone()}", e)
         }
     }
 
-    private fun postIncomingNotification(context: Context, sender: String, body: String, privacyMode: Boolean) {
-        val notifId = sender.hashCode()
+    /**
+     * @param address     the raw phone number — threaded into the Reply / Mark-as-read
+     *                    receiver extras, which need a sendable/queryable address.
+     *                    Passing the display name here breaks both actions for any
+     *                    contact with a saved name.
+     * @param displayName human-readable label used only for the notification title.
+     */
+    private fun postIncomingNotification(
+        context: Context,
+        address: String,
+        displayName: String,
+        body: String,
+        privacyMode: Boolean
+    ) {
+        /* Keyed on the address, not the display name — the address is stable even if
+         * the user renames the contact between two messages, so both messages update
+         * the same notification instead of forking into two. */
+        val notifId = address.hashCode()
         val nm = context.getSystemService(NotificationManager::class.java)
 
         // ── Privacy mode: redact sender and body so bystanders can't read the screen ──
-        val displayTitle = if (privacyMode) context.getString(R.string.privacy_mode_notification_title) else sender
+        val displayTitle = if (privacyMode) context.getString(R.string.privacy_mode_notification_title) else displayName
         val displayBody  = if (privacyMode) "" else body
 
         // ── Content intent — opens the conversation list ──────────────────────────
@@ -193,7 +209,7 @@ class SmsReceiver : BroadcastReceiver() {
             context,
             notifId xor 0x0100_0000,
             Intent(context, DirectReplyReceiver::class.java).apply {
-                putExtra(DirectReplyReceiver.EXTRA_ADDRESS, sender)
+                putExtra(DirectReplyReceiver.EXTRA_ADDRESS, address)
                 putExtra(DirectReplyReceiver.EXTRA_NOTIF_ID, notifId)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
@@ -213,7 +229,7 @@ class SmsReceiver : BroadcastReceiver() {
             context,
             notifId xor 0x0200_0000,
             Intent(context, MarkAsReadReceiver::class.java).apply {
-                putExtra(MarkAsReadReceiver.EXTRA_ADDRESS, sender)
+                putExtra(MarkAsReadReceiver.EXTRA_ADDRESS, address)
                 putExtra(MarkAsReadReceiver.EXTRA_NOTIF_ID, notifId)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -313,30 +329,5 @@ class SmsReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "SmsReceiver"
-    }
-
-    /**
-     * Queries [ContactsContract.PhoneLookup] for the display name of [address].
-     * Returns null when the number has no matching contact. Uses the system's
-     * built-in phone-number normalisation so "+12065550100" and "2065550100"
-     * both resolve to the same contact entry.
-     */
-    private fun lookupContactName(context: Context, address: String): String? {
-        if (address.isEmpty()) return null
-        val uri = Uri.withAppendedPath(
-            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-            Uri.encode(address)
-        )
-        return try {
-            context.contentResolver.query(
-                uri,
-                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-                null, null, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst())
-                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
-                else null
-            }
-        } catch (_: Exception) { null }
     }
 }

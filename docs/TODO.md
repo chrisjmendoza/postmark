@@ -121,6 +121,28 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       the conversation, so closing the viewer doesn't strand you wherever you were
       scrolled to before opening it. Reuses the same centered-scroll routine as
       search-jump (`scrollToMessageCentered()`, extracted so both share it).
+      **Google Messages-style action set (July 6 2026)** — header redesigned to
+      close/sender+friendly-timestamp/download/delete/⋮ overflow (Forward, Share,
+      Star, View details); adjacent images peek in from the pager's edges
+      (`contentPadding`/`pageSpacing` on `HorizontalPager`); a quick-reaction row at
+      the bottom reuses the same emoji set and toggle as long-pressing a bubble.
+      Download saves to `Pictures/Postmark` via `MediaStore` (runtime
+      `WRITE_EXTERNAL_STORAGE` request on API 26-28 only; none needed on 29+). Share
+      opens the system share sheet directly on the `content://mms/part/` URI — no
+      `FileProvider` copy needed, same permission-grant mechanism the platform's own
+      Messages app relies on. Delete is real (see "Real message delete" below, not a
+      Postmark-only hide). See "Forward message" and "Star an image" below for those
+      two.
+- [x] **Real message delete** (July 6 2026) — the action-bar Delete button and the
+      image viewer's trash icon previously did nothing (`onDelete` just dismissed the
+      popup — there was no `ContentResolver.delete()` anywhere in the codebase before
+      this). `ThreadViewModel.deleteMessage()` now removes both the Room row and, for
+      a real (non-optimistic) row, the underlying `content://sms` or `content://mms`
+      row — a genuine delete, not a Postmark-only hide, matching what Google Messages'
+      trash icon does. Requires being the default SMS app (shows the existing "set
+      default" dialog otherwise, same as sending). Both entry points confirm through
+      one shared "Delete message?" dialog before deleting — this is destructive and
+      irreversible, so it's never a single unconfirmed tap.
 - [x] **Tap video → player dialog** — `VideoPlayerDialog` composable with ExoPlayer
       (media3 1.5.1); auto-plays on open; `DisposableEffect` releases player on dismiss;
       tapping the video thumbnail in a bubble opens it.
@@ -158,11 +180,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       multi-select recipient picker in `NewConversationScreen`. Check
       `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` — some carriers disable group MMS
       and expect N separate 1:1 sends instead ("MMS broadcast" mode).
-- [ ] **Group MMS — per-bubble sender attribution** — show sender name/avatar per
-      bubble within a group thread (every bubble currently renders identically to a
-      1:1 thread's). `Message.address` already holds the correct per-message sender
-      for a received group MMS — this is a `ThreadScreen` bubble-rendering change,
-      not a sync-layer one.
+- [x] **Group MMS — per-bubble sender attribution** (July 11 2026) — group threads
+      now show a small sender-name label above the first received bubble of each
+      sender's cluster (`ThreadViewModel.participantNames` resolves the roster via
+      the new shared `Context.lookupContactName()`; label rendered in
+      `MessageBubble`). `computeClusterPositions` also splits received clusters per
+      `Message.address`, so two participants texting back-to-back no longer fuse
+      into one bubble run (tested in `MessageGroupingTest`). Avatars per bubble
+      remain a possible follow-up.
 
 ### Contact integration
 - [ ] **Contact photo / profile picture in avatar** — currently all
@@ -215,12 +240,16 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       already in the codebase.
 
 ### Blocking and spam (required for Play Store messaging category)
-- [ ] **Block number** — wire up existing stub in ⋮ menu.
-      Use Android `BlockedNumberContract` API for system-level
-      blocking. Blocked numbers go to a "Blocked" folder, not deleted.
-      Blocked threads must not generate notifications.
-- [ ] **Blocked conversations screen** — accessible from Settings.
-      Shows blocked threads with option to unblock.
+- [x] **Block number** (July 11 2026) — ⋮ menu item now confirms via dialog and
+      writes to `BlockedNumberContract` (`ThreadViewModel.blockNumber()`), so the
+      platform rejects calls/texts system-wide before they reach any app — which
+      also means no notifications and no "Blocked folder" needed: blocked messages
+      never arrive. Hidden for group threads (ambiguous target). Result reported
+      via Snackbar. Needs on-device verification.
+- [ ] **Blocked numbers screen** — accessible from Settings. Query
+      `BlockedNumberContract.BlockedNumbers.CONTENT_URI` to list blocked numbers
+      with an unblock action (delete the row). Until then, the block dialog points
+      users at the phone's own blocked-numbers settings.
 - [ ] **Spam detection + Spam folder** — "Report as spam" option in
       thread ⋮ menu (and inline on notifications from unknown numbers).
       Moves thread to a separate Spam folder visible in the nav drawer
@@ -315,9 +344,25 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Backup history list** — done.
 - [x] **WorkManager status indicator** — done.
 - [x] **Per-thread backup policy dialog** — done.
-- [ ] **Backup restore** — read JSON, validate version field,
-      apply to Room with migration version check. Show progress.
-      Warn user that restore merges with existing data.
+- [x] **Backup restore** — done July 11: format v2 (streamed zip with
+      attachments/reactions/thread metadata), `RestoreWorker` merge-only
+      restore with fingerprint dedup + progress + confirm dialog, SAF
+      backup folder + restore picker. Needs on-device verification.
+- [x] **Selective export** — done July 12: pick conversations (searchable
+      multi-select) and/or a date range, save the same v2 archive anywhere
+      via CreateDocument (`ExportScreen` + `ExportWorker`); restores through
+      the normal restore flow. Needs on-device verification.
+- [x] **Readable export format** — done July 12 (same day as the feedback):
+      `ExportScreen` now has a format choice — **"Readable text + media"**
+      (default): a zip with `README.txt`, one `ConversationName.txt` transcript
+      per thread (the Copy format, phone number in the header, photo-only
+      messages emit `[Attachment: media/…/2026-05-01_1432.jpg]` lines instead of
+      blanks), and `media/ConversationName/` files with date-stamped,
+      extension-correct names — vs **"Postmark backup"** (the restorable v2
+      archive). One-way nature stated in the UI and README.txt. Pure naming/zip
+      layout in `domain/backup/ReadableExport.kt` (17 tests); Android side in
+      `ReadableExportWriter`. Needs on-device verification.
+      Possible follow-up: `index.html` with inline thumbnails.
 
 ---
 
@@ -365,21 +410,42 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `HapticFeedbackType.LongPress` when a reaction pill is tapped
       to add tactile confirmation and make the interaction feel
       premium.
-- [ ] **Full emoji picker for reactions** — the current emoji popup
-      shows only ~7 quick-pick reactions. Add a "＋" button that
-      opens a full bottom-sheet emoji picker (all categories, search
-      bar, recents row) matching the experience in Google Messages.
-      Use `androidx.emoji2` or a Compose emoji-picker library.
-      Users expect access to the full emoji set for reactions.
-- [ ] **Bubble tap for link/phone detection** — auto-linkify URLs,
-      phone numbers, addresses in message body. Tap URL → browser,
-      tap phone → dial dialog, tap address → Maps.
+- [x] **Full emoji picker for reactions** (July 6 2026) — the "＋" button (bubble
+      long-press popup and the image viewer's quick-reaction row) opens
+      `androidx.emoji2.emojipicker.EmojiPickerView` — the real system-style picker,
+      not a lookalike: full Unicode emoji set, category tabs, recents, long-press for
+      skin-tone/gender variants. An earlier attempt used a hand-curated ~47-emoji list
+      with keyword search (`EmojiData.kt`, now deleted) that only ever searched those
+      47 — this replaces it outright rather than extending it. One gap from the
+      original ask: `EmojiPickerView` has no public search/filter API, so there's no
+      search bar — browse-by-category-and-recents only, matching what the widget
+      itself actually offers.
+- [x] **Bubble tap for link/phone detection** (July 12 2026) — auto-linkify URLs
+      and phone numbers in the message body: tap URL → browser, tap phone → dial
+      dialog. Addresses → Maps not done. Links are attached as `LinkAnnotation`s on
+      the `AnnotatedString` and rendered with a plain `Text` — **not** `ClickableText`.
+      `ClickableText` was the first attempt (commit `16ce390`); its whole-body gesture
+      detector swallowed taps/long-presses before they reached the bubble's parent
+      `combinedClickable`, breaking message selection and the emoji reaction popup
+      (fixed same day — see CHANGELOG 2026-07-12 third batch). Rule: link handling in
+      a bubble must stay scoped to link ranges (`LinkAnnotation`), never wrap the body.
 - [ ] **Copy individual message** — already in action bar. Verify
       it copies plain text without timestamps.
-- [ ] **Forward message** — action bar Forward: opens share sheet
-      or internal compose with message body pre-filled.
+- [x] **Forward message** (July 6 2026) — full in-app forward, not just a share
+      sheet: new `ForwardPickerScreen`/`ForwardPickerViewModel` (`ui/forward/`) shows
+      recent conversations by default, live contact search once you type (same source
+      as `NewConversationViewModel`), and sends a fresh copy (body + attachments) to
+      whichever thread/contact is picked via `MmsManagerWrapper.sendMms()` /
+      `SmsManagerWrapper.sendTextMessage()`. Wired to both the action-bar Forward
+      button and the image viewer's overflow menu. **Known simplification:** the
+      forwarded copy's optimistic row has no PendingIntent (no fast delivery-status
+      callback) — it still sends and gets reconciled by the normal incremental sync,
+      just without the live-compose flow's immediate status update. Acceptable
+      trade-off for a secondary action; revisit if forwarded messages feel laggy on
+      delivery-status in practice.
 - [ ] **Message info** — wire up Info in action bar once delivery
-      timestamps are stored.
+      timestamps are stored. (The image viewer's "View details" is a separate,
+      already-shipped lightweight version — sender/timestamp/starred only, see below.)
 - [ ] **Selection mode — Copy format** — verify friendly plain text
       output matches the designed format:
         Conversation with [Name]
@@ -404,9 +470,24 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       Settings.
 
 ### Starred & pinned messages
-- [ ] **Star / pin a message** — long-press → "Pin" (Discord-style).
-      `isPinned` boolean on `MessageEntity`. Room migration required.
-      Wording TBD (pin / star / favorite — same underlying feature).
+- [x] **Star an image** (July 6 2026) — wording landed as "star," scoped to images
+      specifically rather than the originally-envisioned generic per-message "pin."
+      `isStarred` boolean on `MessageEntity` (schema v13→v14). Toggled from the
+      full-screen image viewer's overflow menu. A global cross-thread **Starred
+      images** gallery (`ui/starred/StarredImagesScreen.kt`, reachable from
+      Settings → General) lists every starred image, newest first; tapping one
+      navigates to its source thread and scrolls/highlights it (reuses the
+      search-jump `scrollToMessageId` mechanism rather than a third full-screen
+      viewer implementation). This satisfies the gallery half of the original ask;
+      the generic "pin any message (text or media), long-press → Pin, per-thread
+      panel" design below is still open as a distinct, broader feature — `isPinned`
+      would be a separate column from `isStarred`, not a rename of it, since they
+      cover different scopes (any message vs. images only) and different browsing
+      surfaces (per-thread panel vs. global gallery).
+- [ ] **Pin any message (text or media)** — long-press → "Pin" (Discord-style).
+      `isPinned` boolean on `MessageEntity`. Room migration required. Distinct from
+      the image-only `isStarred` above — covers text messages too, and the panel
+      below is per-thread, not a global gallery.
 - [ ] **Pinned messages panel** — accessible from thread toolbar icon
       or ⋮ menu. Scrollable list of pinned messages in this thread;
       tap jumps to that message in context.
@@ -482,8 +563,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🔵 TIER 4 — Infrastructure / Housekeeping
 
 ### CI and test hygiene
-- [ ] **GitHub Actions CI** — run unit tests on every push,
-      instrumented tests on merge to main. Badge in README.
+- [x] **Unit tests on every push** (July 11 2026) — `distribute.yml` now runs
+      `./gradlew test` before `assembleDebug`, so broken code can't reach testers.
+- [ ] **GitHub Actions CI — remaining** — instrumented tests on merge to
+      main. Badge in README.
 - [ ] **Replace `runBlocking` in instrumented tests** with `runTest`
       from `kotlinx-coroutines-test`.
 - [ ] **Add test size annotations** — `@SmallTest` / `@MediumTest` /

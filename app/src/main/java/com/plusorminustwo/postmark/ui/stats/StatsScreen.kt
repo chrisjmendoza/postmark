@@ -61,7 +61,6 @@ fun StatsScreen(
     val heatmapMessages     by viewModel.heatmapMessages.collectAsState()
     val directThreadNavigation by viewModel.directThreadNavigation.collectAsState()
     val responseBuckets by viewModel.responseBuckets.collectAsState()
-    val isRecomputing by viewModel.isRecomputing.collectAsState()
 
     val isInDrilldown = selectedScope == StatsScope.PER_THREAD && selectedThreadId != null
     val isInThreadList = selectedScope == StatsScope.PER_THREAD && selectedThreadId == null
@@ -127,10 +126,6 @@ fun StatsScreen(
                         )
                     }
                 }
-            }
-
-            if (isRecomputing) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
             when {
@@ -326,8 +321,11 @@ private fun ChartsView(stats: ParsedStats) {
 
 // ── Heatmap view ──────────────────────────────────────────────────────────────
 
+// Tiers 1–6 are fixed accent blues that read on both themes. Tier 0 (no messages) is
+// resolved via [heatmapTierColor] instead — the literal below is only a placeholder so
+// index math stays 1:1 with the tier number.
 private val HEATMAP_COLORS = listOf(
-    Color(0xFF2C2C2E),  // tier 0 — no messages
+    Color(0xFF2C2C2E),  // tier 0 — placeholder; see heatmapTierColor()
     Color(0xFF1C3A5A),  // tier 1
     Color(0xFF1A4E7A),  // tier 2
     Color(0xFF1F62A0),  // tier 3
@@ -335,6 +333,16 @@ private val HEATMAP_COLORS = listOf(
     Color(0xFF2E8AD1),  // tier 5
     Color(0xFF378ADD)   // tier 6 — most active
 )
+
+/**
+ * Background color for a heatmap cell of [tier]. Tier 0 ("no messages") uses the theme's
+ * [surfaceVariant][androidx.compose.material3.ColorScheme.surfaceVariant] so an empty day
+ * reads as a faint cell on both light and dark themes, rather than the hardcoded near-black
+ * that looked like a *busy* day on the light-theme white card.
+ */
+@Composable
+private fun heatmapTierColor(tier: Int): Color =
+    if (tier == 0) MaterialTheme.colorScheme.surfaceVariant else HEATMAP_COLORS[tier]
 
 @Composable
 private fun HeatmapView(
@@ -368,6 +376,7 @@ private fun HeatmapView(
     val fullDateFmt     = remember { DateTimeFormatter.ofPattern("EEEE, MMMM d") }
 
     val totalInMonth    = countByDay.values.sum()
+    val maxDayCount     = countByDay.values.maxOrNull() ?: 0
     val activeDaysCount = countByDay.count { it.value > 0 }
     val dailyAvg        = if (month.lengthOfMonth() > 0) totalInMonth.toFloat() / month.lengthOfMonth() else 0f
 
@@ -486,7 +495,7 @@ private fun HeatmapView(
                     } else {
                         val date      = LocalDate.parse(label)
                         val count     = countByDay[label] ?: 0
-                        val tier      = heatmapTierForCount(count)
+                        val tier      = heatmapTierForCount(count, maxDayCount)
                         val dayNum    = date.dayOfMonth
                         val isSelected = date in selectedDays
                         Box(
@@ -502,7 +511,7 @@ private fun HeatmapView(
                                 )
                                 .background(
                                     if (isSelected) MaterialTheme.colorScheme.primary
-                                    else HEATMAP_COLORS[tier]
+                                    else heatmapTierColor(tier)
                                 )
                                 .clickable { onDayToggle(date) },
                             contentAlignment = Alignment.Center
@@ -530,17 +539,17 @@ private fun HeatmapView(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text("Less", style = MaterialTheme.typography.labelSmall,
+                Text("0", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                HEATMAP_COLORS.forEach { color ->
+                HEATMAP_COLORS.indices.forEach { tier ->
                     Box(
                         modifier = Modifier
                             .size(12.dp)
                             .clip(RoundedCornerShape(2.dp))
-                            .background(color)
+                            .background(heatmapTierColor(tier))
                     )
                 }
-                Text("More", style = MaterialTheme.typography.labelSmall,
+                Text(maxDayCount.toString(), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(12.dp))

@@ -58,15 +58,6 @@ interface MessageDao {
     """)
     suspend fun getActiveDatesForThread(threadId: Long): List<String>
 
-    @Query("SELECT * FROM messages WHERE threadId = :threadId ORDER BY timestamp DESC LIMIT 1")
-    suspend fun getLatestForThread(threadId: Long): MessageEntity?
-
-    @Query("SELECT * FROM messages WHERE threadId = :threadId ORDER BY timestamp DESC LIMIT :n")
-    suspend fun getLatestNForThread(threadId: Long, n: Int): List<MessageEntity>
-
-    @Query("SELECT * FROM messages WHERE threadId = :threadId AND timestamp < :timestamp ORDER BY timestamp DESC LIMIT 1")
-    suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity?
-
     @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :messageId")
     suspend fun updateDeliveryStatus(messageId: Long, status: Int)
 
@@ -106,8 +97,11 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteById(messageId: Long)
 
+    /** Latest message in a thread by timestamp — used to refresh the thread preview after
+     *  reaction cleanup. No reaction filtering (the former name `getLatestNonReactionForThread`
+     *  falsely implied it). */
     @Query("SELECT * FROM messages WHERE threadId = :threadId ORDER BY timestamp DESC LIMIT 1")
-    suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity?
+    suspend fun getLatestForThread(threadId: Long): MessageEntity?
 
     @Query("DELETE FROM messages")
     suspend fun deleteAll()
@@ -127,19 +121,29 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE threadId = :threadId AND attachmentUri IS NOT NULL ORDER BY timestamp DESC")
     fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>>
 
+    /** Every message (any thread) carrying a media attachment. Backs the orphaned
+     *  outgoing-MMS cache sweep, which needs the full set of still-referenced cache URIs. */
+    @Query("SELECT * FROM messages WHERE attachmentUri IS NOT NULL")
+    suspend fun getAllWithAttachments(): List<MessageEntity>
+
     /** Live (threadId → unread count) pairs used by [ConversationsViewModel] for unread badges. */
     @Query("SELECT threadId, COUNT(*) as count FROM messages WHERE isRead = 0 GROUP BY threadId")
     fun observeUnreadCounts(): Flow<List<UnreadCount>>
 
     /** Highest SMS provider _id stored in Room (SMS only, excluding MMS offset rows).
-     *  Used by [SmsSyncHandler] to bound incremental queries to rows not yet imported. */
-    @Query("SELECT MAX(id) FROM messages WHERE isMms = 0")
+     *  Used by [SmsSyncHandler] to bound incremental queries to rows not yet imported.
+     *  The `id < 20000000000` (RESTORED_ID_OFFSET) guard excludes rows inserted by
+     *  backup restore — those have no provider row, and letting one become the
+     *  watermark would make every future real message silently unsynced. */
+    @Query("SELECT MAX(id) FROM messages WHERE isMms = 0 AND id < 20000000000")
     suspend fun getMaxId(): Long?
 
     /** Highest stored MMS row id (already offset by MMS_ID_OFFSET).
      *  Subtract MMS_ID_OFFSET to get the raw content-provider `_id`.
-     *  Used by [SmsSyncHandler] to bound incremental MMS queries. */
-    @Query("SELECT MAX(id) FROM messages WHERE isMms = 1")
+     *  Used by [SmsSyncHandler] to bound incremental MMS queries.
+     *  Excludes restored rows (id >= RESTORED_ID_OFFSET) for the same watermark
+     *  reason as [getMaxId]. */
+    @Query("SELECT MAX(id) FROM messages WHERE isMms = 1 AND id < 20000000000")
     suspend fun getMaxMmsId(): Long?
 
     /** Lowest stored MMS row id (already offset by MMS_ID_OFFSET).
@@ -148,9 +152,24 @@ interface MessageDao {
      *  The `id > 0` guard excludes optimistic sent-MMS rows (which have negative IDs
      *  like `-System.currentTimeMillis()`). Without it, a live optimistic row would make
      *  resumeBeforeRawId go deeply negative, causing `rawId >= resumeBeforeRawId` to be
-     *  true for every positive rawId and silently skipping the entire MMS import. */
-    @Query("SELECT MIN(id) FROM messages WHERE isMms = 1 AND id > 0")
+     *  true for every positive rawId and silently skipping the entire MMS import.
+     *  The `id < 20000000000` guard excludes restored rows, which aren't provider rows
+     *  and must not influence the resume watermark. */
+    @Query("SELECT MIN(id) FROM messages WHERE isMms = 1 AND id > 0 AND id < 20000000000")
     suspend fun getMinMmsId(): Long?
+
+    /** True when any message row exists, including restored rows. Used by
+     *  [ConversationsViewModel]'s recovery check — unlike the watermark queries above,
+     *  restored rows COUNT as messages here, otherwise a device holding only restored
+     *  history would re-trigger the full provider import on every launch. */
+    @Query("SELECT EXISTS(SELECT 1 FROM messages)")
+    suspend fun hasAnyMessages(): Boolean
+
+    /** Highest id in the restored-row range (RESTORED_ID_OFFSET and above), or null.
+     *  Seeds the id sequence of a new restore so it can't collide with rows an
+     *  earlier (possibly interrupted) restore already inserted. */
+    @Query("SELECT MAX(id) FROM messages WHERE id >= 20000000000")
+    suspend fun getMaxRestoredId(): Long?
 
     /** Used for the 8-week activity heatmap (all threads). */
     @Query("SELECT * FROM messages WHERE timestamp >= :startMs ORDER BY timestamp ASC")
@@ -167,4 +186,14 @@ interface MessageDao {
     /** Month-scoped heatmap (single thread). */
     @Query("SELECT * FROM messages WHERE threadId = :threadId AND timestamp >= :startMs AND timestamp < :endMs ORDER BY timestamp ASC")
     fun observeMessagesInRangeForThread(threadId: Long, startMs: Long, endMs: Long): Flow<List<MessageEntity>>
+
+    @Query("UPDATE messages SET isStarred = :isStarred WHERE id = :messageId")
+    suspend fun updateStarred(messageId: Long, isStarred: Boolean)
+
+    /** Every starred message with a media attachment, newest first — backs the global
+     *  Starred Images gallery (Settings → Starred images). Image-vs-video/audio filtering
+     *  happens in the repository layer after decoding attachmentsJson, since a single
+     *  starred message can carry a mix of attachment types. */
+    @Query("SELECT * FROM messages WHERE isStarred = 1 AND attachmentUri IS NOT NULL ORDER BY timestamp DESC")
+    fun observeStarredMedia(): Flow<List<MessageEntity>>
 }

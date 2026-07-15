@@ -12,6 +12,13 @@ internal val DAY_FORMATTER = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault(
     it.timeZone = java.util.TimeZone.getDefault()
 }
 
+/** "Sat, Jul 5, 2026 5:34 PM" — full date + time, used by the full-screen image viewer's
+ *  header. An earlier version showed only weekday + time ("Sat 5:34 PM"), which was
+ *  ambiguous for anything more than a few days old — the full date removes that. */
+internal val FRIENDLY_TIMESTAMP_FORMATTER = SimpleDateFormat("EEE, MMM d, yyyy h:mm a", Locale.getDefault()).also {
+    it.timeZone = java.util.TimeZone.getDefault()
+}
+
 /**
  * Groups [this] list (expected in ascending timestamp order) into an ordered map of
  * day-label → messages. The map preserves insertion order, so keys are in ascending
@@ -58,10 +65,10 @@ fun computeClusterPositions(messages: List<Message>): Map<Long, ClusterPosition>
         val prev = messages.getOrNull(i - 1)
         val next = messages.getOrNull(i + 1)
         val attachedToPrev = prev != null &&
-            prev.isSent == cur.isSent &&
+            sameVisualSender(prev, cur) &&
             cur.timestamp - prev.timestamp <= CLUSTER_GAP_MS
         val attachedToNext = next != null &&
-            next.isSent == cur.isSent &&
+            sameVisualSender(cur, next) &&
             next.timestamp - cur.timestamp <= CLUSTER_GAP_MS
         result[cur.id] = when {
             attachedToPrev && attachedToNext -> ClusterPosition.MIDDLE
@@ -72,3 +79,11 @@ fun computeClusterPositions(messages: List<Message>): Map<Long, ClusterPosition>
     }
     return result
 }
+
+/**
+ * Sent messages all render on the right regardless of their stored address, but
+ * received messages in a group thread carry the actual sender in [Message.address] —
+ * two participants texting back-to-back must not fuse into one bubble run.
+ */
+private fun sameVisualSender(a: Message, b: Message): Boolean =
+    a.isSent == b.isSent && (a.isSent || a.address == b.address)

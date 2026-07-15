@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.plusorminustwo.postmark.data.sync.SmsContentObserver
+import com.plusorminustwo.postmark.service.backup.BackupScheduler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -24,6 +25,7 @@ class PostmarkApplication : Application(), Configuration.Provider {
 
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var smsContentObserver: SmsContentObserver
+    @Inject lateinit var backupScheduler: BackupScheduler
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -37,6 +39,10 @@ class PostmarkApplication : Application(), Configuration.Provider {
         // while the app is running. The initial bulk sync is triggered by
         // MainActivity after permissions are granted.
         smsContentObserver.register()
+        // Reconcile the periodic backup schedule with the persisted preferences.
+        // ExistingPeriodicWorkPolicy.UPDATE keeps the original enqueue time, so
+        // re-syncing on every startup never resets a pending backup's timing.
+        backupScheduler.syncWithPrefs()
     }
 
     private fun createNotificationChannels() {

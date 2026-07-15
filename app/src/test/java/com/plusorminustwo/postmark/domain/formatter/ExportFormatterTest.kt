@@ -32,6 +32,66 @@ class ExportFormatterTest {
     }
 
     @Test
+    fun `header includes formatted phone number after the name`() {
+        val msg = received(t1, "Hey")
+        val result = ExportFormatter.formatForCopy(listOf(msg), displayName, ownAddress, theirAddress)
+        assertTrue(result.startsWith("Conversation with $displayName (555) 999-8888"))
+    }
+
+    @Test
+    fun `header does not repeat the number for unknown contacts`() {
+        // Unknown contact: displayName IS the raw address — number must appear once.
+        val msg = received(t1, "Hey")
+        val result = ExportFormatter.formatForCopy(listOf(msg), theirAddress, ownAddress, theirAddress)
+        assertTrue(result.startsWith("Conversation with $theirAddress\n"))
+    }
+
+    @Test
+    fun `header does not repeat the number when the display name is already formatted`() {
+        val formatted = formatPhoneNumber(theirAddress)
+        val msg = received(t1, "Hey")
+        val result = ExportFormatter.formatForCopy(listOf(msg), formatted, ownAddress, theirAddress)
+        assertTrue(result.startsWith("Conversation with $formatted\n"))
+    }
+
+    @Test
+    fun `attachment note is appended after the body`() {
+        val msg = received(t1, "look at this")
+        val result = ExportFormatter.formatForCopy(
+            listOf(msg), displayName, ownAddress, theirAddress
+        ) { "[Attachment: media/Sarah/2024-04-14_1003.jpg]" }
+        assertTrue(result.contains("look at this\n[Attachment: media/Sarah/2024-04-14_1003.jpg]"))
+    }
+
+    @Test
+    fun `photo-only message exports the note instead of a blank line`() {
+        val msg = received(t1, "")
+        val result = ExportFormatter.formatForCopy(
+            listOf(msg), displayName, ownAddress, theirAddress
+        ) { "[Attachment: media/Sarah/2024-04-14_1003.jpg]" }
+        assertTrue(result.contains("[Attachment: media/Sarah/2024-04-14_1003.jpg]"))
+        assertFalse("Blank body line should be dropped when a note is present", result.contains("\n\n\n"))
+    }
+
+    @Test
+    fun `messages without attachments are unaffected by the note lambda`() {
+        val withNote = ExportFormatter.formatForCopy(
+            listOf(received(t1, "plain")), displayName, ownAddress, theirAddress
+        ) { null }
+        val without = ExportFormatter.formatForCopy(
+            listOf(received(t1, "plain")), displayName, ownAddress, theirAddress
+        )
+        assertEquals(without, withNote)
+    }
+
+    @Test
+    fun `header omits number when no address is supplied`() {
+        val msg = received(t1, "Hey")
+        val result = ExportFormatter.formatForCopy(listOf(msg), displayName, ownAddress)
+        assertTrue(result.startsWith("Conversation with $displayName\n"))
+    }
+
+    @Test
     fun `single-day selection has no date divider`() {
         val msgs = listOf(received(t1, "Hey"), sent(t2, "Hi back"))
         val result = ExportFormatter.formatForCopy(msgs, displayName, ownAddress)

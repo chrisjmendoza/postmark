@@ -1,4 +1,4 @@
-package com.plusorminustwo.postmark.search.parser
+package com.plusorminustwo.postmark.data.reaction
 
 import android.content.Context
 import org.json.JSONArray

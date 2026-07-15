@@ -27,6 +27,7 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
 import com.plusorminustwo.postmark.data.sync.SyncLogger
+import com.plusorminustwo.postmark.domain.logging.redactPhone
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -95,7 +96,7 @@ class MmsManagerWrapper @Inject constructor(
             syncLogger.logError(TAG, "sendMms FAILED — no attachments for messageId=$messageId")
             return@withContext false
         }
-        syncLogger.log(TAG, "sendMms start: to=$toAddress attachments=${attachments.size} messageId=$messageId")
+        syncLogger.log(TAG, "sendMms start: to=${toAddress.redactPhone()} attachments=${attachments.size} messageId=$messageId")
 
         // ── 1. Read attachment bytes (with filesDir cache for retry resilience) ─
         /* Photo-picker URIs (content://media/picker_get_content/…) are only valid
@@ -263,7 +264,7 @@ class MmsManagerWrapper @Inject constructor(
         try {
             smsManager.sendMultimediaMessage(context, pduUri, null, null, sentIntent)
             Log.i(TAG, "sendMms: sendMultimediaMessage dispatched for messageId=$messageId")
-            syncLogger.log(TAG, "sendMms dispatched to radio: to=$toAddress messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
+            syncLogger.log(TAG, "sendMms dispatched to radio: to=${toAddress.redactPhone()} messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
         } catch (e: Exception) {
             Log.e(TAG, "sendMultimediaMessage failed", e)
             syncLogger.logError(TAG, "sendMms FAILED — sendMultimediaMessage threw for messageId=$messageId", e)
@@ -349,6 +350,47 @@ class MmsManagerWrapper @Inject constructor(
                 if (index == 0) "mms_attach_$messageId.bin"
                 else "mms_attach_${messageId}_$index.bin"
             )
+
+        /**
+         * Deletes the filesDir cache files (`mms_attach_*.bin`) backing [attachments] of an
+         * outgoing MMS. Received-MMS attachments carry `content://mms/part` URIs whose last
+         * segment isn't a cache-file name, so they're skipped; any non-cache URI is a no-op.
+         * Call after a message is deleted so its cached media doesn't leak.
+         */
+        fun deleteAttachmentCacheFiles(context: Context, attachments: List<MessageAttachment>) {
+            attachments.forEach { att ->
+                val name = Uri.parse(att.uri).lastPathSegment ?: return@forEach
+                if (name.startsWith("mms_attach_") && name.endsWith(".bin")) {
+                    runCatching { File(context.filesDir, name).delete() }
+                }
+            }
+        }
+
+        /**
+         * Deletes `mms_attach_*.bin` cache files in filesDir that no live message references.
+         * Each sent-MMS row (and any still-pending optimistic row) references its own cache
+         * file via a FileProvider URI, so a file whose name is absent from [referencedNames]
+         * is a leftover from a superseded/failed/deleted send. A file is only removed once
+         * [nowMs] − its mtime exceeds [minAgeMs], so a file an in-flight send just wrote but
+         * hasn't yet attached to a row is never swept. Returns the number of files deleted.
+         */
+        fun sweepOrphanedAttachmentCache(
+            context: Context,
+            referencedNames: Set<String>,
+            nowMs: Long,
+            minAgeMs: Long = 60 * 60 * 1000L
+        ): Int {
+            val files = context.filesDir.listFiles { f ->
+                f.name.startsWith("mms_attach_") && f.name.endsWith(".bin")
+            } ?: return 0
+            var deleted = 0
+            files.forEach { f ->
+                if (f.name !in referencedNames && nowMs - f.lastModified() > minAgeMs) {
+                    if (runCatching { f.delete() }.getOrDefault(false)) deleted++
+                }
+            }
+            return deleted
+        }
     }
 
     // ── Image compression helper ──────────────────────────────────────────────

@@ -4,7 +4,7 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.previewText
-import com.plusorminustwo.postmark.search.parser.ReactionFallbackParser
+import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -100,7 +100,7 @@ class ReactionResolver @Inject constructor(
                 }
             } else {
                 // Original not found within the 100-message window — leave as visible bubble.
-                log("no-match: id=${msg.id} emoji=${parsed.emoji} quote='${parsed.quotedText.take(40)}'")
+                log("no-match: id=${msg.id} emoji=${parsed.emoji} quoteLen=${parsed.quotedText.length}")
             }
         }
 

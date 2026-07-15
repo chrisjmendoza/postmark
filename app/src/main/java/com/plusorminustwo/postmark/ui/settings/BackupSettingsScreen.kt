@@ -1,6 +1,8 @@
 package com.plusorminustwo.postmark.ui.settings
 
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -8,6 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +24,7 @@ import com.plusorminustwo.postmark.service.backup.BackupFrequency
 @Composable
 fun BackupSettingsScreen(
     onBack: () -> Unit,
+    onExportClick: () -> Unit = {},
     viewModel: BackupSettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -38,9 +42,34 @@ fun BackupSettingsScreen(
 
     val backupFiles by viewModel.backupFiles.collectAsState()
     val backupStatus by viewModel.backupStatus.collectAsState()
+    val restoreStatus by viewModel.restoreStatus.collectAsState()
+    val pendingRestore by viewModel.pendingRestore.collectAsState()
+    val backupFolder by viewModel.backupFolder.collectAsState()
+    val feedback by viewModel.feedback.collectAsState()
 
     var fileToDelete by remember { mutableStateOf<String?>(null) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(feedback) {
+        feedback?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearFeedback()
+        }
+    }
+
+    // Refresh the file list whenever a backup or restore finishes running.
+    LaunchedEffect(backupStatus, restoreStatus) {
+        viewModel.refreshBackupFiles()
+    }
+
+    val restorePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.prepareRestoreFromUri(it) } }
+
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri -> uri?.let { viewModel.setBackupFolder(it) } }
 
     // ── Confirmation dialogs ──────────────────────────────────────────────────
 
@@ -78,6 +107,38 @@ fun BackupSettingsScreen(
         )
     }
 
+    pendingRestore?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissPendingRestore() },
+            title = { Text("Restore backup") },
+            text = {
+                val manifest = pending.manifest
+                Text(
+                    buildString {
+                        if (manifest != null) {
+                            append("\"${pending.displayName}\" from ")
+                            append(formatBackupDate(manifest.exportedAt))
+                            append(" contains ${manifest.threadCount} conversations and ")
+                            append("${manifest.messageCount} messages.")
+                        } else {
+                            append("\"${pending.displayName}\" is an older Postmark backup ")
+                            append("(text messages only).")
+                        }
+                        append("\n\nRestoring adds messages and conversations that are ")
+                        append("missing from this phone. Nothing is deleted or overwritten, ")
+                        append("and messages you already have are skipped.")
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.startRestore() }) { Text("Restore") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissPendingRestore() }) { Text("Cancel") }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -88,7 +149,8 @@ fun BackupSettingsScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -105,6 +167,7 @@ fun BackupSettingsScreen(
                 Switch(checked = enabled, onCheckedChange = {
                     enabled = it
                     prefs.edit().putBoolean("enabled", it).apply()
+                    viewModel.applySchedule()
                 })
             }
 
@@ -118,6 +181,7 @@ fun BackupSettingsScreen(
                             onClick = {
                                 frequency = freq
                                 prefs.edit().putString("frequency", freq.name).apply()
+                                viewModel.applySchedule()
                             },
                             shape = SegmentedButtonDefaults.itemShape(index, BackupFrequency.entries.size),
                             label = { Text(freq.name.lowercase().replaceFirstChar { it.uppercase() }) }
@@ -132,6 +196,7 @@ fun BackupSettingsScreen(
                     Switch(checked = requireWifi, onCheckedChange = {
                         requireWifi = it
                         prefs.edit().putBoolean("require_wifi", it).apply()
+                        viewModel.applySchedule()
                     })
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -139,6 +204,7 @@ fun BackupSettingsScreen(
                     Switch(checked = requireCharging, onCheckedChange = {
                         requireCharging = it
                         prefs.edit().putBoolean("require_charging", it).apply()
+                        viewModel.applySchedule()
                     })
                 }
 
@@ -168,11 +234,71 @@ fun BackupSettingsScreen(
                 Text("Back up now")
             }
 
-            // Storage path
-            val backupDir = context.getExternalFilesDir("backups")?.absolutePath ?: ""
-            Text("Storage: $backupDir",
+            // ── Backup location ───────────────────────────────────────────────
+            Text("Backup folder", style = MaterialTheme.typography.labelLarge)
+            if (backupFolder != null) {
+                Text(
+                    backupFolder ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (viewModel.folderFallbackHappened()) {
+                    Text(
+                        "The last backup couldn't use this folder and was saved to " +
+                            "app storage instead. Re-choose the folder to fix access.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            } else {
+                Text(
+                    "App storage — erased if Postmark is uninstalled. Choose a folder " +
+                        "to keep backups through reinstalls.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { folderPicker.launch(null) }) {
+                    Text(if (backupFolder != null) "Change folder" else "Choose folder")
+                }
+                if (backupFolder != null) {
+                    TextButton(onClick = { viewModel.clearBackupFolder() }) {
+                        Text("Use app storage")
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
+            // ── Restore ───────────────────────────────────────────────────────
+            Text("Restore", style = MaterialTheme.typography.titleSmall)
+            RestoreStatusRow(restoreStatus)
+            OutlinedButton(
+                onClick = { restorePicker.launch(arrayOf("*/*")) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = restoreStatus !is RestoreStatus.Running &&
+                    restoreStatus !is RestoreStatus.Queued
+            ) {
+                Text("Restore from backup file…")
+            }
+
+            HorizontalDivider()
+
+            // ── Export ────────────────────────────────────────────────────────
+            Text("Export", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Save chosen conversations — optionally a date range — as a " +
+                    "backup file you can keep anywhere or restore later.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(
+                onClick = onExportClick,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Export conversations…")
+            }
 
             HorizontalDivider()
 
@@ -200,6 +326,7 @@ fun BackupSettingsScreen(
                     backupFiles.forEach { file ->
                         BackupFileRow(
                             file = file,
+                            onRestoreClick = { viewModel.prepareRestoreFromFile(file) },
                             onDeleteClick = { fileToDelete = file.name }
                         )
                     }
@@ -247,7 +374,46 @@ private fun BackupStatusRow(status: BackupStatus) {
 }
 
 @Composable
-private fun BackupFileRow(file: BackupFileInfo, onDeleteClick: () -> Unit) {
+private fun RestoreStatusRow(status: RestoreStatus) {
+    when (status) {
+        is RestoreStatus.None -> return
+        is RestoreStatus.Queued -> Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+            Text("Restore queued…", style = MaterialTheme.typography.bodySmall)
+        }
+        is RestoreStatus.Running -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val label = if (status.total > 0)
+                "${status.phase} — ${"%,d".format(status.done)} / ${"%,d".format(status.total)}"
+            else status.phase
+            Text(label, style = MaterialTheme.typography.bodySmall)
+            if (status.total > 0) {
+                LinearProgressIndicator(
+                    progress = { status.done.toFloat() / status.total },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+        is RestoreStatus.Finished -> Text(
+            if (status.success) "Last restore: ${status.message}"
+            else "Restore failed: ${status.message}",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (status.success) MaterialTheme.colorScheme.tertiary
+            else MaterialTheme.colorScheme.error
+        )
+    }
+}
+
+@Composable
+private fun BackupFileRow(
+    file: BackupFileInfo,
+    onRestoreClick: () -> Unit,
+    onDeleteClick: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -262,9 +428,11 @@ private fun BackupFileRow(file: BackupFileInfo, onDeleteClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        IconButton(onClick = onRestoreClick) {
+            Icon(Icons.Default.Restore, contentDescription = "Restore ${file.name}")
+        }
         IconButton(onClick = onDeleteClick) {
             Icon(Icons.Default.Delete, contentDescription = "Delete ${file.name}")
         }
     }
 }
-

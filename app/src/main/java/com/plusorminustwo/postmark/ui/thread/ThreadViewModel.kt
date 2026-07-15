@@ -1,15 +1,18 @@
 ﻿package com.plusorminustwo.postmark.ui.thread
 
-import android.app.role.RoleManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.app.PendingIntent
-import android.os.Build
+import android.net.Uri
+import android.provider.BlockedNumberContract
 import android.provider.Telephony
 import androidx.core.content.FileProvider
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.plusorminustwo.postmark.data.contacts.lookupContactName
+import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
@@ -17,11 +20,14 @@ import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepositor
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
+import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
+import com.plusorminustwo.postmark.domain.model.RESTORED_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.decodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
+import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
@@ -30,9 +36,11 @@ import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -156,6 +164,23 @@ class ThreadViewModel @Inject constructor(
         .map { topEmojis -> buildQuickEmojiList(topEmojis) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DEFAULT_QUICK_EMOJIS)
 
+    /**
+     * address → contact display name for this thread's roster, resolved once per
+     * roster change on IO (each entry is a ContactsContract query). Empty for 1:1
+     * threads, so the UI can use `isNotEmpty()` as the "group thread — show
+     * per-bubble sender labels" signal.
+     */
+    val participantNames: StateFlow<Map<String, String>> = threadRepository
+        .observeById(threadId)
+        .map { it?.participants.orEmpty() }
+        .distinctUntilChanged()
+        .map { roster ->
+            if (roster.size <= 1) emptyMap()
+            else roster.associateWith { addr -> context.lookupContactName(addr) ?: formatPhoneNumber(addr) }
+        }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     // Named holder for the action-related sub-state to stay within combine's 5-arg limit.
     private data class InnerState(
         val replyText: String,
@@ -222,7 +247,12 @@ class ThreadViewModel @Inject constructor(
             pendingAttachments      = inner.pendingAttachments,
             replyingToId            = inner.replyingToId
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
+    }
+        // NOTE: deliberately NOT .flowOn(Dispatchers.Default). It was added July 12
+        // (fable-analysis #10) and reverted the same day: with it, on-device message
+        // selection stopped responding (mode entered but taps never applied). Root
+        // cause not yet isolated — re-attempt only with on-device verification.
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
     // ── Selection ─────────────────────────────────────────────────────────────
 
@@ -309,10 +339,57 @@ class ThreadViewModel @Inject constructor(
         // _selectionState already contains the long-pressed message
     }
 
-    /** Stub — forward a message to another conversation. */
-    fun forwardMessage(messageId: Long) {
-        dismissReactionPicker()
-        // TODO: navigate to contact picker and send message copy
+    fun toggleStarred(messageId: Long) {
+        viewModelScope.launch {
+            val message = messageRepository.getById(messageId) ?: return@launch
+            messageRepository.updateStarred(messageId, !message.isStarred)
+        }
+    }
+
+    /**
+     * Permanently deletes a message — both the Room row and, for a real (non-optimistic,
+     * `id > 0`) row, the underlying system `content://sms` or `content://mms` row. Requires
+     * being the default SMS app (system providers reject writes from non-default apps);
+     * sets [ThreadUiState.showDefaultSmsDialog] (the same dialog [sendMessage] uses) instead
+     * of failing silently if not.
+     *
+     * The caller is expected to confirm with the user first — this performs the delete
+     * immediately and unconditionally once called.
+     */
+    fun deleteMessage(messageId: Long) {
+        if (!context.isDefaultSmsApp()) {
+            _showDefaultSmsDialog.value = true
+            return
+        }
+        viewModelScope.launch {
+            val message = messageRepository.getById(messageId) ?: return@launch
+            // Negative IDs are optimistic (not-yet-synced) rows — no system row exists yet.
+            // Restored rows (id >= RESTORED_ID_OFFSET) exist only in Room by construction,
+            // so there is no provider row to delete for them either.
+            if (message.id in 1 until RESTORED_ID_OFFSET) {
+                val uri = if (message.isMms) {
+                    Uri.parse("content://mms/${message.id - MMS_ID_OFFSET}")
+                } else {
+                    Uri.parse("content://sms/${message.id}")
+                }
+                withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.delete(uri, null, null)
+                    } catch (_: Exception) {
+                        // System provider delete failed (e.g. race with sync) — still remove
+                        // the local row below so the UI doesn't show a message the user just
+                        // asked to delete; a future resync can't resurrect a row that no
+                        // longer exists in Room even if the system row somehow survived.
+                    }
+                }
+            }
+            messageRepository.deleteById(messageId)
+            // Remove the outgoing-MMS media this message cached in filesDir so it doesn't
+            // leak (no-op for SMS / received MMS — those carry no mms_attach_* cache files).
+            withContext(Dispatchers.IO) {
+                MmsManagerWrapper.deleteAttachmentCacheFiles(context, message.attachments)
+            }
+        }
     }
 
     fun toggleReaction(messageId: Long, emoji: String) {
@@ -465,7 +542,7 @@ class ThreadViewModel @Inject constructor(
         // Require at least text OR an attachment; also block re-entrant sends.
         if ((text.isEmpty() && attachments.isEmpty()) || _isSending.value) return
 
-        if (!isDefaultSmsApp()) {
+        if (!context.isDefaultSmsApp()) {
             _showDefaultSmsDialog.value = true
             return
         }
@@ -510,12 +587,14 @@ class ThreadViewModel @Inject constructor(
                 /* Snapshot the max MMS _id before sending so MmsSentReceiver can find
                  * the real content://mms row without relying on the date field format
                  * (seconds vs milliseconds varies by device/OEM). */
-                val beforeSendMaxId = try {
-                    context.contentResolver.query(
-                        android.net.Uri.parse("content://mms"),
-                        arrayOf("_id"), null, null, "_id DESC LIMIT 1"
-                    )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
-                } catch (_: Exception) { 0L }
+                val beforeSendMaxId = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.query(
+                            android.net.Uri.parse("content://mms"),
+                            arrayOf("_id"), null, null, "_id DESC LIMIT 1"
+                        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
+                    } catch (_: Exception) { 0L }
+                }
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
@@ -598,12 +677,14 @@ class ThreadViewModel @Inject constructor(
                  * has already been consumed) then re-invoke MmsManagerWrapper with the
                  * same attachments. */
                 val reqCode = (messageId and 0x3FFF_FFFFL).toInt()
-                val beforeSendMaxId = try {
-                    context.contentResolver.query(
-                        android.net.Uri.parse("content://mms"),
-                        arrayOf("_id"), null, null, "_id DESC LIMIT 1"
-                    )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
-                } catch (_: Exception) { 0L }
+                val beforeSendMaxId = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.query(
+                            android.net.Uri.parse("content://mms"),
+                            arrayOf("_id"), null, null, "_id DESC LIMIT 1"
+                        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
+                    } catch (_: Exception) { 0L }
+                }
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
@@ -633,16 +714,6 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
-    private fun isDefaultSmsApp(): Boolean {
-        /* On Android 10+ the RoleManager is the authoritative source —
-         * getDefaultSmsPackage can lag after the role is granted via the system dialog. */
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val rm = context.getSystemService(RoleManager::class.java)
-            if (rm.isRoleHeld(RoleManager.ROLE_SMS)) return true
-        }
-        return Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
-    }
-
     // ── Backup policy ─────────────────────────────────────────────────────────
 
     fun updateBackupPolicy(policy: BackupPolicy) {
@@ -665,6 +736,40 @@ class ThreadViewModel @Inject constructor(
         val current = uiState.value.thread?.isPinned ?: return
         viewModelScope.launch {
             threadRepository.updatePinned(threadId, !current)
+        }
+    }
+
+    // ── Block number ──────────────────────────────────────────────────────────
+
+    /** One-shot user-facing result of a block attempt — the UI shows this as a Snackbar. */
+    private val _blockResultEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val blockResultEvent: SharedFlow<String> = _blockResultEvent.asSharedFlow()
+
+    /**
+     * Adds this thread's address to the system [BlockedNumberContract] provider, so the
+     * platform rejects future calls and texts from it before they reach any app.
+     * Only the default SMS app (or dialer/carrier app) may write to the provider —
+     * when Postmark isn't default, the result message says so instead of failing silently.
+     */
+    fun blockNumber() {
+        val address = uiState.value.thread?.address?.takeIf { it.isNotEmpty() } ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val message = try {
+                if (BlockedNumberContract.canCurrentUserBlockNumbers(context)) {
+                    val values = ContentValues().apply {
+                        put(BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER, address)
+                    }
+                    context.contentResolver.insert(
+                        BlockedNumberContract.BlockedNumbers.CONTENT_URI, values
+                    )
+                    "Blocked $address — calls and texts from this number will be rejected"
+                } else {
+                    "Postmark must be your default SMS app to block numbers"
+                }
+            } catch (e: Exception) {
+                "Couldn't block $address"
+            }
+            _blockResultEvent.emit(message)
         }
     }
 

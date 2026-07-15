@@ -10,8 +10,8 @@ class MessageGroupingTest {
     private val MIN = 60_000L
     private val DAY = 24 * 60 * MIN  // 86_400_000 ms
 
-    private fun msg(id: Long, isSent: Boolean, ts: Long) = Message(
-        id = id, threadId = 1L, address = "+1", body = "x",
+    private fun msg(id: Long, isSent: Boolean, ts: Long, address: String = "+1") = Message(
+        id = id, threadId = 1L, address = address, body = "x",
         timestamp = ts, isSent = isSent, type = 1
     )
 
@@ -95,6 +95,48 @@ class MessageGroupingTest {
         assertEquals(ClusterPosition.TOP,    result[1])
         assertEquals(ClusterPosition.BOTTOM, result[2])
         assertEquals(ClusterPosition.SINGLE, result[3])
+    }
+
+    // ── group threads: per-address boundaries ──────────────────────────────────
+    // In a group thread Message.address carries the actual per-message sender, so
+    // received messages cluster per address; sent messages always cluster together
+    // (they render on the right regardless of stored address).
+
+    @Test
+    fun `received messages from different group participants do not cluster`() {
+        val msgs = listOf(
+            msg(1, isSent = false, ts = 0,       address = "+15550001"),
+            msg(2, isSent = false, ts = 1 * MIN, address = "+15550002")
+        )
+        val result = computeClusterPositions(msgs)
+        assertEquals(ClusterPosition.SINGLE, result[1])
+        assertEquals(ClusterPosition.SINGLE, result[2])
+    }
+
+    @Test
+    fun `group participant switch breaks cluster then resumes per sender`() {
+        val msgs = listOf(
+            msg(1, isSent = false, ts = 0,       address = "+15550001"),
+            msg(2, isSent = false, ts = 1 * MIN, address = "+15550001"),
+            msg(3, isSent = false, ts = 2 * MIN, address = "+15550002"),
+            msg(4, isSent = false, ts = 3 * MIN, address = "+15550002")
+        )
+        val result = computeClusterPositions(msgs)
+        assertEquals(ClusterPosition.TOP,    result[1])
+        assertEquals(ClusterPosition.BOTTOM, result[2])
+        assertEquals(ClusterPosition.TOP,    result[3])
+        assertEquals(ClusterPosition.BOTTOM, result[4])
+    }
+
+    @Test
+    fun `sent messages cluster even when stored addresses differ`() {
+        val msgs = listOf(
+            msg(1, isSent = true, ts = 0,       address = "+15550001"),
+            msg(2, isSent = true, ts = 1 * MIN, address = "SELF")
+        )
+        val result = computeClusterPositions(msgs)
+        assertEquals(ClusterPosition.TOP,    result[1])
+        assertEquals(ClusterPosition.BOTTOM, result[2])
     }
 
     // ── gap breaks cluster ─────────────────────────────────────────────────────

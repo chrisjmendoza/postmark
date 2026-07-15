@@ -1,18 +1,12 @@
 package com.plusorminustwo.postmark.ui.stats
 
 import androidx.lifecycle.SavedStateHandle
-import com.plusorminustwo.postmark.data.db.dao.GlobalCounts
-import com.plusorminustwo.postmark.data.db.dao.GlobalStatsDao
 import com.plusorminustwo.postmark.data.db.dao.MessageDao
 import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
-import com.plusorminustwo.postmark.data.db.dao.ThreadStatsDao
-import com.plusorminustwo.postmark.data.db.entity.GlobalStatsEntity
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
-import com.plusorminustwo.postmark.data.db.entity.ThreadStatsEntity
-import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -64,7 +58,6 @@ class StatsViewModelActionsTest {
             ActionsThreadDao(),
             dao,
             ActionsReactionDao(),
-            StatsUpdater(dao, ActionsThreadStatsDao(), ActionsGlobalStatsDao(), ActionsReactionDao()),
             savedStateHandle
         )
     }
@@ -340,7 +333,6 @@ class StatsViewModelHeatmapDowTest {
             ActionsThreadDao(),
             dao,
             ActionsReactionDao(),
-            StatsUpdater(dao, ActionsThreadStatsDao(), ActionsGlobalStatsDao(), ActionsReactionDao()),
             SavedStateHandle()
         )
     }
@@ -518,9 +510,6 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity> =
         allMessages.filter { it.threadId == threadId && it.timestamp in startMs until endMs }
     override suspend fun getActiveDatesForThread(threadId: Long): List<String> = emptyList()
-    override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
-    override suspend fun getLatestNForThread(threadId: Long, n: Int): List<MessageEntity> = emptyList()
-    override suspend fun getLatestBeforeForThread(threadId: Long, timestamp: Long): MessageEntity? = null
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
     override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
@@ -531,11 +520,16 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun getMaxId(): Long? = null
     override suspend fun getMaxMmsId(): Long? = null
     override suspend fun getMinMmsId(): Long? = null
+    override suspend fun hasAnyMessages(): Boolean = false
+    override suspend fun getMaxRestoredId(): Long? = null
     override suspend fun deleteById(messageId: Long) = Unit
-    override suspend fun getLatestNonReactionForThread(threadId: Long): MessageEntity? = null
+    override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
     override suspend fun markAllRead(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
+    override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
+    override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 private class ActionsThreadDao : ThreadDao {
@@ -562,21 +556,6 @@ private class ActionsThreadDao : ThreadDao {
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
-}
-
-private class ActionsThreadStatsDao : ThreadStatsDao {
-    override fun observeByThread(threadId: Long): Flow<ThreadStatsEntity?> = flowOf(null)
-    override fun observeAll(): Flow<List<ThreadStatsEntity>> = flowOf(emptyList())
-    override suspend fun getByThread(threadId: Long): ThreadStatsEntity? = null
-    override suspend fun upsert(stats: ThreadStatsEntity) = Unit
-    override suspend fun update(stats: ThreadStatsEntity) = Unit
-    override suspend fun getGlobalCounts(): GlobalCounts? = null
-}
-
-private class ActionsGlobalStatsDao : GlobalStatsDao {
-    override fun observe(): Flow<GlobalStatsEntity?> = flowOf(null)
-    override suspend fun get(): GlobalStatsEntity? = null
-    override suspend fun upsert(stats: GlobalStatsEntity) = Unit
 }
 
 private class ActionsReactionDao : ReactionDao {

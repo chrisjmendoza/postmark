@@ -2,6 +2,7 @@ package com.plusorminustwo.postmark.data.sync
 
 import android.content.Context
 import android.util.Log
+import com.plusorminustwo.postmark.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -34,7 +35,8 @@ class SyncLogger @Inject constructor(
     fun log(tag: String, message: String) {
         val ts   = sdf.format(Date())
         val line = "$ts [$tag] $message\n"
-        Log.d("PostmarkSync", "[$tag] $message")
+        // Logcat mirror is debug-only: release Logcat is readable by adb on any device.
+        if (BuildConfig.DEBUG) Log.d("PostmarkSync", "[$tag] $message")
         try {
             logFile.appendText(line)
             trimIfNeeded()
@@ -50,7 +52,7 @@ class SyncLogger @Inject constructor(
         val stackTrace = throwable?.stackTraceToString()?.let { "\n$it" } ?: ""
         val ts   = sdf.format(Date())
         val line = "$ts [ERROR/$tag] $message$stackTrace\n"
-        Log.e("PostmarkSync", "[ERROR/$tag] $message", throwable)
+        if (BuildConfig.DEBUG) Log.e("PostmarkSync", "[ERROR/$tag] $message", throwable)
         try {
             logFile.appendText(line)
             trimIfNeeded()

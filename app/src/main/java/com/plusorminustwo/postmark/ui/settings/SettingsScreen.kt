@@ -26,7 +26,9 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Star
 import com.plusorminustwo.postmark.BuildConfig
+import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import androidx.compose.material3.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +55,7 @@ import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 fun SettingsScreen(
     onBackupSettingsClick: () -> Unit,
     onDevOptionsClick: () -> Unit,
+    onStarredImagesClick: () -> Unit = {},
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -65,16 +68,9 @@ fun SettingsScreen(
 
     // ── Default-SMS state — re-checked on every resume so it reflects changes
     // made in system settings without needing a restart.
-    fun checkIsDefault() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        context.getSystemService(RoleManager::class.java)
-            ?.isRoleHeld(RoleManager.ROLE_SMS) == true
-    } else {
-        Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
-    }
-
-    var isDefaultSmsApp by rememberSaveable { mutableStateOf(checkIsDefault()) }
+    var isDefaultSmsApp by rememberSaveable { mutableStateOf(context.isDefaultSmsApp()) }
     LifecycleResumeEffect(Unit) {
-        isDefaultSmsApp = checkIsDefault()
+        isDefaultSmsApp = context.isDefaultSmsApp()
         onPauseOrDispose {}
     }
 
@@ -83,7 +79,7 @@ fun SettingsScreen(
         ActivityResultContracts.StartActivityForResult()
     ) {
         // Re-check after the user returns from the system dialog.
-        isDefaultSmsApp = checkIsDefault()
+        isDefaultSmsApp = context.isDefaultSmsApp()
     }
 
     Scaffold(
@@ -133,6 +129,14 @@ fun SettingsScreen(
                 title = "Backup",
                 subtitle = "Schedule automatic backups",
                 onClick = onBackupSettingsClick
+            )
+            HorizontalDivider()
+
+            SettingsRow(
+                icon = { Icon(Icons.Default.Star, null) },
+                title = "Starred images",
+                subtitle = "View all starred photos",
+                onClick = onStarredImagesClick
             )
             HorizontalDivider()
 

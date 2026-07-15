@@ -15,7 +15,8 @@ import javax.inject.Singleton
  * and MMS (`content://mms`) content providers and forwards them to [SmsSyncHandler].
  *
  * [register] is called from [PostmarkApplication] when the app gains the default
- * SMS role; [unregister] is called when the role is lost.
+ * SMS role. The process-scoped registration is torn down automatically when the
+ * process dies, so no explicit unregister path is needed.
  */
 @Singleton
 class SmsContentObserver @Inject constructor(
@@ -30,11 +31,6 @@ class SmsContentObserver @Inject constructor(
     fun register() {
         context.contentResolver.registerContentObserver(smsUri, true, this)
         context.contentResolver.registerContentObserver(mmsUri, true, this)
-    }
-
-    /** Unregisters both content-provider observers. Safe to call multiple times. */
-    fun unregister() {
-        context.contentResolver.unregisterContentObserver(this)
     }
 
     /** Routes the changed URI to the appropriate [SmsSyncHandler] path. */

@@ -28,7 +28,6 @@ fun DevOptionsScreen(
     viewModel: DevOptionsViewModel = hiltViewModel()
 ) {
     val feedback by viewModel.feedback.collectAsState()
-    val isRecomputing by viewModel.isRecomputing.collectAsState()
     val isReprocessing by viewModel.isReprocessing.collectAsState()
     val reprocessProgress by viewModel.reprocessProgress.collectAsState()
     val logContent by viewModel.logContent.collectAsState()
@@ -63,30 +62,6 @@ fun DevOptionsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            DevSectionHeader("Stats")
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Recalculate stats", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "Recompute all conversation statistics",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (isRecomputing) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                } else {
-                    IconButton(onClick = viewModel::recomputeStats) {
-                        Icon(Icons.Default.Refresh, "Recalculate")
-                    }
-                }
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
             DevSectionHeader("Sample data")
             DevButton("Load sample data", "Insert 5 threads + ~70 messages") {
                 viewModel.loadSampleData()

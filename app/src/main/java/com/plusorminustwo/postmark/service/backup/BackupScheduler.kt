@@ -65,6 +65,27 @@ class BackupScheduler @Inject constructor(
         )
     }
 
+    /**
+     * Re-reads the persisted backup preferences and schedules or cancels the
+     * periodic work to match. Call on app startup (so the schedule survives
+     * pref changes made before this process started) and after any
+     * backup-settings change.
+     */
+    fun syncWithPrefs() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(KEY_ENABLED, true)) {
+            cancel()
+            return
+        }
+        schedule(
+            frequency = BackupFrequency.valueOf(
+                prefs.getString(KEY_FREQUENCY, BackupFrequency.DAILY.name)!!
+            ),
+            requireWifi = prefs.getBoolean(KEY_REQUIRE_WIFI, true),
+            requireCharging = prefs.getBoolean(KEY_REQUIRE_CHARGING, true)
+        )
+    }
+
     /** Cancels the periodic backup work. The next [schedule] call re-enables it. */
     fun cancel() {
         WorkManager.getInstance(context).cancelUniqueWork(BackupWorker.WORK_NAME)
@@ -76,34 +97,58 @@ class BackupScheduler @Inject constructor(
         WorkManager.getInstance(context).enqueue(request)
     }
 
-    private fun calculateInitialDelay(
-        frequency: BackupFrequency,
-        hourOfDay: Int,
-        minuteOfHour: Int,
-        dayOfWeek: Int,
-        dayOfMonth: Int
-    ): Long {
-        val now = Calendar.getInstance()
-        val target = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, hourOfDay)
-            set(Calendar.MINUTE, minuteOfHour)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
+    companion object {
+        // Shared with BackupSettingsScreen (writes) and BackupWorker (retention_count).
+        const val PREFS_NAME           = "backup_prefs"
+        const val KEY_ENABLED          = "enabled"
+        const val KEY_FREQUENCY        = "frequency"
+        const val KEY_REQUIRE_WIFI     = "require_wifi"
+        const val KEY_REQUIRE_CHARGING = "require_charging"
+        /** SAF tree URI of the user-chosen backup folder; null/absent = app dir. */
+        const val KEY_TREE_URI         = "backup_tree_uri"
+        /** Set by [BackupWorker] when the chosen folder was unusable and the backup
+         *  fell back to the app dir; cleared on the next successful folder write. */
+        const val KEY_TREE_FALLBACK    = "backup_tree_fallback"
+    }
+}
 
-            when (frequency) {
-                BackupFrequency.WEEKLY -> {
-                    set(Calendar.DAY_OF_WEEK, dayOfWeek)
-                    if (before(now)) add(Calendar.WEEK_OF_YEAR, 1)
-                }
-                BackupFrequency.MONTHLY -> {
-                    set(Calendar.DAY_OF_MONTH, dayOfMonth)
-                    if (before(now)) add(Calendar.MONTH, 1)
-                }
-                BackupFrequency.DAILY -> {
-                    if (before(now)) add(Calendar.DAY_OF_YEAR, 1)
-                }
+/**
+ * Pure delay calculation: milliseconds from [now] until the next occurrence of the
+ * configured backup time — later today (or this week/month) if it hasn't passed
+ * yet, otherwise rolled over one day/week/month. [now] is a parameter (rather than
+ * Calendar.getInstance() inline) so the rollover logic is unit-testable.
+ */
+internal fun calculateInitialDelay(
+    frequency: BackupFrequency,
+    hourOfDay: Int,
+    minuteOfHour: Int,
+    dayOfWeek: Int,
+    dayOfMonth: Int,
+    now: Calendar = Calendar.getInstance()
+): Long {
+    /* Seed from now.timeInMillis rather than clone() — assigning the millis forces
+     * a full field recompute, so the DAY_OF_WEEK set below always resolves against
+     * consistent fields even if the caller's Calendar has stale/unnormalised ones. */
+    val target = Calendar.getInstance(now.timeZone).apply {
+        timeInMillis = now.timeInMillis
+        set(Calendar.HOUR_OF_DAY, hourOfDay)
+        set(Calendar.MINUTE, minuteOfHour)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+
+        when (frequency) {
+            BackupFrequency.WEEKLY -> {
+                set(Calendar.DAY_OF_WEEK, dayOfWeek)
+                if (before(now)) add(Calendar.WEEK_OF_YEAR, 1)
+            }
+            BackupFrequency.MONTHLY -> {
+                set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                if (before(now)) add(Calendar.MONTH, 1)
+            }
+            BackupFrequency.DAILY -> {
+                if (before(now)) add(Calendar.DAY_OF_YEAR, 1)
             }
         }
-        return maxOf(0L, target.timeInMillis - now.timeInMillis)
     }
+    return maxOf(0L, target.timeInMillis - now.timeInMillis)
 }

@@ -19,22 +19,24 @@ A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark 
 - Navigate from any heatmap day or message directly into the thread at the right position
 
 ### Search
-- Full-text search powered by FTS5 with word-start matching (`he` matches `hello`, not `the`)
-- Filter by sent/received, date range, thread, or emoji reaction
+- Full-text search powered by FTS4 with word-start matching (`he` matches `hello`, not `the`)
+- Filter by sent/received, date range, thread, protocol (SMS/MMS), or emoji reaction
 - Match highlighting in results
 
 ### Export
 - Select individual messages, a whole day, or a date range from any thread
 - **Copy** — writes a clean labeled transcript to clipboard, ready to paste into Claude, ChatGPT, or anywhere else
-- **Share** — renders the selection as an image for visual sharing
+- Image export ("share as picture") is planned but not yet implemented
 
-### Backup
+### Backup & Restore
 - Scheduled automatic backups — daily, weekly, or monthly via WorkManager
 - Configurable time, Wi-Fi-only, charging-only constraints
 - Configurable retention (1–30 files, oldest auto-deleted)
-- Stored in `Android/data/com.plusorminustwo.postmark/files/backups/` — accessible via file explorer or USB transfer, no cloud account needed
+- Full-fidelity archive format (v2): threads, messages, reactions, and attachment bytes in a streamed zip
+- Optional user-chosen backup folder (Storage Access Framework) so backups survive uninstall; default is `Android/data/com.plusorminustwo.postmark/files/backups/`
+- **Restore** — merge-only and idempotent: adds what's missing, deduplicates against existing history, never deletes or overwrites
+- Selective export — chosen conversations and/or a date range to a file of your choosing; restores through the same flow
 - Per-thread backup policy: follow global / always include / never include
-- JSON format with version field for future migration support
 
 ### Apple Reaction Parsing
 - Automatically converts Apple's SMS reaction fallback texts into emoji
@@ -55,12 +57,12 @@ UI (Jetpack Compose + ViewModel + StateFlow)
             │
     Domain (pure Kotlin models, ExportFormatter, AppleReactionParser)
             │
-    Data (Room + FTS5, Repositories, SmsContentObserver, WorkManager)
+    Data (Room + FTS4, Repositories, SmsContentObserver, WorkManager)
             │
     Android OS (content://sms, SmsManager, RoleManager)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, FTS5 sync strategy, and key design decisions.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, FTS sync strategy, and key design decisions (note: its schema section lags the code — the entity definitions are authoritative).
 
 ---
 
@@ -70,7 +72,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, 
 |---|---|
 | UI | Jetpack Compose, Material 3, Navigation Compose |
 | State | ViewModel, StateFlow, Kotlin Coroutines + Flow |
-| Database | Room 2.7.0 + FTS5 (SQLite virtual table) |
+| Database | Room + FTS4 (SQLite virtual table) — versions in `gradle/libs.versions.toml` |
 | Dependency injection | Hilt 2.56 |
 | Background work | WorkManager 2.10.0 |
 | Build | AGP 9.2.0, Kotlin 2.2.10, KSP |
@@ -84,29 +86,35 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, 
 ```
 app/src/main/java/com/plusorminustwo/postmark/
 ├── data/
+│   ├── contacts/       # Shared contact-name lookup
 │   ├── db/             # Room database, entities, DAOs, migrations
 │   ├── repository/     # Data access layer
-│   ├── preferences/    # ThemePreferenceRepository
-│   └── sync/           # SmsHistoryImportWorker, StatsUpdater,
-│                       # StatsAlgorithms
+│   ├── preferences/    # SharedPreferences-backed repositories
+│   └── sync/           # SmsSyncHandler, SmsHistoryImportWorker, StatsUpdater
 ├── di/                 # Hilt modules (DatabaseModule, RepositoryModule)
 ├── domain/
-│   ├── model/          # Clean domain models
-│   └── formatter/      # ExportFormatter, date formatters
+│   ├── backup/         # Backup archive format v2 (pure, JVM-testable)
+│   ├── formatter/      # ExportFormatter, date/phone formatters
+│   ├── logging/        # Log PII redaction
+│   └── model/          # Clean domain models
 ├── search/             # SearchRepository, FtsQueryBuilder, SearchDao
+│                       # (also houses the reaction parsers — historical accident)
 ├── service/
-│   ├── sms/            # SmsReceiver, SmsContentObserver, SmsSyncHandler
-│   └── backup/         # BackupWorker, BackupScheduler
+│   ├── sms/            # SmsReceiver, send wrappers, delivery receivers
+│   └── backup/         # BackupWorker, ExportWorker, RestoreWorker, scheduler
 ├── ui/
-│   ├── conversations/  # Conversation list screen
-│   ├── thread/         # Thread detail screen, selection mode
-│   ├── search/         # Search screen
-│   ├── stats/          # Stats screen (Numbers, Charts, Heatmap)
-│   ├── settings/       # Settings, Appearance, Backup settings
-│   ├── export/         # Export bottom sheet
+│   ├── components/     # Shared composables (avatars, date-range sheet)
+│   ├── contact/        # Contact detail screen
+│   ├── conversations/  # Conversation list, new-conversation screen
+│   ├── forward/        # Forward destination picker
 │   ├── navigation/     # Nav graph, Screen routes
-│   └── theme/          # Material 3 theme, PostmarkColors,
-│                       # ThemePreference
+│   ├── onboarding/     # Default-SMS role onboarding
+│   ├── search/         # Search screen
+│   ├── settings/       # Settings, Appearance, Backup/Export, Dev options
+│   ├── starred/        # Starred images gallery
+│   ├── stats/          # Stats screen (Numbers, Charts, Heatmap)
+│   ├── theme/          # Material 3 theme, ThemePreference
+│   └── thread/         # Thread detail screen, selection mode, image viewer
 └── PostmarkApplication.kt
 ```
 
@@ -116,7 +124,7 @@ app/src/main/java/com/plusorminustwo/postmark/
 
 ### Prerequisites
 
-- Android Studio Meerkat or later
+- A current stable Android Studio (must support the AGP version in `gradle/libs.versions.toml`)
 - JDK 17+
 - A physical Android device or emulator running Android 8.0+
 
@@ -160,22 +168,32 @@ On first launch Postmark requests the **default SMS role** via `RoleManager`. On
 
 ## Known Limitations
 
+- **No RCS.** Postmark speaks SMS/MMS only. Setting it as your default SMS app means
+  conversations that were using RCS (Google Messages "chat features") silently fall
+  back to SMS/MMS. RCS requires carrier/Google agreements unavailable to third-party apps.
 - **Samsung devices** require Postmark to be set as the default SMS app before any messages can be read. This is a Samsung-specific restriction, not an Android platform limitation.
-- MMS support is in progress.
-- SMS send/receive is scaffolded and will be fully enabled in an upcoming release.
+- **Group MMS sending** is not yet supported — received group threads display correctly
+  (full roster, per-sender bubble labels), but replies reach only the first participant
+  and new group threads can't be started. A warning banner is shown in group threads.
+- **Emoji reactions are local annotations.** Incoming Apple-style reaction texts are
+  parsed and rendered, but reactions you add are stored only in Postmark's database —
+  nothing is transmitted to the other person.
+- **Single-device validated.** Daily-driven at 620-thread/159k-message scale on a
+  Samsung S24 Ultra; other OEMs and carriers (especially MMS behavior) are untested.
 
 ---
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for a full phase-by-phase breakdown.
+`docs/TODO.md` is the live, tiered backlog and the source of truth for what's next.
+(ROADMAP.md is historical and partially stale — trust TODO.md and the code over it.)
 
-**Currently in progress:**
-- Floating date pill with calendar jump picker in thread view
-- Message grouping and bubble polish
+**Currently in progress / next up:**
+- Blocking & spam completion — blocked-numbers screen, spam folder (Play Store requirement)
+- Group MMS sending (multi-recipient PDU + recipient picker)
+- Contact photos in avatars
 - Image export (Canvas to Bitmap rendering)
-- Search date range and reaction filters
-- Full SMS send/receive with delivery status
+- Play Store prep — SMS permissions declaration, privacy policy, store assets
 
 ---
 

@@ -8,7 +8,6 @@ import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
-import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.data.sync.buildGlobalStatsData
 import com.plusorminustwo.postmark.data.sync.buildThreadStatsData
 import com.plusorminustwo.postmark.data.sync.computeResponseTimeBuckets
@@ -86,7 +85,6 @@ class StatsViewModel @Inject constructor(
     private val threadDao: ThreadDao,
     private val messageDao: MessageDao,
     private val reactionDao: ReactionDao,
-    private val statsUpdater: StatsUpdater,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -101,9 +99,6 @@ class StatsViewModel @Inject constructor(
 
     private val _selectedThreadId = MutableStateFlow<Long?>(null)
     val selectedThreadId: StateFlow<Long?> = _selectedThreadId
-
-    private val _isRecomputing = MutableStateFlow(false)
-    val isRecomputing: StateFlow<Boolean> = _isRecomputing
 
     // ── Heatmap month navigation ──────────────────────────────────────────────
 
@@ -326,22 +321,6 @@ class StatsViewModel @Inject constructor(
         when (_selectedScope.value) {
             StatsScope.GLOBAL -> _globalStyle.value = style
             StatsScope.PER_THREAD -> _threadStyle.value = style
-        }
-    }
-
-    /**
-     * Writes computed stats to the persisted stats tables (for future use,
-     * e.g. home-screen widgets). Not required for the Stats screen display,
-     * which is always live.
-     */
-    fun recomputeAll() {
-        viewModelScope.launch {
-            _isRecomputing.value = true
-            try {
-                statsUpdater.recomputeAll()
-            } finally {
-                _isRecomputing.value = false
-            }
         }
     }
 

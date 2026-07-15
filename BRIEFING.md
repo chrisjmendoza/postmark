@@ -764,7 +764,10 @@ Five additional sync gaps resolved (May 3 audit):
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
-ACTIVE BRANCH: fix/mms-pdu-encoding
+ACTIVE BRANCH: fix/fable-critical (July 11 2026 — critical-tier
+fixes from docs/fable-analysis.md; see docs/CHANGELOG.md)
+NOTE: this section goes stale — trust docs/TODO.md and
+docs/CHANGELOG.md over the tier lists below.
 
 TIER 1 — REMAINING (in priority order)
 1. MULTIPART MESSAGE HANDLING

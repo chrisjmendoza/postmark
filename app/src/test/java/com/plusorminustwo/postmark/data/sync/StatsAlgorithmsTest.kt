@@ -169,45 +169,33 @@ class StatsAlgorithmsTest {
     // ── heatmapTierForCount ───────────────────────────────────────────────
 
     @Test
-    fun `tier 0 for zero count`() = assertEquals(0, heatmapTierForCount(0))
+    fun `tier 0 for zero count`() = assertEquals(0, heatmapTierForCount(0, 100))
 
     @Test
-    fun `tier 0 for negative count`() = assertEquals(0, heatmapTierForCount(-5))
+    fun `tier 0 for negative count`() = assertEquals(0, heatmapTierForCount(-5, 100))
 
     @Test
-    fun `tier 1 for count 1 and 2`() {
-        assertEquals(1, heatmapTierForCount(1))
-        assertEquals(1, heatmapTierForCount(2))
+    fun `tier 0 when max count is zero`() = assertEquals(0, heatmapTierForCount(0, 0))
+
+    @Test
+    fun `tier 6 for count equal to max`() {
+        assertEquals(6, heatmapTierForCount(100, 100))
+        assertEquals(6, heatmapTierForCount(1, 1))
     }
 
     @Test
-    fun `tier 2 for count 3 and 4`() {
-        assertEquals(2, heatmapTierForCount(3))
-        assertEquals(2, heatmapTierForCount(4))
+    fun `tier scales proportionally to max count`() {
+        // max = 100: tiers land on multiples of ~16.7
+        assertEquals(1, heatmapTierForCount(1, 100))
+        assertEquals(1, heatmapTierForCount(16, 100))
+        assertEquals(2, heatmapTierForCount(17, 100))
+        assertEquals(3, heatmapTierForCount(50, 100))
+        assertEquals(6, heatmapTierForCount(99, 100))
     }
 
     @Test
-    fun `tier 3 for count 5 and 6`() {
-        assertEquals(3, heatmapTierForCount(5))
-        assertEquals(3, heatmapTierForCount(6))
-    }
-
-    @Test
-    fun `tier 4 for count 7 through 9`() {
-        assertEquals(4, heatmapTierForCount(7))
-        assertEquals(4, heatmapTierForCount(9))
-    }
-
-    @Test
-    fun `tier 5 for count 10 through 14`() {
-        assertEquals(5, heatmapTierForCount(10))
-        assertEquals(5, heatmapTierForCount(14))
-    }
-
-    @Test
-    fun `tier 6 for count 15 or more`() {
-        assertEquals(6, heatmapTierForCount(15))
-        assertEquals(6, heatmapTierForCount(100))
+    fun `smallest nonzero count always gets at least tier 1`() {
+        assertEquals(1, heatmapTierForCount(1, 1000))
     }
 
     // ── groupMessagesByDay ────────────────────────────────────────────────

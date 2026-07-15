@@ -10,7 +10,6 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
-import com.plusorminustwo.postmark.data.db.entity.ThreadStatsEntity
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -117,27 +116,6 @@ class PostmarkDatabaseTest {
         val remaining = db.reactionDao().getByMessage(10L)
         assertEquals(1, remaining.size)
         assertEquals("😂", remaining[0].emoji)
-    }
-
-    // ── ThreadStats DAO ────────────────────────────────────────────────────
-
-    @Test
-    fun upsertAndReadStats() = runBlocking {
-        db.threadDao().insert(thread(1))
-        val stats = ThreadStatsEntity(threadId = 1L, totalMessages = 42, sentCount = 20, receivedCount = 22)
-        db.threadStatsDao().upsert(stats)
-        val read = db.threadStatsDao().getByThread(1L)
-        assertEquals(42, read?.totalMessages)
-    }
-
-    @Test
-    fun globalCountsSumsAcrossThreads() = runBlocking {
-        db.threadDao().insertAll(listOf(thread(1), thread(2)))
-        db.threadStatsDao().upsert(ThreadStatsEntity(threadId = 1L, totalMessages = 30, sentCount = 10, receivedCount = 20))
-        db.threadStatsDao().upsert(ThreadStatsEntity(threadId = 2L, totalMessages = 70, sentCount = 40, receivedCount = 30))
-        val global = db.threadStatsDao().getGlobalCounts()
-        assertEquals(100, global?.totalMessages)
-        assertEquals(50, global?.sentCount)
     }
 
     // ── FTS search via SearchDao ───────────────────────────────────────────

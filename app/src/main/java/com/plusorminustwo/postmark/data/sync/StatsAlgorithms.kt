@@ -6,13 +6,14 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import kotlin.math.ceil
 
 /** 24 hours — response gaps beyond this are considered dormant and excluded from avg. */
 internal const val MAX_RESPONSE_GAP_MS = 24L * 3600_000L
 
 /**
  * Pure thread statistics — no JSON, no Room dependencies.
- * Produced by [buildThreadStatsData] and consumed by [StatsUpdater] which serialises to Room.
+ * Produced by [buildThreadStatsData] and consumed live by the Stats screen ViewModel.
  */
 internal data class ThreadStatsData(
     val totalMessages: Int = 0,
@@ -246,37 +247,13 @@ internal fun isEmojiCodePoint(cp: Int): Boolean =
     cp in 0x2B00..0x2BFF
 
 /**
- * Map a raw message count for one heatmap cell to an intensity tier 0–6.
- *
- *  0 → tier 0 (no messages)
- *  1–2 → tier 1
- *  3–4 → tier 2
- *  5–6 → tier 3
- *  7–9 → tier 4
- *  10–14 → tier 5
- *  15+ → tier 6
+ * Map a raw message count for one heatmap cell to an intensity tier 0–6,
+ * scaled relative to the busiest day in view (maxCount). Tier 6 is always
+ * the day(s) with maxCount messages; tier 0 is always zero messages.
  */
-internal fun heatmapTierForCount(count: Int): Int = when {
-    count <= 0  -> 0
-    count <= 2  -> 1
-    count <= 4  -> 2
-    count <= 6  -> 3
-    count <= 9  -> 4
-    count <= 14 -> 5
-    else        -> 6
-}
-
-/**
- * Build a sorted list of 56 "yyyy-MM-dd" day labels covering the last 8 weeks,
- * ending today (inclusive).
- */
-internal fun last56DayLabels(): List<String> {
-    val fmt = localDayFormatter()
-    val cal = Calendar.getInstance()
-    return (55 downTo 0).map { daysBack ->
-        cal.timeInMillis = System.currentTimeMillis() - daysBack * 86_400_000L
-        fmt.format(cal.time)
-    }
+internal fun heatmapTierForCount(count: Int, maxCount: Int): Int {
+    if (count <= 0 || maxCount <= 0) return 0
+    return ceil(count.toFloat() / maxCount.toFloat() * 6).toInt().coerceIn(1, 6)
 }
 
 /** Groups messages into a date→count map using local-timezone day boundaries. */

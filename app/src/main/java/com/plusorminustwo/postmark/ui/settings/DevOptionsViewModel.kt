@@ -11,7 +11,6 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.ReactionResolver
 import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
-import com.plusorminustwo.postmark.data.sync.StatsUpdater
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
@@ -39,7 +38,6 @@ import javax.inject.Inject
 class DevOptionsViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
-    private val statsUpdater: StatsUpdater,
     private val reactionResolver: ReactionResolver,
     private val syncLogger: SyncLogger,
     @param:ApplicationContext private val context: Context
@@ -47,9 +45,6 @@ class DevOptionsViewModel @Inject constructor(
 
     private val _feedback = MutableStateFlow<String?>(null)
     val feedback: StateFlow<String?> = _feedback.asStateFlow()
-
-    private val _isRecomputing = MutableStateFlow(false)
-    val isRecomputing: StateFlow<Boolean> = _isRecomputing.asStateFlow()
 
     private val _isReprocessing = MutableStateFlow(false)
     val isReprocessing: StateFlow<Boolean> = _isReprocessing.asStateFlow()
@@ -64,20 +59,6 @@ class DevOptionsViewModel @Inject constructor(
     val logContent: StateFlow<String?> = _logContent.asStateFlow()
 
     fun clearFeedback() { _feedback.value = null }
-
-    // ── Stats ─────────────────────────────────────────────────────────────────
-
-    fun recomputeStats() {
-        viewModelScope.launch {
-            _isRecomputing.value = true
-            try {
-                statsUpdater.recomputeAll()
-                _feedback.value = "Stats recomputed"
-            } finally {
-                _isRecomputing.value = false
-            }
-        }
-    }
 
     // ── Sample data ───────────────────────────────────────────────────────────
 
@@ -275,7 +256,6 @@ class DevOptionsViewModel @Inject constructor(
                             yield()
                         }
                     )
-                    statsUpdater.recomputeAll()
                     syncLogger.log("ReprocessReactions",
                         "done: inserted=${result.inserted} removed=${result.removed}")
                     _feedback.value = "Reactions reprocessed: ${result.inserted} inserted, ${result.removed} fallbacks removed"

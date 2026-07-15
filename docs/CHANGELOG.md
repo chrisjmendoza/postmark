@@ -4,7 +4,793 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-14 (feature) — permanent sticky date header in the thread
+
+Reworked the transient floating date pill into a **permanent sticky date header** pinned
+under the top bar (centered). It's always visible while a thread has messages and shows the
+day of the top-of-viewport item, updating live as day separators scroll past the top edge —
+so the current day is always on screen, whether scrolling up into history, back down, or
+jumping via the calendar picker (tapping the header still opens it).
+
+Two parts:
+- **Empty-oval bug fixed first:** `pillDateLabel` started as `""` and was only assigned from
+  `visibleDate` (a `derivedStateOf` over `listState.layoutInfo.visibleItemsInfo`, which is
+  empty on the first frames before layout settles). It now seeds from the newest day's label
+  (`renderState.items[0]`) whenever it would otherwise be empty, so it's never a blank oval.
+- **Made permanent:** the pill's visibility is now `pillDateLabel.isNotEmpty()` instead of
+  scroll-driven. Deleted the now-dead `ThreadFloatingDatePillEffect` (scroll-to-show +
+  1.8 s-idle-hide), the `PILL_HIDE_DELAY_MS` constant, the `pillVisible` state, and the
+  orphaned `collectLatest` import.
+- **Content offset (no overlap):** the header's height is measured via `onGloballyPositioned`
+  and reserved as top padding on the `LazyColumn`, so messages scroll *beneath* the header
+  rather than behind it. Height is derived from layout (not hardcoded), so it adapts to font
+  scale per the repo's no-hardcoded-pixels rule.
+
+`ThreadScreen.kt` only; compiles clean. Compose state — verify on-device.
+
+---
+
+## 2026-07-14 — fable-analysis 🟢/🔵 quality tier: 8 items closed
+
+Worked through the "Worth doing" and "Housekeeping" tiers of `docs/fable-analysis.md`.
+All eight are refactors/cleanups/docs — no behavioral feature changes — and `./gradlew
+test` stays green throughout. #22 (the dead `PostmarkColors` system) was deliberately
+skipped at the owner's request. Two items (#24, #35) touch UI/MMS surfaces that a unit
+test can't exercise and still want on-device verification.
+
+### #27 — Dead code removed; a misleading DAO name fixed
+
+Re-verified usage against the *current* code (the July-10 "five unused methods" count
+predated the stats/restore changes) and removed only what's genuinely dead:
+- Three `MessageDao` queries with no production callers: `getLatestForThread` (a verbatim
+  duplicate of another query), `getLatestNForThread`, and `getLatestBeforeForThread` —
+  plus the matching override in each of the 5 hand-rolled fake DAOs.
+- `StatsAlgorithms.last56DayLabels()` (unused, and DST-broken via fixed-86.4M-ms
+  arithmetic) and `SmsContentObserver.unregister()` (no callers; the observer is torn
+  down with the process).
+- Renamed `getLatestNonReactionForThread` → `getLatestForThread`. The old name implied a
+  reaction filter it never had; its query is identical to the dead duplicate above, so
+  the rename both collapses the duplication and tells the truth.
+
+### #26 — `isDefaultSmsApp()` deduplicated
+
+Three near-identical default-SMS-role checks (`ConversationsViewModel`, `SettingsScreen`,
+`ThreadViewModel`) collapsed into one `Context.isDefaultSmsApp()` extension in a new
+`util/` package. Unified on the most robust of the three semantics — `RoleManager`
+role-held **or** `getDefaultSmsPackage` match — which the `ThreadViewModel` copy already
+used; the other two now inherit that fallback. Orphaned `RoleManager`/`Build` imports
+cleaned up.
+
+### #29 — Duplicated sample data deleted
+
+`ConversationsViewModel.loadSampleData()` (+ its `msg()` helper, ~115 lines) was a verbatim
+twin of `DevOptionsViewModel`'s. Deleted it and removed the "Load sample data" button from
+the production empty state in `ConversationsScreen` — seeding sample data now lives only in
+Dev Options, where it belongs. `DevOptionsViewModel` keeps the single surviving copy.
+
+### #33 — Reaction parsers moved out of `search/parser/`
+
+`AndroidReactionParser`, `AppleReactionParser`, and `ReactionFallbackParser` (and their
+tests) `git mv`'d to `data/reaction/`. They had nothing to do with search. `search/parser/`
+now holds only `FtsQueryBuilder`, which genuinely parses FTS queries.
+
+### #35 — Orphaned outgoing-MMS cache files swept
+
+`mms_attach_<id>.bin` files in `filesDir` (the permanent FileProvider-backed source for a
+sent MMS image) accrued forever. Two-part fix:
+- On message delete, `deleteMessage()` now deletes that message's own cache files (parsed
+  from its attachment URIs; no-op for SMS / received MMS).
+- A one-shot startup sweep in `ConversationsViewModel.init` deletes only `mms_attach_*.bin`
+  files that **no** live message references — every sent/pending row points at its own via
+  a FileProvider URI, so the referenced-set is built from all attachment-bearing messages
+  (new `MessageDao.getAllWithAttachments()`). A 1-hour mtime guard protects a file an
+  in-flight send just wrote but hasn't attached to a row yet.
+
+This touches the fragile sent-MMS pipeline — the reasoning above keeps referenced files
+safe, but it needs on-device verification.
+
+### #24 — Light-theme hardcoded-dark islands
+
+- Heatmap tier-0 (empty) tiles rendered near-black on the light theme's white card (they
+  looked like the *busiest* day). Now resolved through a `heatmapTierColor()` helper that
+  returns `surfaceVariant` for tier 0; the blue tiers 1–6 (which read on both themes) are
+  unchanged. Tile and legend both go through the helper so they stay consistent.
+- The emoji reaction popup pill used near-black literals; now `surfaceContainerHigh` /
+  `outlineVariant` / `onSurfaceVariant`.
+- The sent (amber) / delivered (green) delivery ticks render beside the timestamp on the
+  screen background, so the bright shades failed contrast on light theme. They now pick
+  darker amber/green when the surface luminance is high.
+
+### #34 / #21 — Docs reconciled with reality
+
+- **ARCHITECTURE.md** regenerated: schema v9 → v15; dropped the `thread_stats` table/FK and
+  the `StatsUpdater`/pre-aggregated-stats sections (removed in #9); rewrote Stats as
+  live-compute; DI table now lists the 4 real DAOs; Backup section rewritten for the v2
+  archive + `RestoreWorker` + SAF folder.
+- **ROADMAP.md** reconciled: removed the duplicated Phase 4 block; corrected the "fuzzy
+  containment" matching tier to "exact → normalized → prefix" with a do-not-reintroduce
+  note (it self-matched and was deliberately removed); replaced the stale
+  backup-restore/`ThreadStatsEntity`/`StatsUpdater` entries with the v2-restore + live-stats
+  reality; marked the fully-checked Phase 2 as Done.
+
+---
+
+## 2026-07-12 (third batch) — thread bubble long-press / selection regression
+
+### Long-press selection + emoji reaction popup restored
+
+Long-pressing a text message stopped selecting it or opening the emoji reaction
+popup, and tapping messages after "Select messages" no longer toggled selection.
+Root cause: the auto-linkify commit (`16ce390`) swapped the bubble body from a plain
+`Text` to `ClickableText`, which installs its own gesture detector over the whole
+message body. Because a child that claims a pointer event wins over its parent, that
+detector swallowed taps **and** long-presses before they could reach the bubble's
+parent `combinedClickable` — the modifier that actually drives selection and the
+reaction popup. The text fills nearly the whole bubble, so almost every touch hit
+`ClickableText` first.
+
+Fix: reverted to a plain `Text` and moved link handling into the `AnnotatedString`
+itself via the modern `LinkAnnotation` API (the intended replacement for the now-
+deprecated `ClickableText`). `linkifyText` now attaches links with
+`addLink(LinkAnnotation.Url(…))` for URLs and `addLink(LinkAnnotation.Clickable(…))`
+for phone numbers. Link ranges claim only taps that land on them, so long-press and
+taps on the rest of the bubble fall through to the parent — selection and the popup
+work again, while tapping a real URL/phone still opens the browser/dialer. Deleted
+the two `onClick`/`getStringAnnotations` handler blocks (net simplification) and added
+an `http://` scheme fallback so schemeless URLs like `example.com` actually open.
+`ThreadScreen.kt` only; `./gradlew test` green. Gesture behavior isn't unit-testable —
+verify on-device.
+
+---
+
+## 2026-07-12 (second batch) — fable-analysis 🟡 tier: 8 of 12 items closed
+
+Worked through `docs/fable-analysis.md`'s "Fix soon" tier. `./gradlew test`: 545
+passing (+9); `assembleDebug` + `compileDebugAndroidTestKotlin` clean.
+
+### #9 — Stats split-brain resolved by deletion
+
+The pre-aggregated stats system (`StatsUpdater`, `ThreadStatsEntity`/`GlobalStatsEntity`,
+their DAOs) was **write-only**: `recomputeAll()` did a full-table scan on every
+incremental sync, first-import, and restore to maintain tables with zero readers —
+`StatsViewModel` has always computed live from the messages table. Per CLAUDE.md
+(prefer deletion; no parallel data structures), the persisted system is gone:
+6 production files deleted, schema v15 (`MIGRATION_14_15` drops `thread_stats`/
+`global_stats` — derived caches, not user data), and every sync/restore no longer
+pays an O(N) recompute tax. Dev Options lost its now-meaningless "Recalculate stats"
+row; the Stats screen behavior is unchanged (it never read the tables). The TIER-2
+heatmap-performance item stands on its own — its fix (month-window query + index)
+never needed these tables.
+
+### #12 — Migration test debt cleared (needs a device run)
+
+Schemas `1.json`–`3.json` were never committed, so six existing migration tests threw
+FileNotFoundException. Regenerated all three by building the historical commits at
+those schema versions in a git worktree (`6bcfb3c`, its parent, and `7ed808b~1`).
+Added tests for all 9 previously-untested migrations (3→4 through 13→14), a 14→15
+test, and a full 1→15 chain test. Also fixed latent failures in the existing 11→12
+tests (INSERTs omitted NOT-NULL columns — Room-created tables carry no SQL defaults)
+and converted the 1→2 tests off `runMigrationsAndValidate` (the migrations' DEFAULT
+clauses aren't declared as `@ColumnInfo(defaultValue=)`, which strict validation
+flags). These are instrumented tests — they compile but need `connectedAndroidTest`
+on a device to execute.
+
+### #18 — Sync log no longer leaks PII
+
+New pure `String.redactPhone()` (`domain/logging/`, 8 tests): numbers → "…1234",
+emails → "…@domain", 5–6-digit short codes pass through (they identify services,
+and masking them would hide carrier bugs). Applied at every SyncLogger call site
+that logged an address (SmsReceiver, SmsSentDeliveryReceiver, MmsManagerWrapper,
+MmsSentReceiver); the notification log line no longer records the contact's display
+name (logs `nameResolved=` instead) and ReactionResolver's no-match line logs quote
+*length*, not the quoted text. SyncLogger's Logcat mirror is now debug-only.
+Deliberately call-site (not a central regex): an 11-digit MMS row id is
+indistinguishable from a phone number to a regex, and masking ids would cripple
+the exact debugging this log exists for.
+
+### #11 — Blocking I/O off Main
+
+`SmsManagerWrapper.sendTextMessage()` is now `suspend` + `withContext(IO)` (same
+contract as `sendMms`), which fixes every caller at once; `HeadlessSmsSendService`
+grew the coroutine it needed (stopSelf after send completes).
+`ThreadViewModel.deleteMessage()`'s provider delete and both `beforeSendMaxId`
+provider queries (send + retry paths) moved to IO.
+
+### Smaller fixes
+
+- **#10 — REVERTED same day.** `.flowOn(Dispatchers.Default)` was added to
+  `ThreadViewModel.uiState`'s combine, and on-device message selection stopped
+  responding (selection mode entered, but bubble taps never applied; long-press
+  also dead). It is the only working-tree change in that screen's reactive path,
+  so it was reverted on the regression report without an isolated root cause —
+  a NOTE in the code marks it do-not-reintroduce without on-device verification.
+  Fallout fix kept: `ExportFormatter`'s shared `SimpleDateFormat`s (not
+  thread-safe) are now created per call, since the readable export legitimately
+  calls the formatter from worker threads while Copy uses it on Main.
+- **#15** — `ContactDetailScreen`'s viewer got the full edge-to-edge fix from
+  ThreadScreen (`usePlatformDefaultWidth = false` + `decorFitsSystemWindows` +
+  close button `statusBarsPadding`).
+- **#17** — Forward now confirms before sending ("Forward message? Send a copy to
+  X?") on all four entry points: thread row, contact row, keyboard Go, send icon.
+- **#19** — README rewritten where it lied: Known Limitations (RCS silence now
+  documented, group-MMS-send and local-only reactions stated), "currently in
+  progress" list, FTS5→FTS4, dead "Share as image" claim, stale backup section,
+  package-structure tree, Android Studio version.
+- **Export screen inset bug** (on-device report): the bottom "Export N conversations"
+  button sat behind the 3-button nav bar — `navigationBarsPadding()` on the
+  bottomBar content (Scaffold doesn't inset custom bottom bars).
+- **Copy header now carries the phone number** (user request): "Conversation with
+  Sarah (206) 555-1234" so the number is verifiable from the paste alone. Skipped
+  when it would just repeat the name (unknown contacts). Header also honors the
+  Postmark nickname now, matching the thread top bar. 4 new `ExportFormatterTest`
+  cases; `docs/OWNER-ACTIONS.md` created for the three items needing owner input
+  (#13 encryption decision, #14 keystore/secrets, #20 Play Store workstream).
+
+### Readable export — "text + media" format (user request, same day)
+
+On-device feedback: unzipping an export yields `data.jsonl` + SHA-named blobs — a
+machine format when the expectation was files you can open. Rather than bending
+the backup format both ways (pretty names would break content-addressed dedup),
+`ExportScreen` now offers two formats. **"Readable text + media"** (the new
+default) writes a zip of: `README.txt` (what this is, and that it is *not*
+restorable); one `ConversationName.txt` per thread — the exact Copy transcript
+format, so the phone-number header lands here too — and
+`media/ConversationName/` holding every attachment as a regular file named
+`2026-05-01_1432.jpg` (message date + MIME-derived extension). Transcript lines
+reference the exact media files (`[Attachment: media/Sarah/…]`), which also fixes
+the "photo-only messages export as blank lines" end-user finding for this path.
+**"Postmark backup"** remains the restorable v2 archive, unchanged.
+
+Mechanics: naming rules (filesystem-safe sanitization, case-insensitive dedup
+with " (2)" suffixes placed before the extension, MIME→extension table) and the
+zip writer are pure in `domain/backup/ReadableExport.kt` — 17 new tests including
+a zip round-trip. `ReadableExportWriter` (service) contributes only queries +
+ContentResolver reads, reusing the selection plumbing via a shared
+`exportableMessagesFor()` extracted from `BackupArchiveExporter`.
+`ExportFormatter` gained an optional per-message `attachmentNote` lambda (3 more
+tests). Both formats keep the `postmark_export_` filename prefix so retention
+pruning never eats them (readable files are `postmark_export_readable_<stamp>.zip`).
+Unreadable attachment bytes are skipped but still named in the transcript — a
+visible gap beats a silent one. `./gradlew test`: 559 passing (+10).
+
+Needs on-device verification: export 2 conversations with photos/video in
+readable format, unzip on a computer, confirm the txt opens with the number in
+the header and every media file opens on double-click; confirm a photo-only
+message shows its `[Attachment: …]` line; confirm the backup-format option still
+restores.
+
+### Still open from the 🟡 tier
+
+**#13** (backup encryption — needs a passphrase-UX decision: Keystore-bound keys
+would defeat restore-after-uninstall by design), **#14** (release-signed tester
+builds — needs a keystore + CI secrets only the owner can create), **#20** (Play
+Store declaration/privacy-policy workstream — external). See fable-analysis.md.
+
+---
+
+## 2026-07-12 — Selective export: chosen conversations, optional date range
+
+Follow-up to yesterday's backup v2 + restore. The scheduled backup is global (minus
+per-thread NEVER_INCLUDE opt-outs); the user goal was selective options — export
+only certain numbers, or a date-range slice, to a file of their choosing. The v2
+format was designed for exactly this (files are selection-agnostic; restore is a
+fingerprint-keyed merge), so this landed as a writer-side selection layer + an
+Export screen with **zero format or restore changes**. Scheduled backup behavior is
+untouched. `./gradlew test`: 536 passing (+12); `assembleDebug` clean.
+
+### Selection layer (pure, tested)
+
+`BackupSelection(threadIds?, startMs, endMs)` in `domain/backup/`, with the rules
+pinned in `BackupSelectionTest`:
+
+- **Explicit picks are exact** — deliberately checking a conversation exports it
+  even if its backupPolicy is NEVER_INCLUDE (a deliberate export beats a standing
+  policy). **Select-all still honors NEVER_INCLUDE**, keeping that setting's
+  "always excluded from backups" promise for whole-corpus runs.
+- Date filtering runs in SQL via the existing `getByThreadAndDateRange` (inclusive
+  BETWEEN). Threads with no in-range messages are skipped entirely; the
+  whole-corpus backup keeps empty threads so their metadata survives.
+- `localDateRangeToMillisBounds()` converts picked calendar days (Material3's
+  DateRangePicker hands back UTC-midnight day markers) to inclusive local-zone
+  epoch bounds — end-of-day inclusive, zone injectable for tests.
+- **Prune-safety catch:** exports are named `postmark_export_<stamp>.zip`, and
+  `isBackupFileName()` now excludes that prefix — without this, an export saved
+  into the backup folder would have been **eaten by retention pruning** (matched
+  `postmark_*.zip`). Both directions pinned in `RestoreMergeTest`.
+
+### Shared writer + ExportWorker
+
+The archive engine moved out of `BackupWorker` into `BackupArchiveExporter`
+(@Singleton) — pass-A attachment hashing, manifest, blobs, records, now
+parameterized by selection with a progress callback. `BackupWorker` kept its
+destination/prune/prefs logic and delegates the writing (behavior-neutral
+refactor). New `ExportWorker` (unique work `postmark_export`, foreground id 1003,
+same progress plumbing as RestoreWorker) writes to a user-chosen SAF document.
+On failure it best-effort-deletes the document it was writing (CreateDocument
+creates the file up front; a half-written archive left behind would look
+restorable) and does **not** retry — the destination grant is interactive context,
+so the error surfaces and the user re-runs.
+
+### Export UI
+
+Backup settings gained an "Export conversations…" entry → new `ExportScreen`
+(route `settings/backup/export`), modeled on the ForwardPicker: searchable
+conversation list (in-memory filter over nickname/name/address —
+`filterThreadsForExport`, pure), checkbox multi-select with select-all-visible,
+optional date range via the DateRangePicker bottom sheet (extracted from
+ThreadScreen's private copy to `ui/components/DateRangeSheet.kt`, now shared),
+destination via the system `CreateDocument` dialog (persistable grant taken before
+enqueue), live progress + last-outcome row (the RestoreStatus mapper generalized
+with label parameters instead of a duplicate). Exported files restore through the
+existing restore picker unchanged — and because restore merges, overlapping
+slices and full backups coexist without duplicates.
+
+Needs on-device verification: export a 2-conversation + 1-month slice and restore
+it (dedup against existing history), the DateRangePicker flow, the CreateDocument
+grant surviving to the worker, retention pruning leaving `postmark_export_*` files
+alone when saved into the backup folder, and the export progress notification.
+
+---
+
+## 2026-07-11 (second batch) — Backup format v2 + restore
+
+The last 🔴 item from `docs/fable-analysis.md` (#2): backup was lossy, OOM-prone, and
+had no read path at all. This batch replaces the format, builds restore from scratch,
+and moves backups somewhere uninstall can't erase. `./gradlew test`: 524 passing
+(+60 over the morning batch); `assembleDebug` clean.
+
+### Backup format v2 — a streamed zip that actually contains your data
+
+v1 serialized only id/body/timestamp/isSent per message — no attachments, reactions,
+isMms, participants, or any thread metadata — and built the whole document as one
+in-memory pretty-printed `JSONObject` (a guaranteed OOM at the 620-thread/159k-message
+scale this app is dogfooded at). v2 is a zip archive (`postmark_<stamp>.zip`) with a
+fixed entry order:
+
+1. `manifest.json` — version, export time, thread/message/attachment counts (drives
+   the restore confirmation dialog), and an `encryption` field reserved for item #13
+   so adding encryption later won't need a format break (always `"none"` today).
+2. `attachments/<sha256>` — one entry per unique attachment blob, content-addressed
+   (identical media stored once), bytes streamed from the content resolver. Each
+   blob is read twice (hash pass, then copy pass) so nothing large is ever buffered.
+3. `data.jsonl` — one compact JSON record per line: a thread record (nickname,
+   pin/mute/notifications, backupPolicy, participants, preview) followed by its
+   message records (full fidelity: type, deliveryStatus, isMms, isRead, isStarred,
+   attachment refs, inline reactions). **No local row ids** — they're device-local
+   provider ids, meaningless across a reinstall; identity is a content fingerprint.
+
+Everything streams both ways (`BackupArchiveWriter`/`BackupArchiveReader` in
+`domain/backup/` — plain-JVM, so the full round-trip is unit-tested). Serialization
+is a new hand-rolled minimal JSON codec (`BackupJson.kt`) for the established reason
+(org.json is an unmocked stub in JVM tests) — unlike the existing single-purpose
+codecs it does full RFC 8259 escaping, because message bodies contain newlines and
+data.jsonl framing dies without `\n` escaping. Optimistic (`id < 0`) rows are now
+excluded from backups (v1 wrote them). The archive is written to a `.tmp` name and
+renamed only when complete, so a mid-write crash can't leave a half-file that looks
+like a real backup. v1 `.json` files remain readable (magic-byte detection, `PK` vs
+`{`) and share the retention pool with `.zip` so they age out normally.
+
+### Restore — merge-only, fingerprint-deduped, idempotent (`RestoreWorker`)
+
+The hard design problem: Room message ids are system-provider `_id`s (MMS offset by
+10^10) and thread ids are system thread ids — none of it survives a reinstall, and
+the incremental-sync watermarks are `MAX(id)` queries over Room. Decisions, all
+pinned by JVM tests in `RestoreMergeTest`:
+
+- **Room-only.** No message writes to the system providers (an MMS provider insert
+  means hand-building part/addr rows, and historical inserts race the live
+  watermarks). Room is Postmark's source of truth, and the next v2 backup includes
+  restored data, so nothing is stranded. The one provider interaction is
+  `Telephony.Threads.getOrCreateThreadId()` (precedent: `SmsManagerWrapper`) — a
+  restored thread gets its *real* system thread id, so a future text from that
+  person lands in the same conversation instead of forking (synthetic thread ids
+  would collide with provider-assigned ids later — worst case, strangers' messages
+  merged into one thread). Fallback on OEM failure: stable negative id from the
+  normalized address.
+- **Restored rows live in a reserved id range** (`RESTORED_ID_OFFSET = 2×10^10`).
+  The three watermark queries (`getMaxId`/`getMaxMmsId`/`getMinMmsId`) now exclude
+  that range — otherwise the first restored row would become the watermark and
+  every future incoming message would be silently skipped, the app's worst failure
+  mode. Found in the same sweep: `ConversationsViewModel`'s recovery check used
+  `getMaxId()==null && getMaxMmsId()==null` as "no messages", which (with the new
+  guards) would have re-triggered the full provider import *on every launch* on a
+  device holding only restored history — now an `EXISTS` query (`hasAnyMessages()`)
+  that counts restored rows. `ThreadViewModel.deleteMessage` also skips the
+  provider-delete for restored-range ids (no provider row exists by construction).
+- **Dedup is a content fingerprint** — (transport, direction, timestamp, normalized
+  address, body), held as a *multiset* per thread so genuinely identical messages
+  keep their multiplicity. Address normalization (last-10-digits) matches across
+  formatting differences ("+12065551234" vs "206-555-1234"). Memory is bounded by
+  the largest single thread, never the corpus.
+- **Merge semantics: nothing is ever deleted or overwritten.** Zero
+  `ContentResolver.delete`, zero Room deletes of user data. Existing threads keep
+  every user-made choice — backup metadata (nickname, pin, mute, notifications,
+  backupPolicy) is applied only where the local value is still the default
+  (`mergeThreadMetadata`, pure). Reactions merge onto both restored *and*
+  already-present messages, deduped on (messageId, sender, emoji). Restored
+  messages are forced `isRead=true` (no unread-badge flood from years of history)
+  and PENDING/FAILED delivery statuses normalize to NONE (a restored PENDING spins
+  forever; a restored FAILED offers a retry button that would re-send a years-old
+  text). SENT/DELIVERED are kept.
+- **Idempotent by construction** — rerunning after a crash skips fingerprint
+  matches, already-extracted blobs, and duplicate reactions; the restored-id
+  sequence reseeds from `getMaxRestoredId()`. WorkManager retries are therefore
+  safe (same retry-3 policy as the import worker).
+- **Attachments** are extracted to `filesDir/restored_attachments/<sha256>` and
+  stored as FileProvider URIs — not `file://`, which `shareImage`'s `EXTRA_STREAM`
+  would reject with `FileUriExposedException` on API 24+ (`file_paths.xml` already
+  exposes all of filesDir, and same-process Coil + share + save-to-gallery all have
+  in-repo precedent with FileProvider URIs). Blob extraction is content-addressed
+  and skip-if-exists; blobs this run extracted that no record ended up referencing
+  are cleaned up at the end.
+- v1 files restore too (SMS-only, fields synthesized; documented best-effort).
+- Worker plumbing mirrors `SmsHistoryImportWorker`: foreground on `CHANNEL_SYNC`
+  (own notification id 1002), `setProgress` phase/done/total, `Result.retry()` up
+  to 3 attempts, `statsUpdater.recomputeAll()` at the end. FTS needs nothing —
+  the existing Room triggers index restored rows on insert.
+
+### Backups can now survive uninstall — optional SAF backup folder
+
+`getExternalFilesDir("backups")` is erased on uninstall, which defeated the entire
+point of a backup. New "Backup folder" row in Backup settings: pick any folder via
+the system tree picker (`ACTION_OPEN_DOCUMENT_TREE` + persistable permission), and
+`BackupWorker` writes *and prunes* there via DocumentFile (new dependency
+`androidx.documentfile:1.1.0`). If the folder or its permission disappears, the
+backup falls back to app storage and the screen shows a warning instead of failing
+silently. Default behavior (no folder chosen) is unchanged.
+
+### Restore UI (BackupSettingsScreen)
+
+"Restore from backup file…" opens the system file picker (persistable read grant
+taken before enqueueing, since a one-shot grant wouldn't survive to the worker);
+each row in the backup history list also gained a restore icon. Both paths stage a
+confirmation dialog that quotes the manifest ("contains 620 conversations and
+159,000 messages") and states the merge contract plainly: *adds what's missing,
+deletes and overwrites nothing, skips what you already have.* Progress renders as a
+phase label + determinate bar driven by the worker's WorkInfo progress (same
+pattern as the first-sync banner), and the last restore's outcome stays visible as
+a status row (`RestoreStatus.kt`, pure mapper + tests, mirroring `BackupStatus`).
+
+### Tests
+
++60 across six files: `BackupJsonTest` (escaping incl. control chars/surrogates,
+round-trips, malformed input), `BackupRecordCodecTest` (record round-trips, v1
+parsing + synthesized fields, forward-compat unknown record types),
+`BackupArchiveTest` (in-memory zip round-trip, entry ordering invariant, skipped
+blobs, unknown entries), `RestoreMergeTest` (normalization, fingerprint multiset,
+metadata merge rules, status sanitization, id sequencing, filename filter),
+`RestoreStatusTest`, plus `hasAnyMessages`/`getMaxRestoredId` on the five fake
+MessageDaos.
+
+Needs on-device verification: a scheduled v2 backup at real scale (620 threads /
+159k+ messages — pass-A hashing time is the thing to watch), a full restore
+round-trip on a second device or after a wipe (attachment rendering + share from
+restored FileProvider URIs, thread convergence when the restored contact texts
+back), SAF folder persistence across an uninstall/reinstall, and the restore
+progress notification.
+
+---
+
+## 2026-07-11
+
+Worked through the critical tier of `docs/fable-analysis.md` (seven-persona review of
+the whole codebase, July 10) — the theme of that tier was "features that look done in
+the UI but are not connected underneath." All eight items landed, plus the two bounded
+group-messaging improvements from TODO.md. `./gradlew test`: 464 passing.
+
+Testing note for this batch: the cluster-splitting fix and the backup scheduling
+logic are covered by unit tests (see below); the notification-address fix, sync loop
+hardening, Block number, and the delivery-indicator changes live in
+receiver/ContentResolver/Compose surfaces this repo doesn't currently unit-test —
+those are the on-device verification items listed at the end of this entry.
+
+### Automatic backups actually schedule now
+
+`BackupScheduler.schedule()` had zero callers anywhere in the app — the "Automatic
+backups" toggle, frequency picker, and Wi-Fi/charging switches in
+`BackupSettingsScreen` all wrote prefs that nothing ever read back at scheduling time.
+Only the manual "Back up now" button was wired to anything. Three personas in the
+analysis converged on this independently.
+
+Fix: new `BackupScheduler.syncWithPrefs()` re-reads the persisted preferences and
+schedules or cancels the periodic work to match. Called from every scheduling-relevant
+settings change (via `BackupSettingsViewModel.applySchedule()`) and from
+`PostmarkApplication.onCreate()` — the startup call matters because the default is
+enabled=true, so users who never opened the settings screen still get backups, and
+because `ExistingPeriodicWorkPolicy.UPDATE` preserves the original enqueue time,
+re-syncing on every process start never resets a pending backup's timing. The pref
+keys are now shared constants on `BackupScheduler`.
+
+Also fixed the prune ordering in `BackupWorker.performBackup()`: it pruned old
+backups *before* writing the new one, so retention=1 deleted every existing backup
+and could then fail the write, leaving zero backups. It now writes first, then keeps
+the `retention` newest (the just-written file counts toward the total, so the drop
+changed from `retention - 1` to `retention`).
+
+Both pieces of backup-scheduling logic are now pure functions with tests
+(`BackupSchedulerLogicTest`): `selectBackupsToPrune()` pins the retention invariant
+(the just-written backup counts toward the total and is never deleted — a regression
+here is data loss), and `calculateInitialDelay()` gained an injectable `now` so the
+day/week/month rollover math is verifiable. Writing those tests surfaced a real
+`java.util.Calendar` footgun: `set(DAY_OF_WEEK)` on a calendar with unnormalised
+fields resolves against stale state, so the target calendar is now seeded from
+`now.timeInMillis` (forces a full field recompute) instead of `clone()`.
+
+Deliberately NOT built in this pass: restore. Doing it right requires extending the
+backup format first (it currently serializes only id/body/timestamp/isSent — no
+attachments, reactions, isMms, or participants). ROADMAP.md's claim that restore was
+done has been corrected instead — it was marked `[x]` with no read path existing
+anywhere in `service/backup/`.
+
+### Notification "Reply" and "Mark as read" were broken for every saved contact
+
+`SmsReceiver` resolved the sender's contact display name and then passed *that* into
+`EXTRA_ADDRESS` for both notification actions. `DirectReplyReceiver` would try to
+send an SMS to "John Smith"; `MarkAsReadReceiver` would run
+`WHERE address = 'John Smith'` and match nothing. The actions only worked for unknown
+numbers — broken exactly for the contacts a user actually replies to.
+
+Fix: `postIncomingNotification()` now takes `address` (raw number, threaded into both
+receiver extras) and `displayName` (title only) as separate parameters. The
+notification ID is now keyed on the address instead of the display name, so renaming
+a contact between two messages updates the same notification instead of forking into
+two. `DirectReplyReceiver` also got the `goAsync()` + `Dispatchers.IO` treatment every
+sibling receiver already had — it was doing the send's ContentResolver/telephony I/O
+on the main thread.
+
+### One exception could permanently kill incremental sync
+
+The two channel-consumer loops in `SmsSyncHandler`'s init block had no exception
+handling: a single `SQLiteException` (or any throw) inside `syncLatestSms()` ended
+the `for` loop for the process lifetime — no restart, no log line, and every
+subsequent incoming message silently unsynced. The worst possible failure mode for
+an SMS app. Each iteration is now individually try/caught and logged via `SyncLogger`;
+`CancellationException` is rethrown so scope cancellation still works.
+
+### "Block number" does something now
+
+The ⋮ menu item was `onClick = { menuExpanded = false }` — a safety control that
+closed the menu and did nothing else. It now confirms via AlertDialog, then inserts
+the thread's address into the system `BlockedNumberContract` provider (Postmark
+qualifies as the default SMS app, which is exactly who that API is for), so the
+platform rejects future calls and texts before they reach any app. Result is
+reported via Snackbar, including an honest "Postmark must be your default SMS app to
+block numbers" when the write isn't permitted. Hidden for group threads, where "the
+number" is ambiguous. A Blocked-numbers management screen (list/unblock) remains open
+in TODO.md — until then the dialog copy points at the phone's own blocked-numbers
+settings for unblocking.
+
+### CI now runs the test suite before shipping to testers
+
+`distribute.yml` built and uploaded the APK to Firebase App Distribution on every
+push with no test step anywhere — broken code reached real phones. `./gradlew test`
+now gates `assembleDebug`.
+
+### Failed-send indicator: accessible, and tappable by humans
+
+`DeliveryStatusIndicator` had `contentDescription = null` (delivery state was
+color-only — invisible to screen readers) and the retry action was a 12dp tap
+target. Every state now has a description ("Sending" / "Sent" / "Delivered" /
+"Failed to send. Tap to retry."), and the failed state — the only tappable one —
+wraps the 12dp glyph in `minimumInteractiveComponentSize()` for a 48dp touch target
+without inflating the other states' layout.
+
+### Group threads: per-bubble sender labels + cluster splitting per sender
+
+Two changes for received group MMS (sending group MMS remains open — that's
+multi-recipient PDU construction plus carrier `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL`
+handling, and wants on-device verification):
+
+- **Sender labels.** Every bubble in a group thread rendered identically to a 1:1
+  thread's, so participants were indistinguishable. New
+  `ThreadViewModel.participantNames` resolves the thread's roster
+  (address → contact name) once per roster change on IO; `MessageBubble` takes an
+  optional `senderName` and renders it as a small `labelSmall` line above the first
+  received bubble of each sender's cluster. Roster misses fall back to
+  `formatPhoneNumber(message.address)` rather than no label. 1:1 threads are
+  untouched (`participantNames` is empty for them, which doubles as the group
+  signal).
+- **Cluster bug found while implementing.** `computeClusterPositions` grouped by
+  `isSent` only, so two group participants texting back-to-back within the 3-minute
+  window fused into one visual bubble run — same corner-rounding, no boundary. New
+  `sameVisualSender()` splits received clusters per `Message.address`; sent messages
+  still cluster regardless of stored address (they all render on the right). Three
+  new cases in `MessageGroupingTest` cover the per-participant boundaries.
+
+Supporting cleanup: `lookupContactName` existed as five identical private copies
+(`SmsReceiver`, `SmsSyncHandler`, `SmsHistoryImportWorker`, `ForwardPickerViewModel`,
+`NewConversationViewModel`) and the sender-label work would have created a sixth.
+All five deleted in favor of one shared `Context.lookupContactName()` extension in
+`data/contacts/ContactNameLookup.kt` (fable-analysis item #26).
+
+Needs on-device verification: block-number end-to-end, sender labels against a real
+group thread, and the first scheduled backup actually firing.
+
+---
+
 ## 2026-07-06
+
+### Real full emoji picker (androidx.emoji2.emojipicker), not a lookalike
+
+Asked why the "full" emoji picker ("+" button, previous entry below) still felt
+limited — because it was: `EmojiPickerBottomSheet` was backed by a hand-curated
+`ALL_EMOJI_SECTIONS` list in `EmojiData.kt` — 4 sections, ~47 emoji total, with a
+keyword-search `TextField` filtering only over those 47. Nowhere near "all," and
+nowhere near what a phone's actual emoji keyboard offers.
+
+Replaced the entire custom grid/search implementation with
+`androidx.emoji2.emojipicker.EmojiPickerView` (new dependency,
+`androidx.emoji2:emoji2-emojipicker:1.6.0`, the current stable release verified
+against Google's Maven metadata) — the real widget Google ships for exactly this:
+the complete Unicode emoji set, category tabs, recently-used tracking, and long-press
+for skin-tone/gender variants. It's an Android `View`, not Compose-native, so it's
+embedded via `AndroidView` inside the same `ModalBottomSheet` both call sites already
+used (the bubble long-press popup's "more" button, and the image viewer's new "+"
+button) — neither call site needed to change, only `EmojiPickerBottomSheet`'s
+internals. `EmojiData.kt` (the now-fully-unused hand-curated list) deleted rather than
+left as dead code.
+
+Note: `EmojiPickerView` exposes no public search/filter API (confirmed against its
+public API surface) — the picker is browse-by-category-and-recents, matching the
+`EmojiPickerView`'s own actual capabilities, not a lookalike with a search box that
+happened to only search 47 entries.
+
+Tests: 453 passing (unchanged — no pure-function surface here, this swaps a UI widget
+implementation). `./gradlew test` + `assembleDebug`: both clean.
+
+### Image viewer quick-reactions: bigger, higher, full emoji picker
+
+Compared against Google Messages' viewer directly. Three changes to the reaction row:
+- Emoji tap targets grew from a bare `Text` with 6dp padding to explicit 48dp circles
+  (`Box` + `CircleShape`), each showing its emoji at 28sp — noticeably bigger and
+  easier to hit, matching the bubble long-press popup's circle-button pattern
+  (`EmojiReactionPopup`'s 44dp/24sp, just a bit larger here since the viewer has more
+  room).
+- Bottom margin increased from `navBarBottomPadding + 12.dp` to `+ 28.dp` so the row
+  sits with real breathing room above the nav bar instead of hugging it.
+- Added a "+" button reusing the existing `EmojiPickerBottomSheet` (the same full
+  emoji picker — search, sectioned grid — already wired to the bubble long-press
+  popup's "more" button) instead of being limited to the ~5 quick-pick reactions.
+
+`./gradlew test`: all passing. `assembleDebug`: clean.
+
+### Nav-bar overlap fix #3 (works this time) + full date in the viewer header
+
+The `decorFitsSystemWindows` fix (previous entry below) turned out to be necessary but
+not sufficient — confirmed still broken on a real Samsung phone after that change
+shipped. `navigationBarsPadding()`/`.navigationBarsPadding()` computed inside the image
+viewer's and video player's own `Dialog` content kept reading **zero** bottom inset
+even with that flag forced, on-device. Rather than keep chasing why a Dialog's own
+Window won't reliably report `WindowInsets.navigationBars` (Compose-Dialog + OEM
+insets quirks are a known rabbit hole), switched to a more robust approach: read the
+nav-bar height once from the *Activity's* window — `ThreadContent`/`VideoPlayerDialog`
+are both hosted there, and the rest of the app has never had this problem, so that
+window's insets are known-good — and pass the resulting `Dp` value down as an explicit
+`.padding(bottom = ...)` instead of relying on the dialog's own insets reporting at
+all. Applied to both `FullScreenImageViewer` (new `navBarBottomPadding` parameter) and
+`VideoPlayerDialog` (computed locally, since nothing else needs it there).
+
+Also: the viewer header's timestamp only showed a weekday and time ("Sat 5:34 PM"),
+ambiguous for anything more than a few days old. `FRIENDLY_TIMESTAMP_FORMATTER` now
+includes the full date: "Sat, Jul 5, 2026 5:34 PM".
+
+`./gradlew test`: all passing. `assembleDebug`: clean.
+
+### Fixed the recurring nav-bar overlap bug (root cause) + added EXIF photo details
+
+**Nav-bar overlap, actually fixed this time.** Reported again after the previous fix
+attempt: the bottom row (reactions, page counter, "Go to chat") was still rendering
+underneath the phone's 3-button nav bar. Root cause: `DialogProperties
+(usePlatformDefaultWidth = false)` makes a Compose `Dialog`'s *content* fill the
+screen, but the dialog's own `Window` — a separate window from the Activity's — still
+defaults to `decorFitsSystemWindows = true`. That means this window never actually
+receives real `navigationBars`/`statusBars` `WindowInsets` values, so
+`navigationBarsPadding()`/`statusBarsPadding()` were silently computing **zero**
+padding the whole time — they weren't missing, they just had nothing to apply. Fixed
+by reaching into the dialog's own `Window` (via `(LocalView.current.parent as
+DialogWindowProvider).window`) and calling `WindowCompat.setDecorFitsSystemWindows
+(window, false)` directly, in both `FullScreenImageViewer` and `VideoPlayerDialog`
+(same latent bug there, proactively fixed even though only the image viewer had been
+reported — video's control bar could hit the same overlap on a short/tall aspect
+ratio).
+
+**EXIF photo metadata in "View details."** Was sender/timestamp/starred only. Now
+also reads, when present: date taken, camera make/model, pixel dimensions (EXIF
+first, falling back to a bounds-only `BitmapFactory` decode if EXIF lacks them), GPS
+coordinates (tap to open in Maps), and file size — via `androidx.exifinterface`
+(already a dependency, used elsewhere for outgoing-image rotation) plus a
+`ContentResolver` file-descriptor size query. Loads asynchronously (a
+`LinearProgressIndicator` while reading) since it touches the content provider.
+**Availability varies a lot in practice and this is called out in the UI, not hidden:**
+Postmark's own outgoing-image compression decodes via `BitmapFactory`, which does not
+preserve EXIF, so images *you sent* essentially never carry metadata beyond what
+Postmark already knows from its own database. Received images keep whatever the
+sender's phone/carrier left intact — inconsistent, since some carriers strip EXIF for
+size/privacy. When nothing is found, the dialog says so plainly instead of showing a
+set of blank/misleading fields.
+
+Tests: no new pure-function surface here (EXIF reading is Android-API-dependent I/O,
+same category as `compressImage`'s `BitmapFactory` calls — not unit-testable off a
+device). `./gradlew test`: all passing. `assembleDebug`: clean.
+
+### Google Messages-style image viewer actions: delete, download, share, forward, star, reactions
+
+Requested after seeing Google Messages' image viewer: download/trash buttons, an
+overflow menu (Forward, Share, Star, View details), and quick reactions at the bottom.
+Not a pixel-for-pixel copy, but every one of those actions now exists in Postmark's
+viewer, plus a global place to browse starred images.
+
+**Real message delete.** The action-bar Delete button and the viewer's trash icon
+previously did nothing — `onDelete` just dismissed the popup, and there was no
+`ContentResolver.delete()` anywhere in the codebase. `ThreadViewModel.deleteMessage()`
+now removes both the Room row and, for a real (non-optimistic, `id > 0`) row, the
+underlying `content://sms/{id}` or `content://mms/{id - MMS_ID_OFFSET}` row — a genuine
+delete, matching what Google Messages' trash icon does, not a Postmark-only hide (a
+Postmark-only hide would let the same message resurface on a future resync, which
+would have been a worse trap than doing nothing). Requires being the default SMS app
+(system providers reject writes otherwise); reuses the existing "set default" dialog
+if not. Both entry points confirm through one shared `AlertDialog` first — this is
+destructive and irreversible.
+
+**Download.** Saves to `Pictures/Postmark` via `MediaStore`. API 29+ needs no
+permission (scoped storage, app's own insert); API 26-28 requests
+`WRITE_EXTERNAL_STORAGE` at runtime first (manifest declares it with
+`maxSdkVersion="28"` — unnecessary and unrequested on newer OS versions).
+
+**Share.** Opens the system share sheet directly on the `content://mms/part/` URI with
+`FLAG_GRANT_READ_URI_PERMISSION` — no `FileProvider` copy needed. This is the same
+mechanism the platform's own Messages app uses to let other apps read one MMS
+attachment without copying it first.
+
+**Forward — full in-app, not just a share sheet.** New `ui/forward/` package:
+`ForwardPickerScreen` shows recent conversations by default, live contact search once
+you type (same query logic as `NewConversationViewModel`, reusing its `ContactResult`
+type rather than redefining it), and `ForwardPickerViewModel.forward()` sends a copy
+of the source message's body + attachments to whichever destination is picked, via the
+same `MmsManagerWrapper.sendMms()`/`SmsManagerWrapper.sendTextMessage()` the live
+compose flow uses. New nav route `forward/{messageId}`, wired to both the action-bar
+Forward button (previously a stub — `dismissReactionPicker()` and a `// TODO` comment,
+no navigation, no send) and the viewer's overflow menu.
+**Known simplification:** the forwarded copy's `sentIntent` is `null` — no fast
+PendingIntent-driven delivery-status callback like the primary compose path gets. It
+still sends correctly and gets reconciled by the normal incremental sync
+(`SmsSyncHandler`); it just doesn't get the *fast* status update. Deliberately not
+duplicating that whole subsystem for a secondary action — revisit if forwarded
+messages feel laggy on delivery status in practice.
+
+**Star + global gallery.** New `isStarred` column on `messages` (schema v13→v14,
+`MessageDao.updateStarred()`/`observeStarredMedia()` mirroring the existing
+`ThreadDao.updatePinned()` pattern). Toggled from the viewer's overflow menu. New
+`ui/starred/StarredImagesScreen` (reachable from Settings → General → "Starred
+images") lists every starred image across every conversation, newest first — tapping
+one navigates to its source thread and scrolls/highlights it via the existing
+`scrollToMessageId` search-jump mechanism, rather than building a third full-screen-
+viewer implementation just for this grid. Deliberately scoped to images specifically,
+distinct from the broader "pin any message, per-thread panel" item already on
+`docs/TODO.md` — different scope (images-only vs. any message) and different browsing
+surface (global gallery vs. per-thread panel), so `isPinned` remains open as its own
+feature rather than being folded into this one.
+
+**Quick reactions in the viewer.** A row of the same ranked quick-reaction emojis
+used by the bubble long-press popup, now also tappable directly from the image
+viewer — calls the same `onToggleReaction(messageId, emoji)` `ThreadViewModel`
+already exposes.
+
+**Adjacent-image peek.** `HorizontalPager`'s `contentPadding`/`pageSpacing` now leave
+the previous/next image's edge visible during a swipe instead of each page filling
+the viewer edge-to-edge — closer to the carousel feel of other gallery viewers.
+
+**Nav-bar padding fix** (reported from testing the previous entry below): the bottom
+row (page counter + "Go to chat") was rendering underneath the system navigation bar,
+unreachable. Cause: the same edge-to-edge `DialogProperties(usePlatformDefaultWidth =
+false)` fix that made the viewer cover the whole screen also meant content could now
+render behind system bars unless explicitly inset. Fixed with
+`navigationBarsPadding()`/`statusBarsPadding()` on the top and bottom rows as part of
+this redesign.
+
+Tests: 453 passing (`./gradlew test`), `assembleDebug` clean. Five test-double
+`MessageDao` implementations across existing test files needed the two new abstract
+methods (`updateStarred`/`observeStarredMedia`) added as no-ops to keep compiling.
 
 ### Image viewer: fixed swipe + full-screen bugs, added date pill and "Go to chat"
 
