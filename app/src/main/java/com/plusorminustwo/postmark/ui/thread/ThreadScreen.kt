@@ -1,9 +1,13 @@
 package com.plusorminustwo.postmark.ui.thread
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.AudioAttributes
@@ -397,6 +401,12 @@ private fun ThreadContent(
             if (index >= 0) globalImageViewerIndex = index
         }
     }
+
+    // URI of the video being played; null = player closed. Lifted here (rather than
+    // per-MessageBubble) so the player dialog isn't torn down when the LazyColumn item
+    // hosting it is disposed during a rotation relayout.
+    var playingVideoUri by remember { mutableStateOf<String?>(null) }
+    val onVideoTap = remember { { uri: String -> playingVideoUri = uri } }
 
     // Live Y of the bubble currently selected for reaction.
     // Initialised from the ViewModel's snapshot Y (captured at long-press time),
@@ -803,6 +813,7 @@ private fun ThreadContent(
                             isHighlighted = item.message.id == uiState.highlightedMessageId,
                             onToggleSelect = { onToggleSelection(item.message.id) },
                             onImageTap = onImageTap,
+                            onVideoTap = onVideoTap,
                             onLongClick = { y -> onShowReactionPicker(item.message.id, y) },
                             onReactionTargetYChanged = if (item.message.id == uiState.reactionPickerMessageId)
                                 { y -> liveBubbleY = y } else null,
@@ -867,6 +878,15 @@ private fun ThreadContent(
                         onDismiss = { globalImageViewerIndex = null }
                     )
                 }
+            }
+
+            // Full-screen video player — hosted here (not per-bubble) so it survives the
+            // LazyColumn item that launched it being disposed during a rotation relayout.
+            playingVideoUri?.let { videoUri ->
+                VideoPlayerDialog(
+                    uri = videoUri,
+                    onDismiss = { playingVideoUri = null }
+                )
             }
 
             // Delete confirmation — shared by the action-bar Delete button and the image
@@ -1108,6 +1128,10 @@ private fun MessageBubble(
     // Tapping an image attachment reports its URI up to ThreadContent, which owns the
     // single shared full-screen viewer and resolves the URI to a thread-wide page index.
     onImageTap: (String) -> Unit = {},
+    // Tapping a video reports its URI up to ThreadContent, which owns the single shared
+    // player dialog. Hosted there (not per-bubble) so it survives the LazyColumn item
+    // being disposed during a rotation relayout — otherwise rotating dumps back to chat.
+    onVideoTap: (String) -> Unit = {},
     onReactionClick: (String) -> Unit,
     timestampPref: TimestampPreference,
     isTimestampExpanded: Boolean,
@@ -1253,9 +1277,6 @@ private fun MessageBubble(
                     )
             ) {
                 if (message.attachments.isNotEmpty()) {
-                    // URI of the video being played; null = player closed. Videos stay a
-                    // per-message dialog — only images page thread-wide (see onImageTap).
-                    var playingVideoUri by remember { mutableStateOf<String?>(null) }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (message.attachments.size == 1) {
                             // Single attachment — full-width rendering (image, video, or audio).
@@ -1267,7 +1288,7 @@ private fun MessageBubble(
                                 onImageClick = if (att.mimeType.startsWith("image/"))
                                     { { onImageTap(att.uri) } } else null,
                                 onVideoClick = if (att.mimeType.startsWith("video/"))
-                                    { { playingVideoUri = att.uri } } else null
+                                    { { onVideoTap(att.uri) } } else null
                             )
                         } else {
                             // Multiple attachments — 2-column thumbnail grid for images/videos;
@@ -1285,7 +1306,7 @@ private fun MessageBubble(
                                                 if (att.mimeType.startsWith("image/")) {
                                                     onImageTap(att.uri)
                                                 } else {
-                                                    playingVideoUri = att.uri
+                                                    onVideoTap(att.uri)
                                                 }
                                             }
                                         )
@@ -1318,13 +1339,6 @@ private fun MessageBubble(
                             )
                         }
                     }
-                    // Full-screen video player — shown when the user taps a video thumbnail.
-                    playingVideoUri?.let { videoUri ->
-                        VideoPlayerDialog(
-                            uri = videoUri,
-                            onDismiss = { playingVideoUri = null }
-                        )
-                    }
                 } else {
                     // Plain SMS bubble — linkify URLs and phone numbers.
                     val fontScale  = LocalBubbleFontScale.current
@@ -1346,17 +1360,19 @@ private fun MessageBubble(
             }
             if (message.reactions.isNotEmpty()) {
                 // Google Messages-style badge: always the bubble's own bottom-right
-                // corner, whether the bubble is sent or received, hanging half off
-                // the edge. Unconstrained in width so a pill row wider than a short
-                // bubble grows leftward past its edge instead of wrapping into a
-                // stack of single pills.
+                // corner, whether the bubble is sent or received. y=16 drops the pill
+                // below the bubble edge so it reads as hanging off the corner rather
+                // than overlapping it (kept in step with the tail Spacer below, which
+                // reserves overhang + 2dp so the badge never touches the next message).
+                // Unconstrained in width so a pill row wider than a short bubble grows
+                // leftward past its edge instead of wrapping into a stack of pills.
                 ReactionPills(
                     reactions = message.reactions,
                     isSent = message.isSent,
                     onReactionClick = onReactionClick,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .offset(x = 6.dp, y = 10.dp)
+                        .offset(x = 6.dp, y = 16.dp)
                 )
             }
         }  // end Box(widthIn+align)
@@ -1396,7 +1412,7 @@ private fun MessageBubble(
             }
         }
         if (message.reactions.isNotEmpty() && (clusterPosition == ClusterPosition.BOTTOM || clusterPosition == ClusterPosition.SINGLE)) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(18.dp))
         }
     }
 }
@@ -1435,13 +1451,44 @@ private fun AttachmentThumbnail(
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            // Video cell — play icon over the placeholder background.
-            Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = "Video",
-                modifier = Modifier.size(40.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // Video cell — first frame (extracted off the main thread) with a play badge.
+            val videoThumb by produceState<Bitmap?>(null, attachment.uri) {
+                value = withContext(Dispatchers.IO) {
+                    val retriever = MediaMetadataRetriever()
+                    var frame: Bitmap? = null
+                    try {
+                        retriever.setDataSource(ctx, Uri.parse(attachment.uri))
+                        frame = retriever.getFrameAtTime(0)
+                    } catch (e: Exception) {
+                        android.util.Log.w("VideoThumb", "Frame extraction failed", e)
+                    } finally {
+                        retriever.release()
+                    }
+                    frame
+                }
+            }
+            videoThumb?.let {
+                Image(
+                    bitmap             = it.asImageBitmap(),
+                    contentDescription = "Video preview",
+                    contentScale       = ContentScale.Crop,
+                    modifier           = Modifier.fillMaxSize()
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.35f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Video",
+                    modifier = Modifier.size(28.dp),
+                    tint = Color.White
+                )
+            }
         }
     }
 }
@@ -1529,10 +1576,29 @@ private fun MmsAttachment(
 
         // ── Video ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("video/") == true -> {
+            val ctx = LocalContext.current
+            // Extract the first frame via MediaMetadataRetriever so the bubble shows a
+            // real still instead of a blank tile. Runs off the main thread; falls back to
+            // the play-icon placeholder while loading (or if extraction fails).
+            val videoThumb by produceState<Bitmap?>(null, uri) {
+                value = withContext(Dispatchers.IO) {
+                    val retriever = MediaMetadataRetriever()
+                    var frame: Bitmap? = null
+                    try {
+                        retriever.setDataSource(ctx, Uri.parse(uri))
+                        frame = retriever.getFrameAtTime(0)
+                    } catch (e: Exception) {
+                        android.util.Log.w("VideoThumb", "Frame extraction failed", e)
+                    } finally {
+                        retriever.release()
+                    }
+                    frame
+                }
+            }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(120.dp)
+                    .height(160.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .then(
@@ -1541,12 +1607,30 @@ private fun MmsAttachment(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Video",
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                videoThumb?.let {
+                    Image(
+                        bitmap             = it.asImageBitmap(),
+                        contentDescription = "Video preview",
+                        contentScale       = ContentScale.Crop,
+                        modifier           = Modifier.fillMaxSize()
+                    )
+                }
+                // Play badge overlaid at centre — signals it's a video and gives a clear
+                // tap target even before (or if) the thumbnail resolves.
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.35f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Video",
+                        modifier = Modifier.size(32.dp),
+                        tint = Color.White
+                    )
+                }
             }
         }
 
@@ -2585,6 +2669,9 @@ private fun FullScreenImageViewer(
     ) { images.size }
     val currentImage = images.getOrNull(pagerState.currentPage)
     val context = LocalContext.current
+    // Allow the device to rotate while viewing full-screen photos (e.g. landscape shots);
+    // reverts to the app-wide portrait lock on close.
+    AllowScreenRotationWhileVisible()
     val coroutineScope = rememberCoroutineScope()
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showDetailsFor by remember { mutableStateOf<ThreadImageRef?>(null) }
@@ -3131,6 +3218,39 @@ private fun ZoomableImage(uri: String) {
     )
 }
 
+// ── Screen-orientation helpers ────────────────────────────────────────────────
+
+/** Walk the ContextWrapper chain to find the hosting [Activity], or null. */
+private fun Context.findActivity(): Activity? {
+    var context: Context? = this
+    while (context is ContextWrapper) {
+        if (context is Activity) return context
+        context = context.baseContext
+    }
+    return null
+}
+
+/**
+ * While this composable is in the composition, let the screen rotate freely
+ * (subject to the user's system auto-rotate setting). On dispose it restores the
+ * app-wide portrait lock declared in the manifest.
+ *
+ * The full-screen media viewers use this so landscape photos/videos can be viewed
+ * rotated, while the rest of the app stays portrait. Rotation reconfigures the
+ * activity in place (see `configChanges` in the manifest) rather than recreating
+ * it, so the viewer stays open across the rotation.
+ */
+@Composable
+private fun AllowScreenRotationWhileVisible() {
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(activity) {
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+}
+
 // ── VideoPlayerDialog ─────────────────────────────────────────────────────────
 
 /**
@@ -3146,6 +3266,9 @@ private fun ZoomableImage(uri: String) {
 @Composable
 private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
+    // Allow the device to rotate while the player is open (portrait clips can then be
+    // watched full-screen in landscape); reverts to the app-wide portrait lock on close.
+    AllowScreenRotationWhileVisible()
     // Read from the Activity window (this composable's own hosting window, before the
     // Dialog{} call below enters its own separate window) — see the identical comment
     // on FullScreenImageViewer's navBarBottomPadding param for why this is more
@@ -3221,7 +3344,10 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
             verticalArrangement = Arrangement.Center
         ) {
             // Video surface — native controls hidden; we supply our own bar below.
-            Box(modifier = Modifier.weight(1f, fill = false)) {
+            // Fill all vertical space left above the control bar; PlayerView's default
+            // RESIZE_MODE_FIT preserves the video's own aspect ratio, so a portrait clip
+            // uses the full height instead of being letterboxed into a 16:9 strip.
+            Box(modifier = Modifier.weight(1f)) {
                 AndroidView(
                     factory = { context ->
                         PlayerView(context).apply {
@@ -3230,9 +3356,7 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
                             useController = false
                         }
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                    modifier = Modifier.fillMaxSize()
                 )
                 // Close button in top-right corner.
                 IconButton(
