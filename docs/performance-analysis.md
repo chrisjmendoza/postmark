@@ -102,7 +102,7 @@ All compiled clean; `./gradlew test` green. Items marked ⚠ want a quick on-dev
 
 ### 🐞 Correctness bug found along the way (not perf — file separately)
 
-- [ ] **`FtsQueryBuilder.kt:23` emits `^"term"*` but the table is FTS4, not FTS5.** In FTS4, `^` anchors to the *first token of the column* — global search only matches messages whose **first word** starts with the term. Plain `"term"*` gives the intended word-prefix behavior. One-line fix + test update; user-visible search-recall bug.
+- [x] **`FtsQueryBuilder.kt` emitted `^"term"*` but the table is FTS4, not FTS5.** Fixed July 15. Empirical testing against real FTS4 (not just docs) showed the situation was worse than first filed: the original suggestion here (`"term"*`, star outside quotes) is **also** broken in FTS4 — the star is silently dropped, giving exact-whole-word match only. The correct FTS4 form is the star *inside* the phrase quotes: `"term*"` (multi-word input becomes one phrase with a prefix on the last word, `"say hi*"`). The `""` quote-escaping scheme was FTS5-only too; embedded quotes are now replaced with spaces, which is semantically identical since the simple tokenizer never indexes them. Unused `buildMultiWord` helper deleted per house rules. Tests updated; punctuation-only queries verified to return empty rather than throw. ⚠ worth a quick on-device search sanity pass.
 
 ---
 

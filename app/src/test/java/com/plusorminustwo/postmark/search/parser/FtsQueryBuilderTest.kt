@@ -1,7 +1,6 @@
 package com.plusorminustwo.postmark.search.parser
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FtsQueryBuilderTest {
@@ -13,40 +12,34 @@ class FtsQueryBuilderTest {
     }
 
     @Test
-    fun `single word produces word-start prefix syntax`() {
-        assertEquals("^\"hello\"*", FtsQueryBuilder.build("hello"))
+    fun `single word produces FTS4 phrase-prefix syntax with star inside quotes`() {
+        assertEquals("\"hello*\"", FtsQueryBuilder.build("hello"))
     }
 
     @Test
     fun `leading and trailing whitespace is trimmed`() {
-        assertEquals("^\"hello\"*", FtsQueryBuilder.build("  hello  "))
+        assertEquals("\"hello*\"", FtsQueryBuilder.build("  hello  "))
     }
 
     @Test
-    fun `embedded double-quotes are escaped`() {
-        // A query containing a literal " must not break FTS5 MATCH syntax
-        assertEquals("^\"say \"\"hi\"\"\"*", FtsQueryBuilder.build("say \"hi\""))
+    fun `multi-word input becomes one phrase with prefix on the last word`() {
+        assertEquals("\"say hi*\"", FtsQueryBuilder.build("say hi"))
     }
 
     @Test
-    fun `multi-word query produces one prefix clause per word`() {
-        val result = FtsQueryBuilder.buildMultiWord("did you")
-        assertEquals("^\"did\"* ^\"you\"*", result)
+    fun `internal whitespace runs collapse to single spaces`() {
+        assertEquals("\"hello world*\"", FtsQueryBuilder.build("  hello   world  "))
     }
 
     @Test
-    fun `multi-word trims and ignores extra whitespace between words`() {
-        val result = FtsQueryBuilder.buildMultiWord("  hello   world  ")
-        assertEquals("^\"hello\"* ^\"world\"*", result)
+    fun `embedded double-quotes are replaced with spaces`() {
+        // FTS4 has no in-phrase quote escaping; the tokenizer drops quotes from indexed
+        // tokens anyway, so 'say "hi"' and 'say hi' match the same messages.
+        assertEquals("\"say hi*\"", FtsQueryBuilder.build("say \"hi\""))
     }
 
     @Test
-    fun `multi-word blank returns empty`() {
-        assertTrue(FtsQueryBuilder.buildMultiWord("   ").isEmpty())
-    }
-
-    @Test
-    fun `single word via buildMultiWord equals build`() {
-        assertEquals(FtsQueryBuilder.build("hi"), FtsQueryBuilder.buildMultiWord("hi"))
+    fun `quotes-only input returns empty string`() {
+        assertEquals("", FtsQueryBuilder.build("\"\""))
     }
 }

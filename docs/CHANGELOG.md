@@ -4,6 +4,20 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-15 (search fix) — FTS4 word-prefix matching restored in global search
+
+The correctness bug filed in performance-analysis.md §🐞 is fixed: `FtsQueryBuilder`
+emitted FTS5 syntax (`^"term"*`) against the FTS4 `messages_fts` table, so global
+search only matched a message's exact first word. Empirical testing against real FTS4
+showed the originally-suggested fix (`"term"*`, star outside quotes) was *also* broken
+— FTS4 silently drops that star. The correct FTS4 form is the star inside the phrase
+quotes (`"term*"`); multi-word input becomes one phrase with a prefix on the last word.
+FTS5-style `""` quote escaping replaced with quote→space (identical semantics — the
+tokenizer never indexes quotes). Dead `buildMultiWord` helper deleted. Tests rewritten
+for the FTS4 forms; `./gradlew test` green. Needs a quick on-device search check.
+
+---
+
 ## 2026-07-15 (performance) — four-lens perf analysis + 21 quick wins; docs/performance-analysis.md
 
 Four parallel Fable agents audited the codebase for the reported "occasional choppiness"
