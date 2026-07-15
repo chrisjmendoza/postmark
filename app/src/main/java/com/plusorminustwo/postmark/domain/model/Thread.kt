@@ -1,5 +1,7 @@
 package com.plusorminustwo.postmark.domain.model
 
+import androidx.compose.runtime.Immutable
+
 /**
  * Domain model representing a single SMS/MMS conversation thread.
  *
@@ -24,6 +26,10 @@ package com.plusorminustwo.postmark.domain.model
  *                                 for logic that needs to know "is this a group thread?"
  *                                 (e.g. gating group-aware sending, which isn't implemented yet).
  */
+// @Immutable: the participants List makes Thread inferred-unstable, which made every
+// visible ThreadRow unskippable — all rows recomposed on each threads/unreadCounts
+// emission. All fields are read-only and never mutated after construction.
+@Immutable
 data class Thread(
     val id: Long,
     val displayName: String,

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark launch window matching Theme.kt's BgPrimary (#1C1C1E) — see the
+         values/themes.xml comment. -->
+    <style name="Theme.Postmark" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF1C1C1E</item>
+    </style>
+</resources>

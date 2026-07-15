@@ -196,6 +196,11 @@ class ThreadViewModel @Inject constructor(
         val replyingToId: Long?
     )
 
+    // Backing cache for the render-state memoization inside the uiState combine below.
+    private var renderCacheKey: List<Message>? = null
+    private var renderCache = ThreadRenderState()
+    private var imagesCache: List<ThreadImageRef> = emptyList()
+
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<ThreadUiState> = combine(
         threadRepository.observeById(threadId),
@@ -228,12 +233,23 @@ class ThreadViewModel @Inject constructor(
             )
         }
     ) { thread, messages, selected, selectionMode, inner ->
+        // Memoized by list identity: Room emits a new List instance only when the
+        // messages query actually re-ran, while this transform re-runs for EVERY
+        // combined input (each reply-bar keystroke, selection tap, picker open…).
+        // Without the cache, buildRenderState + buildThreadImages re-derived the
+        // whole thread — O(n) date formatting, clustering, three maps — on the main
+        // thread per keystroke. The transform runs sequentially in one collector
+        // coroutine, so plain vars are safe here.
+        if (messages !== renderCacheKey) {
+            renderCache    = buildRenderState(messages)
+            imagesCache    = buildThreadImages(messages)
+            renderCacheKey = messages
+        }
         ThreadUiState(
             thread = thread,
             messages = messages,
-            // Build the flat render list off the main thread inside this combine block.
-            renderState = buildRenderState(messages),
-            threadImages = buildThreadImages(messages),
+            renderState = renderCache,
+            threadImages = imagesCache,
             selectedMessageIds = selected,
             isSelectionMode = selectionMode,
             selectionScope = inner.selectionScope,

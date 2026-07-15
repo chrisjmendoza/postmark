@@ -4,6 +4,59 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-15 (performance) — four-lens perf analysis + 21 quick wins; docs/performance-analysis.md
+
+Four parallel Fable agents audited the codebase for the reported "occasional choppiness"
+(UI/Compose, DB at 160k-row scale, concurrency, platform/build/media); findings were
+hand-verified against source, consolidated into **docs/performance-analysis.md** (tiered
+checklist, same conventions as TODO.md), and every safe quick win was implemented in the
+same session. `./gradlew test` green; ⚠-marked items in the doc want on-device sanity checks.
+
+Highlights of what landed (full list + rationale in performance-analysis.md §✅):
+
+- **Render-state memoization** (`ThreadViewModel`): `buildRenderState`/`buildThreadImages`
+  ran on Main inside the uiState combine — re-executed on *every reply-bar keystroke and
+  selection tap* over the whole thread. Now rebuilt only when Room emits a new messages
+  list instance. Dispatcher-free, so it can't reproduce the July-12 flowOn regression.
+- **July-12 regression probable root cause found and removed**: the shared
+  `SimpleDateFormat`s in `MessageGrouping.kt` are not thread-safe; a Default-dispatched
+  `groupByDay()` racing Main's `localDateToLabel()` can throw inside the combine and
+  silently kill the uiState flow (exactly the "selection stopped applying" symptom).
+  All shared formatters are now immutable `DateTimeFormatter`s — the off-main refactor
+  (fable-analysis #10) is unblocked, pending on-device verification.
+- **Thread-open write storm fixed**: `markAllRead` gained `AND isRead = 0` and the FTS
+  sync trigger is now `AFTER UPDATE OF body` (idempotently migrated in `onOpen`) —
+  opening a 10k-message thread no longer rewrites 10k FTS entries behind the enter
+  animation. Verified no code path UPDATEs body.
+- **Schema v16**: perf indexes — `(threadId, timestamp)` (replaces plain threadId;
+  per-thread reads no longer sort in a temp B-tree), `(isRead, threadId)` (unread badges
+  full-scanned the table per invalidation), `isMms` (watermark MIN/MAX), `isStarred`.
+  Additive migration + 15→16 test + full-chain test extended.
+- **60 s catch-up poll off Main**: `triggerCatchUp()` now wraps in `Dispatchers.IO` —
+  it was running cross-process telephony ContentResolver queries on the main thread
+  every 60 seconds for the app's lifetime.
+- **Video thumbnail cache** (`ui/thread/VideoThumbnails.kt`): three duplicated
+  `MediaMetadataRetriever` blocks replaced by one 16 MB LRU with ≤640 px scaled frames
+  (was: full-resolution ~8 MB frame re-decoded every time a bubble scrolled back in).
+- **Compose-phase fixes**: FAB auto-hide moved to `snapshotFlow` (was restarting a
+  coroutine + recomposing per scrolled frame); date-pill stale-closure + backwards-write
+  fixed; pinch-zoom viewers switched to lambda `graphicsLayer` (param overload recomposed
+  per gesture frame); swipe-reply icon alpha to draw phase; `contentType` on the thread
+  list; bubble shapes/timestamps/reaction-groupings remembered; `@Immutable Thread`;
+  conversation rows animate reordering (`animateItem`); search highlight remembered;
+  stale search results cancelled; `scrollToMessageCentered` stale-snapshot fix.
+- **Startup/lifecycle**: backup-scheduler reconciliation off the cold-start critical
+  path; font-scale persistence debounced (was an `apply()` per pinch frame — QueuedWork
+  flushes synchronously at onStop); one shared WorkManager observer instead of three;
+  dark launch `windowBackground` via `values-night` (kills the white flash on cold start).
+
+Also filed in the doc: the biggest remaining lever is that **CI ships debuggable debug
+APKs** (debug Compose is 2–5× slower per frame — staging build type sketched in Tier 1),
+plus a search-correctness bug found in passing (`FtsQueryBuilder` uses FTS5 `^` syntax
+against an FTS4 table — global search only matches a message's first word).
+
+---
+
 ## 2026-07-15 (feature) — video attachments: thumbnails, portrait-aware player, tap-to-pause; iOS custom-emoji tapbacks; ThreadScreen housekeeping
 
 A day of user-driven video-attachment work (all reported from real conversations on a

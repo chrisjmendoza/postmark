@@ -289,7 +289,9 @@ private fun SearchResultRow(message: Message, query: String, onClick: () -> Unit
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Text(
-            text = highlightQuery(message.body, query),
+            // Remembered: highlightQuery compiles a Regex and rebuilds an
+            // AnnotatedString — per visible row per keystroke without the cache.
+            text = remember(message.body, query) { highlightQuery(message.body, query) },
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 3
         )

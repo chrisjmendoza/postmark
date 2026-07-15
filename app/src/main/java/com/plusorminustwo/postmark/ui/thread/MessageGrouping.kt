@@ -1,23 +1,30 @@
 package com.plusorminustwo.postmark.ui.thread
 
 import com.plusorminustwo.postmark.domain.model.Message
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /** Describes where a message bubble sits within a run of consecutive same-sender messages. */
 enum class ClusterPosition { SINGLE, TOP, MIDDLE, BOTTOM }
 
-internal val DAY_FORMATTER = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).also {
-    it.timeZone = java.util.TimeZone.getDefault()
-}
+// DateTimeFormatter, not SimpleDateFormat: these are shared across every caller of the
+// render pipeline, and SimpleDateFormat is NOT thread-safe — concurrent format() calls
+// corrupt its internal Calendar. That made moving buildRenderState off the main thread
+// (fable-analysis #10) unsafe; DateTimeFormatter is immutable, so it can't recur.
+internal val DAY_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.getDefault())
 
 /** "Sat, Jul 5, 2026 5:34 PM" — full date + time, used by the full-screen image viewer's
  *  header. An earlier version showed only weekday + time ("Sat 5:34 PM"), which was
  *  ambiguous for anything more than a few days old — the full date removes that. */
-internal val FRIENDLY_TIMESTAMP_FORMATTER = SimpleDateFormat("EEE, MMM d, yyyy h:mm a", Locale.getDefault()).also {
-    it.timeZone = java.util.TimeZone.getDefault()
-}
+internal val FRIENDLY_TIMESTAMP_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEE, MMM d, yyyy h:mm a", Locale.getDefault())
+
+/** Formats an epoch-millis timestamp with [formatter] in the device's current zone. */
+internal fun formatEpochMillis(timestampMs: Long, formatter: DateTimeFormatter): String =
+    Instant.ofEpochMilli(timestampMs).atZone(ZoneId.systemDefault()).format(formatter)
 
 /**
  * Groups [this] list (expected in ascending timestamp order) into an ordered map of
@@ -26,7 +33,7 @@ internal val FRIENDLY_TIMESTAMP_FORMATTER = SimpleDateFormat("EEE, MMM d, yyyy h
  * iterate [Map.entries] reversed.
  */
 fun List<Message>.groupByDay(): Map<String, List<Message>> =
-    groupBy { DAY_FORMATTER.format(Date(it.timestamp)) }
+    groupBy { formatEpochMillis(it.timestamp, DAY_FORMATTER) }
 
 private val CLUSTER_GAP_MS = 3 * 60 * 1_000L  // 3 minutes
 

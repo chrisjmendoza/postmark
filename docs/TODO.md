@@ -320,23 +320,28 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       by name without scrolling through the full conversations list.
 
 ### Performance & optimization
+> **See `docs/performance-analysis.md` (July 15 2026)** — the authoritative, tiered
+> perf checklist from the four-lens Fable audit. 21 quick wins landed same-day
+> (render-state memoization, markAllRead/FTS-trigger fix, schema v16 indexes,
+> catch-up poll off Main, video thumbnail cache, and more). The items below are
+> kept for continuity but the new doc supersedes them.
 - [ ] **Heatmap query performance** — with 150k+ messages the heatmap is slow to load and
-      unresponsive on month navigation. The `byDayOfWeekJson` / `byMonthJson` stats are
-      pre-aggregated in `ThreadStats`, but the heatmap still does per-day message counts
-      at query time. Profile the `StatsViewModel` heatmap flow and either: (a) pre-compute
-      per-day counts into `ThreadStatsEntity` during `StatsUpdater` so month navigation is
-      an in-memory lookup, or (b) add a dedicated index on `messages(threadId, timestamp)`
-      and limit the query window to the displayed month. Target: month switch feels instant.
-- [ ] **`StatsUpdater` incremental updates** — currently recomputes all stats from scratch
-      on every sync. For large message sets this is slow. Only recompute stats for threads
-      whose messages changed since `lastUpdatedAt`. Track a `dirtyThreadIds` set in
-      `SyncWorker` and pass it to `StatsUpdater.updateStats(dirtyThreadIds)`.
-- [ ] **LazyColumn key stability** — verify all `LazyColumn` item keys are stable IDs
-      (not list positions). Unstable keys cause unnecessary recompositions as list data
-      updates after sync.
+      unresponsive on month navigation. ~~Option (a) pre-compute in ThreadStatsEntity~~
+      (obsolete — stats tables deleted at v15). The `messages(threadId, timestamp)` index
+      landed July 15 (schema v16); remaining work is performance-analysis.md Tier 1 #5:
+      debounce + single-pass stats, `flowOn` the heatmap flows, then SQL aggregation.
+      Target: month switch feels instant.
+- [x] ~~**`StatsUpdater` incremental updates**~~ — obsolete: `StatsUpdater` and the
+      pre-aggregated tables were deleted outright (July 12, fable-analysis #9); stats
+      compute live. The live-compute cost is tracked in performance-analysis.md Tier 1 #5.
+- [x] **LazyColumn key stability** — verified July 15 (four-lens audit): both big lists
+      use stable ID keys (`items(threadList, key = { it.id })`; thread items keyed by
+      `ThreadListItem.key`). `contentType` added to the thread list the same day.
 - [ ] **Thread view initial load** — profile cold-open of a large thread (1000+ messages).
       `LazyColumn reverseLayout` with that many items may have a first-frame hitch;
       consider paging with `Pager` / `PagingSource` if the frame time is > 16ms.
+      (= performance-analysis.md Tier 1 #3 — windowed query or Paging3; the July 15
+      memoization + v16 index already removed the per-keystroke rebuild and sort pass.)
 
 ### Export — image rendering
 - [ ] **Image export** — render selected messages to `Canvas`,

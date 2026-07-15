@@ -30,6 +30,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -131,9 +132,12 @@ class SmsSyncHandler @Inject constructor(
      * Awaitable catch-up pass, called by [SmsHistoryImportWorker] after the full
      * historical sync completes to pick up any messages that arrived during the
      * sync window. Waits for any in-flight channel-triggered sync to finish first
-     * (via the same Mutex), then runs synchronously on the caller's coroutine.
+     * (via the same Mutex), then runs on [Dispatchers.IO] regardless of the
+     * caller's context — the sync bodies issue cross-process ContentResolver
+     * queries, and ConversationsViewModel's 60-second poll used to run them on
+     * Main.immediate, stalling frames on every idle pass.
      */
-    suspend fun triggerCatchUp() {
+    suspend fun triggerCatchUp() = withContext(Dispatchers.IO) {
         smsMutex.withLock { syncLatestSms() }
         mmsMutex.withLock { syncLatestMms() }
     }

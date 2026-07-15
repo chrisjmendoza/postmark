@@ -173,7 +173,7 @@ fun buildThreadImages(messages: List<Message>): List<ThreadImageRef> =
                 ThreadImageRef(
                     messageId = msg.id,
                     uri = att.uri,
-                    timestampLabel = FRIENDLY_TIMESTAMP_FORMATTER.format(java.util.Date(msg.timestamp)),
+                    timestampLabel = formatEpochMillis(msg.timestamp, FRIENDLY_TIMESTAMP_FORMATTER),
                     isSent = msg.isSent,
                     isStarred = msg.isStarred
                 )

@@ -1,0 +1,126 @@
+# Postmark — Performance Analysis
+
+**Date:** July 15, 2026 · **Branch:** `fix/fable-critical` · **Model:** Fable 5
+
+## Method
+
+Four independent Fable agents read the actual source (not the docs) through four lenses: **Compose/UI rendering**, **database/data layer at the real 160k-message scale**, **concurrency/main-thread contention**, and **platform/build/media pipeline**. Every finding below carries a file:line citation; the highest-severity claims were re-verified against the code by hand before being trusted. Where multiple agents independently converged on the same finding from different angles, that convergence is noted — it is the strongest signal in this analysis.
+
+Checklist semantics match `docs/TODO.md`: work top-to-bottom within a tier. Items checked `[x]` were **implemented on July 15, 2026** (same session as this analysis); anything marked *needs on-device verification* compiled and passed unit tests but has not been exercised on hardware.
+
+---
+
+## Executive Summary
+
+The choppiness has real, identifiable causes — and they stack. In ranked order of user impact:
+
+1. **Every build anyone has ever run is a debuggable debug APK.** CI ships `assembleDebug` to Firebase; the release build type has no signing config and cannot be installed at all. Debug Compose runs 2–5× slower per frame than release. This is the single largest smoothness lever in the project, it costs one build-type stanza, and **every other measurement is distorted until it's fixed** (→ item 1).
+2. **The thread screen rebuilt its entire render model on the main thread on every keystroke.** All four agents found this independently. `buildRenderState` + `buildThreadImages` ran inside the `uiState` combine, which re-fires for every reply-bar character, selection tap, and picker twitch — O(n) date-formatting and clustering over the whole thread, per keystroke, on Main. *Fixed today via identity-memoization; the off-main move is item 2.*
+3. **Opening a thread rewrote every row of it.** `markAllRead` had no `AND isRead = 0` predicate, and the FTS sync trigger fired on *every* UPDATE (not just body changes) — so opening a 10k-message thread executed 10k FTS delete+insert pairs behind the screen-entry animation, then invalidated every messages observer. *Both fixed today.*
+4. **The 60-second catch-up poll ran cross-process ContentResolver queries on the main thread.** A binder round-trip to the telephony provider every 60 s, on Main, for the life of the process — a textbook "periodic hitch" signature. *Fixed today.*
+5. **Unindexed hot queries at 160k rows.** The unread-count badge query full-scanned the table on every message write while the home screen was visible; per-thread reads sorted the whole thread in a temp B-tree; sync watermarks walked the full id range every poll. *Indexes added today (schema v16).*
+6. **Media churn.** Video thumbnails were re-extracted at native resolution (a 1080p frame ≈ 8 MB) every time a bubble scrolled back into view, with no cache, from three duplicated code blocks. *Consolidated + cached + downscaled today.*
+
+### The July 12 `flowOn` regression — probable root cause found
+
+`docs/fable-analysis.md` #10 (add `.flowOn(Dispatchers.Default)` to the render combine) was reverted after on-device selection stopped responding, cause unknown. The concurrency audit produced a strong hypothesis: **`MessageGrouping.kt`'s `DAY_FORMATTER`/`FRIENDLY_TIMESTAMP_FORMATTER` were shared `SimpleDateFormat` instances — not thread-safe.** With the combine on `Default`, `groupByDay()` raced the Main-thread `localDateToLabel()` on the same formatter; concurrent `format()` corrupts its internal `Calendar` and can throw — and an exception inside the combine transform **silently kills the `uiState` flow**, freezing the UI at its last state. That matches the observed symptom ("mode entered but taps never applied") exactly.
+
+All shared formatters were replaced with immutable `java.time.DateTimeFormatter` today, which removes the race entirely. Item 2 (the staged off-main refactor) is therefore unblocked — but per the standing note, it must be verified on device.
+
+---
+
+## Checklist
+
+### ✅ Implemented July 15, 2026 (this batch)
+
+All compiled clean; `./gradlew test` green. Items marked ⚠ want a quick on-device sanity pass.
+
+- [x] **1. Render-state memoization by list identity** — `ThreadViewModel.kt` combine now rebuilds `renderState`/`threadImages` only when Room emits a new `messages` list instance; keystrokes/selection taps reuse the cache. Dispatcher-free, so it cannot reproduce the July-12 regression. *(Found independently by all four agents — the #1 code-level fix.)* ⚠ verify typing in a large thread feels smoother.
+- [x] **2. `markAllRead` no-op predicate** — `MessageDao.kt`: `AND isRead = 0`. Re-opening an already-read thread now touches zero rows → zero trigger fires → zero invalidation.
+- [x] **3. FTS UPDATE trigger scoped to body changes** — `PostmarkDatabase.kt`: `AFTER UPDATE OF body ON messages`; existing installs migrated idempotently in `onOpen()` (triggers aren't in Room's schema hash — no version bump needed for this part). Delivery-status flips, star toggles, and markAllRead no longer re-tokenize FTS entries. Verified: no code path UPDATEs `body`.
+- [x] **4. `triggerCatchUp()` hops to `Dispatchers.IO`** — `SmsSyncHandler.kt`. The 60 s poll and any other Main-context caller no longer run telephony-provider cursor queries on the main thread.
+- [x] **5. Schema v16 — query-driven indexes** (`MessageEntity.kt`, `PostmarkDatabase.MIGRATION_15_16`, `DatabaseModule`): `(threadId, timestamp)` replaces the plain `threadId` index (per-thread reads now come back in index order, no sort pass); `(isRead, threadId)` for the unread badges; `isMms` for the sync watermarks; `isStarred` for the gallery. Additive migration + `DatabaseMigrationTest` 15→16 + full-chain test extended to v16. ⚠ instrumented migration test needs a `connectedAndroidTest` run on device.
+- [x] **6. Thread-safe date formatters** — `MessageGrouping.kt`, `ThreadListItem.kt`, `ThreadScreen.kt`, `ConversationsScreen.kt`: every shared `SimpleDateFormat` replaced with `DateTimeFormatter` (identical output patterns). Prerequisite for item 2 below; also deletes 4 per-row-per-recomposition `SimpleDateFormat` constructions in the conversations list.
+- [x] **7. FAB auto-hide via `snapshotFlow`** — `ThreadScreen.kt`: the effect was keyed on `firstVisibleItemScrollOffset`, recomposing its scope and restarting its coroutine **every scrolled frame**. Now one stable effect; per-frame reads never touch the composition phase.
+- [x] **8. Floating date pill fixes** — `ThreadScreen.kt`: (a) the `derivedStateOf` was in a key-less `remember` capturing the *first* (empty) `renderState` — bubble-keyed date lookups silently resolved `""` forever; now keyed on the id→date map. (b) `pillDateLabel` was written during composition (guaranteed double-compose per day-boundary crossing); now reconciled in a `LaunchedEffect`. ⚠ verify pill updates while scrolling.
+- [x] **9. Pinch-zoom viewers: draw-phase transforms** — `ThreadScreen.kt` (`ZoomableImage`) and `ContactDetailScreen.kt` used the *parameter* overload of `graphicsLayer`, recomposing the whole image node every pinch/pan frame (the code comment claimed otherwise). Now the lambda overload + `remember(uri)`-ed `ImageRequest`.
+- [x] **10. Swipe-to-reply icon alpha → `graphicsLayer`** — `ThreadScreen.kt`: `Modifier.alpha(animatable…)` read the animation in composition, recomposing the bubble per drag frame; the bubble's own translation already did this correctly.
+- [x] **11. Video thumbnail cache** — new `ui/thread/VideoThumbnails.kt`: process-wide 16 MB LRU keyed by URI, frames downscaled to ≤640 px via `getScaledFrameAtTime` (API 27+). Replaces three duplicated `MediaMetadataRetriever` blocks (bubble, grid cell, reply-bar preview) that re-decoded a full-resolution frame on every scroll re-entry. Cache hits render synchronously — no placeholder flash. ⚠ verify video stills in a media-heavy thread (decode path itself is unchanged).
+- [x] **12. `contentType` on the thread LazyColumn** — `ThreadScreen.kt`: bubbles vs. date headers now reuse composition slots per kind during fling.
+- [x] **13. ReplyBar `replyingTo` O(1) lookup** — `ThreadScreen.kt`: was a linear `find` over all messages, re-evaluated per keystroke; now uses the prebuilt `messageIdToIndex`.
+- [x] **14. `scrollToMessageCentered` stale-capture fix** — `ThreadScreen.kt`: its `snapshotFlow` observed a plain parameter (emits once, never again) — "Go to chat"/search-jump during thread load suspended forever. Now reads through `rememberUpdatedState`. ⚠ verify search-jump into a large thread mid-load.
+- [x] **15. Per-bubble micro-costs** — `ThreadScreen.kt`: bubble corner shapes precomputed (8 shared instances), timestamp text `remember(timestamp)`, `ReactionPills` groupBy remembered.
+- [x] **16. Conversations list** — `Thread` domain model annotated `@Immutable` (its `List` field made every `ThreadRow` unskippable), formatters hoisted (item 6), and rows animate placement via `Modifier.animateItem()` — pin/unpin and reorder now slide instead of teleporting. ⚠ visual check.
+- [x] **17. One shared WorkManager observer** — `ConversationsViewModel.kt`: `isSyncing`/`syncProgress`/`syncStatus` each registered their own `getWorkInfosForUniqueWorkFlow` observer; every import `setProgress` tick triple-queried the Work DB. Now one `shareIn(replay = 1)` source.
+- [x] **18. Search polish** — `SearchScreen.kt`: highlight `AnnotatedString` (regex compile per row per keystroke) now remembered. `SearchViewModel.kt`: in-flight query job cancelled on supersede — stale broad results can no longer overwrite newer narrow ones.
+- [x] **19. Font-scale persistence debounced** — `BubbleFontScaleRepository.kt`: pinch fired an `Editor.apply()` per gesture frame (QueuedWork floods flush synchronously at `Activity.onStop` — lifecycle-transition jank). Live `StateFlow` update stays per-frame; disk write debounced 400 ms.
+- [x] **20. Startup: backup-scheduler reconciliation off Main** — `PostmarkApplication.kt`: `syncWithPrefs()` blocked on a prefs disk load + forced WorkManager init before first frame; now on `Dispatchers.Default`.
+- [x] **21. Dark launch window** — `values-night/themes.xml` + `windowBackground` in both variants: cold start no longer white-flashes before this dark-default app paints. ⚠ visual check both themes.
+
+### 🔴 Tier 1 — biggest remaining levers
+
+- [ ] **1. Ship minified, non-debuggable builds to testers.** *(Owner action + on-device verify — the single largest smoothness jump available.)* `distribute.yml:49-63` builds `assembleDebug`; `app/build.gradle.kts` release block has `isMinifyEnabled = true` but **no signingConfig**. Add a `staging` build type (`initWith(release)`, `signingConfig = signingConfigs.getByName("debug")` so update-installs keep working, `matchingFallbacks += "release"`, `isShrinkResources = true`) and point CI at `assembleStaging`. First staging build must be smoke-tested on device — R8 + Hilt/Room/Compose can surface keep-rule gaps; see Tier 4 for the proguard cleanup to do alongside. Keep a debug lane for attaching the debugger.
+- [ ] **2. Move the render pipeline off the main thread — staged re-attempt of fable-analysis #10.** Now unblocked by the formatter fix (see summary). Do **not** re-apply `flowOn` to the whole combine. Instead derive from messages only:
+  `messageRepository.observeByThread(threadId).map { Triple(it, buildRenderState(it), buildThreadImages(it)) }.flowOn(Dispatchers.Default).shareIn(viewModelScope, WhileSubscribed(5_000), replay = 1)` — feed that into the outer combine, which stays on Main so selection taps apply synchronously. Also fold in `activeDates` (currently a **second** independent `observeByThread` subscription mapping on Main — `ThreadViewModel.kt:151-160`) and repository-side mapping (`MessageRepository.kt:31-41` does reactions-join + `toDomain()` + JSON decode per row on Main). **Requires on-device verification of selection, per the standing note.**
+- [ ] **3. Window the thread query.** `MessageDao.observeByThread` has no LIMIT — a 10k-message thread materializes fully on every invalidation, and Room invalidation is table-granular (any write in any thread re-runs it). Options, simplest first: (a) observed `LIMIT 500` newest + one-shot "load older" pages appended in the VM (fits the house simplicity rule; scroll-to-date/search-jump need a `COUNT(*)`-based initial window), (b) Paging3 (`reverseLayout` composes naturally with `ORDER BY timestamp DESC`, date headers via `insertSeparators`). TODO.md's "Thread view initial load" item — profile first; the v16 composite index may make (a) sufficient.
+- [ ] **4. Baseline profile + `profileinstaller` + macrobenchmark module.** No `:baselineprofile` module, no `androidx.profileinstaller` dependency anywhere. Meaningless until item 1 ships non-debug builds; after that it's a 20–30 % cold-start/first-scroll win. One `com.android.test` module doubles as the jank benchmark suite (`FrameTimingMetric`) driving: cold start → conversations fling → open biggest thread → fling → image viewer → video.
+- [ ] **5. Stats screen data path.** `StatsViewModel.kt:130-136` observes `observeMessagesFrom(0L)` — **all 160k rows materialize on every messages invalidation** while Stats is open (GC pressure = hitches), then two consumers each re-sort/re-format everything. Near-term: `debounce(1_000)` the source, compute global+per-thread in one shared pass, add `.flowOn(Dispatchers.Default)` to the four un-dispatched heatmap flows (`:203-208, :222-237, :241-253, :255-264` — use per-call or `java.time` formatters, NOT the shared-instance pattern that caused July 12). Long-term: SQL aggregation (`GROUP BY threadId`, `strftime` day buckets) so invalidations never materialize the table. Addresses TODO.md's "Heatmap query performance" (the pre-aggregation option there is obsolete — those tables were deleted in v15).
+
+### 🟡 Tier 2 — high-value, contained
+
+- [ ] **6. Transaction-coalesce sync finalization.** Each DAO suspend call is its own transaction = its own invalidation tick. One MMS send currently produces ~6 `messages` ticks + 2 `threads` ticks (optimistic insert → real insert → status transfer → attachment transfer → optimistic delete → previews); every tick re-runs every open observer. Wrap the groups in `SmsSyncHandler.kt:259-269, 373-455`, the send path (`ThreadViewModel.kt:578-651`), and the import worker's 1,240 single-row thread-metadata updates (`SmsHistoryImportWorker.kt:223-227, 350-361, 481-499`) in `db.withTransaction { }`. Fakes in unit tests can't provide a Room DB — inject a small `TransactionRunner` (`suspend (suspend () -> Unit) -> Unit`; identity impl in fakes). **Touches the fragile sync core — needs on-device verification.**
+- [ ] **7. RestoreWorker batch inserts.** `RestoreWorker.kt:343` inserts row-at-a-time — ~160k WAL commits + invalidation ticks for a full restore. Buffer 500-row `insertAll` batches inside `withTransaction` (mirror the import worker); batch reaction dedup checks with an `IN` query.
+- [ ] **8. Contact photo/name LRU cache.** `ContactAvatar.kt:47-83` re-queries `PhoneLookup` (cross-process binder) every time a row scrolls back into composition, and letter→photo swap flashes per pass. Process-scoped `LruCache<String, String?>` (address → photoUri) seeded synchronously in `remember(address)`; consider the same for `lookupContactName`. (3 agents converged.)
+- [ ] **9. Reaction resolution window query.** `SmsSyncHandler.kt:283, 469` load the **entire thread** (`getByThread`) to search the last 100 messages for a tapback target. Add `ORDER BY timestamp DESC LIMIT 150` DAO query, reverse in memory. Touches sync — verify a live tapback on device.
+- [ ] **10. Lifecycle-gate the 60 s poll.** `ConversationsViewModel.kt:87-92` polls for the VM's lifetime — including while the app is backgrounded (viewModelScope isn't lifecycle-aware; the VM sits on the nav back stack). Gate with `ProcessLifecycleOwner` foreground check or move to a `repeatOnLifecycle` collector. (Now that the poll is on IO the cost is battery/provider churn, not jank.)
+- [ ] **11. SyncLogger async drain.** `SyncLogger.kt:34-62`: synchronous `appendText` + `File.length()` on the caller's thread — including Main in `SmsReceiver.kt:67` (deliberately pre-`goAsync`, documented) and during Hilt graph construction; the 100 KB trim reads+rewrites the whole file on whatever thread trips it. Bounded `Channel<String>` drained by one IO coroutine keeps the crash-safety (enqueue is instant) and moves trim off the append path.
+- [ ] **12. `SubcomposeAsyncImage` → `AsyncImage` where slots are trivial** (`ThreadScreen.kt` bubble/grid paths, `ContactAvatar`, `StarredImagesScreen`). Subcomposition is measurably slower per node in scrolling lists. **Caution:** `SubcomposeAsyncImage` + explicit-context `ImageRequest` was part of the deliberate `content://mms/part/` ContentResolver fix (BRIEFING "MMS image loading fixed") — keep the explicit-context request builder, only swap the composable wrapper, and verify MMS images on device.
+- [ ] **13. Fixed-size image placeholders.** Bubble images compose at `height(80.dp)` loading → up to `heightIn(max 240.dp)` loaded (`ThreadScreen.kt` image branch) — every async resolve reflows the list; in `reverseLayout` that reads as scroll-position jumping. Options: fixed `aspectRatio(4f/3f)` + Crop (visual change — owner call), or persist attachment pixel dimensions at sync time and size exactly. Needs a design decision, hence not auto-applied.
+- [ ] **14. `coil-video` migration** (supersedes today's LruCache if adopted): add the `coil-video` artifact + one app-wide `ImageLoader` (`ImageLoaderFactory` on `PostmarkApplication` with `VideoFrameDecoder`), render video stills through the same `AsyncImage` path as photos with `.size()` bounds — memory *and disk* caching, then delete `VideoThumbnails.kt`. Pairs with item 12's caution: verify `content://mms/part/` video URIs decode on device.
+
+### 🟢 Tier 3 — UI engagement & polish (make it *feel* smoother)
+
+- [ ] **15. `animateItem()` on thread bubbles** — new-message insert currently pops; with stable keys already in place this is a one-line add at `ThreadScreen.kt` items content root. Watch for cost on huge threads during bulk sync (placement animations on many items) — try on device.
+- [ ] **16. Top-bar swap animation** — normal ↔ selection ↔ action bars hard-swap via `when` (`ThreadScreen.kt:643-761`), and the selection bar's extra height jumps the list. Wrap in `AnimatedContent` (fade+slide).
+- [ ] **17. ReplyBar transitions** — quote strip / attachment previews / group warning pop in and out; wrap each in `AnimatedVisibility(expandVertically() + fadeIn())` or `animateContentSize()` on the bar column.
+- [ ] **18. Highlight decay** — search-jump/`Go to chat` highlight clears after 2 s with a hard color swap; `animateColorAsState` fade-out reads far more polished. (Note: `MessageBubble` accepts `isHighlighted` but doesn't tint with it — check for dead/unfinished wiring while there.)
+- [ ] **19. Image-viewer pager transforms** — pager already peeks adjacent pages; a slight `graphicsLayer` scale/alpha on `getOffsetDistanceInPages` matches Google Messages' feel.
+- [ ] **20. Unread-filter chip row** appears via plain `if` (`ConversationsScreen.kt:123-144`) — `AnimatedVisibility`.
+- [ ] **21. Haptics** — zero haptic feedback anywhere in `ui/` (also fable-analysis #31). Reaction toggle, long-press entry, pin/unpin are the obvious sites.
+
+### 🔵 Tier 4 — observability, build & hygiene
+
+- [ ] **22. JankStats** (`androidx.metrics:metrics-performance`) in `MainActivity` with `PerformanceMetricsState` screen/scrolling markers — makes every future jank report attributable. ~1 hour.
+- [ ] **23. Compose compiler reports** (`composeCompiler { reportsDestination/metricsDestination }`) — confirm what actually skips; strong skipping is already ON (Kotlin 2.2.10 plugin), no action needed there.
+- [ ] **24. StrictMode in debug** (`detectDiskReads/Writes` + `penaltyLog`) — would have auto-flagged the startup and logger findings.
+- [ ] **25. Proguard/R8 hygiene** (with Tier-1 item 1): delete the blanket `-keep class …data.db.entity.** { *; }` / `domain.model.** { *; }` (Room is KSP-generated, nothing reflects on domain models — the keeps block R8 from optimizing the hottest data classes); add `isShrinkResources = true`; revisit `android.r8.optimizedResourceShrinking=false` in `gradle.properties` (document why or remove).
+- [ ] **26. Compose BOM bump** — `2025.01.00` is ~12 months stale; 1.8/1.9 shipped pausable-composition LazyList prefetch and cheaper text layout, free wins for long-thread fling. Mechanical bump + full UI regression pass on device.
+- [ ] **27. `material-icons-extended` diet** — ~11 MB of classes riding into the (currently un-shrunk) builds users install; largely moot once item 1's R8 lands, else swap to icons-core + inline the used set.
+- [ ] **28. Gradle heap** — `org.gradle.jvmargs=-Xmx2048m` is low for AGP 9 + KSP + Hilt; `-Xmx4g` + `kotlin.daemon.jvmargs=-Xmx2g` (build-time QoL only).
+- [ ] **29. FTS4 `optimize`** after the historical import (`INSERT INTO messages_fts(messages_fts) VALUES('optimize')` at the end of `SmsHistoryImportWorker.doWork`) — the index is left fragmented after 160k trigger-driven inserts.
+- [ ] **30. Audio playback unification** — each audio chip owns a raw `MediaPlayer`; two can play simultaneously, and scrolling the playing chip off-screen kills playback (item disposal). One ViewModel-owned player (Media3 handles audio) fixes both and deletes the `MediaPlayer` path.
+
+### 🐞 Correctness bug found along the way (not perf — file separately)
+
+- [ ] **`FtsQueryBuilder.kt:23` emits `^"term"*` but the table is FTS4, not FTS5.** In FTS4, `^` anchors to the *first token of the column* — global search only matches messages whose **first word** starts with the term. Plain `"term"*` gives the intended word-prefix behavior. One-line fix + test update; user-visible search-recall bug.
+
+---
+
+## Already done well — do not "fix"
+
+- Flat, keyed, `@Immutable` thread list model (`ThreadListItem`) with stable string keys and precomputed clustering — textbook LazyColumn architecture; all four agents called it out positively.
+- `remember(viewModel)`-stabilized callbacks throughout `ThreadScreen`; scroll effects isolated into dedicated composables.
+- Coil decode bounds on bubble images (`.size(560, 480)` / `.size(280, 280)`) + crossfade.
+- ExoPlayer lifecycle (create-once, release in `DisposableEffect`, hoisted above the list); portrait-lock + `configChanges` rotation strategy.
+- `SmsSyncHandler` conflated-channel + per-transport-mutex design — sync storms are structurally impossible; an idle catch-up pass causes **zero** Room invalidations (verified).
+- All receivers: `goAsync()` + IO + `finally { finish() }`; MMS send pipeline fully off-main including the Transformer HandlerThread.
+- `WhileSubscribed(5_000)` everywhere; no `Eagerly`, no `GlobalScope`, no `runBlocking` in production code.
+- Search debounced (300 ms) + FTS-backed + LIMITed; forward-picker uses `mapLatest` correctly.
+- Batched 500-row import inserts, checkpoint resume, ETA as pure function.
+- Edge-to-edge/IME handling (`imePadding`, dialog `setDecorFitsSystemWindows`) is correct and hard-won — don't touch it casually.
+- Perfetto trace markers already exist around `ThreadRenderState.build` and `sendMessage` — use them to verify Tier-1 item 2.
+
+## Verification log
+
+- **2026-07-15:** `./gradlew test` — all unit tests passing after the ✅ batch (426+ pre-existing tests; formatter changes covered by existing `MessageGroupingTest`/`DateNavigation` suites). `compileDebugAndroidTestSources` clean (migration test compiles; needs device run). `assembleDebug` clean.
+- **Pending on-device:** items marked ⚠ above, plus every Tier-1/2 item that lands afterward. The Samsung S24 Ultra remains the reference device.

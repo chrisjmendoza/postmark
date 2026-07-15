@@ -11,6 +11,7 @@ import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.model.toBoundsMs
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -55,6 +56,9 @@ class SearchViewModel @Inject constructor(
 
     private val _query = MutableStateFlow("")
     private val _filters = MutableStateFlow(SearchFilters())
+    // In-flight query job — cancelled when a newer query supersedes it (see search()).
+    private var searchJob: Job? = null
+
     private val _results = MutableStateFlow<List<Message>>(emptyList())
     private val _isLoading = MutableStateFlow(false)
     private val _selectedThread = MutableStateFlow<Thread?>(null)
@@ -119,10 +123,14 @@ class SearchViewModel @Inject constructor(
     private fun search(query: String, filters: SearchFilters) {
         // Allow browse (blank query) when a protocol filter is active.
         if (query.isBlank() && filters.isMms == null) {
+            searchJob?.cancel()
             _results.value = emptyList()
             return
         }
-        viewModelScope.launch {
+        // Cancel the in-flight query: without this, an expensive broad FTS query
+        // finishing after a cheaper narrow one overwrote the newer results.
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
             _isLoading.value = true
             val (startMs, _) = filters.dateRange.toBoundsMs()
             _results.value = searchRepository.search(

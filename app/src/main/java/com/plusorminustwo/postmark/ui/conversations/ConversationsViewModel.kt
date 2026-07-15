@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
@@ -128,15 +129,21 @@ class ConversationsViewModel @Inject constructor(
     /** Flips the "show unread only" filter on or off. */
     fun toggleUnreadFilter() { _showUnreadOnly.update { !it } }
 
-    val isSyncing: StateFlow<Boolean> = workManager
+    // Single shared WorkDatabase observer feeding isSyncing / syncProgress / syncStatus.
+    // Three independent getWorkInfosForUniqueWorkFlow calls each registered their own
+    // observer, so every setProgress tick during a 100k-row import triple-queried the
+    // Work DB and triple-mapped the result — precisely while the list was importing.
+    private val importWorkInfos = workManager
         .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    val isSyncing: StateFlow<Boolean> = importWorkInfos
         .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     // Live progress data emitted by the worker every 500 rows via setProgress().
     // Null when the worker is not running or hasn't emitted progress yet.
-    val syncProgress: StateFlow<SyncProgress?> = workManager
-        .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
+    val syncProgress: StateFlow<SyncProgress?> = importWorkInfos
         .map { infos ->
             val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
                 ?: return@map null
@@ -154,8 +161,7 @@ class ConversationsViewModel @Inject constructor(
 
     // Last known sync result — reads from SharedPreferences (written by the worker),
     // and updates live when a new work run completes.
-    val syncStatus: StateFlow<String?> = workManager
-        .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
+    val syncStatus: StateFlow<String?> = importWorkInfos
         .map { infos ->
             val latest = infos.firstOrNull()
             when (latest?.state) {

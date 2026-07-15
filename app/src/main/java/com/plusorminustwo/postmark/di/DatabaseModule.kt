@@ -14,7 +14,7 @@ import javax.inject.Singleton
 /**
  * Hilt module that provides the singleton [PostmarkDatabase] and all its DAO accessors.
  *
- * Registers every manual migration (v1 → v15) so Room never needs to resort to
+ * Registers every manual migration (v1 → v16) so Room never needs to resort to
  * a destructive rebuild. Also installs [PostmarkDatabase.FTS_CALLBACK] to populate
  * the `messages_fts` virtual table after every fresh database creation.
  */
@@ -40,7 +40,8 @@ object DatabaseModule {
                 PostmarkDatabase.MIGRATION_11_12,
                 PostmarkDatabase.MIGRATION_12_13,
                 PostmarkDatabase.MIGRATION_13_14,
-                PostmarkDatabase.MIGRATION_14_15
+                PostmarkDatabase.MIGRATION_14_15,
+                PostmarkDatabase.MIGRATION_15_16
             )
             .addCallback(PostmarkDatabase.FTS_CALLBACK)
             .build()

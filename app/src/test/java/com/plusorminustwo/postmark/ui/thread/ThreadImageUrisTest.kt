@@ -100,7 +100,7 @@ class ThreadImageUrisTest {
     @Test fun `timestamp label matches the shared friendly-timestamp formatter`() {
         val ts = 1_700_000_000_000L
         val messages = listOf(msg(1, ts, listOf(image("content://mms/part/1"))))
-        val expectedLabel = FRIENDLY_TIMESTAMP_FORMATTER.format(Date(ts))
+        val expectedLabel = formatEpochMillis(ts, FRIENDLY_TIMESTAMP_FORMATTER)
         assertEquals(expectedLabel, buildThreadImages(messages).single().timestampLabel)
     }
 

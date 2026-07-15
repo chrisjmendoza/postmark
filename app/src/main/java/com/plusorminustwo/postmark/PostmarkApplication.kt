@@ -8,6 +8,9 @@ import androidx.work.Configuration
 import com.plusorminustwo.postmark.data.sync.SmsContentObserver
 import com.plusorminustwo.postmark.service.backup.BackupScheduler
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -42,7 +45,10 @@ class PostmarkApplication : Application(), Configuration.Provider {
         // Reconcile the periodic backup schedule with the persisted preferences.
         // ExistingPeriodicWorkPolicy.UPDATE keeps the original enqueue time, so
         // re-syncing on every startup never resets a pending backup's timing.
-        backupScheduler.syncWithPrefs()
+        // Off the main thread: this call blocks on the backup_prefs disk load and
+        // forces WorkManager's on-demand init (WorkDatabase open) — cold-start tax
+        // with no first-frame dependency.
+        CoroutineScope(Dispatchers.Default).launch { backupScheduler.syncWithPrefs() }
     }
 
     private fun createNotificationChannels() {
