@@ -78,7 +78,6 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
-import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
@@ -105,20 +104,14 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items as lazyGridItems
 import androidx.compose.foundation.lazy.itemsIndexed as lazyRowItemsIndexed
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
@@ -133,7 +126,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -164,7 +156,6 @@ internal val LocalBubbleFontScale = compositionLocalOf { 1.0f }
  * @param scrollToDate      ISO-8601 date string ("yyyy-MM-dd"); if non-empty, scrolls to that day.
  * @param onBack            Called when the user presses the back/up button.
  * @param onViewStats       Navigates to the Stats screen scoped to this thread.
- * @param onBackupSettingsClick Navigates to the Backup Settings screen.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -175,7 +166,6 @@ fun ThreadScreen(
     onBack: () -> Unit,
     onViewContact: () -> Unit = {},
     onViewStats: () -> Unit = {},
-    onBackupSettingsClick: () -> Unit = {},
     onSearchInThread: (Long) -> Unit = {},
     // Navigates to the forward destination picker for this message. Owned by the nav
     // layer (like onViewContact) rather than the ViewModel, since picking a destination
@@ -245,7 +235,6 @@ fun ThreadScreen(
         onBack = onBack,
         onViewContact = onViewContact,
         onViewStats = onViewStats,
-        onBackupSettingsClick = onBackupSettingsClick,
         onHighlightMessage = onHighlightMessage,
         onDeleteMessage = onDeleteMessage,
         onToggleStarred = onToggleStarred,
@@ -311,7 +300,6 @@ private fun ThreadContent(
     onBack: () -> Unit,
     onViewContact: () -> Unit = {},
     onViewStats: () -> Unit,
-    onBackupSettingsClick: () -> Unit,
     onHighlightMessage: (Long) -> Unit,
     onDeleteMessage: (Long) -> Unit = {},
     onToggleStarred: (Long) -> Unit = {},
@@ -2277,9 +2265,9 @@ private fun ReplyBar(
                         colors        = TextFieldDefaults.colors(
                             focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            focusedIndicatorColor   = androidx.compose.ui.graphics.Color.Transparent,
-                            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                            disabledIndicatorColor  = androidx.compose.ui.graphics.Color.Transparent,
+                            focusedIndicatorColor   = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor  = Color.Transparent,
                         ),
                         shape         = RoundedCornerShape(24.dp),
                         textStyle     = MaterialTheme.typography.bodyMedium,
@@ -2527,13 +2515,13 @@ private fun bubbleShape(isSent: Boolean, position: ClusterPosition): RoundedCorn
  * Places the pill just below the bubble; clamps so it never goes off the bottom of the screen.
  *
  * [bubbleBottomY] is the Y coordinate of the bubble's bottom edge in root coordinates.
- * [maxPillTopPx]  is the largest allowed top-Y for the pill (screen height − pill height − padding).
+ * [maxPillTopPx]  is the largest allowed top-Y for the pill (screen height − pill height − padding);
+ *                 the pill height is already folded into this bound by the caller.
  *
  * Extracted as a pure function so it can be unit-tested without Compose.
  */
 internal fun reactionPillTopPx(
     bubbleBottomY: Float,
-    pillHeightPx: Float,
     gapPx: Float,
     maxPillTopPx: Float
 ): Float = minOf(bubbleBottomY + gapPx, maxPillTopPx)
@@ -2562,12 +2550,12 @@ private fun smsCounter(length: Int): String? {
  * double-annotating telephone numbers embedded in URLs (e.g. `tel:` links).
  *
  * @param text      Raw message body.
- * @param linkColor Colour applied to detected links; pass [MaterialTheme.colorScheme.primary].
+ * @param linkColor Colour applied to detected links; pass `MaterialTheme.colorScheme.primary`.
  */
 private fun linkifyText(
     text: String,
-    linkColor: androidx.compose.ui.graphics.Color,
-    context: android.content.Context,
+    linkColor: Color,
+    context: Context,
 ): androidx.compose.ui.text.AnnotatedString {
     // Links are attached with addLink(LinkAnnotation, …) rather than a plain string
     // annotation + onClick. This is what lets the surrounding Text stay a normal Text:
@@ -3358,6 +3346,21 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxSize()
                 )
+                // Transparent tap layer over the video: tapping anywhere on the frame
+                // toggles play/pause (industry-standard, and a far larger target than the
+                // control-bar button). Sits above the PlayerView but below the close button
+                // so the corner ✕ still dismisses. No ripple — an indication over video reads
+                // as a glitch.
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            if (player.isPlaying) player.pause() else player.play()
+                        }
+                )
                 // Close button in top-right corner.
                 IconButton(
                     onClick = onDismiss,
@@ -3519,7 +3522,7 @@ private fun EmojiReactionPopup(
     // bubbleBottomY is the live position fed from MessageBubble's onGloballyPositioned
     // (via liveBubbleY in ThreadContent), so it is always up to date — no manual
     // IME or top-bar offset compensation is needed here.
-    val pillTopPx = reactionPillTopPx(bubbleBottomY, pillHeightPx, gapPx, maxPillTopPx)
+    val pillTopPx = reactionPillTopPx(bubbleBottomY, gapPx, maxPillTopPx)
 
     // Theme-driven so the pill matches the app theme instead of always rendering dark
     // (it previously used near-black literals that looked wrong on the Always-Light theme).
@@ -3634,7 +3637,6 @@ private fun ThreadScreenPreview() {
             quickReactionEmojis = listOf("❤️", "😂", "😮", "😢", "🙏", "👍"),
             onBack = {},
             onViewStats = {},
-            onBackupSettingsClick = {},
             onHighlightMessage = {},
             onDismissDefaultSmsDialog = {},
             onUpdateBackupPolicy = {},
