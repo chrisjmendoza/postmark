@@ -46,6 +46,17 @@ class AppleReactionParser internal constructor(
         RegexOption.DOT_MATCHES_ALL
     )
 
+    // iOS 17+ custom-emoji tapbacks (any emoji beyond the six named reactions above)
+    // carry the emoji literally in the fallback verb rather than an English word:
+    //   add:    Reacted 😎 to "text"
+    //   remove: Removed a 😎 from "text"  /  Removed a 😎 reaction from "text"
+    // There is no verb→emoji table to consult — the emoji IS the reaction, exactly
+    // like the Android format. These match against the verb captured by reactionRegex.
+    private val customTapbackAdd =
+        Regex("""^Reacted\s+(.+?)\s+to$""", RegexOption.IGNORE_CASE)
+    private val customTapbackRemove =
+        Regex("""^Removed\s+(?:a|an)\s+(.+?)\s+(?:reaction\s+)?from$""", RegexOption.IGNORE_CASE)
+
     /**
      * Attempts to parse [messageBody] as an Apple reaction fallback SMS.
      *
@@ -63,6 +74,20 @@ class AppleReactionParser internal constructor(
             }
             if (pattern.removeVerbs.any { verb.startsWith(it, ignoreCase = true) }) {
                 return ParsedReaction(pattern.emoji, quotedText, isRemoval = true)
+            }
+        }
+
+        // Custom-emoji tapback: the emoji is carried literally in the verb (e.g. the
+        // sunglasses 😎 in `Reacted 😎 to "…"`). The non-ASCII guard rejects real
+        // sentences that happen to start "Reacted … to" — only an emoji qualifies.
+        customTapbackAdd.find(verb)?.groupValues?.get(1)?.let { emoji ->
+            if (emoji.isNotEmpty() && emoji[0].code > 127) {
+                return ParsedReaction(emoji, quotedText, isRemoval = false)
+            }
+        }
+        customTapbackRemove.find(verb)?.groupValues?.get(1)?.let { emoji ->
+            if (emoji.isNotEmpty() && emoji[0].code > 127) {
+                return ParsedReaction(emoji, quotedText, isRemoval = true)
             }
         }
         return null
