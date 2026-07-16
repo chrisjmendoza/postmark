@@ -105,8 +105,8 @@ class StatsViewModel @Inject constructor(
     private val _heatmapMonth = MutableStateFlow(YearMonth.now())
     val heatmapMonth: StateFlow<YearMonth> = _heatmapMonth
 
-    private val _selectedHeatmapDays = MutableStateFlow<Set<LocalDate>>(emptySet())
-    val selectedHeatmapDays: StateFlow<Set<LocalDate>> = _selectedHeatmapDays
+    private val _heatmapSelection = MutableStateFlow(HeatmapSelection())
+    val heatmapSelection: StateFlow<HeatmapSelection> = _heatmapSelection
 
     /** True when navigated directly from a thread (back goes to thread, not thread list). */
     private val _directThreadNavigation = MutableStateFlow(false)
@@ -253,11 +253,11 @@ class StatsViewModel @Inject constructor(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), IntArray(7))
 
     val selectedDayMessages: StateFlow<List<MessageEntity>> =
-        combine(heatmapMessages, _selectedHeatmapDays) { msgs, days ->
-            if (days.isEmpty()) emptyList()
+        combine(heatmapMessages, _heatmapSelection) { msgs, selection ->
+            if (selection.days.isEmpty()) emptyList()
             else {
                 val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).also { it.timeZone = TimeZone.getDefault() }
-                val dayStrings = days.map { it.toString() }.toSet()
+                val dayStrings = selection.days.map { it.toString() }.toSet()
                 msgs.filter { msg -> fmt.format(Date(msg.timestamp)) in dayStrings }
             }
         }
@@ -280,7 +280,7 @@ class StatsViewModel @Inject constructor(
             _selectedScope.value = _originScope.value
         }
         _selectedThreadId.value = id
-        _selectedHeatmapDays.value = emptySet()
+        _heatmapSelection.value = HeatmapSelection()
     }
 
     fun setScope(scope: StatsScope) {
@@ -293,22 +293,25 @@ class StatsViewModel @Inject constructor(
         _selectedScope.value = scope
         _selectedThreadId.value = null
         _directThreadNavigation.value = false
-        _selectedHeatmapDays.value = emptySet()
+        _heatmapSelection.value = HeatmapSelection()
     }
 
     fun setHeatmapMonth(month: YearMonth) {
         _heatmapMonth.value = month
-        _selectedHeatmapDays.value = emptySet()
+        _heatmapSelection.value = HeatmapSelection()
     }
 
-    /** Adds [date] to the selection if not present, removes it if already selected. */
-    fun toggleHeatmapDay(date: LocalDate) {
-        val current = _selectedHeatmapDays.value
-        _selectedHeatmapDays.value =
-            if (date in current) current - date else current + date
+    /** Tap: selects just [date] — or toggles it while in multi-select. See [HeatmapSelection]. */
+    fun tapHeatmapDay(date: LocalDate) {
+        _heatmapSelection.value = _heatmapSelection.value.tap(date)
     }
 
-    fun clearHeatmapDays() { _selectedHeatmapDays.value = emptySet() }
+    /** Long-press: enters multi-select / extends a range to [date]. See [HeatmapSelection]. */
+    fun longPressHeatmapDay(date: LocalDate) {
+        _heatmapSelection.value = _heatmapSelection.value.longPress(date)
+    }
+
+    fun clearHeatmapDays() { _heatmapSelection.value = HeatmapSelection() }
 
     /** Pre-select a thread (called when navigating here directly from a thread). */
     fun preSelectThread(id: Long) {

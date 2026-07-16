@@ -79,11 +79,11 @@ class StatsViewModelActionsTest {
     }
 
     @Test
-    fun `selectThread with id clears selectedHeatmapDays`() {
+    fun `selectThread with id clears the heatmap day selection`() {
         val vm = makeViewModel()
-        vm.toggleHeatmapDay(LocalDate.now())
+        vm.tapHeatmapDay(LocalDate.now())
         vm.selectThread(42L)
-        assertTrue(vm.selectedHeatmapDays.value.isEmpty())
+        assertTrue(vm.heatmapSelection.value.days.isEmpty())
     }
 
     @Test
@@ -130,12 +130,12 @@ class StatsViewModelActionsTest {
     }
 
     @Test
-    fun `selectThread null clears selectedHeatmapDays`() {
+    fun `selectThread null clears the heatmap day selection`() {
         val vm = makeViewModel()
         vm.selectThread(42L)
-        vm.toggleHeatmapDay(LocalDate.now())
+        vm.tapHeatmapDay(LocalDate.now())
         vm.selectThread(null)
-        assertTrue(vm.selectedHeatmapDays.value.isEmpty())
+        assertTrue(vm.heatmapSelection.value.days.isEmpty())
     }
 
     @Test
@@ -230,11 +230,11 @@ class StatsViewModelActionsTest {
     }
 
     @Test
-    fun `setScope clears selectedHeatmapDays`() {
+    fun `setScope clears the heatmap day selection`() {
         val vm = makeViewModel()
-        vm.toggleHeatmapDay(LocalDate.now())
+        vm.tapHeatmapDay(LocalDate.now())
         vm.setScope(StatsScope.PER_THREAD)
-        assertTrue(vm.selectedHeatmapDays.value.isEmpty())
+        assertTrue(vm.heatmapSelection.value.days.isEmpty())
     }
 
     // ── setDisplayStyle routing ───────────────────────────────────────────────

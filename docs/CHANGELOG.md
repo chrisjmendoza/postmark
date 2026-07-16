@@ -4,6 +4,21 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-15 (stats) — heatmap: tap = single day, long-press = multi-select + date ranges
+
+Heatmap day taps previously accumulated a multi-day selection; now a tap selects just
+that day (tapping it again clears). Long-press is the deliberate gateway to
+multi-select: it keeps the current day as an anchor, so **tap the first day,
+long-press the last** selects the whole range between them (shift-click semantics).
+While in multi-select, taps toggle individual days and each long-press extends a range
+from the last long-pressed day; deselecting the last day exits the mode. Logic lives in
+a new pure `HeatmapSelection` state machine (ui/stats) with its own test suite —
+`StatsViewModel` just delegates, and the day cell swapped `clickable` for
+`combinedClickable`. A one-line hint appears above the Clear button while
+multi-select is active.
+
+---
+
 ## 2026-07-15 (ui) — date pill straddles the top bar edge; messages scroll behind it
 
 Per feedback from on-device use: the floating date pill now sits half in the top bar,

@@ -1,9 +1,11 @@
 package com.plusorminustwo.postmark.ui.stats
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -54,7 +56,7 @@ fun StatsScreen(
     val allLiveThreadStats by viewModel.allLiveThreadStats.collectAsState()
     val heatmapData by viewModel.heatmapData.collectAsState()
     val heatmapMonth by viewModel.heatmapMonth.collectAsState()
-    val selectedHeatmapDays by viewModel.selectedHeatmapDays.collectAsState()
+    val heatmapSelection by viewModel.heatmapSelection.collectAsState()
     val selectedDayMessages by viewModel.selectedDayMessages.collectAsState()
     val allThreadMessages   by viewModel.selectedThreadMessages.collectAsState()
     val heatmapByDayOfWeek  by viewModel.heatmapByDayOfWeek.collectAsState()
@@ -152,7 +154,8 @@ fun StatsScreen(
                                 data                = heatmapData,
                                 stats               = stats,
                                 month               = heatmapMonth,
-                                selectedDays        = selectedHeatmapDays,
+                                selectedDays        = heatmapSelection.days,
+                                multiSelectActive   = heatmapSelection.multiSelect,
                                 selectedDayMessages = selectedDayMessages,
                                 allThreadMessages   = allThreadMessages,
                                 threadNames         = threadNames,
@@ -160,7 +163,8 @@ fun StatsScreen(
                                 monthMessages       = heatmapMessages,
                                 byDayOfWeek         = heatmapByDayOfWeek,
                                 onMonthChange       = { viewModel.setHeatmapMonth(it) },
-                                onDayToggle         = { viewModel.toggleHeatmapDay(it) },
+                                onDayTap            = { viewModel.tapHeatmapDay(it) },
+                                onDayLongPress      = { viewModel.longPressHeatmapDay(it) },
                                 onClearSelection    = { viewModel.clearHeatmapDays() },
                                 onContactClick      = { viewModel.selectThread(it) },
                                 onNavigateToThread  = if (isInDrilldown && tid != null) { msgId, date ->
@@ -344,12 +348,14 @@ private val HEATMAP_COLORS = listOf(
 private fun heatmapTierColor(tier: Int): Color =
     if (tier == 0) MaterialTheme.colorScheme.surfaceVariant else HEATMAP_COLORS[tier]
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HeatmapView(
     data: HeatmapData,
     stats: ParsedStats,
     month: YearMonth,
     selectedDays: Set<LocalDate>,
+    multiSelectActive: Boolean,
     selectedDayMessages: List<MessageEntity>,
     allThreadMessages: List<MessageEntity>,
     threadNames: Map<Long, String>,
@@ -357,7 +363,8 @@ private fun HeatmapView(
     monthMessages: List<MessageEntity>,
     byDayOfWeek: IntArray,
     onMonthChange: (YearMonth) -> Unit,
-    onDayToggle: (LocalDate) -> Unit,
+    onDayTap: (LocalDate) -> Unit,
+    onDayLongPress: (LocalDate) -> Unit,
     onClearSelection: () -> Unit,
     onContactClick: (Long) -> Unit = {},
     onNavigateToThread: ((messageId: Long?, date: LocalDate?) -> Unit)? = null
@@ -513,7 +520,12 @@ private fun HeatmapView(
                                     if (isSelected) MaterialTheme.colorScheme.primary
                                     else heatmapTierColor(tier)
                                 )
-                                .clickable { onDayToggle(date) },
+                                // Tap = select just this day; long-press = multi-select /
+                                // range extend (see HeatmapSelection for the semantics).
+                                .combinedClickable(
+                                    onClick     = { onDayTap(date) },
+                                    onLongClick = { onDayLongPress(date) }
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -562,6 +574,16 @@ private fun HeatmapView(
             }
             if (hasSelection) {
                 Spacer(Modifier.height(10.dp))
+                if (multiSelectActive) {
+                    Text(
+                        "Multi-select — tap to add or remove days, long-press to extend a range",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
                 OutlinedButton(
                     onClick = onClearSelection,
                     modifier = Modifier.fillMaxWidth(),
