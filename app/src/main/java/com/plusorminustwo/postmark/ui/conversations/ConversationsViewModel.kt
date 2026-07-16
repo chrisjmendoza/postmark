@@ -238,6 +238,14 @@ class ConversationsViewModel @Inject constructor(
         }
     }
 
+    /** Long-press → "Mark as read" on a conversation row. Same no-op-safe
+     *  markAllRead the thread screen uses on open (isRead = 0 predicate). */
+    fun markThreadRead(threadId: Long) {
+        viewModelScope.launch {
+            messageRepository.markAllRead(threadId)
+        }
+    }
+
 }
 
 /** Snapshot of in-progress sync data emitted by [SmsHistoryImportWorker] via setProgress(). */

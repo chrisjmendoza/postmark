@@ -228,7 +228,8 @@ fun ConversationsScreen(
                                     unreadCount = unreadCounts[thread.id] ?: 0,
                                     onClick = { onThreadClick(thread.id) },
                                     onTogglePin = { viewModel.togglePin(thread.id, thread.isPinned) },
-                                    onToggleMute = { viewModel.toggleMute(thread.id, thread.isMuted) }
+                                    onToggleMute = { viewModel.toggleMute(thread.id, thread.isMuted) },
+                                    onMarkRead = { viewModel.markThreadRead(thread.id) }
                                 )
                                 HorizontalDivider()
                             }
@@ -380,7 +381,8 @@ private fun RoleDenialBanner(onDismiss: () -> Unit, onSetDefault: () -> Unit) {
     }
 }
 
-/** A single conversation row. Long-press opens a context menu with Pin/Unpin and Mute/Unmute. */
+/** A single conversation row. Long-press opens a context menu with Pin/Unpin,
+ *  Mute/Unmute, and (when unread) Mark as read. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThreadRow(
@@ -389,6 +391,7 @@ private fun ThreadRow(
     onClick: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleMute: () -> Unit,
+    onMarkRead: () -> Unit,
 ) {
     // Controls visibility of the long-press dropdown menu.
     var menuExpanded by remember { mutableStateOf(false) }
@@ -476,6 +479,15 @@ private fun ThreadRow(
                 text = { Text(if (thread.isMuted) "Unmute" else "Mute") },
                 onClick = { menuExpanded = false; onToggleMute() }
             )
+            // Only offered while there is something to mark — markAllRead is a
+            // no-op on read threads anyway (isRead = 0 predicate), this just
+            // keeps the menu honest.
+            if (unreadCount > 0) {
+                DropdownMenuItem(
+                    text = { Text("Mark as read") },
+                    onClick = { menuExpanded = false; onMarkRead() }
+                )
+            }
         }
     } // end Box
 }

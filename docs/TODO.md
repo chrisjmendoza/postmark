@@ -7,6 +7,22 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🔴 TIER 1 — Core Loop (app unusable as daily driver without these)
 
 ### Thread view — finish the experience
+- [ ] **Date pill overlaps selection/action top bars** (found on-device July 16
+      2026) — the floating date pill straddles the top bar's bottom edge from the
+      shared `topBar` Box in `ThreadScreen`, so when selection or action mode
+      swaps the bar (now via AnimatedContent), the pill renders in front of the
+      new bar's controls. Rethink the header/pill layout: simplest is hiding the
+      pill while `topBarMode != NORMAL`; alternatively re-anchor it below
+      whichever bar is active so it never covers actionable controls.
+- [ ] **Long-press flow: no full-screen dim + selection header immediately**
+      (July 16 2026) — entering message selection currently darkens the whole
+      screen (the scrim behind the reaction popup). Desired behavior: long-press
+      a message pops the emoji reaction picker AND opens the selection header at
+      the same time, with no screen darkening — the conversation stays fully
+      readable behind the popup. Likely means replacing the scrimmed
+      popup/dialog treatment with a lightweight anchored popup and entering
+      selection mode directly from long-press (today it takes long-press →
+      action bar → "Select").
 - [x] **Reaction chip position** (reworked July 16 2026) — pills are a layout
       child of the bubble Column with a custom `layout` modifier reporting
       only their bottom half: they straddle the bubble's bottom-end corner
@@ -189,6 +205,23 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       multi-select recipient picker in `NewConversationScreen`. Check
       `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` — some carriers disable group MMS
       and expect N separate 1:1 sends instead ("MMS broadcast" mode).
+- [ ] **Voice memos — record + send** (added July 16 2026) — there is currently
+      no way to record a voice message; audio can only be attached from existing
+      files. Mic button in the reply bar with two capture gestures (WhatsApp /
+      Google Messages pattern):
+      1. **Hold to record** — recording runs while the button is held; releasing
+         stops it (design call at implementation time: send immediately vs. show
+         a preview chip with play/delete before send).
+      2. **Press and slide up to lock** — sliding up while holding latches
+         hands-free recording (button stays "live" without a finger on it) with
+         a visible recording state (timer, stop/cancel controls). Haptic on latch.
+      Also needs: slide-away/cancel affordance while holding, RECORD_AUDIO runtime
+      permission, MediaRecorder capture in an MMS-friendly codec/container (AAC in
+      .m4a or AMR in .3gp) with a duration/size cap derived from the carrier MMS
+      limit (reuse the existing video-size budget logic in MmsManagerWrapper),
+      then hand off to the existing audio-attachment MMS send path. Playback
+      reuses the audio chip — coordinate with performance-analysis.md Tier 4 #30
+      (one ViewModel-owned player) rather than adding another raw MediaPlayer.
 - [x] **Group MMS — per-bubble sender attribution** (July 11 2026) — group threads
       now show a small sender-name label above the first received bubble of each
       sender's cluster (`ThreadViewModel.participantNames` resolves the roster via
@@ -199,12 +232,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       remain a possible follow-up.
 
 ### Contact integration
-- [ ] **Contact photo / profile picture in avatar** — currently all
-      avatars show a colored letter initial. `ContactsContract` lookup
-      for the contact's photo URI should replace it when one exists;
-      fall back to letter initial if no photo. Requires
-      `READ_CONTACTS` (already granted). Use Coil `AsyncImage` with
-      `loadThumbnail` or the photo URI directly.
+- [x] **Contact photo / profile picture in avatar** — done (`ContactAvatar.kt`:
+      PhoneLookup photo URI via Coil, letter-initial fallback). July 16 2026:
+      lookups cached process-wide in `ContactCaches` with a contacts
+      ContentObserver invalidating on contact edits (performance-analysis #8).
 - [x] **Phone number formatting** — `formatPhoneNumber()` in
       `PhoneNumberFormatter.kt`; E.164 NANP → `(xxx) xxx-xxxx`;
       wired in Conversations, Thread, and Search screens.
