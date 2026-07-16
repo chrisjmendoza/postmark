@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -11,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.metrics.performance.JankStats
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkManager
 import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
@@ -31,6 +33,8 @@ class MainActivity : ComponentActivity() {
 
     private val themeViewModel: AppThemeViewModel by viewModels()
 
+    private lateinit var jankStats: JankStats
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { triggerFirstLaunchSyncIfPermitted() }
@@ -47,6 +51,28 @@ class MainActivity : ComponentActivity() {
                 AppNavigation(showOnboarding = showOnboarding)
             }
         }
+        // Attributable jank: log-only listener; the "screen" state is stamped by
+        // AppNavigation, so every janky frame in logcat names its route. Runs on
+        // the FrameMetrics handler thread (API 24+), not Main.
+        jankStats = JankStats.createAndTrack(window) { frameData ->
+            if (frameData.isJank) {
+                Log.w(
+                    "JankStats",
+                    "Janky frame: ${frameData.frameDurationUiNanos / 1_000_000} ms " +
+                        "states=${frameData.states}"
+                )
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        jankStats.isTrackingEnabled = true
+    }
+
+    override fun onPause() {
+        jankStats.isTrackingEnabled = false
+        super.onPause()
     }
 
     private fun requestPermissionsIfNeeded() {
@@ -71,7 +97,7 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return
         val prefs = getSharedPreferences("postmark_prefs", MODE_PRIVATE)
         if (prefs.getBoolean("first_sync_completed", false)) return
-        android.util.Log.i("SyncTrigger", "MainActivity.triggerFirstLaunchSyncIfPermitted — enqueuing KEEP")
+        Log.i("SyncTrigger", "MainActivity.triggerFirstLaunchSyncIfPermitted — enqueuing KEEP")
         WorkManager.getInstance(this).enqueueUniqueWork(
             SmsHistoryImportWorker.WORK_NAME,
             ExistingWorkPolicy.KEEP,

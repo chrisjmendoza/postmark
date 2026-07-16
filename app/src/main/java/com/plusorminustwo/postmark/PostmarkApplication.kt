@@ -3,6 +3,7 @@ package com.plusorminustwo.postmark
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.plusorminustwo.postmark.data.sync.SmsContentObserver
@@ -36,6 +37,19 @@ class PostmarkApplication : Application(), Configuration.Provider {
             .build()
 
     override fun onCreate() {
+        // Debug-only main-thread disk I/O detection. Installed before
+        // super.onCreate() so Hilt graph construction is covered too. Log-only
+        // by design — never penaltyDeath: SmsReceiver's pre-goAsync log write is
+        // deliberate and must show up in the log, not crash.
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(
+                StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads()
+                    .detectDiskWrites()
+                    .penaltyLog()
+                    .build()
+            )
+        }
         super.onCreate()
         createNotificationChannels()
         // Register content observer so incremental SMS changes are picked up

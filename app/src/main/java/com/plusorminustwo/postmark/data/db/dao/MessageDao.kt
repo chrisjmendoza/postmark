@@ -52,12 +52,6 @@ interface MessageDao {
     """)
     suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity>
 
-    @Query("""
-        SELECT DISTINCT date(timestamp / 1000, 'unixepoch')
-        FROM messages WHERE threadId = :threadId
-    """)
-    suspend fun getActiveDatesForThread(threadId: Long): List<String>
-
     @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :messageId")
     suspend fun updateDeliveryStatus(messageId: Long, status: Int)
 

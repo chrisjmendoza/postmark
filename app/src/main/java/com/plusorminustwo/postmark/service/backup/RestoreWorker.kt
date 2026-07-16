@@ -10,11 +10,14 @@ import android.provider.Telephony
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import androidx.hilt.work.HiltWorker
+import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.plusorminustwo.postmark.PostmarkApplication
+import com.plusorminustwo.postmark.data.db.PostmarkDatabase
+import com.plusorminustwo.postmark.data.db.optimizeMessagesFts
 import com.plusorminustwo.postmark.R
 import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.ui.MainActivity
@@ -70,6 +73,7 @@ import java.io.InputStream
 class RestoreWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
+    private val db: PostmarkDatabase,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val syncLogger: SyncLogger
@@ -89,16 +93,33 @@ class RestoreWorker @AssistedInject constructor(
     private inner class ThreadContext(
         val threadId: Long,
         val localLastMessageAt: Long,
-        val index: RestoreMessageIndex
+        val index: RestoreMessageIndex,
     ) {
         var newestInserted: Message? = null
+
+        /** (messageId, senderAddress, emoji) of every reaction already present locally,
+         *  plus those buffered by this run — one query per thread replaces the former
+         *  per-reaction existence check. Filled lazily by [reactionKeysFor] on the first
+         *  reaction record, since most threads have no reactions at all. */
+        var reactionKeys: MutableSet<Triple<Long, String, String>>? = null
     }
+
+    private suspend fun reactionKeysFor(ctx: ThreadContext): MutableSet<Triple<Long, String, String>> =
+        ctx.reactionKeys
+            ?: messageRepository.getReactionsByThread(ctx.threadId)
+                .mapTo(mutableSetOf()) { Triple(it.messageId, it.senderAddress, it.emoji) }
+                .also { ctx.reactionKeys = it }
 
     private var nextRestoredId = 0L
     private var progressDone = 0
     private var progressTotal = 0
     private val referencedShas = mutableSetOf<String>()
     private val extractedShas = mutableSetOf<String>()
+
+    // Insert buffers, committed in one transaction per BATCH_SIZE rows and at every
+    // thread boundary — a full restore is a few hundred commits instead of ~160k.
+    private val pendingMessages = mutableListOf<Message>()
+    private val pendingReactions = mutableListOf<Reaction>()
 
     override suspend fun doWork(): Result {
         setForeground(getForegroundInfo())
@@ -131,6 +152,10 @@ class RestoreWorker @AssistedInject constructor(
             }
 
             cleanupUnreferencedBlobs()
+
+            // Mass trigger-driven FTS inserts leave the index fragmented; runs after
+            // the final flush, outside any transaction, and never fails the restore.
+            db.optimizeMessagesFts()
 
             val status = buildString {
                 append("Restored ${counts.inserted} messages")
@@ -340,7 +365,7 @@ class RestoreWorker @AssistedInject constructor(
                 isRead = record.isRead,
                 isStarred = record.isStarred
             )
-            messageRepository.insert(message)
+            pendingMessages += message
             val newest = ctx.newestInserted
             if (newest == null || message.timestamp > newest.timestamp) {
                 ctx.newestInserted = message
@@ -349,10 +374,12 @@ class RestoreWorker @AssistedInject constructor(
         }
 
         // Reactions merge onto both inserted and already-present messages.
-        for (reaction in record.reactions) {
-            if (!messageRepository.reactionExists(targetId, reaction.sender, reaction.emoji)) {
-                messageRepository.insertReaction(
-                    Reaction(
+        // Set.add doubles as the dedup check (against local rows and this run's buffer).
+        if (record.reactions.isNotEmpty()) {
+            val reactionKeys = reactionKeysFor(ctx)
+            for (reaction in record.reactions) {
+                if (reactionKeys.add(Triple(targetId, reaction.sender, reaction.emoji))) {
+                    pendingReactions += Reaction(
                         id = 0, // auto-generated
                         messageId = targetId,
                         senderAddress = reaction.sender,
@@ -360,9 +387,13 @@ class RestoreWorker @AssistedInject constructor(
                         timestamp = reaction.timestamp,
                         rawText = reaction.rawText
                     )
-                )
-                counts.reactionsAdded++
+                    counts.reactionsAdded++
+                }
             }
+        }
+
+        if (pendingMessages.size >= BATCH_SIZE || pendingReactions.size >= BATCH_SIZE) {
+            flushBatch()
         }
 
         progressDone++
@@ -371,9 +402,24 @@ class RestoreWorker @AssistedInject constructor(
         }
     }
 
-    /** Rolls the thread's list position/preview forward if restore added something
-     *  newer than anything the thread had locally. */
+    /** Commits the buffered rows in one transaction. Messages go first so buffered
+     *  reactions never violate the reactions→messages foreign key. */
+    private suspend fun flushBatch() {
+        if (pendingMessages.isEmpty() && pendingReactions.isEmpty()) return
+        db.withTransaction {
+            messageRepository.insertAll(pendingMessages)
+            pendingReactions.forEach { messageRepository.insertReaction(it) }
+        }
+        pendingMessages.clear()
+        pendingReactions.clear()
+    }
+
+    /** Flushes the thread's buffered rows, then rolls its list position/preview
+     *  forward if restore added something newer than anything it had locally.
+     *  Flushing first keeps the invariant that thread metadata never references
+     *  a message that isn't committed yet. */
     private suspend fun finishThread(ctx: ThreadContext) {
+        flushBatch()
         val newest = ctx.newestInserted ?: return
         if (newest.timestamp > ctx.localLastMessageAt) {
             threadRepository.updateLastMessageAt(ctx.threadId, newest.timestamp)
@@ -468,6 +514,9 @@ class RestoreWorker @AssistedInject constructor(
         const val BLOB_DIR = "restored_attachments"
 
         private const val NOTIF_ID_RESTORE = 1_002
+
+        // Same batch size as SmsHistoryImportWorker's persist loop.
+        private const val BATCH_SIZE = 500
 
         private val SHA256_HEX = Regex("[0-9a-f]{64}")
     }

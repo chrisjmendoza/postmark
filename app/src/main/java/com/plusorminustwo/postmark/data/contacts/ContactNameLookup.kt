@@ -11,26 +11,34 @@ import android.provider.ContactsContract
  * built-in phone-number normalisation, so "+12065550100" and "2065550100" both
  * resolve to the same contact entry.
  *
- * Performs a synchronous ContentResolver query — call from a background dispatcher.
+ * Results are cached in [ContactCaches.names] (see there for the sentinel and
+ * invalidation policy); only real query results are cached — a null cursor or an
+ * exception leaves the cache untouched so the next call retries. Cache misses
+ * perform a synchronous ContentResolver query — call from a background dispatcher.
  */
 fun Context.lookupContactName(address: String): String? {
     // An empty address would produce content://com.android.contacts/phone_lookup/ with
     // no segment, which may match every contact on some ROMs. Skip the lookup entirely.
     if (address.isEmpty()) return null
+    ContactCaches.names.get(address)?.let { return it.ifEmpty { null } }
     val uri = Uri.withAppendedPath(
         ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
         Uri.encode(address)
     )
     return try {
-        contentResolver.query(
+        val cursor = contentResolver.query(
             uri,
             arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
             null, null, null
-        )?.use { cursor ->
-            if (cursor.moveToFirst())
-                cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
+        ) ?: return null // provider unavailable — don't cache, retry next call
+        val name = cursor.use {
+            if (it.moveToFirst())
+                it.getString(it.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
             else null
         }
+        ContactCaches.names.put(address, name.orEmpty())
+        ContactCaches.ensureInvalidationObserver(this)
+        name
     } catch (_: Exception) {
         null
     }

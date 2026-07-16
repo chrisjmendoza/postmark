@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.data.db
 
+import android.util.Log
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
@@ -7,6 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.plusorminustwo.postmark.data.db.dao.*
 import com.plusorminustwo.postmark.data.db.entity.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Room database for Postmark.
@@ -250,5 +253,20 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 """.trimIndent())
             }
         }
+    }
+}
+
+/**
+ * Defragments the `messages_fts` index after a mass trigger-driven insert (historical
+ * import, backup restore). Runs through the support database because the FTS4
+ * special-command syntax is not valid Room `@Query` SQL. Must be called outside any
+ * transaction. Never throws — a skipped optimize only costs search speed, so it must
+ * never fail the calling worker.
+ */
+suspend fun PostmarkDatabase.optimizeMessagesFts() = withContext(Dispatchers.IO) {
+    try {
+        openHelper.writableDatabase.execSQL("INSERT INTO messages_fts(messages_fts) VALUES('optimize')")
+    } catch (e: Exception) {
+        Log.w("PostmarkDb", "messages_fts optimize failed (non-fatal)", e)
     }
 }

@@ -98,7 +98,6 @@ class FailedSendRetryTest {
         override suspend fun deleteByThread(threadId: Long) = Unit
         override suspend fun countByThread(threadId: Long): Int = 0
         override suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity> = emptyList()
-        override suspend fun getActiveDatesForThread(threadId: Long): List<String> = emptyList()
         override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
         override suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? = null
         override suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? = null

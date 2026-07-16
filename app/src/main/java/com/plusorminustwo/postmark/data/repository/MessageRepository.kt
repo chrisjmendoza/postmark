@@ -57,9 +57,6 @@ class MessageRepository @Inject constructor(
     suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<Message> =
         messageDao.getByThreadAndDateRange(threadId, startMs, endMs).map { it.toDomain() }
 
-    suspend fun getActiveDatesForThread(threadId: Long): List<String> =
-        messageDao.getActiveDatesForThread(threadId)
-
     fun observeTopUserEmojis(): Flow<List<String>> =
         reactionDao.observeTopEmojisBySender(SELF_ADDRESS).map { counts -> counts.map { it.emoji } }
 

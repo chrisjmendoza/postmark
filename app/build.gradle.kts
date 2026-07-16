@@ -130,6 +130,12 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
 
+    // ProcessLifecycleOwner — gate the 60 s catch-up poll to app-foreground only
+    implementation(libs.androidx.lifecycle.process)
+
+    // JankStats — attributable jank reporting (perf-analysis #22)
+    implementation(libs.androidx.metrics.performance)
+
     // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)

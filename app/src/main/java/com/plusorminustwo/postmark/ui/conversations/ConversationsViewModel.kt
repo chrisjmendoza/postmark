@@ -2,7 +2,10 @@ package com.plusorminustwo.postmark.ui.conversations
 
 import android.content.Context
 import android.net.Uri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
@@ -84,11 +87,20 @@ class ConversationsViewModel @Inject constructor(
         }
 
         // 60-second foreground polling: catch messages that arrived while the broadcast
-        // receiver was paused or missed a delivery notification.
+        // receiver was paused or missed a delivery notification. Gated to the process
+        // lifecycle — this VM lives on the nav back stack, so viewModelScope alone
+        // would keep polling while the app is backgrounded.
         viewModelScope.launch {
-            while (true) {
-                delay(60_000)
-                smsSyncHandler.triggerCatchUp()
+            ProcessLifecycleOwner.get().lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // Catch up immediately on every foreground entry: repeatOnLifecycle
+                // restarts this block from zero each time, so a delay-first loop would
+                // never fire for sessions shorter than 60 s — exactly the sessions in
+                // which a message missed while backgrounded needs recovering. An idle
+                // catch-up pass causes zero Room invalidations, so eager is cheap.
+                while (true) {
+                    smsSyncHandler.triggerCatchUp()
+                    delay(60_000)
+                }
             }
         }
 
