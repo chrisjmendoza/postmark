@@ -148,15 +148,47 @@ class ThreadViewModel @Inject constructor(
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
-    val activeDates: StateFlow<Set<LocalDate>> = messageRepository
+    /**
+     * Everything derived from the raw message list — built once per Room emission on
+     * [Dispatchers.Default], then shared by [uiState] and [activeDates]. The uiState
+     * combine re-fires for every reply-bar keystroke and selection tap; this flow
+     * re-fires only when the messages table actually changes, so the O(n) clustering,
+     * date formatting, and image indexing never run on the per-keystroke path and
+     * never on the main thread. The flowOn also pulls the repository's reactions-join
+     * and per-row entity mapping (upstream of it in this chain) off Main.
+     */
+    private data class RenderPayload(
+        val messages: List<Message>,
+        val renderState: ThreadRenderState,
+        val threadImages: List<ThreadImageRef>,
+        val activeDates: Set<LocalDate>
+    )
+
+    private val renderPayload: Flow<RenderPayload> = messageRepository
         .observeByThread(threadId)
+        // Room invalidation is table-granular: a write to ANY thread re-runs this
+        // query, usually with an equal result for the open thread. Compare lists
+        // here (cheap, and on Default thanks to the flowOn below) so the expensive
+        // rebuild is skipped; StateFlow conflation downstream can't help because it
+        // compares AFTER the map has already done the work.
+        .distinctUntilChanged()
         .map { messages ->
-            messages.mapTo(mutableSetOf()) { msg ->
-                Instant.ofEpochMilli(msg.timestamp)
-                    .atZone(ZoneId.systemDefault())
-                    .toLocalDate()
-            }
+            RenderPayload(
+                messages = messages,
+                renderState = buildRenderState(messages),
+                threadImages = buildThreadImages(messages),
+                activeDates = messages.mapTo(mutableSetOf()) { msg ->
+                    Instant.ofEpochMilli(msg.timestamp)
+                        .atZone(ZoneId.systemDefault())
+                        .toLocalDate()
+                }
+            )
         }
+        .flowOn(Dispatchers.Default)
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    val activeDates: StateFlow<Set<LocalDate>> = renderPayload
+        .map { it.activeDates }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     val quickReactionEmojis: StateFlow<List<String>> = messageRepository
@@ -196,15 +228,10 @@ class ThreadViewModel @Inject constructor(
         val replyingToId: Long?
     )
 
-    // Backing cache for the render-state memoization inside the uiState combine below.
-    private var renderCacheKey: List<Message>? = null
-    private var renderCache = ThreadRenderState()
-    private var imagesCache: List<ThreadImageRef> = emptyList()
-
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<ThreadUiState> = combine(
         threadRepository.observeById(threadId),
-        messageRepository.observeByThread(threadId),
+        renderPayload,
         _selectionState,
         _isSelectionMode,
         combine(
@@ -232,24 +259,12 @@ class ThreadViewModel @Inject constructor(
                 replyingToId            = arr[9] as Long?
             )
         }
-    ) { thread, messages, selected, selectionMode, inner ->
-        // Memoized by list identity: Room emits a new List instance only when the
-        // messages query actually re-ran, while this transform re-runs for EVERY
-        // combined input (each reply-bar keystroke, selection tap, picker open…).
-        // Without the cache, buildRenderState + buildThreadImages re-derived the
-        // whole thread — O(n) date formatting, clustering, three maps — on the main
-        // thread per keystroke. The transform runs sequentially in one collector
-        // coroutine, so plain vars are safe here.
-        if (messages !== renderCacheKey) {
-            renderCache    = buildRenderState(messages)
-            imagesCache    = buildThreadImages(messages)
-            renderCacheKey = messages
-        }
+    ) { thread, payload, selected, selectionMode, inner ->
         ThreadUiState(
             thread = thread,
-            messages = messages,
-            renderState = renderCache,
-            threadImages = imagesCache,
+            messages = payload.messages,
+            renderState = payload.renderState,
+            threadImages = payload.threadImages,
             selectedMessageIds = selected,
             isSelectionMode = selectionMode,
             selectionScope = inner.selectionScope,
@@ -264,10 +279,11 @@ class ThreadViewModel @Inject constructor(
             replyingToId            = inner.replyingToId
         )
     }
-        // NOTE: deliberately NOT .flowOn(Dispatchers.Default). It was added July 12
-        // (fable-analysis #10) and reverted the same day: with it, on-device message
-        // selection stopped responding (mode entered but taps never applied). Root
-        // cause not yet isolated — re-attempt only with on-device verification.
+        // NOTE: this combine deliberately stays on Main — selection taps must apply
+        // synchronously (July 12: a flowOn(Default) here froze selection on device;
+        // root cause was a SimpleDateFormat data race, fixed July 15 via immutable
+        // DateTimeFormatter). The heavy work now runs upstream in [renderPayload] on
+        // Default, so this transform is pure field assembly with nothing worth a hop.
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUiState())
 
     // ── Selection ─────────────────────────────────────────────────────────────
