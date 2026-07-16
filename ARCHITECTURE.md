@@ -118,11 +118,11 @@ parts or addresses.
 
 Queries flow through `SearchRepository` → `SearchDao` using FTS4 `MATCH` syntax.
 
-**Word-start prefix** format (built by `FtsQueryBuilder`):
+**Phrase-prefix** format (built by `FtsQueryBuilder`):
 ```
-^"term"*
+"term*"
 ```
-This matches words that *start with* the term — `"he"` finds `"hello"` but not `"the"` or `"when"`.
+The star *inside* the phrase quotes is FTS4's word-prefix syntax — `"he"` finds `"hello"` but not `"the"` or `"when"`. Multi-word input becomes one phrase with a prefix on the last word (`"say hi*"`). FTS5 forms don't work here: FTS4 silently drops a star outside the quotes (`"term"*` becomes an exact-word match) and treats a leading `^` as a first-token-of-message anchor.
 
 Filters (thread, sent/received, date range) are applied as additional SQL predicates in the same query, not as post-filter steps, so they benefit from the FTS index.
 

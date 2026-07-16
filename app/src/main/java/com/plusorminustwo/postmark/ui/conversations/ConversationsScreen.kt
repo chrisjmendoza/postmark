@@ -4,6 +4,12 @@ import android.app.role.RoleManager
 import android.content.Intent
 import android.os.Build
 import android.provider.Telephony
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -34,7 +40,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,8 +53,6 @@ import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -120,7 +127,11 @@ fun ConversationsScreen(
             // ── Unread filter chip row ─────────────────────────────────────────
             // Only shown when there are unread threads so the bar doesn't appear
             // in an all-read inbox where it would just be visual noise.
-            if (unreadThreadCount > 0 || showUnreadOnly) {
+            AnimatedVisibility(
+                visible = unreadThreadCount > 0 || showUnreadOnly,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -209,14 +220,19 @@ fun ConversationsScreen(
                     }
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         items(threadList, key = { it.id }) { thread ->
-                            ThreadRow(
-                                thread = thread,
-                                unreadCount = unreadCounts[thread.id] ?: 0,
-                                onClick = { onThreadClick(thread.id) },
-                                onTogglePin = { viewModel.togglePin(thread.id, thread.isPinned) },
-                                onToggleMute = { viewModel.toggleMute(thread.id, thread.isMuted) }
-                            )
-                            HorizontalDivider()
+                            // animateItem: pin/unpin and new-message reordering slide rows
+                            // to their new position instead of teleporting them.
+                            Column(modifier = Modifier.animateItem()) {
+                                ThreadRow(
+                                    thread = thread,
+                                    unreadCount = unreadCounts[thread.id] ?: 0,
+                                    onClick = { onThreadClick(thread.id) },
+                                    onTogglePin = { viewModel.togglePin(thread.id, thread.isPinned) },
+                                    onToggleMute = { viewModel.toggleMute(thread.id, thread.isMuted) },
+                                    onMarkRead = { viewModel.markThreadRead(thread.id) }
+                                )
+                                HorizontalDivider()
+                            }
                         }
                     }
                     syncStatus?.let {
@@ -365,7 +381,8 @@ private fun RoleDenialBanner(onDismiss: () -> Unit, onSetDefault: () -> Unit) {
     }
 }
 
-/** A single conversation row. Long-press opens a context menu with Pin/Unpin and Mute/Unmute. */
+/** A single conversation row. Long-press opens a context menu with Pin/Unpin,
+ *  Mute/Unmute, and (when unread) Mark as read. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThreadRow(
@@ -374,9 +391,14 @@ private fun ThreadRow(
     onClick: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleMute: () -> Unit,
+    onMarkRead: () -> Unit,
 ) {
     // Controls visibility of the long-press dropdown menu.
     var menuExpanded by remember { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
+    // Pin/unpin uses View haptics directly: this Compose BOM's HapticFeedbackType
+    // only offers LongPress/TextHandleMove, neither of which fits a confirm action.
+    val view = LocalView.current
 
     Box {
         Row(
@@ -384,7 +406,10 @@ private fun ThreadRow(
                 .fillMaxWidth()
                 .combinedClickable(
                     onClick = onClick,
-                    onLongClick = { menuExpanded = true }
+                    onLongClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menuExpanded = true
+                    }
                 )
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -444,12 +469,25 @@ private fun ThreadRow(
         ) {
             DropdownMenuItem(
                 text = { Text(if (thread.isPinned) "Unpin" else "Pin") },
-                onClick = { menuExpanded = false; onTogglePin() }
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                    menuExpanded = false
+                    onTogglePin()
+                }
             )
             DropdownMenuItem(
                 text = { Text(if (thread.isMuted) "Unmute" else "Mute") },
                 onClick = { menuExpanded = false; onToggleMute() }
             )
+            // Only offered while there is something to mark — markAllRead is a
+            // no-op on read threads anyway (isRead = 0 predicate), this just
+            // keeps the menu honest.
+            if (unreadCount > 0) {
+                DropdownMenuItem(
+                    text = { Text("Mark as read") },
+                    onClick = { menuExpanded = false; onMarkRead() }
+                )
+            }
         }
     } // end Box
 }
@@ -465,6 +503,13 @@ private fun ThreadRow(
  *  - Same calendar year → "Apr 25"
  *  - Older → "4/25/23"
  */
+// Hoisted, immutable formatters: the old implementation constructed a SimpleDateFormat
+// (a locale-data-heavy constructor) per visible row on every list recomposition.
+private val rowTimeFormatter      = java.time.format.DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+private val rowWeekdayFormatter   = java.time.format.DateTimeFormatter.ofPattern("EEE", Locale.getDefault())
+private val rowMonthDayFormatter  = java.time.format.DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
+private val rowShortDateFormatter = java.time.format.DateTimeFormatter.ofPattern("M/d/yy", Locale.getDefault())
+
 private fun formatDate(timestamp: Long): String {
     val now  = System.currentTimeMillis()
     val diff = now - timestamp
@@ -474,22 +519,21 @@ private fun formatDate(timestamp: Long): String {
     if (diff < 60 * 60_000L) return "${diff / 60_000}m"
 
     // ── Calendar comparisons ──────────────────────────────────────────────────
-    val msgCal = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
-    val nowCal = java.util.Calendar.getInstance()
+    val zone    = java.time.ZoneId.systemDefault()
+    val msgTime = java.time.Instant.ofEpochMilli(timestamp).atZone(zone)
+    val msgDate = msgTime.toLocalDate()
+    val nowDate = java.time.LocalDate.now(zone)
 
-    val sameDay  = msgCal.get(java.util.Calendar.DAY_OF_YEAR) == nowCal.get(java.util.Calendar.DAY_OF_YEAR) &&
-                   msgCal.get(java.util.Calendar.YEAR) == nowCal.get(java.util.Calendar.YEAR)
-    val sameYear = msgCal.get(java.util.Calendar.YEAR) == nowCal.get(java.util.Calendar.YEAR)
-    val daysAgo  = diff / (24 * 60 * 60_000L)
+    val daysAgo = diff / (24 * 60 * 60_000L)
 
     return when {
         // Today — show wall-clock time
-        sameDay    -> SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+        msgDate == nowDate              -> msgTime.format(rowTimeFormatter)
         // Within 6 days — short weekday (Mon, Tue …)
-        daysAgo < 7 -> SimpleDateFormat("EEE", Locale.getDefault()).format(Date(timestamp))
+        daysAgo < 7                     -> msgTime.format(rowWeekdayFormatter)
         // Same year — "Apr 25"
-        sameYear   -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(timestamp))
+        msgDate.year == nowDate.year    -> msgTime.format(rowMonthDayFormatter)
         // Older — "4/25/23"
-        else       -> SimpleDateFormat("M/d/yy", Locale.getDefault()).format(Date(timestamp))
+        else                            -> msgTime.format(rowShortDateFormatter)
     }
 }

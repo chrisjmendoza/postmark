@@ -52,12 +52,6 @@ interface MessageDao {
     """)
     suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity>
 
-    @Query("""
-        SELECT DISTINCT date(timestamp / 1000, 'unixepoch')
-        FROM messages WHERE threadId = :threadId
-    """)
-    suspend fun getActiveDatesForThread(threadId: Long): List<String>
-
     @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :messageId")
     suspend fun updateDeliveryStatus(messageId: Long, status: Int)
 
@@ -112,8 +106,12 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
     suspend fun getAll(): List<MessageEntity>
 
-    /** Marks every message in the given thread as read; called when the user opens the thread. */
-    @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId")
+    /** Marks every message in the given thread as read; called when the user opens the thread.
+     *  The `AND isRead = 0` predicate matters: SQLite fires UPDATE triggers (including the
+     *  FTS sync trigger) and Room invalidation for every matched row even when the value is
+     *  unchanged, so without it re-opening an already-read 10k-message thread rewrote 10k
+     *  FTS entries and re-ran every messages observer during the screen-entry animation. */
+    @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId AND isRead = 0")
     suspend fun markAllRead(threadId: Long)
 
     /** All messages in a thread that carry a media attachment, newest first.

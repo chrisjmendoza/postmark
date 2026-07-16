@@ -15,16 +15,13 @@ import com.plusorminustwo.postmark.data.sync.groupMessagesByDay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 import javax.inject.Inject
 
 /** Controls how statistics are rendered: as numbers, bar charts, or a heatmap grid. */
@@ -79,7 +76,7 @@ data class HeatmapData(
  * [directThreadNavigation] is `true` so the back button returns to the thread instead
  * of the thread-selection list.
  */
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     private val threadDao: ThreadDao,
@@ -105,8 +102,8 @@ class StatsViewModel @Inject constructor(
     private val _heatmapMonth = MutableStateFlow(YearMonth.now())
     val heatmapMonth: StateFlow<YearMonth> = _heatmapMonth
 
-    private val _selectedHeatmapDays = MutableStateFlow<Set<LocalDate>>(emptySet())
-    val selectedHeatmapDays: StateFlow<Set<LocalDate>> = _selectedHeatmapDays
+    private val _heatmapSelection = MutableStateFlow(HeatmapSelection())
+    val heatmapSelection: StateFlow<HeatmapSelection> = _heatmapSelection
 
     /** True when navigated directly from a thread (back goes to thread, not thread list). */
     private val _directThreadNavigation = MutableStateFlow(false)
@@ -127,46 +124,70 @@ class StatsViewModel @Inject constructor(
     // All stats are derived from this single reactive source — no manual
     // refresh needed.
 
+    /** Coalesces Room invalidation storms: while Stats is open during a sync or
+     *  import burst, a full-table observer would otherwise re-materialize every
+     *  row once per write. The first emission passes through untouched so the
+     *  screen isn't blank for a second on open. Runs in the shareIn collector's
+     *  context (viewModelScope), so tests drive it with virtual time. */
+    private fun <T> Flow<T>.debounceAfterFirst(timeoutMs: Long = 1_000L): Flow<T> =
+        withIndex()
+            .debounce { if (it.index == 0) 0L else timeoutMs }
+            .map { it.value }
+
     private val allMessages: SharedFlow<List<MessageEntity>> =
         messageDao.observeMessagesFrom(0L)
+            .debounceAfterFirst()
             .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
     private val allReactions: SharedFlow<List<ReactionEntity>> =
         reactionDao.observeAll()
+            .debounceAfterFirst()
             .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
-    // ── Global stats (live) ───────────────────────────────────────────────────
+    // ── Global + per-thread stats (live, one shared pass) ────────────────────
+
+    private data class StatsPayload(
+        val global: ParsedStats?,
+        val perThread: List<Pair<Long, ParsedStats>>
+    )
+
+    /** Global and per-thread stats computed in ONE transform per emission —
+     *  previously two independent combines each re-walked all messages on every
+     *  invalidation. Shared on Default so neither consumer re-triggers the pass. */
+    private val statsPayload: SharedFlow<StatsPayload> =
+        combine(allMessages, allReactions, threadDao.observeAll()) { msgs, reactions, threads ->
+            val global =
+                if (msgs.isEmpty()) null
+                else buildGlobalStatsData(msgs, threads.size, reactions.map { it.emoji }).toParsed()
+            val msgToThread = msgs.associate { it.id to it.threadId }
+            val reactionsByThread = reactions
+                .groupBy { r -> msgToThread[r.messageId] ?: -1L }
+                .filterKeys { it != -1L }
+            val perThread = msgs.groupBy { it.threadId }
+                .map { (threadId, threadMsgs) ->
+                    val threadReactionEmojis = reactionsByThread[threadId]?.map { it.emoji } ?: emptyList()
+                    threadId to buildThreadStatsData(threadMsgs, threadReactionEmojis).toParsed()
+                }
+                .sortedByDescending { (_, stats) -> stats.totalMessages }
+            StatsPayload(global, perThread)
+        }
+        .flowOn(Dispatchers.Default)
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
     /**
      * Null until Room delivers the first emission (typically < 50 ms after
      * subscription). Null also means "no messages yet".
      */
-    val parsedGlobalStats: StateFlow<ParsedStats?> =
-        combine(allMessages, allReactions, threadDao.observeAll()) { msgs, reactions, threads ->
-            if (msgs.isEmpty()) null
-            else buildGlobalStatsData(msgs, threads.size, reactions.map { it.emoji }).toParsed()
-        }
-        .flowOn(Dispatchers.Default)
+    val parsedGlobalStats: StateFlow<ParsedStats?> = statsPayload
+        .map { it.global }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**
      * Per-thread stats sorted by total message count, recomputed live whenever
      * any message changes.
      */
-    val allLiveThreadStats: StateFlow<List<Pair<Long, ParsedStats>>> =
-        combine(allMessages, allReactions) { msgs, reactions ->
-            val msgToThread = msgs.associate { it.id to it.threadId }
-            val reactionsByThread = reactions
-                .groupBy { r -> msgToThread[r.messageId] ?: -1L }
-                .filterKeys { it != -1L }
-            msgs.groupBy { it.threadId }
-                .map { (threadId, threadMsgs) ->
-                    val threadReactionEmojis = reactionsByThread[threadId]?.map { it.emoji } ?: emptyList()
-                    threadId to buildThreadStatsData(threadMsgs, threadReactionEmojis).toParsed()
-                }
-                .sortedByDescending { (_, stats) -> stats.totalMessages }
-        }
-        .flowOn(Dispatchers.Default)
+    val allLiveThreadStats: StateFlow<List<Pair<Long, ParsedStats>>> = statsPayload
+        .map { it.perThread }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** threadId → displayName for the thread list labels. */
@@ -205,6 +226,7 @@ class StatsViewModel @Inject constructor(
             if (msgs.isEmpty()) IntArray(4)
             else computeResponseTimeBuckets(msgs.sortedBy { it.timestamp })
         }
+        .flowOn(Dispatchers.Default) // full-thread sort — keep it off Main
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), IntArray(4))
 
     // ── Heatmap (live, month-scoped) ──────────────────────────────────────────
@@ -221,19 +243,18 @@ class StatsViewModel @Inject constructor(
 
     val heatmapData: StateFlow<HeatmapData> =
         combine(heatmapMessages, _heatmapMonth) { msgs, month ->
-            val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).also { it.timeZone = TimeZone.getDefault() }
-            val dayLabels = (1..month.lengthOfMonth()).map { day ->
-                fmt.format(Date(month.atDay(day).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()))
-            }
+            // LocalDate.toString() is ISO yyyy-MM-dd — same labels the old
+            // SimpleDateFormat produced, no formatter or Date boxing needed.
+            val dayLabels = (1..month.lengthOfMonth()).map { day -> month.atDay(day).toString() }
             HeatmapData(dayLabels = dayLabels, countByDay = groupMessagesByDay(msgs))
         }
+        .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), run {
             val month = YearMonth.now()
-            val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).also { it.timeZone = TimeZone.getDefault() }
-            val dayLabels = (1..month.lengthOfMonth()).map { day ->
-                fmt.format(Date(month.atDay(day).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()))
-            }
-            HeatmapData(dayLabels = dayLabels, countByDay = emptyMap())
+            HeatmapData(
+                dayLabels = (1..month.lengthOfMonth()).map { day -> month.atDay(day).toString() },
+                countByDay = emptyMap()
+            )
         })
 
     /** Message count by day-of-week (Mon=0..Sun=6) for the currently displayed heatmap month
@@ -250,17 +271,22 @@ class StatsViewModel @Inject constructor(
                 }
                 result
             }
+            // No dispatcher hop: one formatter-free pass over a single month's
+            // messages (the full-table work runs on Default upstream), and the
+            // DoW tests collect synchronously on an unconfined dispatcher.
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), IntArray(7))
 
     val selectedDayMessages: StateFlow<List<MessageEntity>> =
-        combine(heatmapMessages, _selectedHeatmapDays) { msgs, days ->
-            if (days.isEmpty()) emptyList()
+        combine(heatmapMessages, _heatmapSelection) { msgs, selection ->
+            if (selection.days.isEmpty()) emptyList()
             else {
-                val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).also { it.timeZone = TimeZone.getDefault() }
-                val dayStrings = days.map { it.toString() }.toSet()
-                msgs.filter { msg -> fmt.format(Date(msg.timestamp)) in dayStrings }
+                val zone = ZoneId.systemDefault()
+                msgs.filter { msg ->
+                    Instant.ofEpochMilli(msg.timestamp).atZone(zone).toLocalDate() in selection.days
+                }
             }
         }
+        .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // ── Actions ───────────────────────────────────────────────────────────────
@@ -280,7 +306,7 @@ class StatsViewModel @Inject constructor(
             _selectedScope.value = _originScope.value
         }
         _selectedThreadId.value = id
-        _selectedHeatmapDays.value = emptySet()
+        _heatmapSelection.value = HeatmapSelection()
     }
 
     fun setScope(scope: StatsScope) {
@@ -293,22 +319,25 @@ class StatsViewModel @Inject constructor(
         _selectedScope.value = scope
         _selectedThreadId.value = null
         _directThreadNavigation.value = false
-        _selectedHeatmapDays.value = emptySet()
+        _heatmapSelection.value = HeatmapSelection()
     }
 
     fun setHeatmapMonth(month: YearMonth) {
         _heatmapMonth.value = month
-        _selectedHeatmapDays.value = emptySet()
+        _heatmapSelection.value = HeatmapSelection()
     }
 
-    /** Adds [date] to the selection if not present, removes it if already selected. */
-    fun toggleHeatmapDay(date: LocalDate) {
-        val current = _selectedHeatmapDays.value
-        _selectedHeatmapDays.value =
-            if (date in current) current - date else current + date
+    /** Tap: selects just [date] — or toggles it while in multi-select. See [HeatmapSelection]. */
+    fun tapHeatmapDay(date: LocalDate) {
+        _heatmapSelection.value = _heatmapSelection.value.tap(date)
     }
 
-    fun clearHeatmapDays() { _selectedHeatmapDays.value = emptySet() }
+    /** Long-press: enters multi-select / extends a range to [date]. See [HeatmapSelection]. */
+    fun longPressHeatmapDay(date: LocalDate) {
+        _heatmapSelection.value = _heatmapSelection.value.longPress(date)
+    }
+
+    fun clearHeatmapDays() { _heatmapSelection.value = HeatmapSelection() }
 
     /** Pre-select a thread (called when navigating here directly from a thread). */
     fun preSelectThread(id: Long) {

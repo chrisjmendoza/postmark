@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: July 6, 2026
+Last updated: July 16, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -7,16 +7,43 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🔴 TIER 1 — Core Loop (app unusable as daily driver without these)
 
 ### Thread view — finish the experience
-- [x] **Reaction chip position** — chips moved to Column sibling of the
-      bubble Box; `offset(y=(-12).dp)` badges the bubble bottom edge;
-      `align(Start/End)` for sent/received; timestamp offset removed so
-      it follows naturally in the Column flow. iMessage-style badge look.
+- [ ] **Date pill overlaps selection/action top bars** (found on-device July 16
+      2026) — the floating date pill straddles the top bar's bottom edge from the
+      shared `topBar` Box in `ThreadScreen`, so when selection or action mode
+      swaps the bar (now via AnimatedContent), the pill renders in front of the
+      new bar's controls. Rethink the header/pill layout: simplest is hiding the
+      pill while `topBarMode != NORMAL`; alternatively re-anchor it below
+      whichever bar is active so it never covers actionable controls.
+- [ ] **Long-press flow: no full-screen dim + selection header immediately**
+      (July 16 2026) — entering message selection currently darkens the whole
+      screen (the scrim behind the reaction popup). Desired behavior: long-press
+      a message pops the emoji reaction picker AND opens the selection header at
+      the same time, with no screen darkening — the conversation stays fully
+      readable behind the popup. Likely means replacing the scrimmed
+      popup/dialog treatment with a lightweight anchored popup and entering
+      selection mode directly from long-press (today it takes long-press →
+      action bar → "Select").
+- [x] **Reaction chip position** (reworked July 16 2026) — pills are a layout
+      child of the bubble Column with a custom `layout` modifier reporting
+      only their bottom half: they straddle the bubble's bottom-end corner
+      (Google Messages look, same half-out treatment as the top-bar date
+      pill) and the overhang space is reserved, so the timestamp and next
+      message are pushed down instead of collided with. Replaces two earlier
+      offset-badge attempts that painted outside layout and collided.
 - [x] **Reaction pill overflow** — FlowRow replaces Row in `ReactionPills`;
       bubble width captured via `onSizeChanged` constrains pills so they
       wrap to a second line instead of overflowing on short messages.
 - [x] **Custom date range selection** — "Date range" option in selection
       mode; two-field date picker bottom sheet; auto-selects all messages
       within range. Useful for exporting a full month at once.
+      **July 16 2026 fix (found on-device):** the range now REPLACES the
+      current selection and resets scope to MESSAGES — previously it added,
+      which was a silent no-op when the All chip was active.
+- [x] **Draft persistence** (July 16 2026, on-device request) — a typed
+      reply now survives leaving the chat, app restarts, and process death:
+      `DraftRepository` (own SharedPreferences file, keyed by threadId),
+      restored on thread open, saved debounced 400 ms while typing, deleted
+      on send/clear. SavedStateHandle still covers mid-screen process death.
 - [x] **Scroll-to-date fix** — first message of selected date should
       appear near top of screen, not bottom.
 - [x] **Thread view performance** — flat `ThreadListItem` render model
@@ -171,6 +198,9 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       3. ~~Resolves straight to Google Photos~~ — the system Photo Picker is its own
          selection surface; no default-gallery hijack.
       Audio keeps the `GetContent("audio/*")` flow (Photo Picker doesn't do audio).
+      **July 16 2026 fix (found on-device):** re-opening the picker now APPENDS
+      to the pending queue (deduped by uri, capped at 5 with a snackbar) instead
+      of replacing it — photos can be added one at a time.
 - [x] **Group MMS — receive/display** (July 6 2026) — a received group MMS's full
       participant roster (FROM/TO/CC rows, previously only the first was kept — see
       MMS_AUDIT §2.3) is now stored on `Thread.participants` (schema v13,
@@ -186,6 +216,23 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       multi-select recipient picker in `NewConversationScreen`. Check
       `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` — some carriers disable group MMS
       and expect N separate 1:1 sends instead ("MMS broadcast" mode).
+- [ ] **Voice memos — record + send** (added July 16 2026) — there is currently
+      no way to record a voice message; audio can only be attached from existing
+      files. Mic button in the reply bar with two capture gestures (WhatsApp /
+      Google Messages pattern):
+      1. **Hold to record** — recording runs while the button is held; releasing
+         stops it (design call at implementation time: send immediately vs. show
+         a preview chip with play/delete before send).
+      2. **Press and slide up to lock** — sliding up while holding latches
+         hands-free recording (button stays "live" without a finger on it) with
+         a visible recording state (timer, stop/cancel controls). Haptic on latch.
+      Also needs: slide-away/cancel affordance while holding, RECORD_AUDIO runtime
+      permission, MediaRecorder capture in an MMS-friendly codec/container (AAC in
+      .m4a or AMR in .3gp) with a duration/size cap derived from the carrier MMS
+      limit (reuse the existing video-size budget logic in MmsManagerWrapper),
+      then hand off to the existing audio-attachment MMS send path. Playback
+      reuses the audio chip — coordinate with performance-analysis.md Tier 4 #30
+      (one ViewModel-owned player) rather than adding another raw MediaPlayer.
 - [x] **Group MMS — per-bubble sender attribution** (July 11 2026) — group threads
       now show a small sender-name label above the first received bubble of each
       sender's cluster (`ThreadViewModel.participantNames` resolves the roster via
@@ -196,12 +243,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       remain a possible follow-up.
 
 ### Contact integration
-- [ ] **Contact photo / profile picture in avatar** — currently all
-      avatars show a colored letter initial. `ContactsContract` lookup
-      for the contact's photo URI should replace it when one exists;
-      fall back to letter initial if no photo. Requires
-      `READ_CONTACTS` (already granted). Use Coil `AsyncImage` with
-      `loadThumbnail` or the photo URI directly.
+- [x] **Contact photo / profile picture in avatar** — done (`ContactAvatar.kt`:
+      PhoneLookup photo URI via Coil, letter-initial fallback). July 16 2026:
+      lookups cached process-wide in `ContactCaches` with a contacts
+      ContentObserver invalidating on contact edits (performance-analysis #8).
 - [x] **Phone number formatting** — `formatPhoneNumber()` in
       `PhoneNumberFormatter.kt`; E.164 NANP → `(xxx) xxx-xxxx`;
       wired in Conversations, Thread, and Search screens.
@@ -320,23 +365,28 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       by name without scrolling through the full conversations list.
 
 ### Performance & optimization
+> **See `docs/performance-analysis.md` (July 15 2026)** — the authoritative, tiered
+> perf checklist from the four-lens Fable audit. 21 quick wins landed same-day
+> (render-state memoization, markAllRead/FTS-trigger fix, schema v16 indexes,
+> catch-up poll off Main, video thumbnail cache, and more). The items below are
+> kept for continuity but the new doc supersedes them.
 - [ ] **Heatmap query performance** — with 150k+ messages the heatmap is slow to load and
-      unresponsive on month navigation. The `byDayOfWeekJson` / `byMonthJson` stats are
-      pre-aggregated in `ThreadStats`, but the heatmap still does per-day message counts
-      at query time. Profile the `StatsViewModel` heatmap flow and either: (a) pre-compute
-      per-day counts into `ThreadStatsEntity` during `StatsUpdater` so month navigation is
-      an in-memory lookup, or (b) add a dedicated index on `messages(threadId, timestamp)`
-      and limit the query window to the displayed month. Target: month switch feels instant.
-- [ ] **`StatsUpdater` incremental updates** — currently recomputes all stats from scratch
-      on every sync. For large message sets this is slow. Only recompute stats for threads
-      whose messages changed since `lastUpdatedAt`. Track a `dirtyThreadIds` set in
-      `SyncWorker` and pass it to `StatsUpdater.updateStats(dirtyThreadIds)`.
-- [ ] **LazyColumn key stability** — verify all `LazyColumn` item keys are stable IDs
-      (not list positions). Unstable keys cause unnecessary recompositions as list data
-      updates after sync.
+      unresponsive on month navigation. ~~Option (a) pre-compute in ThreadStatsEntity~~
+      (obsolete — stats tables deleted at v15). The `messages(threadId, timestamp)` index
+      landed July 15 (schema v16); remaining work is performance-analysis.md Tier 1 #5:
+      debounce + single-pass stats, `flowOn` the heatmap flows, then SQL aggregation.
+      Target: month switch feels instant.
+- [x] ~~**`StatsUpdater` incremental updates**~~ — obsolete: `StatsUpdater` and the
+      pre-aggregated tables were deleted outright (July 12, fable-analysis #9); stats
+      compute live. The live-compute cost is tracked in performance-analysis.md Tier 1 #5.
+- [x] **LazyColumn key stability** — verified July 15 (four-lens audit): both big lists
+      use stable ID keys (`items(threadList, key = { it.id })`; thread items keyed by
+      `ThreadListItem.key`). `contentType` added to the thread list the same day.
 - [ ] **Thread view initial load** — profile cold-open of a large thread (1000+ messages).
       `LazyColumn reverseLayout` with that many items may have a first-frame hitch;
       consider paging with `Pager` / `PagingSource` if the frame time is > 16ms.
+      (= performance-analysis.md Tier 1 #3 — windowed query or Paging3; the July 15
+      memoization + v16 index already removed the per-keystroke rebuild and sort pass.)
 
 ### Export — image rendering
 - [ ] **Image export** — render selected messages to `Canvas`,
@@ -401,17 +451,16 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ### Thread view — deeper polish
 - [x] **Muted thread visual indicator** — `NotificationsOff` icon (14 dp)
       shown in `ConversationsScreen` thread rows when `isMuted = true`.
-- [x] **Reaction chip cluster-aware spacing** — Spacer(12.dp) only
-      added at BOTTOM/SINGLE cluster positions; TOP/MIDDLE use natural
-      inter-bubble gap.
+- [x] **Reaction chip cluster-aware spacing** — superseded July 16 2026:
+      the corner-straddle layout reserves the pill overhang at every
+      cluster position; the compensation Spacer is deleted.
 - [x] **Reaction chip theming** — ReactionPills uses
       MaterialTheme.colorScheme.primaryContainer / surfaceContainer /
       primary / outlineVariant; no hardcoded hex values.
-- [ ] **Reaction chip overflow handling** — short messages (e.g. "Yes")
-      with 3+ reactions can produce a pill row wider than the bubble.
-      For sent messages use a negative horizontal offset from
-      `Alignment.BottomStart` so pills extend leftward past the bubble
-      edge rather than overflowing right.
+- [x] **Reaction chip overflow handling** (July 16 2026) — pills are
+      End-anchored in the bubble Column: a row wider than a short bubble
+      grows leftward past the bubble edge, and FlowRow wraps at the
+      280 dp bubble max width instead of overflowing right.
 - [ ] **Haptic feedback on reaction toggle** — fire
       `HapticFeedbackType.LongPress` when a reaction pill is tapped
       to add tactile confirmation and make the interaction feel
@@ -453,7 +502,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       timestamps are stored. (The image viewer's "View details" is a separate,
       already-shipped lightweight version — sender/timestamp/starred only, see below.)
 - [ ] **Selection mode — Copy format** — verify friendly plain text
-      output matches the designed format:
+      output matches the designed format. **July 16 2026:** media-only
+      messages now emit a placeholder line — "[Photo]", "[2 photos]",
+      "[Video]", "[Audio message]" — instead of a bare sender/timestamp
+      over a blank (`ExportFormatter.mediaPlaceholder`, 6 new tests):
         Conversation with [Name]
         [Date]
         ────────────────────────

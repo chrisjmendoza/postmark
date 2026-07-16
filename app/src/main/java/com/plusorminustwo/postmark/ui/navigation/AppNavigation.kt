@@ -9,10 +9,14 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.edit
+import androidx.metrics.performance.PerformanceMetricsState
+import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -97,6 +101,22 @@ private val FADE_OUT  = tween<Float>(220)
 fun AppNavigation(showOnboarding: Boolean) {
     val navController = rememberNavController()
     val startDestination = if (showOnboarding) Screen.Onboarding.route else Screen.Conversations.route
+
+    // Stamps the current route onto JankStats frame data ("screen" state) so the
+    // log-only jank listener in MainActivity can attribute hitches to a screen.
+    // A plain destination listener — no recomposition, no per-frame work.
+    val view = LocalView.current
+    DisposableEffect(navController, view) {
+        val holder = PerformanceMetricsState.getHolderForHierarchy(view)
+        val listener = NavController.OnDestinationChangedListener { _, destination, _ ->
+            holder.state?.putState("screen", destination.route ?: "unknown")
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose {
+            navController.removeOnDestinationChangedListener(listener)
+            holder.state?.removeState("screen")
+        }
+    }
 
     NavHost(
         navController = navController,

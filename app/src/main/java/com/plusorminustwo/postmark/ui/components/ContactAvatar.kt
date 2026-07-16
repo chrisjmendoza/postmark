@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.SubcomposeAsyncImage
+import com.plusorminustwo.postmark.data.contacts.ContactCaches
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -28,8 +29,10 @@ import kotlinx.coroutines.withContext
  * Shows a circular contact photo if one exists in the system Contacts provider,
  * falling back to [LetterAvatar] when the number is unknown or has no photo.
  *
- * The lookup runs once per unique [address] on [Dispatchers.IO] and is remembered
- * for the lifetime of the composition — no DB write, no migration.
+ * The lookup runs once per unique [address] per process on [Dispatchers.IO] and
+ * is cached in [ContactCaches.photoUris] (shared sentinel/invalidation policy
+ * lives there) — no DB write, no migration. Rows scrolling back into composition
+ * never re-hit the Contacts provider or flash letter→photo.
  *
  * @param address   Raw phone number used for [ContactsContract.PhoneLookup].
  * @param name      Display name; forwarded to [LetterAvatar] as the letter source.
@@ -44,18 +47,23 @@ fun ContactAvatar(
     size: Dp = 44.dp
 ) {
     // Null = loading/unknown, empty string = no photo found, non-empty = photo URI.
-    var photoUri by remember(address) { mutableStateOf<String?>(null) }
+    // Seeded synchronously from the cache so a previously resolved address renders
+    // its final state on first composition — zero flash on re-scroll.
+    var photoUri by remember(address) { mutableStateOf(ContactCaches.photoUris.get(address)) }
     val context = LocalContext.current
 
-    // Resolve contact photo URI in the background — runs once per unique address.
+    // Cache miss only: resolve the photo URI in the background, then cache it.
+    // Failures (SecurityException before READ_CONTACTS is granted, null cursor) are
+    // NOT cached — photoUri stays null and the next composition retries, so a photo
+    // denied during onboarding isn't pinned to a letter avatar for the process life.
     LaunchedEffect(address) {
-        if (address.isBlank()) return@LaunchedEffect
+        if (address.isBlank() || photoUri != null) return@LaunchedEffect
         withContext(Dispatchers.IO) {
             val lookupUri = Uri.withAppendedPath(
                 ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
                 Uri.encode(address)
             )
-            runCatching {
+            val resolved: String? = try {
                 context.contentResolver.query(
                     lookupUri,
                     arrayOf(ContactsContract.PhoneLookup._ID),
@@ -77,8 +85,15 @@ fun ContactAvatar(
                     } else {
                         "" // No matching contact — use LetterAvatar
                     }
-                } ?: ""
-            }.getOrDefault("").also { photoUri = it }
+                }
+            } catch (_: Exception) {
+                null
+            }
+            if (resolved != null) {
+                ContactCaches.photoUris.put(address, resolved)
+                ContactCaches.ensureInvalidationObserver(context)
+                photoUri = resolved
+            }
         }
     }
 

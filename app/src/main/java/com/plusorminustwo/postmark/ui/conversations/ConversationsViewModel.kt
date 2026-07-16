@@ -2,7 +2,10 @@ package com.plusorminustwo.postmark.ui.conversations
 
 import android.content.Context
 import android.net.Uri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
@@ -22,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
@@ -83,11 +87,20 @@ class ConversationsViewModel @Inject constructor(
         }
 
         // 60-second foreground polling: catch messages that arrived while the broadcast
-        // receiver was paused or missed a delivery notification.
+        // receiver was paused or missed a delivery notification. Gated to the process
+        // lifecycle — this VM lives on the nav back stack, so viewModelScope alone
+        // would keep polling while the app is backgrounded.
         viewModelScope.launch {
-            while (true) {
-                delay(60_000)
-                smsSyncHandler.triggerCatchUp()
+            ProcessLifecycleOwner.get().lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // Catch up immediately on every foreground entry: repeatOnLifecycle
+                // restarts this block from zero each time, so a delay-first loop would
+                // never fire for sessions shorter than 60 s — exactly the sessions in
+                // which a message missed while backgrounded needs recovering. An idle
+                // catch-up pass causes zero Room invalidations, so eager is cheap.
+                while (true) {
+                    smsSyncHandler.triggerCatchUp()
+                    delay(60_000)
+                }
             }
         }
 
@@ -128,15 +141,21 @@ class ConversationsViewModel @Inject constructor(
     /** Flips the "show unread only" filter on or off. */
     fun toggleUnreadFilter() { _showUnreadOnly.update { !it } }
 
-    val isSyncing: StateFlow<Boolean> = workManager
+    // Single shared WorkDatabase observer feeding isSyncing / syncProgress / syncStatus.
+    // Three independent getWorkInfosForUniqueWorkFlow calls each registered their own
+    // observer, so every setProgress tick during a 100k-row import triple-queried the
+    // Work DB and triple-mapped the result — precisely while the list was importing.
+    private val importWorkInfos = workManager
         .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    val isSyncing: StateFlow<Boolean> = importWorkInfos
         .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     // Live progress data emitted by the worker every 500 rows via setProgress().
     // Null when the worker is not running or hasn't emitted progress yet.
-    val syncProgress: StateFlow<SyncProgress?> = workManager
-        .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
+    val syncProgress: StateFlow<SyncProgress?> = importWorkInfos
         .map { infos ->
             val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
                 ?: return@map null
@@ -154,8 +173,7 @@ class ConversationsViewModel @Inject constructor(
 
     // Last known sync result — reads from SharedPreferences (written by the worker),
     // and updates live when a new work run completes.
-    val syncStatus: StateFlow<String?> = workManager
-        .getWorkInfosForUniqueWorkFlow(SmsHistoryImportWorker.WORK_NAME)
+    val syncStatus: StateFlow<String?> = importWorkInfos
         .map { infos ->
             val latest = infos.firstOrNull()
             when (latest?.state) {
@@ -217,6 +235,14 @@ class ConversationsViewModel @Inject constructor(
     fun toggleMute(threadId: Long, currentlyMuted: Boolean) {
         viewModelScope.launch {
             threadRepository.updateMuted(threadId, !currentlyMuted)
+        }
+    }
+
+    /** Long-press → "Mark as read" on a conversation row. Same no-op-safe
+     *  markAllRead the thread screen uses on open (isRead = 0 predicate). */
+    fun markThreadRead(threadId: Long) {
+        viewModelScope.launch {
+            messageRepository.markAllRead(threadId)
         }
     }
 

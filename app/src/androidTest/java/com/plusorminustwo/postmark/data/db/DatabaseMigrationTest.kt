@@ -469,10 +469,10 @@ class DatabaseMigrationTest {
         db13.close()
     }
 
-    // ── Full chain 1 → 15 ─────────────────────────────────────────────────
+    // ── Full chain 1 → 16 ─────────────────────────────────────────────────
 
     @Test
-    fun fullMigrationChain_v1DataSurvivesToV15() {
+    fun fullMigrationChain_v1DataSurvivesToV16() {
         val db = helper.createDatabase("test_chain", 1)
         db.execSQL(
             "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
@@ -490,7 +490,8 @@ class DatabaseMigrationTest {
             PostmarkDatabase.MIGRATION_7_8, PostmarkDatabase.MIGRATION_8_9,
             PostmarkDatabase.MIGRATION_9_10, PostmarkDatabase.MIGRATION_10_11,
             PostmarkDatabase.MIGRATION_11_12, PostmarkDatabase.MIGRATION_12_13,
-            PostmarkDatabase.MIGRATION_13_14, PostmarkDatabase.MIGRATION_14_15
+            PostmarkDatabase.MIGRATION_13_14, PostmarkDatabase.MIGRATION_14_15,
+            PostmarkDatabase.MIGRATION_15_16
         ).forEach { it.migrate(db) }
 
         db.query(
@@ -541,6 +542,44 @@ class DatabaseMigrationTest {
         db.query("SELECT body FROM messages WHERE id = 42").use { c ->
             assertTrue(c.moveToFirst())
             assertEquals("survives the drop", c.getString(0))
+        }
+    }
+
+    // ── MIGRATION 15 → 16 ─────────────────────────────────────────────────
+
+    @Test
+    fun migration15To16_replacesThreadIdIndexWithPerfIndexes() {
+        helper.createDatabase("test_m1516", 15).apply {
+            execSQL(
+                "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
+                " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+            )
+            execSQL(
+                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type)" +
+                " VALUES (42, 1, '+1', 'indexed message', 1000000, 1, 2)"
+            )
+            close()
+        }
+
+        // runMigrationsAndValidate checks the live schema (including the full index set)
+        // against the exported 16.json, so a drift between the entity annotations and
+        // the migration DDL fails here rather than at runtime on a user's device.
+        val db = helper.runMigrationsAndValidate("test_m1516", 16, true, PostmarkDatabase.MIGRATION_15_16)
+        val indexNames = mutableSetOf<String>()
+        db.query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='messages'").use { c ->
+            while (c.moveToNext()) indexNames += c.getString(0)
+        }
+        assertTrue("composite (threadId, timestamp) index missing",
+            "index_messages_threadId_timestamp" in indexNames)
+        assertTrue("(isRead, threadId) index missing", "index_messages_isRead_threadId" in indexNames)
+        assertTrue("isMms index missing", "index_messages_isMms" in indexNames)
+        assertTrue("isStarred index missing", "index_messages_isStarred" in indexNames)
+        assertFalse("superseded plain threadId index should be dropped",
+            "index_messages_threadId" in indexNames)
+
+        db.query("SELECT body FROM messages WHERE id = 42").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("indexed message", c.getString(0))
         }
     }
 }

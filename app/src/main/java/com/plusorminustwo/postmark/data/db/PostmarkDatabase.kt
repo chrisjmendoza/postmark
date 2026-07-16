@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.data.db
 
+import android.util.Log
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
@@ -7,13 +8,15 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.plusorminustwo.postmark.data.db.dao.*
 import com.plusorminustwo.postmark.data.db.entity.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Room database for Postmark.
  *
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity].
  *
- * Current schema version: 15.
+ * Current schema version: 16.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -24,7 +27,7 @@ import com.plusorminustwo.postmark.data.db.entity.*
         ReactionEntity::class,
         MessageFtsEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -181,6 +184,28 @@ abstract class PostmarkDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Query-driven indexes (2026-07-15 performance analysis):
+                //  - (threadId, timestamp) lets observeByThread return per-thread rows in
+                //    index order instead of sorting the whole thread in a temp B-tree on
+                //    every emission; supersedes the plain threadId index (same prefix, so
+                //    the FK lookup and all threadId-only queries still use it).
+                //  - (isRead, threadId) serves observeUnreadCounts, which previously
+                //    full-scanned all ~160k rows on every messages invalidation while the
+                //    conversations screen was visible.
+                //  - isMms serves the getMaxId/getMaxMmsId/getMinMmsId sync watermarks
+                //    (run on every catch-up pass); the isMms predicate otherwise defeats
+                //    SQLite's MIN/MAX index shortcut and walks the full table.
+                //  - isStarred serves the Starred Images gallery query.
+                db.execSQL("DROP INDEX IF EXISTS index_messages_threadId")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_threadId_timestamp ON messages(threadId, timestamp)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_isRead_threadId ON messages(isRead, threadId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_isMms ON messages(isMms)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_isStarred ON messages(isStarred)")
+            }
+        }
+
         val FTS_CALLBACK = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
                 // The messages_fts virtual table is created by Room (declared as @Fts4 entity).
@@ -192,10 +217,14 @@ abstract class PostmarkDatabase : RoomDatabase() {
                     END
                 """.trimIndent())
 
-                // FTS4 uses plain DELETE for removing rows, not the FTS5 'delete' command form
+                // FTS4 uses plain DELETE for removing rows, not the FTS5 'delete' command form.
+                // Scoped to `UPDATE OF body`: the un-scoped form re-tokenized the row's FTS
+                // entry on EVERY update (delivery-status flips, markAllRead, star toggles…)
+                // even though none of those change the body. onOpen() below migrates
+                // existing installs to this definition.
                 db.execSQL("""
                     CREATE TRIGGER IF NOT EXISTS messages_fts_update
-                    AFTER UPDATE ON messages BEGIN
+                    AFTER UPDATE OF body ON messages BEGIN
                         DELETE FROM messages_fts WHERE rowid = old.id;
                         INSERT INTO messages_fts(rowid, body) VALUES (new.id, new.body);
                     END
@@ -210,9 +239,34 @@ abstract class PostmarkDatabase : RoomDatabase() {
             }
 
             override fun onOpen(db: SupportSQLiteDatabase) {
-                // Rebuild FTS index if somehow it got out of sync (e.g. after a restore)
-                // This is a no-op when the index is healthy
+                // Idempotently migrate existing installs to the body-scoped UPDATE trigger
+                // (triggers are not part of Room's schema hash, so this needs no version
+                // bump). Recreating an identical trigger is a no-op-cost pair of DDL
+                // statements per app start.
+                db.execSQL("DROP TRIGGER IF EXISTS messages_fts_update")
+                db.execSQL("""
+                    CREATE TRIGGER messages_fts_update
+                    AFTER UPDATE OF body ON messages BEGIN
+                        DELETE FROM messages_fts WHERE rowid = old.id;
+                        INSERT INTO messages_fts(rowid, body) VALUES (new.id, new.body);
+                    END
+                """.trimIndent())
             }
         }
+    }
+}
+
+/**
+ * Defragments the `messages_fts` index after a mass trigger-driven insert (historical
+ * import, backup restore). Runs through the support database because the FTS4
+ * special-command syntax is not valid Room `@Query` SQL. Must be called outside any
+ * transaction. Never throws — a skipped optimize only costs search speed, so it must
+ * never fail the calling worker.
+ */
+suspend fun PostmarkDatabase.optimizeMessagesFts() = withContext(Dispatchers.IO) {
+    try {
+        openHelper.writableDatabase.execSQL("INSERT INTO messages_fts(messages_fts) VALUES('optimize')")
+    } catch (e: Exception) {
+        Log.w("PostmarkDb", "messages_fts optimize failed (non-fatal)", e)
     }
 }

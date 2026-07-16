@@ -68,10 +68,22 @@ android {
         }
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        // ── Staging: what CI ships to testers ────────────────────────────────
+        // Minified + non-debuggable like release (debug Compose runs 2–5×
+        // slower per frame, so testers on debug builds were measuring the
+        // debugger scaffolding, not the app), but signed with the shared debug
+        // keystore so a staging APK update-installs over previous builds
+        // without an uninstall. Keep the debug lane for attaching a debugger.
+        create("staging") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
         }
     }
 
@@ -117,6 +129,12 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
+
+    // ProcessLifecycleOwner — gate the 60 s catch-up poll to app-foreground only
+    implementation(libs.androidx.lifecycle.process)
+
+    // JankStats — attributable jank reporting (perf-analysis #22)
+    implementation(libs.androidx.metrics.performance)
 
     // Room
     implementation(libs.androidx.room.runtime)

@@ -34,7 +34,8 @@ object ExportFormatter {
      * @param attachmentNote Optional per-message line describing the message's media
      *   (the readable export passes "[Attachment: media/Sarah/2026-05-01_1432.jpg]").
      *   When it returns non-null for a message with a blank body, the empty body line
-     *   is dropped so photo-only messages don't export as blank lines.
+     *   is dropped so photo-only messages don't export as blank lines. Defaults to
+     *   [mediaPlaceholder], so plain Copy shows "[Photo]" instead of a bare timestamp.
      * @return A formatted string, or an empty string if [messages] is empty.
      */
     fun formatForCopy(
@@ -42,7 +43,7 @@ object ExportFormatter {
         threadDisplayName: String,
         ownAddress: String,
         threadAddress: String = "",
-        attachmentNote: (Message) -> String? = { null }
+        attachmentNote: (Message) -> String? = ::mediaPlaceholder
     ): String {
         if (messages.isEmpty()) return ""
 
@@ -96,6 +97,30 @@ object ExportFormatter {
         }
 
         return sb.toString().trimEnd()
+    }
+
+    /**
+     * Bracketed media description for a message's attachments, or null when it has
+     * none: "[Photo]", "[2 photos]", "[Video]", "[Audio message]", "[Photo, video]".
+     * The default [formatForCopy] note — media-only messages used to copy as a
+     * sender line over nothing but a blank.
+     */
+    fun mediaPlaceholder(msg: Message): String? {
+        if (msg.attachments.isEmpty()) return null
+        val counts = msg.attachments
+            .groupingBy { att ->
+                when {
+                    att.mimeType.startsWith("image/", ignoreCase = true) -> "photo"
+                    att.mimeType.startsWith("video/", ignoreCase = true) -> "video"
+                    att.mimeType.startsWith("audio/", ignoreCase = true) -> "audio message"
+                    else -> "attachment"
+                }
+            }
+            .eachCount()
+        val described = counts.entries.joinToString(", ") { (kind, n) ->
+            if (n == 1) kind else "$n ${kind}s"
+        }
+        return "[${described.replaceFirstChar { it.uppercase() }}]"
     }
 
     private fun spansMultipleDays(messages: List<Message>): Boolean {

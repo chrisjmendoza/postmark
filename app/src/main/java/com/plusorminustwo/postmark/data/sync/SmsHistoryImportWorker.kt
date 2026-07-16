@@ -17,6 +17,8 @@ import androidx.work.*
 import com.plusorminustwo.postmark.BuildConfig
 import com.plusorminustwo.postmark.PostmarkApplication
 import com.plusorminustwo.postmark.R
+import com.plusorminustwo.postmark.data.db.PostmarkDatabase
+import com.plusorminustwo.postmark.data.db.optimizeMessagesFts
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -42,6 +44,7 @@ import dagger.assisted.AssistedInject
 class SmsHistoryImportWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
+    private val db: PostmarkDatabase,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val reactionResolver: ReactionResolver,
@@ -141,6 +144,9 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             // (i.e. after the cursor was opened but before the first DB commit).
             smsSyncHandler.triggerCatchUp()
             syncLogger.log("Sync", "Catch-up pass complete")
+            // Mass trigger-driven FTS inserts leave the index fragmented; runs after
+            // all inserts, outside any transaction, and never fails the import.
+            db.optimizeMessagesFts()
             Result.success(workDataOf(KEY_STATUS to status))
         } catch (e: Exception) {
             val msg = "${e.javaClass.simpleName}: ${e.message}"

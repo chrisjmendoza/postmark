@@ -25,6 +25,11 @@ const val DELIVERY_STATUS_FAILED = 4    // delivery failed; shown with error ind
  *
  * Maps 1-to-1 with [com.plusorminustwo.postmark.domain.model.Message]. Reactions are loaded
  * separately via [ReactionEntity] and assembled in the repository layer.
+ *
+ * Index rationale (added v16): (threadId, timestamp) returns per-thread queries in
+ * index order without a sort pass (its threadId prefix also covers the FK and all
+ * threadId-only lookups); (isRead, threadId) covers the unread-badge aggregation;
+ * isMms covers the sync watermark MIN/MAX queries; isStarred the starred gallery.
  */
 @Entity(
     tableName = "messages",
@@ -36,7 +41,13 @@ const val DELIVERY_STATUS_FAILED = 4    // delivery failed; shown with error ind
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("threadId"), Index("timestamp")]
+    indices = [
+        Index("threadId", "timestamp"),
+        Index("timestamp"),
+        Index("isRead", "threadId"),
+        Index("isMms"),
+        Index("isStarred")
+    ]
 )
 data class MessageEntity(
     @PrimaryKey val id: Long,

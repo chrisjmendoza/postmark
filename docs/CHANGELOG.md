@@ -4,6 +4,211 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-16 (thread) — four fixes from on-device testing
+
+All four found by the owner on the first staging build. **Date range selection**
+now *replaces* the selection and resets the scope chip to MESSAGES — it previously
+added to the current selection, a silent no-op with the All chip active (everything
+was already selected, so picking a week appeared to do nothing). **Copy** now emits
+`[Photo]` / `[2 photos]` / `[Video]` / `[Audio message]` placeholder lines for
+media-only messages instead of a bare sender/timestamp over a blank — implemented as
+the default `attachmentNote` in `ExportFormatter` (the readable export keeps its
+richer per-file note), 6 new tests. **The attachment picker appends** across trips
+(deduped by URI, capped at 5 with a snackbar) instead of replacing the queue, so
+photos can be added one at a time. **Drafts persist**: a typed reply survives leaving
+the chat, app restarts, and process death via a new `DraftRepository` (own
+SharedPreferences file keyed by threadId, same debounced-write pattern as the font
+scale); restored on open, deleted on send. Also new: long-press a conversation row →
+**Mark as read** (shown only when the thread has unread messages).
+
+---
+
+## 2026-07-16 (stats) — debounced single-pass stats pipeline
+
+Performance-analysis Tier 1 #5 (near-term form). The Stats screen observed the full
+messages table and re-materialized all ~160k rows on *every* invalidation while open
+— during a sync burst, once per write — then two independent combines each re-walked
+the result. Now: both full-table sources debounce 1 s (first emission untouched, so
+the screen isn't blank on open), and global + per-thread stats compute in one shared
+Default-dispatched pass (`statsPayload`) that both consumers map from.
+`flowOn(Default)` added to responseBuckets/heatmapData/selectedDayMessages;
+`heatmapByDayOfWeek` deliberately stays on the collector context (formatter-free
+single pass over one month; its tests collect synchronously). Every stats-path
+`SimpleDateFormat` replaced with `java.time` — day labels are `LocalDate.toString()`,
+the selected-day filter compares `LocalDate` directly. Long-term SQL aggregation
+stays open pending on-staging profiling.
+
+---
+
+## 2026-07-16 (perf) — render pipeline off Main; Sonnet batch; Tier 3 polish
+
+The big one: **performance-analysis Tier 1 #2**, the staged re-attempt of July 12's
+reverted `flowOn`. Render-state building (clustering, date formatting, image
+indexing) plus the repository's reactions-join now run on `Dispatchers.Default` in a
+dedicated `renderPayload` flow that re-fires only on real message-list changes
+(`distinctUntilChanged` — Room invalidation is table-granular, so writes to *other*
+threads used to re-trigger the O(n) rebuild); the uiState combine stays on Main so
+selection taps apply synchronously. Selection verified on device. Alongside it, the
+"Sonnet batch": contact photo *and* name lookups cached process-wide (`ContactCaches`
+— one home, "" negative sentinel, failures never cached, one ContentObserver evicting
+both on contact edits), RestoreWorker batched into 500-row transactions with lazy
+per-thread reaction dedup, FTS4 `optimize` after import/restore, the 60 s catch-up
+poll gated to app-foreground *and* firing immediately on entry, JankStats (janky
+frames log with the current route) + debug StrictMode. Tier 3 polish: bubbles/date
+headers `animateItem()`, top bars swap via AnimatedContent (exiting selection bar
+renders a retained count and drops Copy taps — live state clears the moment exit
+starts), ReplyBar strips animate via AnimatedVisibility with non-snapshot retention
+(the MutableState version recomposed twice per change), the search-jump highlight
+finally renders (its `isHighlighted` wiring had been dead since introduction; now a
+tertiary tint with animated decay), pager pages scale/dim at draw phase, haptics on
+reaction toggle / long-press / pin. Everything passed an 8-angle adversarial code
+review before landing; the review's confirmed findings (permission-failure cache
+pinning, poll-timer regression, missing distinctUntilChanged, clipboard-clobbering
+exit-window Copy, a dead UTC-bucketed DAO method) were fixed pre-commit.
+
+---
+
+## 2026-07-16 (build) — testers now get minified staging builds
+
+The single largest smoothness lever in the audit: every build anyone had ever run
+was a debuggable debug APK (debug Compose runs 2–5× slower per frame). New `staging`
+build type — `initWith(release)`, minified + resource-shrunk, signed with the shared
+debug keystore so update-installs keep working — and CI ships `assembleStaging` to
+Firebase, archiving each build's R8 `mapping.txt` as a workflow artifact (staging
+crash traces are obfuscated). R8 hygiene with it: blanket `-keep` rules on entities/
+domain models deleted (KSP-generated Room + hand-written JSON codecs — zero
+reflection in main sources), `android.r8.optimizedResourceShrinking=false` removed
+(a bulk AGP-9-upgrade flag, not a real breakage). 28 MB APK vs 50 MB debug.
+Notable diagnosis along the way: the first "staging" install that felt dramatically
+smoother was actually Android Studio's *profileable* transform of the debug variant
+(`dumpsys` can't tell them apart — no DEBUGGABLE flag either way; the pulled APK's
+dex layout settled it), which means killing the debuggable flag alone is a massive
+win before R8 even enters. Gradle wrapper 9.4.1 → 9.6.1 in the same batch.
+
+---
+
+## 2026-07-16 (ui) — reaction pills straddle the bubble corner; collisions eliminated
+
+Emoji reaction pills were colliding with message text, timestamps, and the next message
+(on-device screenshots). Root cause: the pills were a Box overlay (`offset(y = 16.dp)`)
+that painted below the bubble without reserving layout space, patched by a hardcoded
+`Spacer(18.dp)` that only existed at BOTTOM/SINGLE cluster positions — and sat below
+the timestamp row, so the timestamp always collided. Now the bubble wrapper is a Column
+and the pills are a real layout child: a custom `layout` modifier reports only the
+pills' bottom half, so the top half straddles the bubble's bottom-end corner (the same
+half-in/half-out treatment as the top-bar date pill) and everything below — timestamp,
+delivery status, next message — is pushed down by exactly the measured overhang.
+Correct at any font scale and for wrapped pill rows, with no hardcoded compensation.
+Deleted the Spacer hack and the dead `isSent` parameter on `ReactionPills`.
+
+Follow-up from on-device use: the reservation is now conditional. Received bubbles keep
+their timestamp on the opposite corner, so no push-down is needed when a timestamp row
+follows (reserve zero); mid-cluster / hidden-timestamp received bubbles still reserve
+the full overhang so the pill stays off the next message. Sent bubbles reserve the
+overhang minus the timestamp row's own top whitespace (~6 dp of padding + line-height
+leading), tucking that whitespace under the pill so the visible pill→timestamp gap
+stays tight.
+
+---
+
+## 2026-07-15 (stats) — heatmap: tap = single day, long-press = multi-select + date ranges
+
+Heatmap day taps previously accumulated a multi-day selection; now a tap selects just
+that day (tapping it again clears). Long-press is the deliberate gateway to
+multi-select: it keeps the current day as an anchor, so **tap the first day,
+long-press the last** selects the whole range between them (shift-click semantics).
+While in multi-select, taps toggle individual days and each long-press extends a range
+from the last long-pressed day; deselecting the last day exits the mode. Logic lives in
+a new pure `HeatmapSelection` state machine (ui/stats) with its own test suite —
+`StatsViewModel` just delegates, and the day cell swapped `clickable` for
+`combinedClickable`. A one-line hint appears above the Clear button while
+multi-select is active.
+
+---
+
+## 2026-07-15 (ui) — date pill straddles the top bar edge; messages scroll behind it
+
+Per feedback from on-device use: the floating date pill now sits half in the top bar,
+half in the conversation area, instead of floating fully below the bar. Moved from the
+content Box into the Scaffold `topBar` slot (a wrapping Box) — Scaffold draws topBar
+above body content, so the pill's overhanging half renders over the message list; the
+old placement would have hidden a translated pill behind the opaque bar. Bottom-anchored
+and pushed down half its height via lambda `graphicsLayer` (draw-phase only — topBar
+measured height unchanged, overhang stays tappable). Confirmed on device, then
+follow-up in the same session: the list no longer reserves any space for the pill —
+messages deliberately slide up behind the overhang, so the whole measured-height
+apparatus (`datePillHeightPx`, `onGloballyPositioned`, the reserved LazyColumn top
+padding) and the pill's internal 8 dp top gap were deleted.
+
+---
+
+## 2026-07-15 (search fix) — FTS4 word-prefix matching restored in global search
+
+The correctness bug filed in performance-analysis.md §🐞 is fixed: `FtsQueryBuilder`
+emitted FTS5 syntax (`^"term"*`) against the FTS4 `messages_fts` table, so global
+search only matched a message's exact first word. Empirical testing against real FTS4
+showed the originally-suggested fix (`"term"*`, star outside quotes) was *also* broken
+— FTS4 silently drops that star. The correct FTS4 form is the star inside the phrase
+quotes (`"term*"`); multi-word input becomes one phrase with a prefix on the last word.
+FTS5-style `""` quote escaping replaced with quote→space (identical semantics — the
+tokenizer never indexes quotes). Dead `buildMultiWord` helper deleted. Tests rewritten
+for the FTS4 forms; `./gradlew test` green. Needs a quick on-device search check.
+
+---
+
+## 2026-07-15 (performance) — four-lens perf analysis + 21 quick wins; docs/performance-analysis.md
+
+Four parallel Fable agents audited the codebase for the reported "occasional choppiness"
+(UI/Compose, DB at 160k-row scale, concurrency, platform/build/media); findings were
+hand-verified against source, consolidated into **docs/performance-analysis.md** (tiered
+checklist, same conventions as TODO.md), and every safe quick win was implemented in the
+same session. `./gradlew test` green; ⚠-marked items in the doc want on-device sanity checks.
+
+Highlights of what landed (full list + rationale in performance-analysis.md §✅):
+
+- **Render-state memoization** (`ThreadViewModel`): `buildRenderState`/`buildThreadImages`
+  ran on Main inside the uiState combine — re-executed on *every reply-bar keystroke and
+  selection tap* over the whole thread. Now rebuilt only when Room emits a new messages
+  list instance. Dispatcher-free, so it can't reproduce the July-12 flowOn regression.
+- **July-12 regression probable root cause found and removed**: the shared
+  `SimpleDateFormat`s in `MessageGrouping.kt` are not thread-safe; a Default-dispatched
+  `groupByDay()` racing Main's `localDateToLabel()` can throw inside the combine and
+  silently kill the uiState flow (exactly the "selection stopped applying" symptom).
+  All shared formatters are now immutable `DateTimeFormatter`s — the off-main refactor
+  (fable-analysis #10) is unblocked, pending on-device verification.
+- **Thread-open write storm fixed**: `markAllRead` gained `AND isRead = 0` and the FTS
+  sync trigger is now `AFTER UPDATE OF body` (idempotently migrated in `onOpen`) —
+  opening a 10k-message thread no longer rewrites 10k FTS entries behind the enter
+  animation. Verified no code path UPDATEs body.
+- **Schema v16**: perf indexes — `(threadId, timestamp)` (replaces plain threadId;
+  per-thread reads no longer sort in a temp B-tree), `(isRead, threadId)` (unread badges
+  full-scanned the table per invalidation), `isMms` (watermark MIN/MAX), `isStarred`.
+  Additive migration + 15→16 test + full-chain test extended.
+- **60 s catch-up poll off Main**: `triggerCatchUp()` now wraps in `Dispatchers.IO` —
+  it was running cross-process telephony ContentResolver queries on the main thread
+  every 60 seconds for the app's lifetime.
+- **Video thumbnail cache** (`ui/thread/VideoThumbnails.kt`): three duplicated
+  `MediaMetadataRetriever` blocks replaced by one 16 MB LRU with ≤640 px scaled frames
+  (was: full-resolution ~8 MB frame re-decoded every time a bubble scrolled back in).
+- **Compose-phase fixes**: FAB auto-hide moved to `snapshotFlow` (was restarting a
+  coroutine + recomposing per scrolled frame); date-pill stale-closure + backwards-write
+  fixed; pinch-zoom viewers switched to lambda `graphicsLayer` (param overload recomposed
+  per gesture frame); swipe-reply icon alpha to draw phase; `contentType` on the thread
+  list; bubble shapes/timestamps/reaction-groupings remembered; `@Immutable Thread`;
+  conversation rows animate reordering (`animateItem`); search highlight remembered;
+  stale search results cancelled; `scrollToMessageCentered` stale-snapshot fix.
+- **Startup/lifecycle**: backup-scheduler reconciliation off the cold-start critical
+  path; font-scale persistence debounced (was an `apply()` per pinch frame — QueuedWork
+  flushes synchronously at onStop); one shared WorkManager observer instead of three;
+  dark launch `windowBackground` via `values-night` (kills the white flash on cold start).
+
+Also filed in the doc: the biggest remaining lever is that **CI ships debuggable debug
+APKs** (debug Compose is 2–5× slower per frame — staging build type sketched in Tier 1),
+plus a search-correctness bug found in passing (`FtsQueryBuilder` uses FTS5 `^` syntax
+against an FTS4 table — global search only matches a message's first word).
+
+---
+
 ## 2026-07-15 (feature) — video attachments: thumbnails, portrait-aware player, tap-to-pause; iOS custom-emoji tapbacks; ThreadScreen housekeeping
 
 A day of user-driven video-attachment work (all reported from real conversations on a

@@ -1,38 +1,30 @@
 package com.plusorminustwo.postmark.search.parser
 
 /**
- * Builds FTS5 query strings for use with [SearchDao].
+ * Builds FTS4 MATCH query strings for use with [SearchDao].
  *
- * Queries use word-start anchored prefix matching (`^"term"*`) so that a search for
- * "he" matches "hello" but not "the" or "where".
+ * Queries use phrase-prefix matching — `"term*"`, star INSIDE the quotes — so a search
+ * for "he" matches "hello" but not "the" or "where". FTS4 syntax differs from FTS5 here:
+ * with the star outside the quotes (`"term"*`) FTS4 silently drops it and requires an
+ * exact whole-word match, and a leading `^` anchors to the first token of the message
+ * rather than to word starts.
  */
 object FtsQueryBuilder {
 
     /**
-     * Builds a single-term FTS5 query from [rawInput].
+     * Builds an FTS4 phrase-prefix query from [rawInput]. Multi-word input becomes a
+     * single phrase with a prefix on the last word ("say hi" matches "say hive mind").
      *
      * Returns an empty string if [rawInput] is blank (caller should skip the FTS path).
      */
     fun build(rawInput: String): String {
-        val term = rawInput.trim()
+        // FTS4 has no in-phrase quote escaping, but the simple tokenizer treats '"' as a
+        // separator so quotes never appear in indexed tokens — replacing them with
+        // spaces preserves match semantics while keeping the phrase syntax intact.
+        val term = rawInput.replace('"', ' ').trim().replace(WHITESPACE, " ")
         if (term.isBlank()) return ""
-
-        // Escape any FTS5 special characters inside the term
-        val escaped = term.replace("\"", "\"\"")
-
-        return "^\"$escaped\"*"
+        return "\"$term*\""
     }
 
-    /**
-     * Builds a multi-term FTS5 query where each whitespace-separated word becomes
-     * its own word-start prefix term. All terms must match (AND semantics).
-     */
-    fun buildMultiWord(rawInput: String): String {
-        val terms = rawInput.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-        if (terms.isEmpty()) return ""
-        return terms.joinToString(" ") { term ->
-            val escaped = term.replace("\"", "\"\"")
-            "^\"$escaped\"*"
-        }
-    }
+    private val WHITESPACE = Regex("\\s+")
 }

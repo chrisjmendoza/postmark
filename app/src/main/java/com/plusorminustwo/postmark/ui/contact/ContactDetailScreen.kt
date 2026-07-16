@@ -554,6 +554,13 @@ private fun ContactFullScreenViewer(uri: String, onDismiss: () -> Unit) {
             dialogWindow?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
         }
         val context = LocalContext.current
+        // Remembered so pinch/pan recompositions don't rebuild the request per frame.
+        val imageRequest = remember(uri) {
+            ImageRequest.Builder(context)
+                .data(Uri.parse(uri))
+                .crossfade(true)
+                .build()
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -562,10 +569,7 @@ private fun ContactFullScreenViewer(uri: String, onDismiss: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             SubcomposeAsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(Uri.parse(uri))
-                    .crossfade(true)
-                    .build(),
+                model = imageRequest,
                 contentDescription = "Full-screen media",
                 contentScale       = ContentScale.Fit,
                 modifier           = Modifier
@@ -584,12 +588,14 @@ private fun ContactFullScreenViewer(uri: String, onDismiss: () -> Unit) {
                             }
                         }
                     }
-                    .graphicsLayer(
-                        scaleX       = scale,
-                        scaleY       = scale,
-                        translationX = offsetX,
+                    // Lambda overload defers the state reads to the draw phase — the
+                    // parameter overload recomposed this node on every gesture frame.
+                    .graphicsLayer {
+                        scaleX       = scale
+                        scaleY       = scale
+                        translationX = offsetX
                         translationY = offsetY
-                    )
+                    }
             )
             // Close button in top-right corner as a secondary affordance.
             IconButton(

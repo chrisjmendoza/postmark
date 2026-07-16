@@ -62,9 +62,10 @@ class StatsViewModelHeatmapTest {
     }
 
     @Test
-    fun `default selectedHeatmapDays is empty`() {
+    fun `default heatmap selection is empty`() {
         val vm = makeViewModel()
-        assertTrue(vm.selectedHeatmapDays.value.isEmpty())
+        assertTrue(vm.heatmapSelection.value.days.isEmpty())
+        assertFalse(vm.heatmapSelection.value.multiSelect)
     }
 
     @Test
@@ -90,11 +91,11 @@ class StatsViewModelHeatmapTest {
     }
 
     @Test
-    fun `setHeatmapMonth clears selectedHeatmapDays`() {
+    fun `setHeatmapMonth clears the day selection`() {
         val vm = makeViewModel()
-        vm.toggleHeatmapDay(LocalDate.now())
+        vm.tapHeatmapDay(LocalDate.now())
         vm.setHeatmapMonth(YearMonth.now().minusMonths(1))
-        assertTrue(vm.selectedHeatmapDays.value.isEmpty())
+        assertTrue(vm.heatmapSelection.value.days.isEmpty())
     }
 
     @Test
@@ -107,55 +108,49 @@ class StatsViewModelHeatmapTest {
         assertEquals(base.minusMonths(1), vm.heatmapMonth.value)
     }
 
-    // ── Day selection (multi) ─────────────────────────────────────────────
+    // ── Day selection (tap / long-press wiring; full semantics in HeatmapSelectionTest) ──
 
     @Test
-    fun `toggleHeatmapDay adds day to selection`() {
-        val vm  = makeViewModel()
-        val day = LocalDate.now()
-        vm.toggleHeatmapDay(day)
-        assertTrue(day in vm.selectedHeatmapDays.value)
-    }
-
-    @Test
-    fun `toggleHeatmapDay removes day when already selected`() {
-        val vm  = makeViewModel()
-        val day = LocalDate.now()
-        vm.toggleHeatmapDay(day)
-        vm.toggleHeatmapDay(day)
-        assertTrue(vm.selectedHeatmapDays.value.isEmpty())
-    }
-
-    @Test
-    fun `toggleHeatmapDay can select multiple days independently`() {
+    fun `tapHeatmapDay selects only the tapped day`() {
         val vm   = makeViewModel()
         val day1 = LocalDate.now()
         val day2 = day1.minusDays(1)
-        val day3 = day1.minusDays(2)
-        vm.toggleHeatmapDay(day1)
-        vm.toggleHeatmapDay(day2)
-        vm.toggleHeatmapDay(day3)
-        assertEquals(setOf(day1, day2, day3), vm.selectedHeatmapDays.value)
+        vm.tapHeatmapDay(day1)
+        vm.tapHeatmapDay(day2)
+        assertEquals(setOf(day2), vm.heatmapSelection.value.days)
+        assertFalse(vm.heatmapSelection.value.multiSelect)
     }
 
     @Test
-    fun `toggleHeatmapDay removing one day leaves others selected`() {
+    fun `longPressHeatmapDay enters multi-select and taps toggle days`() {
         val vm   = makeViewModel()
         val day1 = LocalDate.now()
-        val day2 = day1.minusDays(1)
-        vm.toggleHeatmapDay(day1)
-        vm.toggleHeatmapDay(day2)
-        vm.toggleHeatmapDay(day1)  // deselect day1
-        assertEquals(setOf(day2), vm.selectedHeatmapDays.value)
+        val day2 = day1.minusDays(3)
+        vm.longPressHeatmapDay(day1)
+        vm.tapHeatmapDay(day2)
+        assertEquals(setOf(day1, day2), vm.heatmapSelection.value.days)
+        assertTrue(vm.heatmapSelection.value.multiSelect)
     }
 
     @Test
-    fun `clearHeatmapDays empties the selection`() {
+    fun `tap then long-press selects the date range`() {
+        val vm    = makeViewModel()
+        val start = LocalDate.now().minusDays(3)
+        val end   = LocalDate.now()
+        vm.tapHeatmapDay(start)
+        vm.longPressHeatmapDay(end)
+        assertEquals(4, vm.heatmapSelection.value.days.size)
+        assertTrue(vm.heatmapSelection.value.multiSelect)
+    }
+
+    @Test
+    fun `clearHeatmapDays empties the selection and exits multi-select`() {
         val vm = makeViewModel()
-        vm.toggleHeatmapDay(LocalDate.now())
-        vm.toggleHeatmapDay(LocalDate.now().minusDays(1))
+        vm.longPressHeatmapDay(LocalDate.now())
+        vm.tapHeatmapDay(LocalDate.now().minusDays(1))
         vm.clearHeatmapDays()
-        assertTrue(vm.selectedHeatmapDays.value.isEmpty())
+        assertTrue(vm.heatmapSelection.value.days.isEmpty())
+        assertFalse(vm.heatmapSelection.value.multiSelect)
     }
 
     // ── preSelectThread ───────────────────────────────────────────────────
@@ -200,11 +195,11 @@ class StatsViewModelHeatmapTest {
     }
 
     @Test
-    fun `setScope GLOBAL clears selectedHeatmapDays`() {
+    fun `setScope GLOBAL clears the day selection`() {
         val vm = makeViewModel()
-        vm.toggleHeatmapDay(LocalDate.now())
+        vm.tapHeatmapDay(LocalDate.now())
         vm.setScope(StatsScope.GLOBAL)
-        assertTrue(vm.selectedHeatmapDays.value.isEmpty())
+        assertTrue(vm.heatmapSelection.value.days.isEmpty())
     }
 
     @Test
@@ -260,7 +255,6 @@ private class FakeMessageDao : MessageDao {
     override suspend fun deleteByThread(threadId: Long) = Unit
     override suspend fun countByThread(threadId: Long): Int = 0
     override suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity> = emptyList()
-    override suspend fun getActiveDatesForThread(threadId: Long): List<String> = emptyList()
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
     override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit

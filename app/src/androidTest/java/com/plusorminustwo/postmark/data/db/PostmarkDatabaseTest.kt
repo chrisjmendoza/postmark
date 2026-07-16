@@ -175,51 +175,10 @@ class PostmarkDatabaseTest {
         assertEquals(1L, results[0].threadId)
     }
 
-    // ── New MessageDao methods ─────────────────────────────────────────────
-
-    @Test
-    fun getLatestNForThread_returnsNMostRecentInDescOrder() = runBlocking {
-        db.threadDao().insert(thread(1))
-        db.messageDao().insertAll(listOf(
-            msg(1, 1, ts = 1000L),
-            msg(2, 1, ts = 2000L),
-            msg(3, 1, ts = 3000L),
-            msg(4, 1, ts = 4000L)
-        ))
-        val result = db.messageDao().getLatestNForThread(1L, 2)
-        assertEquals(2, result.size)
-        assertEquals(4L, result[0].id)  // most recent first
-        assertEquals(3L, result[1].id)
-    }
-
-    @Test
-    fun getLatestNForThread_fewerMessagesThanN_returnsAll() = runBlocking {
-        db.threadDao().insert(thread(1))
-        db.messageDao().insert(msg(1, 1, ts = 1000L))
-        val result = db.messageDao().getLatestNForThread(1L, 5)
-        assertEquals(1, result.size)
-    }
-
-    @Test
-    fun getLatestBeforeForThread_returnsMessageStrictlyBeforeTimestamp() = runBlocking {
-        db.threadDao().insert(thread(1))
-        db.messageDao().insertAll(listOf(
-            msg(1, 1, ts = 1000L),
-            msg(2, 1, ts = 2000L),
-            msg(3, 1, ts = 3000L)
-        ))
-        val result = db.messageDao().getLatestBeforeForThread(1L, 3000L)
-        assertNotNull(result)
-        assertEquals(2L, result!!.id)
-    }
-
-    @Test
-    fun getLatestBeforeForThread_noMessageBefore_returnsNull() = runBlocking {
-        db.threadDao().insert(thread(1))
-        db.messageDao().insert(msg(1, 1, ts = 5000L))
-        val result = db.messageDao().getLatestBeforeForThread(1L, 5000L)
-        assertNull(result)
-    }
+    // ── MessageDao methods ─────────────────────────────────────────────────
+    // (getLatestNForThread / getLatestBeforeForThread tests deleted July 15 —
+    // those DAO methods were removed in the July 14 dead-code sweep, fable-analysis
+    // #27, which left this androidTest source set uncompilable.)
 
     @Test
     fun updateDeliveryStatus_persistsNewStatus() = runBlocking {

@@ -2,9 +2,16 @@ package com.plusorminustwo.postmark.data.preferences
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -33,24 +40,35 @@ class BubbleFontScaleRepository @Inject constructor(
     private val _scale = MutableStateFlow(readScale())
     val scale: StateFlow<Float> = _scale.asStateFlow()
 
+    // Debounced persistence: adjust() fires per pinch-gesture FRAME (and the settings
+    // slider per drag frame). An Editor.apply() per frame floods QueuedWork, whose
+    // pending writes are flushed synchronously at Activity.onStop — a classic source
+    // of lifecycle-transition jank. collectLatest + delay = debounce; drop(1) skips
+    // re-persisting the value we just read at construction. Losing the final ~400 ms
+    // of a pinch to process death is acceptable for a display preference.
+    private val persistScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    init {
+        persistScope.launch {
+            _scale.drop(1).collectLatest { value ->
+                delay(400)
+                prefs.edit().putFloat(PREF_KEY, value).apply()
+            }
+        }
+    }
+
     /** Adjusts the font scale by [delta] (positive = bigger, negative = smaller) and persists. */
     fun adjust(delta: Float) {
-        val newScale = (_scale.value + delta).coerceIn(MIN_SCALE, MAX_SCALE)
-        _scale.value = newScale
-        prefs.edit().putFloat(PREF_KEY, newScale).apply()
+        _scale.value = (_scale.value + delta).coerceIn(MIN_SCALE, MAX_SCALE)
     }
 
     /** Sets font scale to an absolute [value] (clamped to MIN_SCALE..MAX_SCALE) and persists. */
     fun set(value: Float) {
-        val clamped = value.coerceIn(MIN_SCALE, MAX_SCALE)
-        _scale.value = clamped
-        prefs.edit().putFloat(PREF_KEY, clamped).apply()
+        _scale.value = value.coerceIn(MIN_SCALE, MAX_SCALE)
     }
 
     /** Resets font scale to 1.0 and persists. */
     fun reset() {
         _scale.value = DEFAULT_SCALE
-        prefs.edit().putFloat(PREF_KEY, DEFAULT_SCALE).apply()
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────

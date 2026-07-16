@@ -241,7 +241,7 @@ class MessageGroupingTest {
         assertEquals("newest day must be last key",  labels[2], keys[2])
         // Verify the key order actually reflects ascending timestamps
         val timestamps = keys.map { label ->
-            msgs.first { DAY_FORMATTER.format(java.util.Date(it.timestamp)) == label }.timestamp
+            msgs.first { formatEpochMillis(it.timestamp, DAY_FORMATTER) == label }.timestamp
         }
         assertEquals(timestamps, timestamps.sorted())
     }

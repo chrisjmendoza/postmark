@@ -3,11 +3,15 @@ package com.plusorminustwo.postmark
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.plusorminustwo.postmark.data.sync.SmsContentObserver
 import com.plusorminustwo.postmark.service.backup.BackupScheduler
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -33,6 +37,19 @@ class PostmarkApplication : Application(), Configuration.Provider {
             .build()
 
     override fun onCreate() {
+        // Debug-only main-thread disk I/O detection. Installed before
+        // super.onCreate() so Hilt graph construction is covered too. Log-only
+        // by design — never penaltyDeath: SmsReceiver's pre-goAsync log write is
+        // deliberate and must show up in the log, not crash.
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(
+                StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads()
+                    .detectDiskWrites()
+                    .penaltyLog()
+                    .build()
+            )
+        }
         super.onCreate()
         createNotificationChannels()
         // Register content observer so incremental SMS changes are picked up
@@ -42,7 +59,10 @@ class PostmarkApplication : Application(), Configuration.Provider {
         // Reconcile the periodic backup schedule with the persisted preferences.
         // ExistingPeriodicWorkPolicy.UPDATE keeps the original enqueue time, so
         // re-syncing on every startup never resets a pending backup's timing.
-        backupScheduler.syncWithPrefs()
+        // Off the main thread: this call blocks on the backup_prefs disk load and
+        // forces WorkManager's on-demand init (WorkDatabase open) — cold-start tax
+        // with no first-frame dependency.
+        CoroutineScope(Dispatchers.Default).launch { backupScheduler.syncWithPrefs() }
     }
 
     private fun createNotificationChannels() {

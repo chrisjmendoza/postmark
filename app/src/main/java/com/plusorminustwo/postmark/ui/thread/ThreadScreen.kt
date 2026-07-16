@@ -20,14 +20,23 @@ import android.os.Build
 import android.app.role.RoleManager
 import android.provider.MediaStore
 import android.provider.Telephony
+import android.view.HapticFeedbackConstants
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -60,6 +69,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalView
@@ -101,14 +112,14 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
-import java.util.Date
 import java.util.Locale
+import kotlin.math.absoluteValue
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyRow
@@ -119,6 +130,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
@@ -186,6 +198,15 @@ fun ThreadScreen(
     // Wrapped in remember(viewModel) so the same function reference is reused
     // across recompositions. Prevents child composables that accept lambdas from
     // recomposing just because ThreadScreen recomposed.
+
+    // Haptics ride inside these existing callbacks — never as new gesture detectors
+    // on bubbles (child detectors silently break the parent combinedClickable's
+    // selection/long-press; see the July 12 note). CONTEXT_CLICK goes through the
+    // View because this Compose version's HapticFeedbackType only offers
+    // LongPress/TextHandleMove.
+    val view    = LocalView.current
+    val haptics = LocalHapticFeedback.current
+
     val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
     val onDeleteMessage           = remember(viewModel) { { id: Long -> viewModel.deleteMessage(id) } }
     val onToggleStarred           = remember(viewModel) { { id: Long -> viewModel.toggleStarred(id) } }
@@ -206,8 +227,18 @@ fun ThreadScreen(
     val onReplyTextChanged        = remember(viewModel) { { text: String -> viewModel.onReplyTextChanged(text) } }
     val onSendMessage             = remember(viewModel) { { viewModel.sendMessage() } }
     val onToggleSelection         = remember(viewModel) { { id: Long -> viewModel.toggleSelection(id) } }
-    val onShowReactionPicker      = remember(viewModel) { { id: Long, y: Float -> viewModel.showReactionPicker(id, y) } }
-    val onToggleReaction          = remember(viewModel) { { id: Long, emoji: String -> viewModel.toggleReaction(id, emoji) } }
+    val onShowReactionPicker      = remember(viewModel, haptics) {
+        { id: Long, y: Float ->
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            viewModel.showReactionPicker(id, y)
+        }
+    }
+    val onToggleReaction          = remember(viewModel, view) {
+        { id: Long, emoji: String ->
+            view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            viewModel.toggleReaction(id, emoji)
+        }
+    }
     val onToggleTimestamp         = remember(viewModel) { { id: Long -> viewModel.toggleTimestamp(id) } }
     val onToggleMessageIds        = remember(viewModel) { { ids: List<Long> -> viewModel.toggleMessageIds(ids) } }
     val onRetry                   = remember(viewModel) { { id: Long -> viewModel.retrySend(id) } }
@@ -268,6 +299,24 @@ fun ThreadScreen(
         onResetFontScale = onResetFontScale
     )
 }
+
+/**
+ * Which top-bar variant is showing. [AnimatedContent] in [ThreadContent] keys on this
+ * stable discriminator — keying on uiState itself would restart the transition on
+ * every keystroke or selection tap, since a new state object arrives per emission.
+ */
+private enum class TopBarMode { ACTION, SELECTION, NORMAL }
+
+/**
+ * Non-snapshot holder retaining the last meaningful value so an [AnimatedVisibility]
+ * strip still has content while it shrink-animates out. Deliberately NOT a
+ * MutableState: writing snapshot state during composition schedules an extra
+ * recomposition of the scope on every change (the bug class fixed July 15 at the
+ * date pill). A plain field is safe here because exit-frame content is, by
+ * definition, the previous composition's value — live updates must come from a
+ * read of the real (observable) source inside the content lambda.
+ */
+private class Retained<T>(var value: T)
 
 /**
  * Stateless composable that renders the full thread UI.
@@ -411,9 +460,13 @@ private fun ThreadContent(
 
     // Scrolls to and highlights [targetId], centering it in the viewport. Shared by the
     // search-jump navigation effect below and the image viewer's "Go to chat" action.
+    // rememberUpdatedState matters: uiState is a plain parameter, so a snapshotFlow over
+    // it directly would capture one value and never re-emit — if the target wasn't in the
+    // map yet (thread still loading), `.first { }` suspended forever.
+    val currentRenderState = rememberUpdatedState(uiState.renderState)
     suspend fun scrollToMessageCentered(targetId: Long) {
         // Wait until the target message is present in the render state.
-        val targetIndex = snapshotFlow { uiState.renderState.messageIdToIndex[targetId] }
+        val targetIndex = snapshotFlow { currentRenderState.value.messageIdToIndex[targetId] }
             .first { it != null } ?: return
         // Snap to item first so layoutInfo is populated for the target.
         listState.scrollToItem(targetIndex)
@@ -458,14 +511,19 @@ private fun ThreadContent(
         if (scrollToDate.isEmpty()) "" else localDateToLabel(LocalDate.parse(scrollToDate))
     }
 
-    val visibleDate by remember {
+    // Keyed on the id→date map: uiState is a plain parameter, so an un-keyed remember
+    // froze the lambda created on FIRST composition — when renderState was still the
+    // empty initial ThreadUiState() — and every bubble-keyed lookup silently resolved
+    // "" forever (masked by the header_ path and the keep-last-label logic below).
+    val messageIdToDate = uiState.renderState.messageIdToDate
+    val visibleDate by remember(messageIdToDate) {
         derivedStateOf {
             val visible = listState.layoutInfo.visibleItemsInfo
             if (visible.isEmpty()) return@derivedStateOf ""
             val topItem = visible.maxByOrNull { it.index } ?: return@derivedStateOf ""
             when (val key = topItem.key) {
                 is String -> if (key.startsWith("header_")) key.removePrefix("header_")
-                             else key.toLongOrNull()?.let { uiState.renderState.messageIdToDate[it] } ?: ""
+                             else key.toLongOrNull()?.let { messageIdToDate[it] } ?: ""
                 else      -> ""
             }
         }
@@ -480,17 +538,16 @@ private fun ThreadContent(
         null                         -> ""
     }
 
+    // Reconciled in an effect, not inline: writing snapshot state that this same
+    // composition also reads scheduled a guaranteed extra recomposition pass on
+    // every day-boundary crossing while scrolling (a backwards write).
     var pillDateLabel by remember { mutableStateOf("") }
-    when {
-        visibleDate.isNotEmpty() -> pillDateLabel = visibleDate
-        pillDateLabel.isEmpty()  -> pillDateLabel = newestDayLabel
+    LaunchedEffect(visibleDate, newestDayLabel) {
+        when {
+            visibleDate.isNotEmpty() -> pillDateLabel = visibleDate
+            pillDateLabel.isEmpty()  -> pillDateLabel = newestDayLabel
+        }
     }
-
-    // Measured height of the sticky date header. The message list reserves exactly this much
-    // space at its top edge (derived from layout, not a hardcoded value, so it adapts to font
-    // scale) so no message ever scrolls behind the header.
-    var datePillHeightPx by remember { mutableStateOf(0) }
-    val datePillHeight = with(LocalDensity.current) { datePillHeightPx.toDp() }
 
     fun scrollToDateLabel(label: String) {
         uiState.renderState.dateToHeaderIndex[label]?.let { headerIdx ->
@@ -641,8 +698,38 @@ private fun ThreadContent(
         modifier = Modifier.imePadding(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            when {
-                uiState.reactionPickerMessageId != null -> MessageActionTopBar(
+            // The date pill lives in the topBar slot (not the content Box) so it can
+            // straddle the bar's bottom edge: Scaffold draws topBar above body content,
+            // so the pill's overhanging half renders over the message list rather than
+            // disappearing behind the bar.
+            Box {
+            val topBarMode = when {
+                uiState.reactionPickerMessageId != null -> TopBarMode.ACTION
+                uiState.isSelectionMode                 -> TopBarMode.SELECTION
+                else                                    -> TopBarMode.NORMAL
+            }
+            // Written only while selection mode is live; read by the exiting
+            // SELECTION branch below, which AnimatedContent keeps composing after
+            // the selection state has already been cleared.
+            val exitingSelection = remember { Retained(emptySet<Long>()) }
+            if (topBarMode == TopBarMode.SELECTION) {
+                exitingSelection.value = uiState.selectedMessageIds
+            }
+            AnimatedContent(
+                targetState = topBarMode,
+                transitionSpec = {
+                    // The SizeTransform animates the selection bar's extra chip-row
+                    // height in and out instead of jumping the list; clip = false so
+                    // the taller exiting bar stays visible while it shrinks (the
+                    // topBar slot already draws over the message list).
+                    (fadeIn() + slideInVertically()) togetherWith
+                        (fadeOut() + slideOutVertically()) using
+                        SizeTransform(clip = false)
+                },
+                label = "topBarSwap"
+            ) { mode ->
+            when (mode) {
+                TopBarMode.ACTION -> MessageActionTopBar(
                     onCancel  = { onDismissReactionPicker() },
                     onCopy    = {
                         val msg = uiState.messages.find { it.id == uiState.reactionPickerMessageId }
@@ -660,14 +747,23 @@ private fun ThreadContent(
                         onDismissReactionPicker()
                     }
                 )
-                uiState.isSelectionMode -> SelectionTopBar(
-                    selectedCount = uiState.selectedMessageIds.size,
+                TopBarMode.SELECTION -> SelectionTopBar(
+                    // During the exit animation the live selection is already empty —
+                    // render the retained in-mode value so the bar doesn't flash
+                    // "0 selected" while sliding out.
+                    selectedCount = (if (topBarMode == TopBarMode.SELECTION)
+                        uiState.selectedMessageIds else exitingSelection.value).size,
                     totalMessages = uiState.messages.size,
                     scope = uiState.selectionScope,
                     onClose = { onExitSelectionMode() },
                     onScopeChange = { onSetSelectionScope(it) },
                     onShowDateRange = { showDateRangePicker = true },
                     onCopy = {
+                        // Drop taps on the exiting bar: the live selection is empty,
+                        // so copying would clobber the clipboard with an empty export
+                        // (pre-animation the bar vanished the same frame and was
+                        // untappable in this window).
+                        if (topBarMode != TopBarMode.SELECTION) return@SelectionTopBar
                         val text = ExportFormatter.formatForCopy(
                             uiState.messages.filter { it.id in uiState.selectedMessageIds },
                             uiState.thread?.let { t -> t.nickname ?: t.displayName } ?: "",
@@ -682,7 +778,7 @@ private fun ThreadContent(
                         onExitSelectionMode()
                     }
                 )
-                else -> TopAppBar(
+                TopBarMode.NORMAL -> TopAppBar(
                     title = {
                         val name = uiState.thread?.let { t -> t.nickname ?: formatPhoneNumber(t.displayName) } ?: ""
                         Row(
@@ -758,6 +854,22 @@ private fun ThreadContent(
                     }
                 )
             }
+            }
+            // Half-in, half-out of the top bar: bottom-anchored to the bar, then pushed
+            // down by half its own height at draw time. graphicsLayer keeps the shift
+            // out of layout, so the pill never changes the measured topBar height (and
+            // hit testing follows the layer, so the overhanging half stays tappable).
+            // Messages deliberately scroll behind the overhang — the list reserves no
+            // space for it.
+            FloatingDatePill(
+                dateLabel = pillDateLabel,
+                visible = pillDateLabel.isNotEmpty(),
+                onClick = { showCalendarPicker = true },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .graphicsLayer { translationY = size.height / 2f }
+            )
+            }
         },
         bottomBar = {
             // Keep ReplyBar in layout even when picker is open (alpha=0) so the
@@ -766,7 +878,13 @@ private fun ThreadContent(
                 ReplyBar(
                     text                  = uiState.replyText,
                     pendingAttachments    = uiState.pendingAttachments,
-                    replyingTo            = uiState.replyingToId?.let { id -> uiState.messages.find { it.id == id } },
+                    // O(1) via the prebuilt index — a linear find here ran per keystroke
+                    // (this parameter re-evaluates every ThreadContent recomposition).
+                    replyingTo            = uiState.replyingToId?.let { id ->
+                        uiState.renderState.messageIdToIndex[id]
+                            ?.let { uiState.renderState.items.getOrNull(it) as? ThreadListItem.Bubble }
+                            ?.message
+                    },
                     // Sending is still 1:1-only (MMS_AUDIT #6) — thread.address, not the
                     // full roster. Warn rather than silently reply to just one participant.
                     isGroupThread         = (uiState.thread?.participants?.size ?: 0) > 1,
@@ -781,20 +899,27 @@ private fun ThreadContent(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
-                // Reserve space for the sticky date header at the top edge so messages scroll
-                // beneath it rather than behind it. datePillHeight is measured (see below).
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(top = datePillHeight),
+                modifier = Modifier.fillMaxSize(),
                 state = listState,
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
                 // Flat list from renderState — no forEach loops, stable keys, no recomputation.
-                items(uiState.renderState.items, key = { it.key }) { item ->
+                // contentType lets LazyColumn reuse composition slots per item kind instead
+                // of pairing a disposed DateHeader slot with an incoming Bubble during fling.
+                items(
+                    uiState.renderState.items,
+                    key = { it.key },
+                    contentType = { it is ThreadListItem.Bubble }
+                ) { item ->
+                    // animateItem on both item kinds: a new message (and the date header
+                    // that sometimes arrives with it) fades in and slides neighbours
+                    // apart instead of popping. Placement cost during a bulk-sync burst
+                    // of inserts needs an on-device check in a large thread.
                     when (item) {
                         is ThreadListItem.Bubble -> MessageBubble(
                             message = item.message,
+                            modifier = Modifier.animateItem(),
                             clusterPosition = item.clusterPosition,
                             isSelected = item.message.id in uiState.selectedMessageIds,
                             isSelectionMode = uiState.isSelectionMode,
@@ -829,6 +954,7 @@ private fun ThreadContent(
                         )
                         is ThreadListItem.DateHeader -> DateHeader(
                             label = item.dateLabel,
+                            modifier = Modifier.animateItem(),
                             isSelectionMode = uiState.isSelectionMode,
                             selectedCount = item.messageIds.count { it in uiState.selectedMessageIds },
                             totalCount = item.messageIds.size,
@@ -898,29 +1024,21 @@ private fun ThreadContent(
                 )
             }
 
-            // Permanent sticky date header pinned under the top bar. Always visible while the
-            // thread has messages; `pillDateLabel` tracks the day of the top-of-viewport item
-            // (via `visibleDate`), so it updates as day separators scroll past the top edge.
-            FloatingDatePill(
-                dateLabel = pillDateLabel,
-                visible = pillDateLabel.isNotEmpty(),
-                onClick = { showCalendarPicker = true },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .onGloballyPositioned { datePillHeightPx = it.size.height }
-            )
-
-            val scrolledUp by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
-
             // Auto-hide the FAB 3 s after the user stops scrolling.
             // fabVisible is hoisted to the outer scope so the message-arrival
             // effect above can also trigger it when the user is reading history.
-            LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
-                if (scrolledUp) {
-                    fabVisible = true
-                    delay(3_000)
-                    fabVisible = false
-                } else {
+            // snapshotFlow keeps the per-frame scroll-offset reads out of the
+            // composition phase (as LaunchedEffect keys they recomposed this scope
+            // and restarted the coroutine on every scrolled frame); collectLatest
+            // reproduces the old restart-the-countdown-per-scroll-tick semantics.
+            LaunchedEffect(listState) {
+                snapshotFlow {
+                    listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                }.collectLatest { (index, _) ->
+                    if (index > 0) {
+                        fabVisible = true
+                        delay(3_000)
+                    }
                     fabVisible = false
                 }
             }
@@ -1058,8 +1176,7 @@ private fun FloatingDatePill(
             shape = RoundedCornerShape(50),
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
             tonalElevation = 3.dp,
-            shadowElevation = 2.dp,
-            modifier = Modifier.padding(top = 8.dp)
+            shadowElevation = 2.dp
         ) {
             Text(
                 text = dateLabel,
@@ -1130,12 +1247,22 @@ private fun MessageBubble(
     // Non-null only in group threads, for the first received bubble of a sender's
     // cluster — rendered as a small name label above the bubble so participants
     // are distinguishable (they otherwise all render identically to a 1:1 thread).
-    senderName: String? = null
+    senderName: String? = null,
+    modifier: Modifier = Modifier
 ) {
-    val bubbleColor = if (message.isSent)
+    val baseBubbleColor = if (message.isSent)
         MaterialTheme.colorScheme.primaryContainer
     else
         MaterialTheme.colorScheme.surfaceVariant
+    // Search-jump / "Go to chat" highlight. The ViewModel drops highlightedMessageId
+    // 2 s after the jump; animating the colour turns that hard flip into a quick
+    // tint-in and a gentle fade back to the resting bubble colour.
+    val bubbleColor by animateColorAsState(
+        targetValue = if (isHighlighted) MaterialTheme.colorScheme.tertiaryContainer
+                      else baseBubbleColor,
+        animationSpec = tween(durationMillis = if (isHighlighted) 150 else 600),
+        label = "bubbleHighlight"
+    )
 
     val alignment = if (message.isSent) Alignment.End else Alignment.Start
 
@@ -1164,7 +1291,7 @@ private fun MessageBubble(
     val thresholdPx = with(density) { 56.dp.toPx() }  // crossing this fires onSwipeToReply
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .onGloballyPositioned { coords ->
                 // Track the bottom edge of the bubble — popup is placed just below it.
@@ -1243,15 +1370,26 @@ private fun MessageBubble(
                     modifier           = Modifier
                         .align(Alignment.CenterStart)
                         .padding(start = 4.dp)
-                        .alpha((swipeOffset.value / thresholdPx).coerceIn(0f, 1f))
+                        // Lambda graphicsLayer defers the Animatable read to the draw
+                        // phase — Modifier.alpha() read it in composition, recomposing
+                        // the whole bubble on every drag/spring-back frame.
+                        .graphicsLayer { alpha = (swipeOffset.value / thresholdPx).coerceIn(0f, 1f) }
                 )
             }
             // Bubble content — translated right during swipe, springs back on release.
-            Box(
+            // A Column rather than a Box overlay so the reaction pills take part in
+            // layout: they report only their bottom half (see straddle modifier below),
+            // so the space they hang into below the bubble is reserved and the
+            // timestamp row / next message are pushed down instead of collided with.
+            // End-aligned because the pills anchor to the bubble's bottom-end corner
+            // for both sent and received; a pill row wider than a short bubble grows
+            // leftward past its edge instead of pushing the bubble around.
+            Column(
                 modifier = Modifier
                     .widthIn(max = 280.dp)
                     .align(if (message.isSent) Alignment.CenterEnd else Alignment.CenterStart)
-                    .graphicsLayer { translationX = swipeOffset.value }
+                    .graphicsLayer { translationX = swipeOffset.value },
+                horizontalAlignment = Alignment.End
             ) {
             Box(
                 modifier = Modifier
@@ -1347,23 +1485,41 @@ private fun MessageBubble(
                 }
             }
             if (message.reactions.isNotEmpty()) {
-                // Google Messages-style badge: always the bubble's own bottom-right
-                // corner, whether the bubble is sent or received. y=16 drops the pill
-                // below the bubble edge so it reads as hanging off the corner rather
-                // than overlapping it (kept in step with the tail Spacer below, which
-                // reserves overhang + 2dp so the badge never touches the next message).
-                // Unconstrained in width so a pill row wider than a short bubble grows
-                // leftward past its edge instead of wrapping into a stack of pills.
+                // Google Messages-style badge straddling the bubble's bottom-end corner,
+                // half in / half out — same treatment as the date pill on the top bar.
+                // The top half draws over the bubble; how much space the bottom half
+                // reserves below (all derived from the measured pill height) depends on
+                // what follows:
+                //  - Sent: the timestamp/status row shares the pill's corner, so reserve
+                //    the overhang minus the row's own top whitespace (2dp padding +
+                //    label line-height leading) — the row tucks that whitespace under
+                //    the pill and the visible gap stays tight.
+                //  - Received with a timestamp row: the row sits on the opposite corner
+                //    and already clears the overhang — reserve nothing.
+                //  - Received without a row (mid-cluster, timestamps hidden): reserve
+                //    the full overhang to keep the pill off the next message.
                 ReactionPills(
                     reactions = message.reactions,
-                    isSent = message.isSent,
                     onReactionClick = onReactionClick,
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = 6.dp, y = 16.dp)
+                        .layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints)
+                            val overhang = placeable.height / 2
+                            val reserved = when {
+                                message.isSent ->
+                                    (placeable.height - overhang - 6.dp.roundToPx())
+                                        .coerceAtLeast(0)
+                                showTimestamp -> 0
+                                else -> placeable.height - overhang
+                            }
+                            layout(placeable.width, reserved) {
+                                placeable.place(0, -overhang)
+                            }
+                        }
+                        .offset(x = 6.dp)  // nudge past the corner horizontally
                 )
             }
-        }  // end Box(widthIn+align)
+        }  // end Column(widthIn+align)
         }  // end Box(fillMaxWidth) swipe wrapper
         if (showTimestamp || message.isSent) {
             Row(
@@ -1385,7 +1541,9 @@ private fun MessageBubble(
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                     )
                     Text(
-                        text = timeFormatter.format(Date(message.timestamp)),
+                        text = remember(message.timestamp) {
+                            formatEpochMillis(message.timestamp, timeFormatter)
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1398,9 +1556,6 @@ private fun MessageBubble(
                     )
                 }
             }
-        }
-        if (message.reactions.isNotEmpty() && (clusterPosition == ClusterPosition.BOTTOM || clusterPosition == ClusterPosition.SINGLE)) {
-            Spacer(Modifier.height(18.dp))
         }
     }
 }
@@ -1439,22 +1594,8 @@ private fun AttachmentThumbnail(
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            // Video cell — first frame (extracted off the main thread) with a play badge.
-            val videoThumb by produceState<Bitmap?>(null, attachment.uri) {
-                value = withContext(Dispatchers.IO) {
-                    val retriever = MediaMetadataRetriever()
-                    var frame: Bitmap? = null
-                    try {
-                        retriever.setDataSource(ctx, Uri.parse(attachment.uri))
-                        frame = retriever.getFrameAtTime(0)
-                    } catch (e: Exception) {
-                        android.util.Log.w("VideoThumb", "Frame extraction failed", e)
-                    } finally {
-                        retriever.release()
-                    }
-                    frame
-                }
-            }
+            // Video cell — cached first frame (see rememberVideoThumbnail) with a play badge.
+            val videoThumb = rememberVideoThumbnail(attachment.uri)
             videoThumb?.let {
                 Image(
                     bitmap             = it.asImageBitmap(),
@@ -1564,25 +1705,9 @@ private fun MmsAttachment(
 
         // ── Video ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("video/") == true -> {
-            val ctx = LocalContext.current
-            // Extract the first frame via MediaMetadataRetriever so the bubble shows a
-            // real still instead of a blank tile. Runs off the main thread; falls back to
-            // the play-icon placeholder while loading (or if extraction fails).
-            val videoThumb by produceState<Bitmap?>(null, uri) {
-                value = withContext(Dispatchers.IO) {
-                    val retriever = MediaMetadataRetriever()
-                    var frame: Bitmap? = null
-                    try {
-                        retriever.setDataSource(ctx, Uri.parse(uri))
-                        frame = retriever.getFrameAtTime(0)
-                    } catch (e: Exception) {
-                        android.util.Log.w("VideoThumb", "Frame extraction failed", e)
-                    } finally {
-                        retriever.release()
-                    }
-                    frame
-                }
-            }
+            // Cached first frame (see rememberVideoThumbnail) so the bubble shows a real
+            // still; falls back to the play-icon placeholder while loading or on failure.
+            val videoThumb = rememberVideoThumbnail(uri)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1842,7 +1967,8 @@ private fun DateHeader(
     isSelectionMode: Boolean,
     selectedCount: Int,
     totalCount: Int,
-    onToggleDay: () -> Unit
+    onToggleDay: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     // Three-state icon: none / partial / all selected for this day.
     val selectionIcon = when {
@@ -1857,7 +1983,7 @@ private fun DateHeader(
         MaterialTheme.colorScheme.onSurfaceVariant
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.Center,
@@ -2057,7 +2183,7 @@ private fun DeliveryStatusIndicator(
  *  mean far fewer full-quality photos actually fit — the aggregate size budget in
  *  MmsManagerWrapper compresses each image to its share of the cap, so five is
  *  already ambitious on stingy carriers. */
-private const val MAX_MMS_ATTACHMENTS = 5
+private const val MAX_MMS_ATTACHMENTS = ThreadViewModel.MAX_ATTACHMENTS
 
 @Composable
 private fun ReplyBar(
@@ -2120,7 +2246,11 @@ private fun ReplyBar(
                 // ── Group reply notice ───────────────────────────────────────────
                 // Group MMS sending isn't implemented — a reply here would silently
                 // go to only one participant, not the whole group. Warn instead.
-                if (isGroupThread) {
+                AnimatedVisibility(
+                    visible = isGroupThread,
+                    enter   = expandVertically() + fadeIn(),
+                    exit    = shrinkVertically() + fadeOut()
+                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2147,7 +2277,21 @@ private fun ReplyBar(
 
                 // ── Quote strip ──────────────────────────────────────────────────
                 // Shown when the user has swiped to reply to a specific message.
-                if (replyingTo != null) {
+                // The last non-null message is retained so the strip still has
+                // content to render while it shrinks out after replyingTo clears
+                // (AnimatedVisibility keeps composing its content until the exit
+                // animation finishes).
+                val lastQuoted = remember { Retained(replyingTo) }
+                if (replyingTo != null) lastQuoted.value = replyingTo
+                AnimatedVisibility(
+                    visible = replyingTo != null,
+                    enter   = expandVertically() + fadeIn(),
+                    exit    = shrinkVertically() + fadeOut()
+                ) {
+                    // Live value while visible; the retained copy only feeds the
+                    // exit frames (and the replyingTo read keeps this lambda
+                    // recomposing when the quoted message changes in place).
+                    val quoted = replyingTo ?: lastQuoted.value ?: return@AnimatedVisibility
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2165,24 +2309,24 @@ private fun ReplyBar(
                                 .height(36.dp)
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(
-                                    if (replyingTo.isSent) MaterialTheme.colorScheme.primary
+                                    if (quoted.isSent) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.tertiary
                                 )
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text  = if (replyingTo.isSent) "You" else "Them",
+                                text  = if (quoted.isSent) "You" else "Them",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (replyingTo.isSent) MaterialTheme.colorScheme.primary
+                                color = if (quoted.isSent) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.tertiary,
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                             )
                             Text(
-                                text     = replyingTo.body.ifBlank {
+                                text     = quoted.body.ifBlank {
                                     when {
-                                        replyingTo.mimeType?.startsWith("image/") == true -> "🖼️ Photo"
-                                        replyingTo.mimeType?.startsWith("video/") == true -> "🎬 Video"
-                                        replyingTo.mimeType?.startsWith("audio/") == true -> "🎵 Audio"
+                                        quoted.mimeType?.startsWith("image/") == true -> "🖼️ Photo"
+                                        quoted.mimeType?.startsWith("video/") == true -> "🎬 Video"
+                                        quoted.mimeType?.startsWith("audio/") == true -> "🎵 Audio"
                                         else -> "📎 Attachment"
                                     }
                                 },
@@ -2208,15 +2352,34 @@ private fun ReplyBar(
                 }
                 // Pending-attachment previews — one 80 dp thumbnail per attachment,
                 // each with its own × badge, scrolling horizontally when several.
-                if (pendingAttachments.isNotEmpty()) {
+                // Last non-empty list retained for the shrink-out, like the quote
+                // strip above.
+                val lastAttachments = remember { Retained(pendingAttachments) }
+                if (pendingAttachments.isNotEmpty()) lastAttachments.value = pendingAttachments
+                AnimatedVisibility(
+                    visible = pendingAttachments.isNotEmpty(),
+                    enter   = expandVertically() + fadeIn(),
+                    exit    = shrinkVertically() + fadeOut()
+                ) {
+                    val shown =
+                        if (pendingAttachments.isNotEmpty()) pendingAttachments
+                        else lastAttachments.value
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.padding(bottom = 6.dp)
                     ) {
-                        lazyRowItemsIndexed(pendingAttachments) { index, attachment ->
+                        lazyRowItemsIndexed(shown) { index, attachment ->
                             PendingAttachmentPreview(
                                 attachment = attachment,
-                                onRemove   = { onRemoveAttachment(index) }
+                                onRemove   = {
+                                    // During exit the strip renders the retained stale
+                                    // list; only forward the removal while the tapped
+                                    // thumbnail still matches the live list, so a ×
+                                    // tap can never remove a different attachment.
+                                    if (pendingAttachments.getOrNull(index)?.uri == attachment.uri) {
+                                        onRemoveAttachment(index)
+                                    }
+                                }
                             )
                         }
                     }
@@ -2331,24 +2494,9 @@ private fun PendingAttachmentPreview(
                 )
             }
             attachment.mimeType.startsWith("video/") -> {
-                /* Extract the first frame via MediaMetadataRetriever so the user can
-                 * see which video is attached. Runs on IO thread; shows a play-icon
-                 * placeholder while loading (or if extraction fails). */
-                val videoThumb by produceState<Bitmap?>(null, attachment.uri) {
-                    value = withContext(Dispatchers.IO) {
-                        val retriever = MediaMetadataRetriever()
-                        var frame: Bitmap? = null
-                        try {
-                            retriever.setDataSource(context, Uri.parse(attachment.uri))
-                            frame = retriever.getFrameAtTime(0)
-                        } catch (e: Exception) {
-                            android.util.Log.w("VideoThumb", "Frame extraction failed", e)
-                        } finally {
-                            retriever.release()
-                        }
-                        frame
-                    }
-                }
+                /* Cached first frame (see rememberVideoThumbnail) so the user can see
+                 * which video is attached; play-icon placeholder while loading. */
+                val videoThumb = rememberVideoThumbnail(attachment.uri)
                 if (videoThumb != null) {
                     Image(
                         bitmap             = videoThumb!!.asImageBitmap(),
@@ -2478,37 +2626,36 @@ private fun BackupPolicyDialog(
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-private val timeFormatter = SimpleDateFormat("h:mm a", Locale.getDefault()).also {
-    it.timeZone = java.util.TimeZone.getDefault()
-}
+// Thread-safe (immutable), unlike the SimpleDateFormat it replaces.
+private val timeFormatter = DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
 
-private fun localDateToLabel(date: LocalDate): String =
-    DAY_FORMATTER.format(Date(date.atStartOfDay(java.time.ZoneId.systemDefault()).toEpochSecond() * 1000))
+private fun localDateToLabel(date: LocalDate): String = date.format(DAY_FORMATTER)
 
 /**
  * Corner radii for message bubbles.
  * The "sender side" (right for sent, left for received) gets the small corner radius
  * wherever the bubble attaches to its cluster neighbour.
+ *
+ * All eight shapes are precomputed: bubbleShape() is called per visible bubble per
+ * recomposition, and RoundedCornerShape allocation in that path is pure churn.
  */
-private fun bubbleShape(isSent: Boolean, position: ClusterPosition): RoundedCornerShape {
-    val full  = 16.dp
-    val small = 4.dp
-    return if (isSent) {
-        when (position) {
-            ClusterPosition.SINGLE -> RoundedCornerShape(full)
-            ClusterPosition.TOP    -> RoundedCornerShape(topStart = full, topEnd = full,  bottomEnd = small, bottomStart = full)
-            ClusterPosition.MIDDLE -> RoundedCornerShape(topStart = full, topEnd = small, bottomEnd = small, bottomStart = full)
-            ClusterPosition.BOTTOM -> RoundedCornerShape(topStart = full, topEnd = small, bottomEnd = full,  bottomStart = full)
-        }
-    } else {
-        when (position) {
-            ClusterPosition.SINGLE -> RoundedCornerShape(full)
-            ClusterPosition.TOP    -> RoundedCornerShape(topStart = full,  topEnd = full, bottomEnd = full, bottomStart = small)
-            ClusterPosition.MIDDLE -> RoundedCornerShape(topStart = small, topEnd = full, bottomEnd = full, bottomStart = small)
-            ClusterPosition.BOTTOM -> RoundedCornerShape(topStart = small, topEnd = full, bottomEnd = full, bottomStart = full)
-        }
-    }
-}
+private val bubbleFull  = 16.dp
+private val bubbleSmall = 4.dp
+private val sentShapes = mapOf(
+    ClusterPosition.SINGLE to RoundedCornerShape(bubbleFull),
+    ClusterPosition.TOP    to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleFull,  bottomEnd = bubbleSmall, bottomStart = bubbleFull),
+    ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleSmall, bottomEnd = bubbleSmall, bottomStart = bubbleFull),
+    ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleSmall, bottomEnd = bubbleFull,  bottomStart = bubbleFull)
+)
+private val receivedShapes = mapOf(
+    ClusterPosition.SINGLE to RoundedCornerShape(bubbleFull),
+    ClusterPosition.TOP    to RoundedCornerShape(topStart = bubbleFull,  topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleSmall),
+    ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleSmall),
+    ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleFull)
+)
+
+private fun bubbleShape(isSent: Boolean, position: ClusterPosition): RoundedCornerShape =
+    (if (isSent) sentShapes else receivedShapes).getValue(position)
 
 /**
  * Calculates the top-Y offset (in pixels) for the emoji reaction pill.
@@ -2739,7 +2886,22 @@ private fun FullScreenImageViewer(
                 contentPadding = PaddingValues(horizontal = 28.dp),
                 pageSpacing = 10.dp
             ) { page ->
-                ZoomableImage(uri = images[page].uri)
+                ZoomableImage(
+                    uri = images[page].uri,
+                    // Depth cue on the peeking pages: slightly smaller and dimmer,
+                    // easing to full size/opacity as they settle. Lambda graphicsLayer
+                    // keeps the per-scroll-frame offset read in the draw phase — the
+                    // parameter overload would recompose every page on every scrolled
+                    // frame (same principle as the pinch-zoom layer inside).
+                    modifier = Modifier.graphicsLayer {
+                        val distance = pagerState.getOffsetDistanceInPages(page)
+                            .absoluteValue.coerceIn(0f, 1f)
+                        val scale = 1f - 0.08f * distance
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = 1f - 0.4f * distance
+                    }
+                )
             }
 
             // Top bar: close, sender + friendly timestamp, download/delete/overflow.
@@ -3148,7 +3310,7 @@ private fun formatFileSize(bytes: Long): String? {
 /** One page of [FullScreenImageViewer]: a Coil image with pinch-to-zoom and pan.
  *  Zoom state is per-page, so paging to another image resets to 1×. */
 @Composable
-private fun ZoomableImage(uri: String) {
+private fun ZoomableImage(uri: String, modifier: Modifier = Modifier) {
     // Zoom and pan state — tracked as mutable floats so graphicsLayer can read them
     // without triggering a full recomposition on every gesture frame.
     var scale   by remember(uri) { mutableStateOf(1f) }
@@ -3156,14 +3318,19 @@ private fun ZoomableImage(uri: String) {
     var offsetY by remember(uri) { mutableStateOf(0f) }
 
     val ctx = LocalContext.current
-    SubcomposeAsyncImage(
-        model = ImageRequest.Builder(ctx)
+    // Remembered: rebuilding the request per recomposition re-triggered request
+    // equality checks on every gesture frame while zooming.
+    val imageRequest = remember(uri) {
+        ImageRequest.Builder(ctx)
             .data(Uri.parse(uri))
             .crossfade(true)
-            .build(),
+            .build()
+    }
+    SubcomposeAsyncImage(
+        model = imageRequest,
         contentDescription = "Full-screen photo",
         contentScale = ContentScale.Fit,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             // Consume tap on the image itself so it doesn't fall through to the scrim.
             .clickable { /* absorb — don't dismiss when tapping the image */ }
@@ -3197,12 +3364,15 @@ private fun ZoomableImage(uri: String) {
                     } while (event.changes.any { it.pressed })
                 }
             }
-            .graphicsLayer(
-                scaleX = scale,
-                scaleY = scale,
-                translationX = offsetX,
+            // Lambda overload — reads scale/offset in the draw/layer phase only. The
+            // parameter overload read them during composition, recomposing this whole
+            // node on every pinch/pan frame (despite the comment above claiming otherwise).
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offsetX
                 translationY = offsetY
-            )
+            }
     )
 }
 
@@ -3492,22 +3662,19 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
  * Chips the local user has added (senderAddress == [SELF_ADDRESS]) use a highlighted style.
  *
  * Uses [FlowRow] so that chips wrap to a second line instead of overflowing the bubble width.
- * The caller constrains [modifier] with `widthIn(max = bubbleWidth)` to enforce the boundary.
  *
  * @param reactions      Full list of [Reaction] objects on the message.
- * @param isSent         Affects alignment — sent bubbles pin chips to the start edge, received to end.
  * @param onReactionClick  Called with the emoji string when a chip is tapped (toggles the reaction).
- * @param modifier       Receives the `widthIn` + alignment constraints from [MessageBubble].
+ * @param modifier       Receives the corner-straddle placement from [MessageBubble].
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReactionPills(
     reactions: List<Reaction>,
-    isSent: Boolean,
     onReactionClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val grouped = reactions.groupBy { it.emoji }
+    val grouped = remember(reactions) { reactions.groupBy { it.emoji } }
     FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
