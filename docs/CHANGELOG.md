@@ -18,6 +18,14 @@ delivery status, next message — is pushed down by exactly the measured overhan
 Correct at any font scale and for wrapped pill rows, with no hardcoded compensation.
 Deleted the Spacer hack and the dead `isSent` parameter on `ReactionPills`.
 
+Follow-up from on-device use: the reservation is now conditional. Received bubbles keep
+their timestamp on the opposite corner, so no push-down is needed when a timestamp row
+follows (reserve zero); mid-cluster / hidden-timestamp received bubbles still reserve
+the full overhang so the pill stays off the next message. Sent bubbles reserve the
+overhang minus the timestamp row's own top whitespace (~6 dp of padding + line-height
+leading), tucking that whitespace under the pill so the visible pill→timestamp gap
+stays tight.
+
 ---
 
 ## 2026-07-15 (stats) — heatmap: tap = single day, long-press = multi-select + date ranges

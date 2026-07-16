@@ -1387,18 +1387,32 @@ private fun MessageBubble(
             if (message.reactions.isNotEmpty()) {
                 // Google Messages-style badge straddling the bubble's bottom-end corner,
                 // half in / half out — same treatment as the date pill on the top bar.
+                // The top half draws over the bubble; how much space the bottom half
+                // reserves below (all derived from the measured pill height) depends on
+                // what follows:
+                //  - Sent: the timestamp/status row shares the pill's corner, so reserve
+                //    the overhang minus the row's own top whitespace (2dp padding +
+                //    label line-height leading) — the row tucks that whitespace under
+                //    the pill and the visible gap stays tight.
+                //  - Received with a timestamp row: the row sits on the opposite corner
+                //    and already clears the overhang — reserve nothing.
+                //  - Received without a row (mid-cluster, timestamps hidden): reserve
+                //    the full overhang to keep the pill off the next message.
                 ReactionPills(
                     reactions = message.reactions,
                     onReactionClick = onReactionClick,
                     modifier = Modifier
-                        // Straddle: report only the bottom half of the pills to the
-                        // Column and draw the top half over the bubble's corner. The
-                        // overhang is the measured pill height, so font scale and pill
-                        // wrapping are handled without a hardcoded compensation spacer.
                         .layout { measurable, constraints ->
                             val placeable = measurable.measure(constraints)
                             val overhang = placeable.height / 2
-                            layout(placeable.width, placeable.height - overhang) {
+                            val reserved = when {
+                                message.isSent ->
+                                    (placeable.height - overhang - 6.dp.roundToPx())
+                                        .coerceAtLeast(0)
+                                showTimestamp -> 0
+                                else -> placeable.height - overhang
+                            }
+                            layout(placeable.width, reserved) {
                                 placeable.place(0, -overhang)
                             }
                         }
