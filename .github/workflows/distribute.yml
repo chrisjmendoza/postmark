@@ -46,10 +46,21 @@ jobs:
         # Gate distribution on the test suite — broken code must never reach testers' phones.
         run: ./gradlew test --no-daemon
 
-      - name: Build debug APK
-        # The shared debug.keystore is committed to the repo so the APK is
-        # signed consistently — Android treats each CI build as an update, not a reinstall.
-        run: ./gradlew assembleDebug --no-daemon
+      - name: Build staging APK
+        # Staging = release-grade (minified, non-debuggable) but signed with the
+        # shared debug.keystore committed to the repo, so the APK is signed
+        # consistently — Android treats each CI build as an update, not a reinstall.
+        # Debug builds run Compose 2–5× slower per frame; testers must never
+        # measure those.
+        run: ./gradlew assembleStaging --no-daemon
+
+      - name: Archive R8 mapping
+        # Staging is minified, so tester crash traces are obfuscated. Keep the
+        # mapping.txt for each shipped build or those traces are unreadable.
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-mapping-${{ env.APP_VERSION_CODE }}
+          path: app/build/outputs/mapping/staging/mapping.txt
 
       - name: Upload to Firebase App Distribution
         env:
@@ -60,7 +71,7 @@ jobs:
           npm install -g firebase-tools
           echo "$FIREBASE_SA_JSON" > /tmp/sa.json
           GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa.json firebase appdistribution:distribute \
-            app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/staging/app-staging.apk \
             --app "$FIREBASE_APP_ID" \
             --testers "chrisjmendoza@gmail.com" \
             --release-notes "$RELEASE_NOTES"

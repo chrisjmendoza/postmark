@@ -68,10 +68,22 @@ android {
         }
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        // ── Staging: what CI ships to testers ────────────────────────────────
+        // Minified + non-debuggable like release (debug Compose runs 2–5×
+        // slower per frame, so testers on debug builds were measuring the
+        // debugger scaffolding, not the app), but signed with the shared debug
+        // keystore so a staging APK update-installs over previous builds
+        // without an uninstall. Keep the debug lane for attaching a debugger.
+        create("staging") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
         }
     }
 
