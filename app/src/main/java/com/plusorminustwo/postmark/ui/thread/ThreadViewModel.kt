@@ -16,6 +16,7 @@ import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
+import com.plusorminustwo.postmark.data.preferences.DraftRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -107,7 +108,8 @@ class ThreadViewModel @Inject constructor(
     private val smsManagerWrapper: SmsManagerWrapper,
     private val mmsManagerWrapper: MmsManagerWrapper,
     private val timestampPrefRepo: TimestampPreferenceRepository,
-    private val fontScaleRepo: BubbleFontScaleRepository
+    private val fontScaleRepo: BubbleFontScaleRepository,
+    private val draftRepository: DraftRepository
 ) : ViewModel() {
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
@@ -120,7 +122,26 @@ class ThreadViewModel @Inject constructor(
     private val _selectionState  = MutableStateFlow(emptySet<Long>())
     private val _isSelectionMode = MutableStateFlow(false)
     private val _selectionScope  = MutableStateFlow(SelectionScope.MESSAGES)
-    private val _replyText       = MutableStateFlow(savedStateHandle.get<String>(DRAFT_TEXT_KEY) ?: "")
+    // Reply text seeds from SavedStateHandle (process death while this screen is
+    // still on the back stack) and falls back to the persisted per-thread draft,
+    // so a half-typed message survives leaving the chat entirely.
+    private val _replyText       = MutableStateFlow(
+        savedStateHandle.get<String>(DRAFT_TEXT_KEY) ?: draftRepository.draftFor(threadId) ?: ""
+    )
+
+    init {
+        // Draft persistence, debounced like BubbleFontScaleRepository: an apply()
+        // per keystroke floods QueuedWork (flushed synchronously at Activity.onStop).
+        // drop(1) skips re-persisting the value just restored above; send clears the
+        // text, which persists as a delete. The trailing ≤400 ms of typing can be
+        // lost to process death — same accepted trade-off as the font scale.
+        viewModelScope.launch {
+            _replyText.drop(1).collectLatest { text ->
+                delay(400)
+                draftRepository.setDraft(threadId, text)
+            }
+        }
+    }
     private val _isSending       = MutableStateFlow(false)
     private val _showDefaultSmsDialog     = MutableStateFlow(false)
     private val _expandedTimestampIds     = MutableStateFlow(emptySet<Long>())
@@ -485,7 +506,11 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             val (startMs, endMs) = epochMsForDayBoundaries(start, end)
             val messages = messageRepository.getByThreadAndDateRange(threadId, startMs, endMs)
-            _selectionState.update { cur -> cur + messages.map { it.id } }
+            // Replace, don't add: picking a range means "select exactly these".
+            // Adding was a silent no-op when ALL was active (everything already
+            // selected, chip stuck on ALL — found on-device July 16).
+            _selectionState.value = messages.mapTo(mutableSetOf()) { it.id }
+            _selectionScope.value = SelectionScope.MESSAGES
         }
     }
 
@@ -514,8 +539,7 @@ class ThreadViewModel @Inject constructor(
      */
     fun onAttachmentsSelected(attachments: List<MessageAttachment>) {
         if (attachments.none { it.mimeType.startsWith("video/", ignoreCase = true) }) {
-            _pendingAttachments.value = attachments
-            savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(attachments)
+            appendAttachments(attachments)
             return
         }
         viewModelScope.launch {
@@ -526,8 +550,7 @@ class ThreadViewModel @Inject constructor(
             val (accepted, rejectedCount) = partitionAttachmentsByDuration(
                 attachments, videoDurationsMs, MmsManagerWrapper.MAX_VIDEO_DURATION_MS
             )
-            _pendingAttachments.value = accepted
-            savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(accepted)
+            appendAttachments(accepted)
             if (rejectedCount > 0) {
                 val maxSec = MmsManagerWrapper.MAX_VIDEO_DURATION_MS / 1000
                 _attachmentRejectedEvent.tryEmit(
@@ -536,6 +559,23 @@ class ThreadViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /** Appends a picker batch to what's already queued — re-opening the picker used
+     *  to REPLACE the queue, so photos couldn't be added one at a time (found
+     *  on-device July 16). Deduped by uri, capped at [MAX_ATTACHMENTS] total. */
+    private fun appendAttachments(newOnes: List<MessageAttachment>) {
+        val current = _pendingAttachments.value
+        val existingUris = current.mapTo(mutableSetOf()) { it.uri }
+        val merged = current + newOnes.filter { it.uri !in existingUris }
+        val capped = merged.take(MAX_ATTACHMENTS)
+        if (merged.size > MAX_ATTACHMENTS) {
+            _attachmentRejectedEvent.tryEmit(
+                "Up to $MAX_ATTACHMENTS attachments per message — extras weren't added"
+            )
+        }
+        _pendingAttachments.value = capped
+        savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(capped)
     }
 
     /** Removes one pending attachment (user taps the × on its preview thumbnail). */
@@ -827,6 +867,10 @@ class ThreadViewModel @Inject constructor(
     companion object {
         private const val DRAFT_TEXT_KEY        = "draft_text"
         private const val DRAFT_ATTACHMENTS_KEY = "draft_attachments"
+
+        /** Max attachments per outgoing MMS — shared by the picker's maxItems and
+         *  the accumulate-across-picker-trips cap in [appendAttachments]. */
+        const val MAX_ATTACHMENTS = 5
 
         val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "🔥")
 

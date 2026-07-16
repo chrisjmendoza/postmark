@@ -2183,7 +2183,7 @@ private fun DeliveryStatusIndicator(
  *  mean far fewer full-quality photos actually fit — the aggregate size budget in
  *  MmsManagerWrapper compresses each image to its share of the cap, so five is
  *  already ambitious on stingy carriers. */
-private const val MAX_MMS_ATTACHMENTS = 5
+private const val MAX_MMS_ATTACHMENTS = ThreadViewModel.MAX_ATTACHMENTS
 
 @Composable
 private fun ReplyBar(

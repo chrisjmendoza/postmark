@@ -36,6 +36,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Custom date range selection** — "Date range" option in selection
       mode; two-field date picker bottom sheet; auto-selects all messages
       within range. Useful for exporting a full month at once.
+      **July 16 2026 fix (found on-device):** the range now REPLACES the
+      current selection and resets scope to MESSAGES — previously it added,
+      which was a silent no-op when the All chip was active.
+- [x] **Draft persistence** (July 16 2026, on-device request) — a typed
+      reply now survives leaving the chat, app restarts, and process death:
+      `DraftRepository` (own SharedPreferences file, keyed by threadId),
+      restored on thread open, saved debounced 400 ms while typing, deleted
+      on send/clear. SavedStateHandle still covers mid-screen process death.
 - [x] **Scroll-to-date fix** — first message of selected date should
       appear near top of screen, not bottom.
 - [x] **Thread view performance** — flat `ThreadListItem` render model
@@ -190,6 +198,9 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       3. ~~Resolves straight to Google Photos~~ — the system Photo Picker is its own
          selection surface; no default-gallery hijack.
       Audio keeps the `GetContent("audio/*")` flow (Photo Picker doesn't do audio).
+      **July 16 2026 fix (found on-device):** re-opening the picker now APPENDS
+      to the pending queue (deduped by uri, capped at 5 with a snackbar) instead
+      of replacing it — photos can be added one at a time.
 - [x] **Group MMS — receive/display** (July 6 2026) — a received group MMS's full
       participant roster (FROM/TO/CC rows, previously only the first was kept — see
       MMS_AUDIT §2.3) is now stored on `Thread.participants` (schema v13,
@@ -491,7 +502,10 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       timestamps are stored. (The image viewer's "View details" is a separate,
       already-shipped lightweight version — sender/timestamp/starred only, see below.)
 - [ ] **Selection mode — Copy format** — verify friendly plain text
-      output matches the designed format:
+      output matches the designed format. **July 16 2026:** media-only
+      messages now emit a placeholder line — "[Photo]", "[2 photos]",
+      "[Video]", "[Audio message]" — instead of a bare sender/timestamp
+      over a blank (`ExportFormatter.mediaPlaceholder`, 6 new tests):
         Conversation with [Name]
         [Date]
         ────────────────────────

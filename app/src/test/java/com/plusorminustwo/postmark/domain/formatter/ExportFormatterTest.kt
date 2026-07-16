@@ -1,6 +1,7 @@
 package com.plusorminustwo.postmark.domain.formatter
 
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
 import org.junit.Assert.*
 import org.junit.Test
@@ -159,6 +160,52 @@ class ExportFormatterTest {
         val result = ExportFormatter.formatForCopy(listOf(received(t1, body)), displayName, ownAddress)
         assertTrue(result.contains(body))
     }
+
+    // ── Media placeholders ────────────────────────────────────────────────────
+
+    @Test
+    fun `mediaPlaceholder is null for a plain text message`() {
+        assertEquals(null, ExportFormatter.mediaPlaceholder(received(t1, "hi")))
+    }
+
+    @Test
+    fun `mediaPlaceholder labels a single photo`() {
+        val msg = received(t1, "").copy(attachments = listOf(image()))
+        assertEquals("[Photo]", ExportFormatter.mediaPlaceholder(msg))
+    }
+
+    @Test
+    fun `mediaPlaceholder counts same-kind attachments`() {
+        val msg = received(t1, "").copy(attachments = listOf(image(), image("content://b")))
+        assertEquals("[2 photos]", ExportFormatter.mediaPlaceholder(msg))
+    }
+
+    @Test
+    fun `mediaPlaceholder describes mixed media kinds`() {
+        val msg = received(t1, "").copy(
+            attachments = listOf(image(), MessageAttachment("content://v", "video/mp4"))
+        )
+        assertEquals("[Photo, video]", ExportFormatter.mediaPlaceholder(msg))
+    }
+
+    @Test
+    fun `photo-only message copies as placeholder line, not a blank`() {
+        val msg = received(t1, "").copy(attachments = listOf(image()))
+        val result = ExportFormatter.formatForCopy(listOf(msg), displayName, ownAddress)
+        assertTrue(result.contains("[Photo]"))
+        // The sender line must be directly followed by the placeholder — no blank body line.
+        assertTrue(result.lines().none { it.isEmpty() && result.lines().indexOf(it) == 2 })
+    }
+
+    @Test
+    fun `caption and placeholder both appear for media with body text`() {
+        val msg = received(t1, "look at this").copy(attachments = listOf(image()))
+        val result = ExportFormatter.formatForCopy(listOf(msg), displayName, ownAddress)
+        assertTrue(result.contains("look at this"))
+        assertTrue(result.contains("[Photo]"))
+    }
+
+    private fun image(uri: String = "content://a") = MessageAttachment(uri, "image/jpeg")
 
     // Helpers
 
