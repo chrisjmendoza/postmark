@@ -4,6 +4,12 @@ import android.app.role.RoleManager
 import android.content.Intent
 import android.os.Build
 import android.provider.Telephony
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -34,7 +40,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -118,7 +127,11 @@ fun ConversationsScreen(
             // ── Unread filter chip row ─────────────────────────────────────────
             // Only shown when there are unread threads so the bar doesn't appear
             // in an all-read inbox where it would just be visual noise.
-            if (unreadThreadCount > 0 || showUnreadOnly) {
+            AnimatedVisibility(
+                visible = unreadThreadCount > 0 || showUnreadOnly,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -379,6 +392,10 @@ private fun ThreadRow(
 ) {
     // Controls visibility of the long-press dropdown menu.
     var menuExpanded by remember { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
+    // Pin/unpin uses View haptics directly: this Compose BOM's HapticFeedbackType
+    // only offers LongPress/TextHandleMove, neither of which fits a confirm action.
+    val view = LocalView.current
 
     Box {
         Row(
@@ -386,7 +403,10 @@ private fun ThreadRow(
                 .fillMaxWidth()
                 .combinedClickable(
                     onClick = onClick,
-                    onLongClick = { menuExpanded = true }
+                    onLongClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menuExpanded = true
+                    }
                 )
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -446,7 +466,11 @@ private fun ThreadRow(
         ) {
             DropdownMenuItem(
                 text = { Text(if (thread.isPinned) "Unpin" else "Pin") },
-                onClick = { menuExpanded = false; onTogglePin() }
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                    menuExpanded = false
+                    onTogglePin()
+                }
             )
             DropdownMenuItem(
                 text = { Text(if (thread.isMuted) "Unmute" else "Mute") },

@@ -20,14 +20,23 @@ import android.os.Build
 import android.app.role.RoleManager
 import android.provider.MediaStore
 import android.provider.Telephony
+import android.view.HapticFeedbackConstants
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -60,6 +69,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalView
@@ -108,6 +119,7 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.absoluteValue
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyRow
@@ -186,6 +198,15 @@ fun ThreadScreen(
     // Wrapped in remember(viewModel) so the same function reference is reused
     // across recompositions. Prevents child composables that accept lambdas from
     // recomposing just because ThreadScreen recomposed.
+
+    // Haptics ride inside these existing callbacks — never as new gesture detectors
+    // on bubbles (child detectors silently break the parent combinedClickable's
+    // selection/long-press; see the July 12 note). CONTEXT_CLICK goes through the
+    // View because this Compose version's HapticFeedbackType only offers
+    // LongPress/TextHandleMove.
+    val view    = LocalView.current
+    val haptics = LocalHapticFeedback.current
+
     val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
     val onDeleteMessage           = remember(viewModel) { { id: Long -> viewModel.deleteMessage(id) } }
     val onToggleStarred           = remember(viewModel) { { id: Long -> viewModel.toggleStarred(id) } }
@@ -206,8 +227,18 @@ fun ThreadScreen(
     val onReplyTextChanged        = remember(viewModel) { { text: String -> viewModel.onReplyTextChanged(text) } }
     val onSendMessage             = remember(viewModel) { { viewModel.sendMessage() } }
     val onToggleSelection         = remember(viewModel) { { id: Long -> viewModel.toggleSelection(id) } }
-    val onShowReactionPicker      = remember(viewModel) { { id: Long, y: Float -> viewModel.showReactionPicker(id, y) } }
-    val onToggleReaction          = remember(viewModel) { { id: Long, emoji: String -> viewModel.toggleReaction(id, emoji) } }
+    val onShowReactionPicker      = remember(viewModel, haptics) {
+        { id: Long, y: Float ->
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            viewModel.showReactionPicker(id, y)
+        }
+    }
+    val onToggleReaction          = remember(viewModel, view) {
+        { id: Long, emoji: String ->
+            view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            viewModel.toggleReaction(id, emoji)
+        }
+    }
     val onToggleTimestamp         = remember(viewModel) { { id: Long -> viewModel.toggleTimestamp(id) } }
     val onToggleMessageIds        = remember(viewModel) { { ids: List<Long> -> viewModel.toggleMessageIds(ids) } }
     val onRetry                   = remember(viewModel) { { id: Long -> viewModel.retrySend(id) } }
@@ -268,6 +299,24 @@ fun ThreadScreen(
         onResetFontScale = onResetFontScale
     )
 }
+
+/**
+ * Which top-bar variant is showing. [AnimatedContent] in [ThreadContent] keys on this
+ * stable discriminator — keying on uiState itself would restart the transition on
+ * every keystroke or selection tap, since a new state object arrives per emission.
+ */
+private enum class TopBarMode { ACTION, SELECTION, NORMAL }
+
+/**
+ * Non-snapshot holder retaining the last meaningful value so an [AnimatedVisibility]
+ * strip still has content while it shrink-animates out. Deliberately NOT a
+ * MutableState: writing snapshot state during composition schedules an extra
+ * recomposition of the scope on every change (the bug class fixed July 15 at the
+ * date pill). A plain field is safe here because exit-frame content is, by
+ * definition, the previous composition's value — live updates must come from a
+ * read of the real (observable) source inside the content lambda.
+ */
+private class Retained<T>(var value: T)
 
 /**
  * Stateless composable that renders the full thread UI.
@@ -654,8 +703,33 @@ private fun ThreadContent(
             // so the pill's overhanging half renders over the message list rather than
             // disappearing behind the bar.
             Box {
-            when {
-                uiState.reactionPickerMessageId != null -> MessageActionTopBar(
+            val topBarMode = when {
+                uiState.reactionPickerMessageId != null -> TopBarMode.ACTION
+                uiState.isSelectionMode                 -> TopBarMode.SELECTION
+                else                                    -> TopBarMode.NORMAL
+            }
+            // Written only while selection mode is live; read by the exiting
+            // SELECTION branch below, which AnimatedContent keeps composing after
+            // the selection state has already been cleared.
+            val exitingSelection = remember { Retained(emptySet<Long>()) }
+            if (topBarMode == TopBarMode.SELECTION) {
+                exitingSelection.value = uiState.selectedMessageIds
+            }
+            AnimatedContent(
+                targetState = topBarMode,
+                transitionSpec = {
+                    // The SizeTransform animates the selection bar's extra chip-row
+                    // height in and out instead of jumping the list; clip = false so
+                    // the taller exiting bar stays visible while it shrinks (the
+                    // topBar slot already draws over the message list).
+                    (fadeIn() + slideInVertically()) togetherWith
+                        (fadeOut() + slideOutVertically()) using
+                        SizeTransform(clip = false)
+                },
+                label = "topBarSwap"
+            ) { mode ->
+            when (mode) {
+                TopBarMode.ACTION -> MessageActionTopBar(
                     onCancel  = { onDismissReactionPicker() },
                     onCopy    = {
                         val msg = uiState.messages.find { it.id == uiState.reactionPickerMessageId }
@@ -673,14 +747,23 @@ private fun ThreadContent(
                         onDismissReactionPicker()
                     }
                 )
-                uiState.isSelectionMode -> SelectionTopBar(
-                    selectedCount = uiState.selectedMessageIds.size,
+                TopBarMode.SELECTION -> SelectionTopBar(
+                    // During the exit animation the live selection is already empty —
+                    // render the retained in-mode value so the bar doesn't flash
+                    // "0 selected" while sliding out.
+                    selectedCount = (if (topBarMode == TopBarMode.SELECTION)
+                        uiState.selectedMessageIds else exitingSelection.value).size,
                     totalMessages = uiState.messages.size,
                     scope = uiState.selectionScope,
                     onClose = { onExitSelectionMode() },
                     onScopeChange = { onSetSelectionScope(it) },
                     onShowDateRange = { showDateRangePicker = true },
                     onCopy = {
+                        // Drop taps on the exiting bar: the live selection is empty,
+                        // so copying would clobber the clipboard with an empty export
+                        // (pre-animation the bar vanished the same frame and was
+                        // untappable in this window).
+                        if (topBarMode != TopBarMode.SELECTION) return@SelectionTopBar
                         val text = ExportFormatter.formatForCopy(
                             uiState.messages.filter { it.id in uiState.selectedMessageIds },
                             uiState.thread?.let { t -> t.nickname ?: t.displayName } ?: "",
@@ -695,7 +778,7 @@ private fun ThreadContent(
                         onExitSelectionMode()
                     }
                 )
-                else -> TopAppBar(
+                TopBarMode.NORMAL -> TopAppBar(
                     title = {
                         val name = uiState.thread?.let { t -> t.nickname ?: formatPhoneNumber(t.displayName) } ?: ""
                         Row(
@@ -771,6 +854,7 @@ private fun ThreadContent(
                     }
                 )
             }
+            }
             // Half-in, half-out of the top bar: bottom-anchored to the bar, then pushed
             // down by half its own height at draw time. graphicsLayer keeps the shift
             // out of layout, so the pill never changes the measured topBar height (and
@@ -828,9 +912,14 @@ private fun ThreadContent(
                     key = { it.key },
                     contentType = { it is ThreadListItem.Bubble }
                 ) { item ->
+                    // animateItem on both item kinds: a new message (and the date header
+                    // that sometimes arrives with it) fades in and slides neighbours
+                    // apart instead of popping. Placement cost during a bulk-sync burst
+                    // of inserts needs an on-device check in a large thread.
                     when (item) {
                         is ThreadListItem.Bubble -> MessageBubble(
                             message = item.message,
+                            modifier = Modifier.animateItem(),
                             clusterPosition = item.clusterPosition,
                             isSelected = item.message.id in uiState.selectedMessageIds,
                             isSelectionMode = uiState.isSelectionMode,
@@ -865,6 +954,7 @@ private fun ThreadContent(
                         )
                         is ThreadListItem.DateHeader -> DateHeader(
                             label = item.dateLabel,
+                            modifier = Modifier.animateItem(),
                             isSelectionMode = uiState.isSelectionMode,
                             selectedCount = item.messageIds.count { it in uiState.selectedMessageIds },
                             totalCount = item.messageIds.size,
@@ -1157,12 +1247,22 @@ private fun MessageBubble(
     // Non-null only in group threads, for the first received bubble of a sender's
     // cluster — rendered as a small name label above the bubble so participants
     // are distinguishable (they otherwise all render identically to a 1:1 thread).
-    senderName: String? = null
+    senderName: String? = null,
+    modifier: Modifier = Modifier
 ) {
-    val bubbleColor = if (message.isSent)
+    val baseBubbleColor = if (message.isSent)
         MaterialTheme.colorScheme.primaryContainer
     else
         MaterialTheme.colorScheme.surfaceVariant
+    // Search-jump / "Go to chat" highlight. The ViewModel drops highlightedMessageId
+    // 2 s after the jump; animating the colour turns that hard flip into a quick
+    // tint-in and a gentle fade back to the resting bubble colour.
+    val bubbleColor by animateColorAsState(
+        targetValue = if (isHighlighted) MaterialTheme.colorScheme.tertiaryContainer
+                      else baseBubbleColor,
+        animationSpec = tween(durationMillis = if (isHighlighted) 150 else 600),
+        label = "bubbleHighlight"
+    )
 
     val alignment = if (message.isSent) Alignment.End else Alignment.Start
 
@@ -1191,7 +1291,7 @@ private fun MessageBubble(
     val thresholdPx = with(density) { 56.dp.toPx() }  // crossing this fires onSwipeToReply
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .onGloballyPositioned { coords ->
                 // Track the bottom edge of the bubble — popup is placed just below it.
@@ -1867,7 +1967,8 @@ private fun DateHeader(
     isSelectionMode: Boolean,
     selectedCount: Int,
     totalCount: Int,
-    onToggleDay: () -> Unit
+    onToggleDay: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     // Three-state icon: none / partial / all selected for this day.
     val selectionIcon = when {
@@ -1882,7 +1983,7 @@ private fun DateHeader(
         MaterialTheme.colorScheme.onSurfaceVariant
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.Center,
@@ -2145,7 +2246,11 @@ private fun ReplyBar(
                 // ── Group reply notice ───────────────────────────────────────────
                 // Group MMS sending isn't implemented — a reply here would silently
                 // go to only one participant, not the whole group. Warn instead.
-                if (isGroupThread) {
+                AnimatedVisibility(
+                    visible = isGroupThread,
+                    enter   = expandVertically() + fadeIn(),
+                    exit    = shrinkVertically() + fadeOut()
+                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2172,7 +2277,21 @@ private fun ReplyBar(
 
                 // ── Quote strip ──────────────────────────────────────────────────
                 // Shown when the user has swiped to reply to a specific message.
-                if (replyingTo != null) {
+                // The last non-null message is retained so the strip still has
+                // content to render while it shrinks out after replyingTo clears
+                // (AnimatedVisibility keeps composing its content until the exit
+                // animation finishes).
+                val lastQuoted = remember { Retained(replyingTo) }
+                if (replyingTo != null) lastQuoted.value = replyingTo
+                AnimatedVisibility(
+                    visible = replyingTo != null,
+                    enter   = expandVertically() + fadeIn(),
+                    exit    = shrinkVertically() + fadeOut()
+                ) {
+                    // Live value while visible; the retained copy only feeds the
+                    // exit frames (and the replyingTo read keeps this lambda
+                    // recomposing when the quoted message changes in place).
+                    val quoted = replyingTo ?: lastQuoted.value ?: return@AnimatedVisibility
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2190,24 +2309,24 @@ private fun ReplyBar(
                                 .height(36.dp)
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(
-                                    if (replyingTo.isSent) MaterialTheme.colorScheme.primary
+                                    if (quoted.isSent) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.tertiary
                                 )
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text  = if (replyingTo.isSent) "You" else "Them",
+                                text  = if (quoted.isSent) "You" else "Them",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (replyingTo.isSent) MaterialTheme.colorScheme.primary
+                                color = if (quoted.isSent) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.tertiary,
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                             )
                             Text(
-                                text     = replyingTo.body.ifBlank {
+                                text     = quoted.body.ifBlank {
                                     when {
-                                        replyingTo.mimeType?.startsWith("image/") == true -> "🖼️ Photo"
-                                        replyingTo.mimeType?.startsWith("video/") == true -> "🎬 Video"
-                                        replyingTo.mimeType?.startsWith("audio/") == true -> "🎵 Audio"
+                                        quoted.mimeType?.startsWith("image/") == true -> "🖼️ Photo"
+                                        quoted.mimeType?.startsWith("video/") == true -> "🎬 Video"
+                                        quoted.mimeType?.startsWith("audio/") == true -> "🎵 Audio"
                                         else -> "📎 Attachment"
                                     }
                                 },
@@ -2233,15 +2352,34 @@ private fun ReplyBar(
                 }
                 // Pending-attachment previews — one 80 dp thumbnail per attachment,
                 // each with its own × badge, scrolling horizontally when several.
-                if (pendingAttachments.isNotEmpty()) {
+                // Last non-empty list retained for the shrink-out, like the quote
+                // strip above.
+                val lastAttachments = remember { Retained(pendingAttachments) }
+                if (pendingAttachments.isNotEmpty()) lastAttachments.value = pendingAttachments
+                AnimatedVisibility(
+                    visible = pendingAttachments.isNotEmpty(),
+                    enter   = expandVertically() + fadeIn(),
+                    exit    = shrinkVertically() + fadeOut()
+                ) {
+                    val shown =
+                        if (pendingAttachments.isNotEmpty()) pendingAttachments
+                        else lastAttachments.value
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.padding(bottom = 6.dp)
                     ) {
-                        lazyRowItemsIndexed(pendingAttachments) { index, attachment ->
+                        lazyRowItemsIndexed(shown) { index, attachment ->
                             PendingAttachmentPreview(
                                 attachment = attachment,
-                                onRemove   = { onRemoveAttachment(index) }
+                                onRemove   = {
+                                    // During exit the strip renders the retained stale
+                                    // list; only forward the removal while the tapped
+                                    // thumbnail still matches the live list, so a ×
+                                    // tap can never remove a different attachment.
+                                    if (pendingAttachments.getOrNull(index)?.uri == attachment.uri) {
+                                        onRemoveAttachment(index)
+                                    }
+                                }
                             )
                         }
                     }
@@ -2748,7 +2886,22 @@ private fun FullScreenImageViewer(
                 contentPadding = PaddingValues(horizontal = 28.dp),
                 pageSpacing = 10.dp
             ) { page ->
-                ZoomableImage(uri = images[page].uri)
+                ZoomableImage(
+                    uri = images[page].uri,
+                    // Depth cue on the peeking pages: slightly smaller and dimmer,
+                    // easing to full size/opacity as they settle. Lambda graphicsLayer
+                    // keeps the per-scroll-frame offset read in the draw phase — the
+                    // parameter overload would recompose every page on every scrolled
+                    // frame (same principle as the pinch-zoom layer inside).
+                    modifier = Modifier.graphicsLayer {
+                        val distance = pagerState.getOffsetDistanceInPages(page)
+                            .absoluteValue.coerceIn(0f, 1f)
+                        val scale = 1f - 0.08f * distance
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = 1f - 0.4f * distance
+                    }
+                )
             }
 
             // Top bar: close, sender + friendly timestamp, download/delete/overflow.
@@ -3157,7 +3310,7 @@ private fun formatFileSize(bytes: Long): String? {
 /** One page of [FullScreenImageViewer]: a Coil image with pinch-to-zoom and pan.
  *  Zoom state is per-page, so paging to another image resets to 1×. */
 @Composable
-private fun ZoomableImage(uri: String) {
+private fun ZoomableImage(uri: String, modifier: Modifier = Modifier) {
     // Zoom and pan state — tracked as mutable floats so graphicsLayer can read them
     // without triggering a full recomposition on every gesture frame.
     var scale   by remember(uri) { mutableStateOf(1f) }
@@ -3177,7 +3330,7 @@ private fun ZoomableImage(uri: String) {
         model = imageRequest,
         contentDescription = "Full-screen photo",
         contentScale = ContentScale.Fit,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             // Consume tap on the image itself so it doesn't fall through to the scrim.
             .clickable { /* absorb — don't dismiss when tapping the image */ }
