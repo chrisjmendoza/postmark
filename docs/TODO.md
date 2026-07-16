@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: July 6, 2026
+Last updated: July 16, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -7,10 +7,13 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ## 🔴 TIER 1 — Core Loop (app unusable as daily driver without these)
 
 ### Thread view — finish the experience
-- [x] **Reaction chip position** — chips moved to Column sibling of the
-      bubble Box; `offset(y=(-12).dp)` badges the bubble bottom edge;
-      `align(Start/End)` for sent/received; timestamp offset removed so
-      it follows naturally in the Column flow. iMessage-style badge look.
+- [x] **Reaction chip position** (reworked July 16 2026) — pills are a layout
+      child of the bubble Column with a custom `layout` modifier reporting
+      only their bottom half: they straddle the bubble's bottom-end corner
+      (Google Messages look, same half-out treatment as the top-bar date
+      pill) and the overhang space is reserved, so the timestamp and next
+      message are pushed down instead of collided with. Replaces two earlier
+      offset-badge attempts that painted outside layout and collided.
 - [x] **Reaction pill overflow** — FlowRow replaces Row in `ReactionPills`;
       bubble width captured via `onSizeChanged` constrains pills so they
       wrap to a second line instead of overflowing on short messages.
@@ -406,17 +409,16 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 ### Thread view — deeper polish
 - [x] **Muted thread visual indicator** — `NotificationsOff` icon (14 dp)
       shown in `ConversationsScreen` thread rows when `isMuted = true`.
-- [x] **Reaction chip cluster-aware spacing** — Spacer(12.dp) only
-      added at BOTTOM/SINGLE cluster positions; TOP/MIDDLE use natural
-      inter-bubble gap.
+- [x] **Reaction chip cluster-aware spacing** — superseded July 16 2026:
+      the corner-straddle layout reserves the pill overhang at every
+      cluster position; the compensation Spacer is deleted.
 - [x] **Reaction chip theming** — ReactionPills uses
       MaterialTheme.colorScheme.primaryContainer / surfaceContainer /
       primary / outlineVariant; no hardcoded hex values.
-- [ ] **Reaction chip overflow handling** — short messages (e.g. "Yes")
-      with 3+ reactions can produce a pill row wider than the bubble.
-      For sent messages use a negative horizontal offset from
-      `Alignment.BottomStart` so pills extend leftward past the bubble
-      edge rather than overflowing right.
+- [x] **Reaction chip overflow handling** (July 16 2026) — pills are
+      End-anchored in the bubble Column: a row wider than a short bubble
+      grows leftward past the bubble edge, and FlowRow wraps at the
+      280 dp bubble max width instead of overflowing right.
 - [ ] **Haptic feedback on reaction toggle** — fire
       `HapticFeedbackType.LongPress` when a reaction pill is tapped
       to add tactile confirmation and make the interaction feel

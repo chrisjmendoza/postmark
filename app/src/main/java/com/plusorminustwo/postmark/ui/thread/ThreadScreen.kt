@@ -118,6 +118,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
@@ -1276,11 +1277,19 @@ private fun MessageBubble(
                 )
             }
             // Bubble content — translated right during swipe, springs back on release.
-            Box(
+            // A Column rather than a Box overlay so the reaction pills take part in
+            // layout: they report only their bottom half (see straddle modifier below),
+            // so the space they hang into below the bubble is reserved and the
+            // timestamp row / next message are pushed down instead of collided with.
+            // End-aligned because the pills anchor to the bubble's bottom-end corner
+            // for both sent and received; a pill row wider than a short bubble grows
+            // leftward past its edge instead of pushing the bubble around.
+            Column(
                 modifier = Modifier
                     .widthIn(max = 280.dp)
                     .align(if (message.isSent) Alignment.CenterEnd else Alignment.CenterStart)
-                    .graphicsLayer { translationX = swipeOffset.value }
+                    .graphicsLayer { translationX = swipeOffset.value },
+                horizontalAlignment = Alignment.End
             ) {
             Box(
                 modifier = Modifier
@@ -1376,23 +1385,27 @@ private fun MessageBubble(
                 }
             }
             if (message.reactions.isNotEmpty()) {
-                // Google Messages-style badge: always the bubble's own bottom-right
-                // corner, whether the bubble is sent or received. y=16 drops the pill
-                // below the bubble edge so it reads as hanging off the corner rather
-                // than overlapping it (kept in step with the tail Spacer below, which
-                // reserves overhang + 2dp so the badge never touches the next message).
-                // Unconstrained in width so a pill row wider than a short bubble grows
-                // leftward past its edge instead of wrapping into a stack of pills.
+                // Google Messages-style badge straddling the bubble's bottom-end corner,
+                // half in / half out — same treatment as the date pill on the top bar.
                 ReactionPills(
                     reactions = message.reactions,
-                    isSent = message.isSent,
                     onReactionClick = onReactionClick,
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = 6.dp, y = 16.dp)
+                        // Straddle: report only the bottom half of the pills to the
+                        // Column and draw the top half over the bubble's corner. The
+                        // overhang is the measured pill height, so font scale and pill
+                        // wrapping are handled without a hardcoded compensation spacer.
+                        .layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints)
+                            val overhang = placeable.height / 2
+                            layout(placeable.width, placeable.height - overhang) {
+                                placeable.place(0, -overhang)
+                            }
+                        }
+                        .offset(x = 6.dp)  // nudge past the corner horizontally
                 )
             }
-        }  // end Box(widthIn+align)
+        }  // end Column(widthIn+align)
         }  // end Box(fillMaxWidth) swipe wrapper
         if (showTimestamp || message.isSent) {
             Row(
@@ -1429,9 +1442,6 @@ private fun MessageBubble(
                     )
                 }
             }
-        }
-        if (message.reactions.isNotEmpty() && (clusterPosition == ClusterPosition.BOTTOM || clusterPosition == ClusterPosition.SINGLE)) {
-            Spacer(Modifier.height(18.dp))
         }
     }
 }
@@ -3485,18 +3495,15 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
  * Chips the local user has added (senderAddress == [SELF_ADDRESS]) use a highlighted style.
  *
  * Uses [FlowRow] so that chips wrap to a second line instead of overflowing the bubble width.
- * The caller constrains [modifier] with `widthIn(max = bubbleWidth)` to enforce the boundary.
  *
  * @param reactions      Full list of [Reaction] objects on the message.
- * @param isSent         Affects alignment — sent bubbles pin chips to the start edge, received to end.
  * @param onReactionClick  Called with the emoji string when a chip is tapped (toggles the reaction).
- * @param modifier       Receives the `widthIn` + alignment constraints from [MessageBubble].
+ * @param modifier       Receives the corner-straddle placement from [MessageBubble].
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReactionPills(
     reactions: List<Reaction>,
-    isSent: Boolean,
     onReactionClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {

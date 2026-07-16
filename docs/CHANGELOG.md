@@ -4,6 +4,22 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-16 (ui) — reaction pills straddle the bubble corner; collisions eliminated
+
+Emoji reaction pills were colliding with message text, timestamps, and the next message
+(on-device screenshots). Root cause: the pills were a Box overlay (`offset(y = 16.dp)`)
+that painted below the bubble without reserving layout space, patched by a hardcoded
+`Spacer(18.dp)` that only existed at BOTTOM/SINGLE cluster positions — and sat below
+the timestamp row, so the timestamp always collided. Now the bubble wrapper is a Column
+and the pills are a real layout child: a custom `layout` modifier reports only the
+pills' bottom half, so the top half straddles the bubble's bottom-end corner (the same
+half-in/half-out treatment as the top-bar date pill) and everything below — timestamp,
+delivery status, next message — is pushed down by exactly the measured overhang.
+Correct at any font scale and for wrapped pill rows, with no hardcoded compensation.
+Deleted the Spacer hack and the dead `isSent` parameter on `ReactionPills`.
+
+---
+
 ## 2026-07-15 (stats) — heatmap: tap = single day, long-press = multi-select + date ranges
 
 Heatmap day taps previously accumulated a multi-day selection; now a tap selects just
