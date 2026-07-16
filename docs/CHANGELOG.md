@@ -4,6 +4,89 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-16 (thread) — four fixes from on-device testing
+
+All four found by the owner on the first staging build. **Date range selection**
+now *replaces* the selection and resets the scope chip to MESSAGES — it previously
+added to the current selection, a silent no-op with the All chip active (everything
+was already selected, so picking a week appeared to do nothing). **Copy** now emits
+`[Photo]` / `[2 photos]` / `[Video]` / `[Audio message]` placeholder lines for
+media-only messages instead of a bare sender/timestamp over a blank — implemented as
+the default `attachmentNote` in `ExportFormatter` (the readable export keeps its
+richer per-file note), 6 new tests. **The attachment picker appends** across trips
+(deduped by URI, capped at 5 with a snackbar) instead of replacing the queue, so
+photos can be added one at a time. **Drafts persist**: a typed reply survives leaving
+the chat, app restarts, and process death via a new `DraftRepository` (own
+SharedPreferences file keyed by threadId, same debounced-write pattern as the font
+scale); restored on open, deleted on send. Also new: long-press a conversation row →
+**Mark as read** (shown only when the thread has unread messages).
+
+---
+
+## 2026-07-16 (stats) — debounced single-pass stats pipeline
+
+Performance-analysis Tier 1 #5 (near-term form). The Stats screen observed the full
+messages table and re-materialized all ~160k rows on *every* invalidation while open
+— during a sync burst, once per write — then two independent combines each re-walked
+the result. Now: both full-table sources debounce 1 s (first emission untouched, so
+the screen isn't blank on open), and global + per-thread stats compute in one shared
+Default-dispatched pass (`statsPayload`) that both consumers map from.
+`flowOn(Default)` added to responseBuckets/heatmapData/selectedDayMessages;
+`heatmapByDayOfWeek` deliberately stays on the collector context (formatter-free
+single pass over one month; its tests collect synchronously). Every stats-path
+`SimpleDateFormat` replaced with `java.time` — day labels are `LocalDate.toString()`,
+the selected-day filter compares `LocalDate` directly. Long-term SQL aggregation
+stays open pending on-staging profiling.
+
+---
+
+## 2026-07-16 (perf) — render pipeline off Main; Sonnet batch; Tier 3 polish
+
+The big one: **performance-analysis Tier 1 #2**, the staged re-attempt of July 12's
+reverted `flowOn`. Render-state building (clustering, date formatting, image
+indexing) plus the repository's reactions-join now run on `Dispatchers.Default` in a
+dedicated `renderPayload` flow that re-fires only on real message-list changes
+(`distinctUntilChanged` — Room invalidation is table-granular, so writes to *other*
+threads used to re-trigger the O(n) rebuild); the uiState combine stays on Main so
+selection taps apply synchronously. Selection verified on device. Alongside it, the
+"Sonnet batch": contact photo *and* name lookups cached process-wide (`ContactCaches`
+— one home, "" negative sentinel, failures never cached, one ContentObserver evicting
+both on contact edits), RestoreWorker batched into 500-row transactions with lazy
+per-thread reaction dedup, FTS4 `optimize` after import/restore, the 60 s catch-up
+poll gated to app-foreground *and* firing immediately on entry, JankStats (janky
+frames log with the current route) + debug StrictMode. Tier 3 polish: bubbles/date
+headers `animateItem()`, top bars swap via AnimatedContent (exiting selection bar
+renders a retained count and drops Copy taps — live state clears the moment exit
+starts), ReplyBar strips animate via AnimatedVisibility with non-snapshot retention
+(the MutableState version recomposed twice per change), the search-jump highlight
+finally renders (its `isHighlighted` wiring had been dead since introduction; now a
+tertiary tint with animated decay), pager pages scale/dim at draw phase, haptics on
+reaction toggle / long-press / pin. Everything passed an 8-angle adversarial code
+review before landing; the review's confirmed findings (permission-failure cache
+pinning, poll-timer regression, missing distinctUntilChanged, clipboard-clobbering
+exit-window Copy, a dead UTC-bucketed DAO method) were fixed pre-commit.
+
+---
+
+## 2026-07-16 (build) — testers now get minified staging builds
+
+The single largest smoothness lever in the audit: every build anyone had ever run
+was a debuggable debug APK (debug Compose runs 2–5× slower per frame). New `staging`
+build type — `initWith(release)`, minified + resource-shrunk, signed with the shared
+debug keystore so update-installs keep working — and CI ships `assembleStaging` to
+Firebase, archiving each build's R8 `mapping.txt` as a workflow artifact (staging
+crash traces are obfuscated). R8 hygiene with it: blanket `-keep` rules on entities/
+domain models deleted (KSP-generated Room + hand-written JSON codecs — zero
+reflection in main sources), `android.r8.optimizedResourceShrinking=false` removed
+(a bulk AGP-9-upgrade flag, not a real breakage). 28 MB APK vs 50 MB debug.
+Notable diagnosis along the way: the first "staging" install that felt dramatically
+smoother was actually Android Studio's *profileable* transform of the debug variant
+(`dumpsys` can't tell them apart — no DEBUGGABLE flag either way; the pulled APK's
+dex layout settled it), which means killing the debuggable flag alone is a massive
+win before R8 even enters. Gradle wrapper 9.4.1 → 9.6.1 in the same batch.
+
+---
+
 ## 2026-07-16 (ui) — reaction pills straddle the bubble corner; collisions eliminated
 
 Emoji reaction pills were colliding with message text, timestamps, and the next message
