@@ -231,6 +231,7 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
     override suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? = null
     override suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? = null
+    override suspend fun getOptimisticSentMms(threadId: Long): List<MessageEntity> = emptyList()
     override suspend fun deleteAll() = Unit
     override suspend fun getAll(): List<MessageEntity> = rows.values.toList()
     override suspend fun getMaxId(): Long? = null

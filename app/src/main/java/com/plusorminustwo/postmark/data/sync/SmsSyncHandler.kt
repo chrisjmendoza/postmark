@@ -382,87 +382,98 @@ class SmsSyncHandler @Inject constructor(
             val latest = msgs.last()
 
             /*
-             * Transfer delivery status from the optimistic row to the just-inserted real row.
-             * We transfer PENDING too (not just SENT/FAILED) so the real row keeps showing
-             * a delivery indicator during the window between sync replacing the optimistic row
-             * and MmsSentReceiver updating the real row with the final MMSC result.
-             * Race scenario A: MmsSentReceiver fired and marked the temp row FAILED/SENT
-             * before this sync ran → transfer that terminal status immediately.
-             * Race scenario B: MmsSentReceiver hasn't fired yet → transfer PENDING so the
-             * UI keeps showing the clock indicator instead of a blank.
+             * Match each just-imported real SENT row to at most one optimistic temp row, then
+             * hand off status + attachments to it and delete that temp row. persistSentMms
+             * (MmsSentReceiver) wrote the provider row with the optimistic row's own send time
+             * and body, so the match is exact; pickOptimisticMatch's window only tolerates
+             * second-truncation and provider clock oddities. Rows that don't plausibly
+             * correspond are left untouched — the old code grafted the newest optimistic row's
+             * media onto the newest real row unconditionally and then blanket-deleted EVERY
+             * optimistic MMS row in the thread, which let an unrelated RCS-archival text absorb
+             * a memo's attachments and destroyed the correctly-timed optimistic bubble.
              */
-            // isMms = true: a newer optimistic SMS row in the same thread must not shadow
-            // the MMS temp row this status/attachment transfer is meant to read.
-            val optStatus = messageRepository.getOptimisticSentDeliveryStatus(threadId, isMms = true)
-            if (optStatus != null && optStatus != DELIVERY_STATUS_NONE) {
-                val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
-                if (sentMsg != null) {
-                    messageRepository.updateDeliveryStatus(sentMsg.id, optStatus)
-                    val statusName = when (optStatus) {
-                        DELIVERY_STATUS_SENT    -> "SENT"
-                        DELIVERY_STATUS_FAILED  -> "FAILED"
-                        DELIVERY_STATUS_PENDING -> "PENDING"
-                        else                    -> "status=$optStatus"
-                    }
-                    syncLogger.log("IncrementalMms", "transferred $statusName status to real row id=${sentMsg.id} threadId=$threadId")
-                }
-            }
+            val realSent = msgs.filter { it.isSent }.sortedBy { it.timestamp }
+            if (realSent.isNotEmpty()) {
+                val candidates = messageRepository.getOptimisticSentMms(threadId)
+                val consumed = mutableSetOf<Long>()
+                for (real in realSent) {
+                    val matchId = pickOptimisticMatch(
+                        real.body, real.timestamp,
+                        candidates.filter { it.id !in consumed }
+                            .map { OptimisticCandidate(it.id, it.body, it.timestamp) }
+                    ) ?: continue
+                    consumed += matchId
+                    val opt = candidates.first { it.id == matchId }
 
-            /*
-             * Transfer the attachments from the locally-cached compressed media to the
-             * real row. Samsung's content://mms/part/ data for SENT rows is typically empty,
-             * so we use our own filesDir cache to keep the media visible after the real row
-             * replaces the optimistic one.
-             *
-             * Strategy: read the optimistic row (id = tempId), then for each attachment
-             * index look for the cache file (mms_attach_<tempId>*.bin — written by
-             * MmsManagerWrapper BEFORE sendMultimediaMessage(), so guaranteed to exist by
-             * the time the observer fires) and build a stable FileProvider URI. Falls back
-             * per-attachment to the URI already stored on the optimistic row. Reading the
-             * row's own attachment list is immune to the race where ThreadViewModel hasn't
-             * yet re-pinned the stored URIs (it does so after sendMms() returns, but the
-             * ContentObserver may fire before that DB update completes).
-             */
-            val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
-            if (sentMsg != null) {
-                val optId = messageRepository.getOptimisticSentId(threadId, isMms = true)
-                val optAttachments = optId?.let { messageRepository.getById(it)?.attachments }.orEmpty()
-                if (optAttachments.isNotEmpty() && optId != null) {
-                    val transferred = optAttachments.mapIndexed { index, att ->
-                        val cacheFile = MmsManagerWrapper.attachmentCacheFile(context, optId, index)
-                        if (cacheFile.exists()) {
-                            try {
-                                // Build a FileProvider URI so Coil can load it within the app process.
-                                val uri = FileProvider.getUriForFile(
-                                    context, "${context.packageName}.fileprovider", cacheFile
-                                ).toString()
-                                MessageAttachment(uri, att.mimeType)
-                            } catch (_: Exception) {
-                                att // FileProvider lookup failed — keep the DB-stored URI.
-                            }
-                        } else {
-                            att // Cache file not found — keep whatever URI is stored on the row.
+                    /*
+                     * Transfer delivery status. We transfer PENDING too (not just SENT/FAILED)
+                     * so the real row keeps a delivery indicator during the window between sync
+                     * replacing the optimistic row and MmsSentReceiver posting the final result.
+                     * Race A: MmsSentReceiver already marked the temp row FAILED/SENT → transfer
+                     * that terminal status. Race B: it hasn't fired yet → transfer PENDING so the
+                     * UI keeps the clock indicator instead of a blank.
+                     */
+                    if (opt.deliveryStatus != DELIVERY_STATUS_NONE) {
+                        messageRepository.updateDeliveryStatus(real.id, opt.deliveryStatus)
+                        val statusName = when (opt.deliveryStatus) {
+                            DELIVERY_STATUS_SENT    -> "SENT"
+                            DELIVERY_STATUS_FAILED  -> "FAILED"
+                            DELIVERY_STATUS_PENDING -> "PENDING"
+                            else                    -> "status=${opt.deliveryStatus}"
                         }
+                        syncLogger.log("IncrementalMms", "transferred $statusName status to real row id=${real.id} threadId=$threadId")
                     }
-                    messageRepository.updateAttachments(sentMsg.id, transferred)
-                    syncLogger.log("IncrementalMms", "transferred ${transferred.size} attachment(s) to real row id=${sentMsg.id}")
+
+                    /*
+                     * Transfer the attachments from the locally-cached compressed media to the
+                     * real row. Samsung's content://mms/part/ data for SENT rows is typically
+                     * empty, so we use our own filesDir cache (mms_attach_<tempId>*.bin, written
+                     * by MmsManagerWrapper BEFORE dispatch) to keep the media visible after the
+                     * real row replaces the optimistic one. Falls back per-attachment to the URI
+                     * already stored on the optimistic row.
+                     */
+                    val optId = opt.id
+                    val optAttachments = opt.attachments
+                    if (optAttachments.isNotEmpty()) {
+                        val transferred = optAttachments.mapIndexed { index, att ->
+                            val cacheFile = MmsManagerWrapper.attachmentCacheFile(context, optId, index)
+                            if (cacheFile.exists()) {
+                                try {
+                                    // Build a FileProvider URI so Coil can load it within the app process.
+                                    val uri = FileProvider.getUriForFile(
+                                        context, "${context.packageName}.fileprovider", cacheFile
+                                    ).toString()
+                                    MessageAttachment(uri, att.mimeType)
+                                } catch (_: Exception) {
+                                    att // FileProvider lookup failed — keep the DB-stored URI.
+                                }
+                            } else {
+                                att // Cache file not found — keep whatever URI is stored on the row.
+                            }
+                        }
+                        messageRepository.updateAttachments(real.id, transferred)
+                        syncLogger.log("IncrementalMms", "transferred ${transferred.size} attachment(s) to real row id=${real.id}")
+                    }
+
+                    // Targeted delete of the matched temp row — replaces the old blanket
+                    // deleteOptimisticMessages(threadId, isMms = true). Unmatched optimistic
+                    // rows (e.g. a send whose provider persist failed) survive by design: a
+                    // correctly-timed bubble with SENT/FAILED status beats a vanished one.
+                    messageRepository.deleteById(opt.id)
                 }
             }
 
-            // isMms = true: only clear optimistic MMS rows — a pending optimistic SMS
-            // row belongs to syncLatestSms() and must survive this cleanup.
-            messageRepository.deleteOptimisticMessages(threadId, isMms = true)
             threadRepository.updateLastMessageAt(threadId, latest.timestamp)
             // Use emoji label for media-only MMS in the thread preview.
-            val preview = latest.previewText
-            threadRepository.updateLastMessagePreview(threadId, preview)
+            threadRepository.updateLastMessagePreview(threadId, latest.previewText)
         }
 
-        // Clean up optimistic MMS rows for threads that only received MMS reaction fallbacks.
-        val normalThreadIds = normalMessages.map { it.threadId }.toSet()
-        reactionMsgs.map { it.threadId }.distinct()
-            .filter { it !in normalThreadIds }
-            .forEach { messageRepository.deleteOptimisticMessages(it, isMms = true) }
+        /* NOTE: optimistic MMS rows are deliberately NOT cleaned up for reaction-only
+         * threads. A reaction fallback is never the real counterpart of a Postmark send
+         * (our own reactions are local annotations, never transmitted), so deleting here
+         * could only ever destroy a still-in-flight send's temp row — racing
+         * MmsSentReceiver into skipping the provider persist and losing the message.
+         * Temp rows are removed solely by the matched hand-off above. */
 
         /* Resolve MMS reaction fallback messages into Reaction entities (deduped).
          * Mirrors the same logic used in syncLatestSms(). If the original message

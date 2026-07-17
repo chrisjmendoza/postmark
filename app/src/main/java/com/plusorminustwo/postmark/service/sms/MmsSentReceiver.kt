@@ -2,25 +2,19 @@ package com.plusorminustwo.postmark.service.sms
 
 import android.app.Activity
 import android.content.BroadcastReceiver
-import android.content.ContentUris
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.provider.Telephony
 import android.telephony.SmsManager
 import android.util.Log
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.sync.SyncLogger
-import com.plusorminustwo.postmark.domain.logging.redactPhone
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -30,27 +24,32 @@ import javax.inject.Inject
  *
  * Updates the Room delivery status to SENT (2) on success or FAILED (4) on error.
  *
- * Two Room rows are updated to handle a race with [SmsSyncHandler.syncLatestMms]:
- *  1. The temp negative-ID optimistic row (in case sync hasn't run yet).
- *  2. The real Room row derived from the content://mms/_id (in case sync already
- *     replaced the temp row before this receiver fired).
+ * On success it also persists the sent MMS into content://mms via
+ * [MmsManagerWrapper.persistSentMms]. Postmark is the default SMS app, and Android only
+ * auto-persists sent MMS for NON-default apps — so nothing writes the provider row unless
+ * we do. Persisting it makes the send visible to other readers (Google Messages, Phone
+ * Link) and gives [com.plusorminustwo.postmark.data.sync.SmsSyncHandler.syncLatestMms] a
+ * real row, dated at the actual send time, to import and reconcile against the optimistic
+ * Room row. A direct status update on the derived real Room id (MMS_ID_OFFSET + rawId)
+ * closes the race where sync imports that freshly-persisted row before this receiver
+ * finishes.
  *
- * The real MMS row is found by querying content://mms/sent for rows whose date
- * falls within 2 minutes of when the optimistic message was created, using
- * [EXTRA_SENT_AT_MS] to reconstruct the send timestamp.
+ * (Replaces the earlier "search content://mms for a system-persisted row" loop, which
+ * looked for a row that never exists for a default app and could latch onto an unrelated
+ * RCS-archival row Google writes in the same id window.)
  */
 @AndroidEntryPoint
 class MmsSentReceiver : BroadcastReceiver() {
 
     @Inject lateinit var messageRepository: MessageRepository
+    @Inject lateinit var mmsManagerWrapper: MmsManagerWrapper
     @Inject lateinit var syncLogger: SyncLogger
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_MMS_SENT) return
-        val messageId       = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
-        val sentAtMs        = intent.getLongExtra(EXTRA_SENT_AT_MS, -1L)
-        val beforeSendMaxId = intent.getLongExtra(EXTRA_BEFORE_SEND_MAX_ID, -1L)
-        val toAddress       = intent.getStringExtra(EXTRA_TO_ADDRESS)
+        val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
+        val sentAtMs  = intent.getLongExtra(EXTRA_SENT_AT_MS, -1L)
+        val toAddress = intent.getStringExtra(EXTRA_TO_ADDRESS)
         if (messageId == -1L) return
 
         val status = if (resultCode == Activity.RESULT_OK) DELIVERY_STATUS_SENT else DELIVERY_STATUS_FAILED
@@ -80,76 +79,39 @@ class MmsSentReceiver : BroadcastReceiver() {
                 // ── 1. Update the optimistic temp row (may already be deleted by sync) ──
                 messageRepository.updateDeliveryStatus(messageId, status)
 
-                // ── 2. Find and update the real content-provider MMS row ──────────────
-                // Sync may have already replaced the temp row with the real row
-                // (id = MMS_ID_OFFSET + rawMmsId). We find it by querying the raw
-                // content://mms table (NOT the /sent view) filtered by msg_box IN (2=sent,
-                // 4=outbox) and a date window. The raw table is written by the system MMS
-                // service before the /sent view is updated, so this is more reliable.
-                // We retry up to 4 times with 3 s gaps in case the row hasn't been
-                // written yet; on persistent failure SmsSyncHandler will pick it up.
-                /* Find the real content://mms row and update its delivery status.
-                 * Primary strategy: query _id > beforeSendMaxId (passed in from ThreadViewModel
-                 * right before the send). This is immune to the date-field format ambiguity
-                 * (some devices store date in seconds, others in milliseconds).
-                 * Fallback: date window based on sentAtMs for older PendingIntents. */
-                val useIdQuery = beforeSendMaxId >= 0L
-
-                var updatedCount = 0
-                var attempt      = 0
-                while (updatedCount == 0 && attempt < 4) {
-                    if (attempt > 0) delay(3_000)
-                    attempt++
-
-                    val cursor = if (useIdQuery) {
-                        // Reliable: find any sent/outbox row written after the snapshot taken
-                        // immediately before sendMultimediaMessage was called.
-                        context.contentResolver.query(
-                            Uri.parse("content://mms"),
-                            arrayOf("_id", "thread_id"),
-                            "_id > ? AND (msg_box = 2 OR msg_box = 4)",
-                            arrayOf(beforeSendMaxId.toString()),
-                            "_id ASC"
-                        )
-                    } else {
-                        // Legacy fallback for PendingIntents created before EXTRA_BEFORE_SEND_MAX_ID.
-                        // Stock Android stores date in seconds; Samsung OEM ROMs store milliseconds.
-                        // The two numeric ranges are ~1000× apart so a single OR query safely covers both.
-                        val sentAtSec = sentAtMs / 1000L
-                        context.contentResolver.query(
-                            Uri.parse("content://mms"),
-                            arrayOf("_id", "thread_id"),
-                            "((date >= ? AND date <= ?) OR (date >= ? AND date <= ?)) AND (msg_box = 2 OR msg_box = 4)",
-                            arrayOf(
-                                (sentAtSec - 30L).toString(), (sentAtSec + 120L).toString(),       // seconds (AOSP)
-                                (sentAtMs  - 30_000L).toString(), (sentAtMs + 120_000L).toString() // ms (Samsung)
-                            ),
-                            "_id DESC"
-                        )
-                    }
-
-                    cursor?.use { c ->
-                        if (c.moveToFirst()) {
-                            val rawId       = c.getLong(0)
-                            val rowThreadId = c.getLong(1)
-                            val roomId      = MMS_ID_OFFSET + rawId
-                            messageRepository.updateDeliveryStatus(roomId, status)
-                            updatedCount++
-                            syncLogger.log(TAG, "MmsSentReceiver: updated real MMS row to $statusLabel (attempt $attempt, rawId=$rawId)")
-                            repairThreadIdIfWrong(context, rawId, rowThreadId, toAddress)
+                // ── 2. On success, persist the sent MMS into content://mms ourselves ───
+                // (as the default SMS app, nothing else writes the provider row). On FAILED
+                // there is nothing to persist — retrySend re-dispatches and a later success
+                // persists then.
+                if (status == DELIVERY_STATUS_SENT) {
+                    val optimistic = messageRepository.getById(messageId)
+                    when {
+                        optimistic == null ->
+                            // Already replaced/deleted; nothing recoverable (do NOT reconstruct from extras).
+                            syncLogger.logError(TAG, "MmsSentReceiver: optimistic row messageId=$messageId already gone — cannot persist sent MMS")
+                        toAddress.isNullOrEmpty() ->
+                            syncLogger.logError(TAG, "MmsSentReceiver: missing toAddress — cannot persist sent MMS for messageId=$messageId")
+                        else -> {
+                            val rawId = mmsManagerWrapper.persistSentMms(
+                                toAddress   = toAddress,
+                                textBody    = optimistic.body,
+                                attachments = optimistic.attachments,
+                                messageId   = messageId,
+                                sentAtMs    = sentAtMs
+                            )
+                            // Closes the race where sync imports the persisted row (transferring
+                            // a stale PENDING) before this receiver finishes; updating a not-yet-
+                            // imported Room id is a harmless no-op.
+                            rawId?.let { messageRepository.updateDeliveryStatus(MMS_ID_OFFSET + it, status) }
                         }
-                    } ?: syncLogger.log(TAG, "MmsSentReceiver: content://mms cursor was null (attempt $attempt)")
-                }
-
-                if (updatedCount == 0) {
-                    syncLogger.log(TAG, "MmsSentReceiver: no real MMS rows found after $attempt attempts — SmsSyncHandler will transfer status on next sync")
+                    }
                 }
             } finally {
                 // Delete the temp PDU file now that the platform has reported a result.
                 // Doing this here (rather than on a 60 s timer in MmsManagerWrapper) ensures
                 // the file is available for the full duration of any carrier retry / APN
                 // bring-up, which can exceed 60 s on Samsung.
-                // mms_attach_$messageId.bin is intentionally left in place \u2014 SmsSyncHandler
+                // mms_attach_$messageId.bin is intentionally left in place — SmsSyncHandler
                 // uses it as the attachmentUri for the real Room row so the image stays
                 // visible after the optimistic row is replaced.
                 try { java.io.File(context.cacheDir, "mms_out_$messageId.pdu").delete() } catch (_: Exception) {}
@@ -158,69 +120,15 @@ class MmsSentReceiver : BroadcastReceiver() {
         }
     }
 
-    /**
-     * Verifies the platform-assigned `thread_id` on the sent MMS row and repairs it
-     * if wrong. Postmark never inserts into content://mms itself — the system MMS
-     * service persists the row (via [SmsManager.sendMultimediaMessage]) and assigns
-     * whatever thread_id it derives. If that assignment is wrong, stale, or zero,
-     * the sent MMS is orphaned from its conversation for EVERY reader of the shared
-     * provider (Postmark's thread view groups by this id, and so do companion apps
-     * like Windows Phone Link). SMS sends already get this protection via the
-     * explicit THREAD_ID written in [SmsManagerWrapper]; this is the MMS equivalent,
-     * applied at the one point where we have both the real row and the recipient.
-     *
-     * Repairs both the provider row (fixes external readers and any future sync)
-     * and the Room copy (fixes a row incremental sync may already have imported
-     * under the wrong thread — Room thread ids ARE the system thread ids).
-     */
-    private suspend fun repairThreadIdIfWrong(
-        context: Context,
-        rawId: Long,
-        rowThreadId: Long,
-        toAddress: String?
-    ) {
-        if (toAddress.isNullOrEmpty()) return
-        // Same canonical-thread lookup SmsManagerWrapper uses for SMS; some OEMs
-        // throw on malformed addresses, so guard like SmsReceiver does.
-        val expectedThreadId = try {
-            Telephony.Threads.getOrCreateThreadId(context, toAddress)
-        } catch (e: Exception) {
-            syncLogger.logError(TAG, "getOrCreateThreadId failed for toAddress=${toAddress.redactPhone()} — cannot verify thread_id on rawId=$rawId", e)
-            return
-        }
-        if (!mmsThreadIdNeedsRepair(rowThreadId, expectedThreadId)) return
-        try {
-            context.contentResolver.update(
-                ContentUris.withAppendedId(Telephony.Mms.CONTENT_URI, rawId),
-                ContentValues().apply { put(Telephony.Mms.THREAD_ID, expectedThreadId) },
-                null, null
-            )
-            messageRepository.updateThreadId(MMS_ID_OFFSET + rawId, expectedThreadId)
-            syncLogger.log(TAG, "repaired thread_id on content://mms/$rawId: $rowThreadId → $expectedThreadId")
-        } catch (e: Exception) {
-            syncLogger.logError(TAG, "thread_id repair FAILED for rawId=$rawId ($rowThreadId → $expectedThreadId)", e)
-        }
-    }
-
     companion object {
-        const val ACTION_MMS_SENT         = "com.plusorminustwo.postmark.MMS_SENT"
-        const val EXTRA_MESSAGE_ID        = "extra_message_id"
-        /** Epoch-millis at which the optimistic message was created. */
-        const val EXTRA_SENT_AT_MS        = "extra_sent_at_ms"
-        /** Max content://mms _id snapshot taken immediately before sendMultimediaMessage.
-         *  Used to find the real row without relying on the date field format. */
-        const val EXTRA_BEFORE_SEND_MAX_ID = "extra_before_send_max_mms_id"
-        /** Recipient address; lets the receiver verify/repair the platform-assigned thread_id. */
-        const val EXTRA_TO_ADDRESS        = "extra_to_address"
-        private const val TAG             = "MmsSentReceiver"
+        const val ACTION_MMS_SENT  = "com.plusorminustwo.postmark.MMS_SENT"
+        const val EXTRA_MESSAGE_ID = "extra_message_id"
+        /** Epoch-millis at which the optimistic message was created. [MmsManagerWrapper.persistSentMms]
+         *  writes it (in seconds) as the provider row's date so sync restores send-time ordering. */
+        const val EXTRA_SENT_AT_MS = "extra_sent_at_ms"
+        /** Recipient address; [MmsManagerWrapper.persistSentMms] writes the canonical thread_id
+         *  and the TO addr row from it. */
+        const val EXTRA_TO_ADDRESS = "extra_to_address"
+        private const val TAG      = "MmsSentReceiver"
     }
 }
-
-/**
- * True when the platform-assigned thread_id on a sent MMS row must be corrected to
- * the canonical thread id for the recipient. An expected id ≤ 0 means the canonical
- * thread could not be resolved — never "repair" toward an invalid id.
- * Pure — unit-tested in SentRowRepairTest.
- */
-internal fun mmsThreadIdNeedsRepair(rowThreadId: Long, expectedThreadId: Long): Boolean =
-    expectedThreadId > 0L && rowThreadId != expectedThreadId

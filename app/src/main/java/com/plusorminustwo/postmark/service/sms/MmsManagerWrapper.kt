@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.service.sms
 
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -10,6 +11,7 @@ import android.os.HandlerThread
 import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayInputStream
 import android.net.Uri
+import android.provider.Telephony
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import android.util.Log
@@ -278,6 +280,150 @@ class MmsManagerWrapper @Inject constructor(
          * read the file, even when MMS-APN bring-up or carrier retries take > 60 s. */
 
         return@withContext true
+    }
+
+    /** Writes a successfully-sent MMS into content://mms so other default-SMS-app
+     *  readers (Google Messages, Phone Link) see it and so syncLatestMms imports a
+     *  real row whose date matches the actual send time. Android only auto-persists
+     *  sent MMS for NON-default apps; as the default app this is our job.
+     *  Returns the new raw content://mms _id, or null on any failure (callers keep
+     *  the optimistic Room row as the fallback record). */
+    suspend fun persistSentMms(
+        toAddress: String,
+        textBody: String,
+        attachments: List<MessageAttachment>,
+        messageId: Long,      // the optimistic tempId — keys the mms_attach_ cache files
+        sentAtMs: Long        // optimistic row creation time (EXTRA_SENT_AT_MS)
+    ): Long? = withContext(Dispatchers.IO) {
+        try {
+            /* ── 1. Read part bytes FIRST ─────────────────────────────────────────────
+             * Done before any provider write so a read failure needs no cleanup-delete
+             * (we never delete from content://mms — CLAUDE.md CRITICAL). Prefer the
+             * filesDir cache (mms_attach_<tempId>*.bin) written before dispatch; fall
+             * back to the attachment's own URI. An unreadable part is skipped with a
+             * logError, not fatal. */
+            val readableParts = ArrayList<Pair<ByteArray, String>>(attachments.size)
+            attachments.forEachIndexed { index, attachment ->
+                try {
+                    val cacheFile = attachmentCacheFile(context, messageId, index)
+                    val bytes = if (cacheFile.exists()) {
+                        cacheFile.readBytes()
+                    } else {
+                        context.contentResolver.openInputStream(Uri.parse(attachment.uri))?.use { it.readBytes() }
+                    }
+                    if (bytes != null) {
+                        readableParts += bytes to attachment.mimeType
+                    } else {
+                        syncLogger.logError(TAG, "persistSentMms: null bytes for attachment [$index] messageId=$messageId")
+                    }
+                } catch (e: Exception) {
+                    syncLogger.logError(TAG, "persistSentMms: could not read attachment [$index] messageId=$messageId", e)
+                }
+            }
+            val textLen = textBody.toByteArray(Charsets.UTF_8).size
+            // Never insert an empty shell row (no text and nothing readable).
+            if (textBody.isBlank() && readableParts.isEmpty()) {
+                syncLogger.logError(TAG, "persistSentMms: no text and no readable parts — not inserting an empty shell (messageId=$messageId)")
+                return@withContext null
+            }
+
+            // ── 2. Canonical thread id for the recipient ──────────────────────────────
+            val threadId = try {
+                Telephony.Threads.getOrCreateThreadId(context, toAddress)
+            } catch (e: Exception) {
+                // An orphaned-thread row is worse than none; the Room copy stays correct.
+                syncLogger.logError(TAG, "persistSentMms: getOrCreateThreadId failed — not inserting an orphaned row (messageId=$messageId)", e)
+                return@withContext null
+            }
+
+            /* ── 3. Insert the message row ────────────────────────────────────────────
+             * date is written in SECONDS (Telephony.Mms contract); extractMmsMessages
+             * multiplies by 1000 on the way back in, restoring the send-time ordering. */
+            val mSize = readableParts.sumOf { it.first.size } + textLen
+            val msgUri = context.contentResolver.insert(
+                Telephony.Mms.CONTENT_URI,
+                ContentValues().apply {
+                    put("thread_id", threadId)
+                    put("date", sentAtMs / 1000L)                     // SECONDS
+                    put("msg_box", Telephony.Mms.MESSAGE_BOX_SENT)    // 2
+                    put("m_type", 128)                                // SEND_REQ
+                    put(Telephony.Mms.MMS_VERSION, 0x12)  // column is literally "v" — a wrong name kills the whole insert
+                    put("ct_t", "application/vnd.wap.multipart.related")
+                    put("read", 1)
+                    put("seen", 1)
+                    put("m_size", mSize)
+                }
+            )
+            val rawId = msgUri?.lastPathSegment?.toLongOrNull()
+            if (rawId == null) {
+                syncLogger.logError(TAG, "persistSentMms: message insert returned no id (uri=$msgUri messageId=$messageId)")
+                return@withContext null
+            }
+
+            /* ── 4. Parts — one per readable attachment, plus an optional text part ────
+             * Deliberately NO SMIL part: modern readers (incl. Google Messages) render
+             * parts without it, and a SMIL layout referencing mismatched filenames is
+             * worse than none. */
+            val partUri = Uri.parse("content://mms/$rawId/part")
+            readableParts.forEachIndexed { index, (bytes, mimeType) ->
+                try {
+                    val partRowUri = context.contentResolver.insert(
+                        partUri,
+                        ContentValues().apply {
+                            put("mid", rawId)
+                            put("ct", mimeType)
+                            put("cid", "<part$index>")
+                            put("cl", "part$index")
+                        }
+                    )
+                    if (partRowUri != null) {
+                        context.contentResolver.openOutputStream(partRowUri)?.use { it.write(bytes) }
+                    } else {
+                        syncLogger.logError(TAG, "persistSentMms: part insert returned null [$index] messageId=$messageId")
+                    }
+                } catch (e: Exception) {
+                    syncLogger.logError(TAG, "persistSentMms: failed writing part [$index] messageId=$messageId", e)
+                }
+            }
+            if (textBody.isNotBlank()) {
+                try {
+                    context.contentResolver.insert(
+                        partUri,
+                        ContentValues().apply {
+                            put("mid", rawId)
+                            put("ct", "text/plain")
+                            put("chset", 106)   // UTF-8
+                            put("text", textBody)
+                        }
+                    )
+                } catch (e: Exception) {
+                    syncLogger.logError(TAG, "persistSentMms: failed writing text part messageId=$messageId", e)
+                }
+            }
+
+            // ── 5. Addr rows: FROM (self placeholder) + TO ────────────────────────────
+            val addrUri = Uri.parse("content://mms/$rawId/addr")
+            try {
+                context.contentResolver.insert(addrUri, ContentValues().apply {
+                    put("address", "insert-address-token")   // FROM (AOSP convention for self)
+                    put("type", 137)
+                    put("charset", 106)
+                })
+                context.contentResolver.insert(addrUri, ContentValues().apply {
+                    put("address", toAddress)                // TO
+                    put("type", 151)
+                    put("charset", 106)
+                })
+            } catch (e: Exception) {
+                syncLogger.logError(TAG, "persistSentMms: failed writing addr rows messageId=$messageId", e)
+            }
+
+            syncLogger.log(TAG, "persistSentMms: wrote content://mms/$rawId (${readableParts.size} parts, $mSize bytes)")
+            rawId
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "persistSentMms FAILED for messageId=$messageId", e)
+            null
+        }
     }
 
     /**

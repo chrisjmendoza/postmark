@@ -4,6 +4,46 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-17 — sent MMS persisted to the provider; optimistic→real handoff matched per-row
+
+Two related MMS send bugs fixed. **Sent MMS were invisible everywhere but Postmark.**
+Android's MmsService only auto-persists a sent MMS to `content://mms` for apps that are
+*not* the default SMS app — Postmark *is* the default, so it never self-persisted and its
+sent MMS never appeared in Google Messages / Phone Link, and its own sync never saw a real
+row for them. New `MmsManagerWrapper.persistSentMms()` (called by `MmsSentReceiver` after
+the MMSC confirms a send) writes the message row, part rows (media + optional UTF-8 text,
+deliberately no SMIL), and FROM/TO addr rows itself, dated at the actual send time (`date`
+in seconds per the Telephony contract). It reads the part bytes *before* the provider
+insert, so a read failure never leaves an empty shell and no cleanup-delete is ever needed
+(we never call `ContentResolver.delete` on telephony). On any failure it returns null and
+the optimistic Room row remains the fallback record. **A memo could get grafted onto a
+later text and re-dated.** `syncLatestMms`'s optimistic→real handoff correlated the newest
+optimistic sent MMS with the newest real sent row in the batch with no plausibility check,
+then blanket-deleted *every* optimistic MMS row in the thread — so an unrelated RCS-archival
+text row could absorb a memo's attachments while the correctly-timed bubble was destroyed
+(the 2026-07-17 screenshot). The handoff now matches each real row to at most one optimistic
+row via the pure `pickOptimisticMatch` (trimmed bodies equal AND send times within 15 min;
+closest Δt wins, ties to the newer temp id; JVM-tested in `OptimisticMmsMatcherTest`),
+consumes each optimistic row at most once per pass, transfers status + attachments to that
+specific real row, and does a *targeted* `deleteById` instead of the blanket delete. Since
+persistSentMms writes the optimistic row's own send time and body, the match is exact.
+Unmatched optimistic rows now survive by design (a correctly-timed bubble with SENT/FAILED
+status beats a vanished or grafted one). Removed the now-dead `MmsSentReceiver` search loop
+(`_id > beforeSendMaxId` / date-window with retries), its `repairThreadIdIfWrong`, the
+`EXTRA_BEFORE_SEND_MAX_ID` extra and the `beforeSendMaxId` provider snapshot in
+`ThreadViewModel`, and `SentRowRepairTest`. The SMS pipeline is untouched.
+
+Fable's review pass caught three more issues in the same area: the *second* blanket
+delete site — reaction-only-thread cleanup in `syncLatestMms` — is removed too (a
+reaction fallback is never a Postmark send's counterpart, so it could only ever destroy
+an in-flight send's temp row and race `MmsSentReceiver` into skipping the provider
+persist); the provider insert used a nonexistent `mms_version` column name (the pdu
+table's version column is literally `v` — now `Telephony.Mms.MMS_VERSION`), which would
+have thrown inside the catch-all and silently disabled the entire persist; and
+`retrySend` now stamps `EXTRA_SENT_AT_MS` with the failed row's original timestamp
+instead of now(), so a retry outside the 15-minute match window can't produce a
+duplicate bubble.
+
 ## 2026-07-17 (voice memos) — real amplitude waveform in recorded-memo chips
 
 The plain seek `Slider` in reply-bar audio chips (the preview-panel chip and the

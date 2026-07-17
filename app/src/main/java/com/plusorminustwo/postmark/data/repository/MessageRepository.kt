@@ -95,6 +95,11 @@ class MessageRepository @Inject constructor(
     suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? =
         messageDao.getOptimisticSentId(threadId, isMms)
 
+    /** All optimistic sent-MMS temp rows in a thread (newest first) as domain [Message]s,
+     *  for per-row body/time matching in [SmsSyncHandler.syncLatestMms]. */
+    suspend fun getOptimisticSentMms(threadId: Long): List<Message> =
+        messageDao.getOptimisticSentMms(threadId).map { it.toDomain() }
+
     /** Replaces a message's attachment list, keeping the singular first-attachment
      *  columns in sync (they back observeMediaMessages and pre-v12 fallback). */
     suspend fun updateAttachments(messageId: Long, attachments: List<MessageAttachment>) =

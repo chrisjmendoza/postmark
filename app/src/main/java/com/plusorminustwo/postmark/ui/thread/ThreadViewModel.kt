@@ -1026,28 +1026,16 @@ class ThreadViewModel @Inject constructor(
                  * on the old last message instead of the new one. */
                 _scrollToBottomEvent.tryEmit(Unit)
                 /* PendingIntent for MmsSentReceiver — updates Room when the MMSC
-                 * responds. EXTRA_SENT_AT_MS lets the receiver find the real content-
-                 * provider row even if sync replaced the temp row before MMSC replied. */
+                 * responds. EXTRA_SENT_AT_MS becomes the provider row's date when the
+                 * receiver persists the sent MMS (persistSentMms), keeping send-time order. */
                 val reqCode   = (tempId and 0x3FFF_FFFFL).toInt()
-                /* Snapshot the max MMS _id before sending so MmsSentReceiver can find
-                 * the real content://mms row without relying on the date field format
-                 * (seconds vs milliseconds varies by device/OEM). */
-                val beforeSendMaxId = withContext(Dispatchers.IO) {
-                    try {
-                        context.contentResolver.query(
-                            android.net.Uri.parse("content://mms"),
-                            arrayOf("_id"), null, null, "_id DESC LIMIT 1"
-                        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
-                    } catch (_: Exception) { 0L }
-                }
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
                         action = MmsSentReceiver.ACTION_MMS_SENT
                         putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, tempId)
                         putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, now)
-                        putExtra(MmsSentReceiver.EXTRA_BEFORE_SEND_MAX_ID, beforeSendMaxId)
-                        // Lets the receiver verify/repair the platform-assigned thread_id.
+                        // persistSentMms writes the canonical thread_id and TO addr row from this.
                         putExtra(MmsSentReceiver.EXTRA_TO_ADDRESS, thread.address)
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
@@ -1134,22 +1122,17 @@ class ThreadViewModel @Inject constructor(
                  * has already been consumed) then re-invoke MmsManagerWrapper with the
                  * same attachments. */
                 val reqCode = (messageId and 0x3FFF_FFFFL).toInt()
-                val beforeSendMaxId = withContext(Dispatchers.IO) {
-                    try {
-                        context.contentResolver.query(
-                            android.net.Uri.parse("content://mms"),
-                            arrayOf("_id"), null, null, "_id DESC LIMIT 1"
-                        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L } ?: 0L
-                    } catch (_: Exception) { 0L }
-                }
                 val sentIntent = PendingIntent.getBroadcast(
                     context, reqCode,
                     Intent(context, MmsSentReceiver::class.java).apply {
                         action = MmsSentReceiver.ACTION_MMS_SENT
                         putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, messageId)
-                        putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, System.currentTimeMillis())
-                        putExtra(MmsSentReceiver.EXTRA_BEFORE_SEND_MAX_ID, beforeSendMaxId)
-                        // Lets the receiver verify/repair the platform-assigned thread_id.
+                        /* The row's ORIGINAL timestamp, not now(): persistSentMms writes it as
+                         * the provider date, so the matcher in syncLatestMms still pairs the
+                         * imported row with this temp row even when the retry happens outside
+                         * the match window — and the bubble keeps its original position. */
+                        putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, message.timestamp)
+                        // persistSentMms writes the canonical thread_id and TO addr row from this.
                         putExtra(MmsSentReceiver.EXTRA_TO_ADDRESS, message.address)
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT

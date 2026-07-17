@@ -75,18 +75,30 @@ interface MessageDao {
     suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean)
 
     /** Returns the [MessageEntity.deliveryStatus] of the most recent optimistic (negative-ID)
-     *  sent message of the given transport in a thread. Used by [SmsSyncHandler.syncLatestMms]
-     *  to transfer a FAILED status to the real row before the temp row is deleted.
-     *  [isMms] scoping ensures a newer optimistic SMS row can't shadow the MMS row. */
+     *  sent message of the given transport in a thread. [isMms] scoping ensures a newer
+     *  optimistic SMS row can't shadow the MMS row.
+     *  Note: [SmsSyncHandler.syncLatestMms] no longer uses this latest-to-latest read for MMS —
+     *  it matches each real row to a specific optimistic row via [getOptimisticSentMms]
+     *  (see pickOptimisticMatch). Retained as a scoped optimistic-row read (DAO-test-covered). */
     @Query("SELECT deliveryStatus FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int?
 
     /** Returns the row id (negative tempId) of the most recent optimistic sent message of the
-     *  given transport in a thread. Used by [SmsSyncHandler.syncLatestMms] to derive the
-     *  cache file names (mms_attach_<tempId>*.bin) and build stable FileProvider URIs,
-     *  bypassing the race where [ThreadViewModel] hasn't yet updated the stored attachments. */
+     *  given transport in a thread. [isMms] scoping ensures a newer optimistic SMS row can't
+     *  shadow the MMS row.
+     *  Note: [SmsSyncHandler.syncLatestMms] no longer uses this latest-to-latest read for MMS —
+     *  it matches each real row to a specific optimistic row via [getOptimisticSentMms]
+     *  (see pickOptimisticMatch). Retained as a scoped optimistic-row read (DAO-test-covered). */
     @Query("SELECT id FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long?
+
+    /** All optimistic (negative-ID) sent MMS temp rows in a thread, newest (largest id) first.
+     *  [SmsSyncHandler.syncLatestMms] matches each just-imported real sent row to at most one
+     *  of these per-row by trimmed body + send time (see pickOptimisticMatch), replacing the
+     *  old LIMIT 1 latest-real-to-latest-optimistic heuristic that could graft one send's
+     *  attachments onto an unrelated row and then blanket-delete the correctly-timed one. */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = 1 ORDER BY id DESC")
+    suspend fun getOptimisticSentMms(threadId: Long): List<MessageEntity>
 
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteById(messageId: Long)
