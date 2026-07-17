@@ -7,10 +7,11 @@ package com.plusorminustwo.postmark.domain.voicememo
  * haptics) live in VoiceMemoRecorder and ThreadViewModel, which apply the
  * [VoiceMemoEffect] each transition returns.
  *
- * There is deliberately no PREVIEW phase: a finished memo is appended to the
- * existing pending-attachments queue and reviewed in the same preview strip
- * every other attachment uses — a fourth state would duplicate that source
- * of truth. Any stop therefore returns to [VoiceMemoPhase.IDLE].
+ * Two flows share the machine. The quick flow (hold, release) skips PREVIEW —
+ * the memo drops straight into the pending-attachments queue, whose strip is
+ * its review surface. The deliberate flow (slide-up lock) ends in [PREVIEW]:
+ * the take is stopped but NOT yet attached, and the recording panel offers
+ * play/scrub plus Restart / Discard / Attach (the Google Messages pattern).
  */
 enum class VoiceMemoPhase {
     /** Not recording. */
@@ -18,7 +19,9 @@ enum class VoiceMemoPhase {
     /** Recording while the mic button is physically held. */
     HELD,
     /** Hands-free recording after the slide-up latch. */
-    LOCKED
+    LOCKED,
+    /** A locked-mode take is stopped and awaiting review — attach, restart, or discard. */
+    PREVIEW
 }
 
 enum class VoiceMemoEvent {
@@ -30,10 +33,14 @@ enum class VoiceMemoEvent {
     RELEASE,
     /** Stop button tapped in locked mode. */
     STOP_TAP,
-    /** Slide-away past the cancel threshold, or the locked-mode cancel button. */
+    /** Slide-away past the cancel threshold, or the panel's cancel/discard button. */
     CANCEL,
     /** MediaRecorder hit the MMS-budget duration cap. */
-    CAP_REACHED
+    CAP_REACHED,
+    /** Panel restart button — throw away the current take and record a new one. */
+    RESTART,
+    /** Panel attach button — queue the previewed take as a pending attachment. */
+    ATTACH
 }
 
 /** What the caller must do alongside a phase change. */
@@ -43,8 +50,16 @@ enum class VoiceMemoEffect {
     START,
     /** Stop capturing; keep the file and queue it as a pending attachment. */
     STOP_KEEP,
+    /** Stop capturing; keep the file for the preview panel — do NOT attach yet. */
+    STOP_PREVIEW,
     /** Stop capturing; delete the file. */
-    STOP_DISCARD
+    STOP_DISCARD,
+    /** Queue the previewed take as a pending attachment. */
+    ATTACH_PREVIEW,
+    /** Delete the previewed take. */
+    DISCARD_PREVIEW,
+    /** Discard the current take (in-flight recording or held preview) and record anew. */
+    RESTART_RECORDING
 }
 
 data class VoiceMemoTransition(val phase: VoiceMemoPhase, val effect: VoiceMemoEffect)
@@ -63,17 +78,26 @@ fun voiceMemoTransition(phase: VoiceMemoPhase, event: VoiceMemoEvent): VoiceMemo
         }
         VoiceMemoPhase.HELD -> when (event) {
             VoiceMemoEvent.LATCH_LOCK  -> VoiceMemoTransition(VoiceMemoPhase.LOCKED, VoiceMemoEffect.NONE)
+            // Quick flow: straight to the pending strip, no preview stop-over.
             VoiceMemoEvent.RELEASE,
             VoiceMemoEvent.STOP_TAP,
             VoiceMemoEvent.CAP_REACHED -> VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.STOP_KEEP)
             VoiceMemoEvent.CANCEL      -> VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.STOP_DISCARD)
-            VoiceMemoEvent.PRESS       -> VoiceMemoTransition(VoiceMemoPhase.HELD, VoiceMemoEffect.NONE)
+            else                       -> VoiceMemoTransition(VoiceMemoPhase.HELD, VoiceMemoEffect.NONE)
         }
         VoiceMemoPhase.LOCKED -> when (event) {
+            // Deliberate flow: stopping parks the take in the preview panel.
             VoiceMemoEvent.STOP_TAP,
-            VoiceMemoEvent.CAP_REACHED -> VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.STOP_KEEP)
+            VoiceMemoEvent.CAP_REACHED -> VoiceMemoTransition(VoiceMemoPhase.PREVIEW, VoiceMemoEffect.STOP_PREVIEW)
             VoiceMemoEvent.CANCEL      -> VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.STOP_DISCARD)
+            VoiceMemoEvent.RESTART     -> VoiceMemoTransition(VoiceMemoPhase.LOCKED, VoiceMemoEffect.RESTART_RECORDING)
             else                       -> VoiceMemoTransition(VoiceMemoPhase.LOCKED, VoiceMemoEffect.NONE)
+        }
+        VoiceMemoPhase.PREVIEW -> when (event) {
+            VoiceMemoEvent.ATTACH  -> VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.ATTACH_PREVIEW)
+            VoiceMemoEvent.RESTART -> VoiceMemoTransition(VoiceMemoPhase.LOCKED, VoiceMemoEffect.RESTART_RECORDING)
+            VoiceMemoEvent.CANCEL  -> VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.DISCARD_PREVIEW)
+            else                   -> VoiceMemoTransition(VoiceMemoPhase.PREVIEW, VoiceMemoEffect.NONE)
         }
     }
 

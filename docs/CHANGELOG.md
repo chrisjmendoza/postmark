@@ -4,6 +4,30 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-17 (voice memos) — the filler panel becomes a workspace
+
+Owner feedback round 2: the keyboard-space filler is now a real recording panel
+(Google Messages' interaction pattern — no emoji suggestion row, and no copied
+assets). The machine gained a **PREVIEW phase**, splitting the two flows: the
+quick flow (hold → release) still drops the memo straight into the pending strip
+— no extra taps — while the deliberate flow (slide-up lock) now runs in the
+panel: big timer + **Cancel / Stop / Restart** while recording, and on stop the
+take parks *unattached* in the panel as a play/scrub `AudioChip` with
+**Discard / Restart / Attach**. Restart discards the current take (in-flight or
+previewed) and immediately re-records hands-free; Attach hands the take to the
+pending strip like any other attachment. The input row simplifies accordingly
+(timer only while locked, "Voice memo ready" during preview — the old row-level
+Cancel/Stop buttons moved into the panel). Panel visibility rules keep the
+gesture safe: while HELD it exists only at the exact height the IME vacates
+(growing the bar would move the mic under the held finger); once hands-free it
+always shows, content-sized when no keyboard was open. Cleanup covers the new
+state: discarding/restarting deletes the take (pausing playback first if it's
+the one playing), and `onCleared` deletes an orphaned preview take; a
+process-death orphan falls to the 24 h sweep. Transition table exhaustively
+re-tested (23 tests).
+
+---
+
 ## 2026-07-17 (voice memos) — first on-device feedback round
 
 Two findings from the owner's first hands-on pass, fixed before the feature ever

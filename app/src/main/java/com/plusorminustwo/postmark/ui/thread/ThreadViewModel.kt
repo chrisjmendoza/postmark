@@ -619,21 +619,75 @@ class ThreadViewModel @Inject constructor(
     // ── Voice memo recording ──────────────────────────────────────────────────
 
     /** Recording phase + start timestamp for the reply bar's mic button. The UI derives
-     *  the elapsed timer from [startedAtMs]; [maxDurationMs] caps it (MMS byte budget). */
+     *  the elapsed timer from [startedAtMs]; [maxDurationMs] caps it (MMS byte budget).
+     *  [previewUri] is the stopped-but-not-yet-attached take shown by the preview panel
+     *  (non-null exactly in [VoiceMemoPhase.PREVIEW]). */
     data class VoiceMemoUiState(
         val phase: VoiceMemoPhase = VoiceMemoPhase.IDLE,
         val startedAtMs: Long = 0L,
-        val maxDurationMs: Long = MmsManagerWrapper.MAX_VOICE_MEMO_DURATION_MS
+        val maxDurationMs: Long = MmsManagerWrapper.MAX_VOICE_MEMO_DURATION_MS,
+        val previewUri: String? = null
     )
 
     private val _voiceMemo = MutableStateFlow(VoiceMemoUiState())
     val voiceMemoState: StateFlow<VoiceMemoUiState> = _voiceMemo.asStateFlow()
 
+    /** Starts a fresh recording; returns its start timestamp, or null (with a user-facing
+     *  message) when the recorder couldn't start. */
+    private fun startRecorder(maxDurationMs: Long): Long? {
+        // One audio pipeline at a time: recording over playback would capture it.
+        audioPlayer.pause()
+        val now = System.currentTimeMillis()
+        val started = voiceMemoRecorder.start(
+            outputFile    = MmsManagerWrapper.voiceMemoCacheFile(context, now),
+            maxDurationMs = maxDurationMs.toInt(),
+            bitrateBps    = MmsManagerWrapper.VOICE_MEMO_BITRATE_BPS,
+            onMaxDurationReached = { onVoiceMemoEvent(VoiceMemoEvent.CAP_REACHED) }
+        )
+        if (!started) {
+            _attachmentRejectedEvent.tryEmit("Couldn't start recording")
+            return null
+        }
+        return now
+    }
+
+    /** Stops the recorder keeping the take, and returns its FileProvider URI — or null
+     *  (take discarded, [tooShortMessage] shown when that's the cause) when nothing
+     *  usable was captured. */
+    private fun stopRecorderForKeep(startedAtMs: Long, tooShortMessage: String): String? {
+        val elapsedMs = System.currentTimeMillis() - startedAtMs
+        if (!isMemoKeepable(elapsedMs)) {
+            voiceMemoRecorder.stopAndDiscard()
+            _attachmentRejectedEvent.tryEmit(tooShortMessage)
+            return null
+        }
+        val file = voiceMemoRecorder.stopAndKeep() ?: return null
+        return try {
+            FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", file
+            ).toString()
+        } catch (e: Exception) {
+            runCatching { file.delete() }
+            _attachmentRejectedEvent.tryEmit("Couldn't save recording")
+            null
+        }
+    }
+
+    /** Deletes the recording file behind a preview [uri]; pauses playback first in case
+     *  the user is listening to the very take being thrown away. */
+    private fun deletePreviewTake(uri: String) {
+        audioPlayer.pause()
+        viewModelScope.launch(Dispatchers.IO) {
+            MmsManagerWrapper.deleteVoiceMemoCacheFile(context, MessageAttachment(uri, "audio/mp4"))
+        }
+    }
+
     /**
-     * Single entry point for every mic-button interaction (press, slide-latch, release,
-     * stop, cancel, duration cap). Applies the pure [voiceMemoTransition] table and
-     * executes the returned effect — the UI never talks to the recorder directly.
-     * Caller guarantees RECORD_AUDIO is granted before sending [VoiceMemoEvent.PRESS].
+     * Single entry point for every voice memo interaction (mic press, slide-latch,
+     * release, stop, cancel, duration cap, and the panel's restart/attach). Applies the
+     * pure [voiceMemoTransition] table and executes the returned effect — the UI never
+     * talks to the recorder directly. Caller guarantees RECORD_AUDIO is granted before
+     * sending [VoiceMemoEvent.PRESS].
      */
     fun onVoiceMemoEvent(event: VoiceMemoEvent) {
         val current = _voiceMemo.value
@@ -646,43 +700,47 @@ class ThreadViewModel @Inject constructor(
                     )
                     return
                 }
-                // One audio pipeline at a time: recording over playback would capture it.
-                audioPlayer.pause()
-                val now = System.currentTimeMillis()
-                val started = voiceMemoRecorder.start(
-                    outputFile    = MmsManagerWrapper.voiceMemoCacheFile(context, now),
-                    maxDurationMs = current.maxDurationMs.toInt(),
-                    bitrateBps    = MmsManagerWrapper.VOICE_MEMO_BITRATE_BPS,
-                    onMaxDurationReached = { onVoiceMemoEvent(VoiceMemoEvent.CAP_REACHED) }
-                )
-                if (!started) {
-                    _attachmentRejectedEvent.tryEmit("Couldn't start recording")
-                    return
-                }
-                _voiceMemo.value = current.copy(phase = phase, startedAtMs = now)
+                val startedAt = startRecorder(current.maxDurationMs) ?: return
+                _voiceMemo.value = current.copy(phase = phase, startedAtMs = startedAt)
             }
+            // Quick flow (held → release): straight into the pending queue; the
+            // strip's chip (play / scrub / duration / ×) is the review step.
             VoiceMemoEffect.STOP_KEEP -> {
                 _voiceMemo.value = current.copy(phase = phase)
-                val elapsedMs = System.currentTimeMillis() - current.startedAtMs
-                if (!isMemoKeepable(elapsedMs)) {
-                    // Accidental tap — discard, and teach the gesture.
-                    voiceMemoRecorder.stopAndDiscard()
-                    _attachmentRejectedEvent.tryEmit("Hold the mic button to record a voice memo")
-                    return
-                }
-                val file = voiceMemoRecorder.stopAndKeep() ?: return
-                val uri = try {
-                    FileProvider.getUriForFile(
-                        context, "${context.packageName}.fileprovider", file
-                    ).toString()
-                } catch (e: Exception) {
-                    runCatching { file.delete() }
-                    _attachmentRejectedEvent.tryEmit("Couldn't save recording")
-                    return
-                }
-                // Into the same pending queue every attachment uses — the preview strip
-                // (play / duration / ×) is the memo's review step before send.
+                val uri = stopRecorderForKeep(
+                    current.startedAtMs, "Hold the mic button to record a voice memo"
+                ) ?: return
                 appendAttachments(listOf(MessageAttachment(uri, "audio/mp4")))
+            }
+            // Deliberate flow (locked → stop): hold the take for the preview panel.
+            VoiceMemoEffect.STOP_PREVIEW -> {
+                val uri = stopRecorderForKeep(current.startedAtMs, "Recording was too short")
+                _voiceMemo.value = if (uri != null) {
+                    current.copy(phase = phase, previewUri = uri)
+                } else {
+                    current.copy(phase = VoiceMemoPhase.IDLE, previewUri = null)
+                }
+            }
+            VoiceMemoEffect.ATTACH_PREVIEW -> {
+                val uri = current.previewUri
+                _voiceMemo.value = current.copy(phase = phase, previewUri = null)
+                if (uri != null) appendAttachments(listOf(MessageAttachment(uri, "audio/mp4")))
+            }
+            VoiceMemoEffect.DISCARD_PREVIEW -> {
+                _voiceMemo.value = current.copy(phase = phase, previewUri = null)
+                current.previewUri?.let { deletePreviewTake(it) }
+            }
+            VoiceMemoEffect.RESTART_RECORDING -> {
+                // Drop the current take — an in-flight locked recording or a held
+                // preview — and immediately record a new one, still hands-free.
+                voiceMemoRecorder.stopAndDiscard()
+                current.previewUri?.let { deletePreviewTake(it) }
+                val startedAt = startRecorder(current.maxDurationMs)
+                _voiceMemo.value = if (startedAt != null) {
+                    current.copy(phase = phase, startedAtMs = startedAt, previewUri = null)
+                } else {
+                    current.copy(phase = VoiceMemoPhase.IDLE, previewUri = null)
+                }
             }
             VoiceMemoEffect.STOP_DISCARD -> {
                 _voiceMemo.value = current.copy(phase = phase)
@@ -713,8 +771,13 @@ class ThreadViewModel @Inject constructor(
     fun seekAudio(uri: String, fraction: Float) = audioPlayer.seekTo(uri, fraction)
 
     override fun onCleared() {
-        // Discard any in-flight recording (deletes its temp file) and free the player.
+        // Discard any in-flight recording (deletes its temp file), delete an
+        // unattached preview take, and free the player. The file delete runs inline
+        // (viewModelScope is already cancelled here) — it's one small unlink.
         voiceMemoRecorder.stopAndDiscard()
+        _voiceMemo.value.previewUri?.let { uri ->
+            MmsManagerWrapper.deleteVoiceMemoCacheFile(context, MessageAttachment(uri, "audio/mp4"))
+        }
         audioPlayer.release()
         super.onCleared()
     }

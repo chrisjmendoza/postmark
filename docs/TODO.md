@@ -247,9 +247,15 @@ Ordered by priority tier. Work top-to-bottom within each tier.
         duration chip + × (`PendingAudioAttachment`), not an 80 dp tile; and a
         keyboard-space filler panel keeps the reply bar from jumping (and the
         drag math from mis-latching) when recording starts with the IME open.
-      Needs on-device verification: record→preview→send over real MMS, lock mode,
-      cancel paths, permission denial, cap auto-stop, received-memo playback,
-      no bar jump when recording with keyboard open.
+      - July 17 round 2: the filler panel is now the recording workspace (state
+        machine gained PREVIEW). Locked mode: big timer + Cancel/Stop/Restart in
+        the panel; stopping parks the take there (play/scrub chip + Discard/
+        Restart/Attach) instead of attaching immediately. Quick hold→release
+        still attaches straight to the strip. Restart re-records hands-free.
+      Needs on-device verification: record→preview→send over real MMS, lock mode
+      (panel controls, restart, attach), cancel paths, permission denial, cap
+      auto-stop, received-memo playback, no bar jump when recording with
+      keyboard open.
 - [x] **Group MMS — per-bubble sender attribution** (July 11 2026) — group threads
       now show a small sender-name label above the first received bubble of each
       sender's cluster (`ThreadViewModel.participantNames` resolves the roster via

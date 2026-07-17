@@ -80,9 +80,9 @@ class VoiceMemoLogicTest {
         )
     }
 
-    @Test fun `stop tap while locked keeps the memo`() {
+    @Test fun `stop tap while locked parks the take in preview — not attached yet`() {
         assertEquals(
-            VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.STOP_KEEP),
+            VoiceMemoTransition(VoiceMemoPhase.PREVIEW, VoiceMemoEffect.STOP_PREVIEW),
             t(VoiceMemoPhase.LOCKED, VoiceMemoEvent.STOP_TAP)
         )
     }
@@ -94,21 +94,75 @@ class VoiceMemoLogicTest {
         )
     }
 
-    @Test fun `duration cap while locked stops and keeps`() {
+    @Test fun `duration cap while locked also goes to preview`() {
         assertEquals(
-            VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.STOP_KEEP),
+            VoiceMemoTransition(VoiceMemoPhase.PREVIEW, VoiceMemoEffect.STOP_PREVIEW),
             t(VoiceMemoPhase.LOCKED, VoiceMemoEvent.CAP_REACHED)
         )
     }
 
-    @Test fun `no transition ever starts recording except idle press`() {
+    @Test fun `restart while locked re-records without leaving locked mode`() {
+        assertEquals(
+            VoiceMemoTransition(VoiceMemoPhase.LOCKED, VoiceMemoEffect.RESTART_RECORDING),
+            t(VoiceMemoPhase.LOCKED, VoiceMemoEvent.RESTART)
+        )
+    }
+
+    // ── PREVIEW ───────────────────────────────────────────────────────────────
+
+    @Test fun `attach from preview queues the take and returns to idle`() {
+        assertEquals(
+            VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.ATTACH_PREVIEW),
+            t(VoiceMemoPhase.PREVIEW, VoiceMemoEvent.ATTACH)
+        )
+    }
+
+    @Test fun `restart from preview drops the take and records again hands-free`() {
+        assertEquals(
+            VoiceMemoTransition(VoiceMemoPhase.LOCKED, VoiceMemoEffect.RESTART_RECORDING),
+            t(VoiceMemoPhase.PREVIEW, VoiceMemoEvent.RESTART)
+        )
+    }
+
+    @Test fun `cancel from preview discards the take`() {
+        assertEquals(
+            VoiceMemoTransition(VoiceMemoPhase.IDLE, VoiceMemoEffect.DISCARD_PREVIEW),
+            t(VoiceMemoPhase.PREVIEW, VoiceMemoEvent.CANCEL)
+        )
+    }
+
+    @Test fun `stray recorder events in preview are no-ops`() {
+        // The recorder is already stopped in PREVIEW; a racing CAP_REACHED (or any
+        // leftover gesture event) must not disturb the held take.
+        for (event in listOf(
+            VoiceMemoEvent.PRESS, VoiceMemoEvent.LATCH_LOCK, VoiceMemoEvent.RELEASE,
+            VoiceMemoEvent.STOP_TAP, VoiceMemoEvent.CAP_REACHED
+        )) {
+            assertEquals(
+                "PREVIEW + $event",
+                VoiceMemoTransition(VoiceMemoPhase.PREVIEW, VoiceMemoEffect.NONE),
+                t(VoiceMemoPhase.PREVIEW, event)
+            )
+        }
+    }
+
+    @Test fun `recording only starts from an idle press or an explicit restart`() {
         for (phase in VoiceMemoPhase.entries) {
             for (event in VoiceMemoEvent.entries) {
+                val transition = t(phase, event)
                 val isIdlePress = phase == VoiceMemoPhase.IDLE && event == VoiceMemoEvent.PRESS
+                val isRestart   = event == VoiceMemoEvent.RESTART &&
+                    (phase == VoiceMemoPhase.LOCKED || phase == VoiceMemoPhase.PREVIEW)
                 if (!isIdlePress) {
                     assertTrue(
                         "$phase + $event must not START",
-                        t(phase, event).effect != VoiceMemoEffect.START
+                        transition.effect != VoiceMemoEffect.START
+                    )
+                }
+                if (!isRestart) {
+                    assertTrue(
+                        "$phase + $event must not RESTART_RECORDING",
+                        transition.effect != VoiceMemoEffect.RESTART_RECORDING
                     )
                 }
             }

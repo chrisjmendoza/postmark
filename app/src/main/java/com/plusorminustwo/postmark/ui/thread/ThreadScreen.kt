@@ -72,6 +72,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalView
@@ -2412,24 +2413,29 @@ private fun ReplyBar(
                     verticalAlignment = if (isRecording) Alignment.CenterVertically else Alignment.Bottom
                 ) {
                     if (voiceMemo.phase == VoiceMemoPhase.LOCKED) {
+                        // Stop / Restart / Cancel live in the voice panel below (big
+                        // targets in the keyboard's space); the row keeps the timer.
                         RecordingStatusRow(
                             voiceMemo = voiceMemo,
                             locked = true,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
                         )
-                        // Cancel discards the recording; Stop keeps it — it lands in the
-                        // pending-attachment strip for review, it is NOT auto-sent.
-                        TextButton(onClick = { onVoiceMemoEvent(VoiceMemoEvent.CANCEL) }) {
-                            Text("Cancel")
-                        }
-                        IconButton(
-                            onClick = { onVoiceMemoEvent(VoiceMemoEvent.STOP_TAP) },
-                            colors  = IconButtonDefaults.iconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor   = MaterialTheme.colorScheme.onPrimary
-                            )
+                    } else if (voiceMemo.phase == VoiceMemoPhase.PREVIEW) {
+                        // The take itself (chip + Discard/Restart/Attach) is in the
+                        // panel below; the row just says why the composer is parked.
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp),
+                            contentAlignment = Alignment.CenterStart
                         ) {
-                            Icon(Icons.Default.Stop, contentDescription = "Stop recording")
+                            Text(
+                                text  = "Voice memo ready",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     } else {
                         if (!isRecording) {
@@ -2529,46 +2535,46 @@ private fun ReplyBar(
                     }
                 }
 
-                // ── Keyboard-space filler while recording ─────────────────────────
+                // ── Voice memo panel (in the keyboard's space) ────────────────────
                 // Starting a recording removes the focused TextField, which closes
                 // the IME; the Scaffold's imePadding would then slide this whole bar
                 // down mid-gesture — disorienting, and worse, the mic moving under a
                 // stationary finger reads as an upward relative drag (a spurious
-                // lock latch). This panel grows in exact counter-phase to the IME
-                // collapse (height captured at record start − live height), so the
-                // input row never moves — the standard "voice panel occupies the
-                // keyboard space" pattern. Zero-height (absent) when the keyboard
-                // was already closed; shrinks away when recording ends.
+                // lock latch). The panel's minimum height therefore grows in exact
+                // counter-phase to the IME collapse (height captured at record start
+                // − live height), so the input row never moves. While HELD that
+                // stabilizer role is all it has (the finger is mid-gesture — no
+                // buttons to reach, and with no keyboard open it must stay absent or
+                // the bar would grow under the finger). Once hands-free (LOCKED /
+                // PREVIEW) it always shows, as the recording workspace: big
+                // stop/restart/cancel controls, then play/scrub + attach.
                 val lastFillerPx = remember { Retained(0) }
                 val fillerPx =
                     if (isRecording) {
                         (imeAtRecordStart.value - imeVisiblePx).coerceAtLeast(0)
                             .also { lastFillerPx.value = it }
                     } else lastFillerPx.value
+                val panelVisible = when (voiceMemo.phase) {
+                    VoiceMemoPhase.IDLE   -> false
+                    VoiceMemoPhase.HELD   -> imeAtRecordStart.value > 0
+                    VoiceMemoPhase.LOCKED,
+                    VoiceMemoPhase.PREVIEW -> true
+                }
                 AnimatedVisibility(
-                    visible = isRecording && imeAtRecordStart.value > 0,
+                    visible = panelVisible,
+                    // Entry height is already animated by the IME hand-off (or is
+                    // content-sized) — an enter transition would fight it.
                     enter   = EnterTransition.None,
                     exit    = shrinkVertically() + fadeOut()
                 ) {
-                    val pulse by rememberInfiniteTransition(label = "recPanelPulse").animateFloat(
-                        initialValue  = 0.25f,
-                        targetValue   = 0.6f,
-                        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-                        label         = "recPanelPulseAlpha"
+                    VoiceMemoPanel(
+                        voiceMemo        = voiceMemo,
+                        minHeight        = with(density) { fillerPx.toDp() },
+                        audioPlayback    = audioPlayback,
+                        onAudioPlayPause = onAudioPlayPause,
+                        onAudioSeek      = onAudioSeek,
+                        onEvent          = onVoiceMemoEvent
                     )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(with(density) { fillerPx.toDp() }),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector        = Icons.Default.Mic,
-                            contentDescription = null,
-                            modifier           = Modifier.size(48.dp),
-                            tint               = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = pulse)
-                        )
-                    }
                 }
             }
         }
@@ -2674,6 +2680,138 @@ private fun VoiceMemoMicButton(
     }
 }
 
+/** 10 Hz elapsed-time ticker for the recording UI — display-only; the hard duration
+ *  cap is enforced by MediaRecorder itself. */
+@Composable
+private fun rememberRecordingElapsedMs(startedAtMs: Long): Long {
+    var elapsedMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(startedAtMs) {
+        while (true) {
+            elapsedMs = System.currentTimeMillis() - startedAtMs
+            delay(100)
+        }
+    }
+    return elapsedMs
+}
+
+/**
+ * The voice memo workspace that fills the space the keyboard vacates (and shows on
+ * its own for hands-free phases even when no keyboard was open). Content by phase:
+ * HELD — decorative pulsing mic (the finger is mid-gesture; hints are in the input
+ * row). LOCKED — big timer + Cancel / Stop / Restart. PREVIEW — the take as a
+ * play/scrub chip + Discard / Restart / Attach; attaching hands it to the pending
+ * strip like any other attachment. [minHeight] is the keyboard-compensation height
+ * (0 when the keyboard was closed); content may grow past it.
+ */
+@Composable
+private fun VoiceMemoPanel(
+    voiceMemo: ThreadViewModel.VoiceMemoUiState,
+    minHeight: Dp,
+    audioPlayback: StateFlow<AudioPlaybackState>,
+    onAudioPlayPause: (String) -> Unit,
+    onAudioSeek: (String, Float) -> Unit,
+    onEvent: (VoiceMemoEvent) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = minHeight)
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        when (voiceMemo.phase) {
+            VoiceMemoPhase.HELD -> {
+                val pulse by rememberInfiniteTransition(label = "recPanelPulse").animateFloat(
+                    initialValue  = 0.25f,
+                    targetValue   = 0.6f,
+                    animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+                    label         = "recPanelPulseAlpha"
+                )
+                Icon(
+                    imageVector        = Icons.Default.Mic,
+                    contentDescription = null,
+                    modifier           = Modifier.size(48.dp),
+                    tint               = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = pulse)
+                )
+            }
+            VoiceMemoPhase.LOCKED -> {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text  = formatMemoDuration(rememberRecordingElapsedMs(voiceMemo.startedAtMs)) +
+                                " / " + formatMemoDuration(voiceMemo.maxDurationMs),
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        TextButton(onClick = { onEvent(VoiceMemoEvent.CANCEL) }) {
+                            Text("Cancel")
+                        }
+                        FilledIconButton(
+                            onClick  = { onEvent(VoiceMemoEvent.STOP_TAP) },
+                            modifier = Modifier.size(64.dp)
+                        ) {
+                            Icon(
+                                imageVector        = Icons.Default.Stop,
+                                contentDescription = "Stop recording",
+                                modifier           = Modifier.size(32.dp)
+                            )
+                        }
+                        TextButton(onClick = { onEvent(VoiceMemoEvent.RESTART) }) {
+                            Text("Restart")
+                        }
+                    }
+                }
+            }
+            VoiceMemoPhase.PREVIEW -> {
+                val uri = voiceMemo.previewUri
+                if (uri != null) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        AudioChip(
+                            uri = uri,
+                            audioPlayback = audioPlayback,
+                            onPlayPause = onAudioPlayPause,
+                            onSeek = onAudioSeek,
+                            fallbackDurationMs = rememberAudioDurationMs(uri)
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            TextButton(onClick = { onEvent(VoiceMemoEvent.CANCEL) }) {
+                                Text("Discard")
+                            }
+                            OutlinedButton(onClick = { onEvent(VoiceMemoEvent.RESTART) }) {
+                                Text("Restart")
+                            }
+                            Button(onClick = { onEvent(VoiceMemoEvent.ATTACH) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Attach")
+                            }
+                        }
+                    }
+                }
+            }
+            VoiceMemoPhase.IDLE -> { /* composed only during the exit animation */ }
+        }
+    }
+}
+
 /**
  * The in-progress recording indicator that replaces the text field: pulsing red dot,
  * elapsed / cap timer, and (while still held) the lock & cancel gesture hints.
@@ -2684,14 +2822,7 @@ private fun RecordingStatusRow(
     locked: Boolean,
     modifier: Modifier = Modifier
 ) {
-    // 10 Hz elapsed ticker — display-only; the hard cap is enforced by MediaRecorder.
-    var elapsedMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(voiceMemo.startedAtMs) {
-        while (true) {
-            elapsedMs = System.currentTimeMillis() - voiceMemo.startedAtMs
-            delay(100)
-        }
-    }
+    val elapsedMs = rememberRecordingElapsedMs(voiceMemo.startedAtMs)
     val pulse by rememberInfiniteTransition(label = "recPulse").animateFloat(
         initialValue  = 1f,
         targetValue   = 0.3f,
