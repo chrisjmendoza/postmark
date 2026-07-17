@@ -588,6 +588,10 @@ class ThreadViewModel @Inject constructor(
     /** Removes one pending attachment (user taps the × on its preview thumbnail). */
     fun removeAttachment(index: Int) {
         val removed = _pendingAttachments.value.getOrNull(index)
+        // The chip is about to disappear below with no UI left to stop it — pause the
+        // shared player if it's the one currently loaded (any audio attachment, not
+        // just memos; a picked audio file ghosts the same way). Mirrors deletePreviewTake.
+        if (removed != null && removed.uri == audioPlayer.state.value.uri) audioPlayer.pause()
         val updated = _pendingAttachments.value.filterIndexed { i, _ -> i != index }
         _pendingAttachments.value = updated
         savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(updated)
@@ -642,7 +646,14 @@ class ThreadViewModel @Inject constructor(
             outputFile    = MmsManagerWrapper.voiceMemoCacheFile(context, now),
             maxDurationMs = maxDurationMs.toInt(),
             bitrateBps    = MmsManagerWrapper.VOICE_MEMO_BITRATE_BPS,
-            onMaxDurationReached = { onVoiceMemoEvent(VoiceMemoEvent.CAP_REACHED) }
+            onMaxDurationReached = { onVoiceMemoEvent(VoiceMemoEvent.CAP_REACHED) },
+            // Media server death / mic seized mid-recording: only fires while HELD/LOCKED,
+            // where CANCEL → STOP_DISCARD safely deletes the partial file (a no-op transition
+            // everywhere else in the table).
+            onError = {
+                _attachmentRejectedEvent.tryEmit("Recording failed")
+                onVoiceMemoEvent(VoiceMemoEvent.CANCEL)
+            }
         )
         if (!started) {
             _attachmentRejectedEvent.tryEmit("Couldn't start recording")
@@ -752,6 +763,18 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    /** Called when the host activity stops (home, screen-off): backgrounded apps get
+     *  silence from the mic, so an in-flight recording must be parked, not left running.
+     *  LOCKED parks to the preview panel; HELD keeps the take via the quick flow (the
+     *  finger is effectively gone). */
+    fun onHostStopped() {
+        when (_voiceMemo.value.phase) {
+            VoiceMemoPhase.LOCKED -> onVoiceMemoEvent(VoiceMemoEvent.STOP_TAP)
+            VoiceMemoPhase.HELD   -> onVoiceMemoEvent(VoiceMemoEvent.RELEASE)
+            else -> Unit
+        }
+    }
+
     // ── Audio playback (one player per thread screen — perf-analysis #30) ─────
 
     /* The wrapper is cheap to construct (a StateFlow); the ExoPlayer inside is only
@@ -806,6 +829,10 @@ class ThreadViewModel @Inject constructor(
         savedStateHandle.remove<String>(DRAFT_TEXT_KEY)
         clearAttachments()
         clearReplyingTo()
+        // The pending chips just disappeared above; after send the bubble references a
+        // different pinned uri, so a playing one would otherwise orphan. Mirrors the
+        // same guard in removeAttachment / deletePreviewTake.
+        if (attachments.any { it.uri == audioPlayer.state.value.uri }) audioPlayer.pause()
 
         viewModelScope.launch {
             android.os.Trace.beginSection("ThreadViewModel.sendMessage")

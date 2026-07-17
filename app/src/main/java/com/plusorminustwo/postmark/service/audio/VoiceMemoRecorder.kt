@@ -29,7 +29,10 @@ class VoiceMemoRecorder @Inject constructor(
      * Starts a new recording into [outputFile], stopping (and discarding) any recording
      * already in flight first. [onMaxDurationReached] fires on the caller's thread when
      * [maxDurationMs] elapses — MediaRecorder finalizes the file itself at that point,
-     * so the callback only needs to run the normal stop-and-keep flow.
+     * so the callback only needs to run the normal stop-and-keep flow. [onError] fires
+     * on the caller's thread if the media server dies or another app seizes the mic
+     * mid-recording — the recorder is left broken, so the caller should treat it like
+     * a cancel rather than try to recover it.
      *
      * Returns false when the recorder can't start (mic in use by another app, IO error);
      * the output file is already cleaned up in that case.
@@ -38,7 +41,8 @@ class VoiceMemoRecorder @Inject constructor(
         outputFile: File,
         maxDurationMs: Int,
         bitrateBps: Int,
-        onMaxDurationReached: () -> Unit
+        onMaxDurationReached: () -> Unit,
+        onError: () -> Unit
     ): Boolean {
         stopAndDiscard()
         val r = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -60,6 +64,7 @@ class VoiceMemoRecorder @Inject constructor(
                     onMaxDurationReached()
                 }
             }
+            r.setOnErrorListener { _, _, _ -> onError() }
             r.prepare()
             r.start()
             recorder = r

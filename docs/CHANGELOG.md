@@ -4,6 +4,30 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-17 (voice memos) — hardening round 1: screen-off silence, recorder errors, ghost playback
+
+Fable's first review pass on `feat/voice-memos` flagged three blockers, all fixed
+through existing machinery rather than new states. **Locked recordings no longer go
+silent on screen timeout or backgrounding**: Android 9+ feeds silence to a
+backgrounded app's mic, and screen-off stops the activity, which counts as
+backgrounded — well inside the ~1:42 duration cap. The host view now sets
+`keepScreenOn` for exactly as long as the mic is capturing (HELD or LOCKED, never
+PREVIEW), and a new `ThreadViewModel.onHostStopped()` parks whatever take is in
+flight on `ON_STOP` (LOCKED → `STOP_TAP` to the preview panel, HELD → `RELEASE`
+through the quick flow, since the finger is effectively gone) instead of letting it
+keep rolling into silence. **`VoiceMemoRecorder` now has an error listener**: if the
+media server dies or another app seizes the mic mid-recording, `onError` routes
+through the existing `CANCEL` transition — `STOP_DISCARD` deletes the partial file,
+the same no-op-elsewhere table entry the panel's cancel button already uses — plus a
+"Recording failed" snackbar, so the UI never sits in LOCKED with a ticking timer over
+a dead recorder. **Ghost playback is gone**: `removeAttachment` and `sendMessage`
+both now pause the shared player when the attachment leaving (any audio attachment,
+not just memos) is the one currently loaded, mirroring the guard `deletePreviewTake`
+already had — a chip that disappears no longer leaves audio playing from an orphaned
+file handle with nothing on screen to stop it.
+
+---
+
 ## 2026-07-17 (voice memos) — the filler panel becomes a workspace
 
 Owner feedback round 2: the keyboard-space filler is now a real recording panel

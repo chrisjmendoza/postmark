@@ -85,6 +85,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
@@ -219,6 +222,29 @@ fun ThreadScreen(
     // LongPress/TextHandleMove.
     val view    = LocalView.current
     val haptics = LocalHapticFeedback.current
+
+    // Android 9+ feeds silence to a backgrounded app's mic, so the screen must stay on
+    // for exactly as long as the mic is actually capturing — HELD or LOCKED, never
+    // PREVIEW (nothing is recording then). Keyed on the boolean so a phase flip re-runs
+    // this effect; onDispose always clears the flag, whether from the key changing or
+    // this composable leaving — it can never be left stuck on.
+    val isActivelyRecording = voiceMemo.phase == VoiceMemoPhase.HELD || voiceMemo.phase == VoiceMemoPhase.LOCKED
+    DisposableEffect(isActivelyRecording) {
+        view.keepScreenOn = isActivelyRecording
+        onDispose { view.keepScreenOn = false }
+    }
+
+    // Screen-off/home also stops the activity, which counts as backgrounded for the
+    // same mic-silence rule above — park whatever take is in flight rather than let it
+    // keep "recording" silence until the user returns.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) viewModel.onHostStopped()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
     val onDeleteMessage           = remember(viewModel) { { id: Long -> viewModel.deleteMessage(id) } }
