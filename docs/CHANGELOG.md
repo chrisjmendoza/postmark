@@ -4,6 +4,35 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-17 (voice memos) — real amplitude waveform in recorded-memo chips
+
+The plain seek `Slider` in reply-bar audio chips (the preview-panel chip and the
+pending-strip chips) is replaced by a Google-Messages-style amplitude waveform for
+**recorded memos only**, where the amplitude data is captured live during recording
+for free. Bubble chips (sent/received memos) keep the Slider — a waveform there needs
+a MediaCodec decode pass over arbitrary audio, deferred as a future item. A new pure
+`resampleAmplitudes(samples, buckets)` in `VoiceMemoLogic` downsamples/stretches the
+captured amplitudes to exactly `VOICE_WAVEFORM_BUCKETS` (48) bars — bucket value is the
+**max** of the samples mapping into it (peaks read better than means for speech),
+values clamped 0..1, empty input → zeros, non-positive buckets → empty (fully
+JVM-tested). Capture rides the existing ~15 Hz level ticker in `ThreadViewModel`: each
+tick's normalized level is appended to a `waveformBuilder`, cleared in `startRecorder`
+on success (covering START and a hands-free RESTART, which keeps the phase LOCKED so the
+ticker never restarts). The resampled waveform is stored in a
+`memoWaveforms: StateFlow<Map<String, List<Float>>>` keyed by uri, written on
+STOP_KEEP / STOP_PREVIEW and removed on discard / restart / remove-attachment / send;
+it survives process death via a new `draft_waveforms` SavedStateHandle key
+(`HashMap<String, FloatArray>`), mirroring the pending-draft pattern. The map threads
+`ThreadViewModel → ThreadContent → ReplyBar` exactly like `audioPlayback`; the ReplyBar
+collects it once and resolves a `List<Float>?` per chip (per-attachment, by the current
+uri, so a recycled position never shows a neighbour's waveform). A new private
+`WaveformScrubber` Canvas composable draws the bars with all geometry derived (no raw
+pixels), reads its colors outside the draw lambda, splits played/unplayed at the
+position fraction, and wires tap + horizontal-drag gestures **gated on enabled** — these
+detectors live only in the reply bar/panel, never on message bubbles
+(compose-gesture-conflict rule). A chip whose map entry is missing degrades to the
+Slider automatically via the null default.
+
 ## 2026-07-17 (voice memos) — polish round: live level meter, chip durations, attach-menu recording, permission dead-end, confirm haptics
 
 Fable's polish pass, five items closed (pending on-device verify). **Live input level

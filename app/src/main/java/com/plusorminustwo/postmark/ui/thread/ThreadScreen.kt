@@ -170,7 +170,9 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.progressSemantics
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 
@@ -366,6 +368,7 @@ fun ThreadScreen(
         onVoiceMemoEvent = onVoiceMemoEvent,
         recordingLevel = viewModel.recordingLevel,
         audioPlayback = viewModel.audioPlayback,
+        memoWaveforms = viewModel.memoWaveforms,
         onAudioPlayPause = onAudioPlayPause,
         onAudioSeek = onAudioSeek
     )
@@ -459,6 +462,9 @@ private fun ThreadContent(
     // Shared thread-wide audio player state (perf-analysis #30). A StateFlow (stable)
     // rather than a value so position ticks recompose only the chips that collect it.
     audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    // uri → display waveform for recorded memos in the reply bar (preview + pending).
+    // Flows exactly like audioPlayback; the ReplyBar collects it once and resolves it.
+    memoWaveforms: StateFlow<Map<String, List<Float>>> = MutableStateFlow(emptyMap()),
     onAudioPlayPause: (String) -> Unit = {},
     onAudioSeek: (String, Float) -> Unit = { _, _ -> },
 ) {
@@ -978,6 +984,7 @@ private fun ThreadContent(
                     onVoiceMemoEvent      = onVoiceMemoEvent,
                     recordingLevel        = recordingLevel,
                     audioPlayback         = audioPlayback,
+                    memoWaveforms         = memoWaveforms,
                     onAudioPlayPause      = onAudioPlayPause,
                     onAudioSeek           = onAudioSeek
                 )
@@ -1899,7 +1906,11 @@ private fun AudioChip(
     // Duration read from file metadata, for chips that must show a real length
     // before the player has ever loaded this uri (pending-memo review row).
     // Bubbles pass nothing and keep the lazy "Voice memo" label until first play.
-    fallbackDurationMs: Long? = null
+    fallbackDurationMs: Long? = null,
+    // Real amplitude waveform for recorded memos (reply-bar chips only). Non-empty →
+    // replaces the Slider with a WaveformScrubber; null/empty → Slider (bubbles, and
+    // any chip whose map entry is missing — e.g. an exit-animation stale render).
+    waveform: List<Float>? = null
 ) {
     val playback by audioPlayback.collectAsState()
     val isCurrent  = playback.uri == uri
@@ -1946,27 +1957,43 @@ private fun AudioChip(
 
             Column(modifier = Modifier.weight(1f)) {
                 /* Seeking only applies to the loaded item — a chip that isn't playing
-                 * has nothing to seek, so its slider is inert at 0. */
-                Slider(
-                    value    = position,
-                    onValueChange = { scrubFraction = it },
-                    onValueChangeFinished = {
-                        scrubFraction?.let { onSeek(uri, it) }
-                        scrubFraction = null
-                    },
-                    enabled  = isCurrent && durationMs > 0,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(20.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor         = MaterialTheme.colorScheme.onSecondaryContainer,
-                        activeTrackColor   = MaterialTheme.colorScheme.onSecondaryContainer,
-                        inactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f),
-                        disabledThumbColor         = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
-                        disabledActiveTrackColor   = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
-                        disabledInactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f)
+                 * has nothing to seek, so its scrubber/slider is inert at 0. Recorded
+                 * memos with captured amplitudes get the waveform; everything else (and
+                 * any missing/empty entry) keeps the Slider. */
+                if (waveform != null && waveform.isNotEmpty()) {
+                    WaveformScrubber(
+                        samples          = waveform,
+                        positionFraction = position,
+                        enabled          = isCurrent && durationMs > 0,
+                        onScrub          = { scrubFraction = it },
+                        onScrubFinished  = {
+                            scrubFraction?.let { onSeek(uri, it) }
+                            scrubFraction = null
+                        },
+                        modifier = Modifier.fillMaxWidth()
                     )
-                )
+                } else {
+                    Slider(
+                        value    = position,
+                        onValueChange = { scrubFraction = it },
+                        onValueChangeFinished = {
+                            scrubFraction?.let { onSeek(uri, it) }
+                            scrubFraction = null
+                        },
+                        enabled  = isCurrent && durationMs > 0,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(20.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor         = MaterialTheme.colorScheme.onSecondaryContainer,
+                            activeTrackColor   = MaterialTheme.colorScheme.onSecondaryContainer,
+                            inactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f),
+                            disabledThumbColor         = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
+                            disabledActiveTrackColor   = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
+                            disabledInactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f)
+                        )
+                    )
+                }
                 // Elapsed time (left) and total duration (right).
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1987,6 +2014,78 @@ private fun AudioChip(
                     )
                 }
             }
+        }
+    }
+}
+
+// ── WaveformScrubber ─────────────────────────────────────────────────────────
+
+/**
+ * Google-Messages-style amplitude waveform that doubles as the seek control for a
+ * recorded memo chip (reply-bar preview + pending strip only — bubbles keep the
+ * Slider; see the compose-gesture-conflict rule, these detectors must never sit on
+ * or over a message bubble).
+ *
+ * Fed values, never a collector: [positionFraction] follows the finger mid-drag
+ * (the caller passes its scrub value) and the player's position otherwise, so the
+ * bar split never freezes on a conflated flow.
+ *
+ * @param positionFraction 0..1 played/unplayed split point.
+ * @param onScrub          finger-follow — set the caller's scrubFraction.
+ * @param onScrubFinished  commit — seek + clear scrubFraction.
+ */
+@Composable
+private fun WaveformScrubber(
+    samples: List<Float>,
+    positionFraction: Float,
+    enabled: Boolean,
+    onScrub: (Float) -> Unit,
+    onScrubFinished: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // Colors read OUTSIDE the draw lambda (MaterialTheme can't be read inside a
+    // DrawScope). Unplayed is always the 0.3-alpha track; played is full-strength
+    // when enabled, 0.5-alpha when not — matching the Slider's disabled colors.
+    val base          = MaterialTheme.colorScheme.onSecondaryContainer
+    val playedColor   = if (enabled) base else base.copy(alpha = 0.5f)
+    val unplayedColor = base.copy(alpha = 0.3f)
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            // TalkBack reads the position; scrub-by-accessibility-action isn't
+            // supported (play/pause remains — accepted).
+            .progressSemantics(positionFraction)
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectTapGestures { onScrub(it.x / size.width); onScrubFinished() }
+            }
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragStart = { onScrub((it.x / size.width).coerceIn(0f, 1f)) },
+                    onDragEnd   = { onScrubFinished() },
+                    onDragCancel = { onScrubFinished() }
+                ) { change, _ ->
+                    onScrub((change.position.x / size.width).coerceIn(0f, 1f))
+                }
+            }
+    ) {
+        // All geometry derived from the canvas size and sample count — no raw pixels.
+        val slotWidth    = size.width / samples.size
+        val barWidth     = slotWidth * 0.6f
+        val minBarHeight = 3.dp.toPx()
+        val radius       = CornerRadius(barWidth / 2f, barWidth / 2f)
+        val cutoff       = positionFraction * size.width
+        samples.forEachIndexed { index, sample ->
+            val barHeight = maxOf(minBarHeight, sample.coerceIn(0f, 1f) * size.height)
+            val barCenter = index * slotWidth + slotWidth / 2f
+            drawRoundRect(
+                color        = if (barCenter <= cutoff) playedColor else unplayedColor,
+                topLeft      = Offset(index * slotWidth + (slotWidth - barWidth) / 2f, (size.height - barHeight) / 2f),
+                size         = Size(barWidth, barHeight),
+                cornerRadius = radius
+            )
         }
     }
 }
@@ -2239,12 +2338,18 @@ private fun ReplyBar(
     // Shared audio player — lets a pending memo be reviewed (played/scrubbed)
     // before sending.
     audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    // uri → display waveform for recorded memos. Collected ONCE below (it changes
+    // rarely) and resolved to a List<Float>? per chip.
+    memoWaveforms: StateFlow<Map<String, List<Float>>> = MutableStateFlow(emptyMap()),
     onAudioPlayPause: (String) -> Unit = {},
     onAudioSeek: (String, Float) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var showAttachMenu by remember { mutableStateOf(false) }
+    // Collected once here (not per chip) — the map changes only when a take is
+    // stored/removed, so a single subscription feeds every chip its resolved value.
+    val waveforms by memoWaveforms.collectAsState()
 
     /* Android Photo Picker (multi-select, images + video). Jetpack-backed with a
      * Play Services shim below Android 13, so it works down to minSdk 26. Unlike the
@@ -2440,6 +2545,10 @@ private fun ReplyBar(
                                 PendingAudioAttachment(
                                     attachment = attachment,
                                     audioPlayback = audioPlayback,
+                                    // Resolved per-attachment from the CURRENT uri, so a
+                                    // recycled position (an earlier attachment removed)
+                                    // can never show a stale neighbour's waveform.
+                                    waveform = waveforms[attachment.uri],
                                     onAudioPlayPause = onAudioPlayPause,
                                     onAudioSeek = onAudioSeek,
                                     onRemove = {
@@ -2666,6 +2775,7 @@ private fun ReplyBar(
                         minHeight        = with(density) { fillerPx.toDp() },
                         recordingLevel   = recordingLevel,
                         audioPlayback    = audioPlayback,
+                        previewWaveform  = voiceMemo.previewUri?.let { waveforms[it] },
                         onAudioPlayPause = onAudioPlayPause,
                         onAudioSeek      = onAudioSeek,
                         onEvent          = onVoiceMemoEvent
@@ -2937,6 +3047,8 @@ private fun VoiceMemoPanel(
     minHeight: Dp,
     recordingLevel: StateFlow<Float>,
     audioPlayback: StateFlow<AudioPlaybackState>,
+    // Display waveform for the parked preview take, or null (→ Slider fallback).
+    previewWaveform: List<Float>?,
     onAudioPlayPause: (String) -> Unit,
     onAudioSeek: (String, Float) -> Unit,
     onEvent: (VoiceMemoEvent) -> Unit
@@ -3005,7 +3117,8 @@ private fun VoiceMemoPanel(
                             audioPlayback = audioPlayback,
                             onPlayPause = onAudioPlayPause,
                             onSeek = onAudioSeek,
-                            fallbackDurationMs = rememberAudioDurationMs(uri)
+                            fallbackDurationMs = rememberAudioDurationMs(uri),
+                            waveform = previewWaveform
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -3132,6 +3245,8 @@ private fun rememberAudioDurationMs(uri: String): Long? {
 private fun PendingAudioAttachment(
     attachment: MessageAttachment,
     audioPlayback: StateFlow<AudioPlaybackState>,
+    // Display waveform for this recorded memo, or null (→ Slider fallback).
+    waveform: List<Float>?,
     onAudioPlayPause: (String) -> Unit,
     onAudioSeek: (String, Float) -> Unit,
     onRemove: () -> Unit
@@ -3146,7 +3261,8 @@ private fun PendingAudioAttachment(
                 audioPlayback = audioPlayback,
                 onPlayPause = onAudioPlayPause,
                 onSeek = onAudioSeek,
-                fallbackDurationMs = rememberAudioDurationMs(attachment.uri)
+                fallbackDurationMs = rememberAudioDurationMs(attachment.uri),
+                waveform = waveform
             )
         }
         IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {

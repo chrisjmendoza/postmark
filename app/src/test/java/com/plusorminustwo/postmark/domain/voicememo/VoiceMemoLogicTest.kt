@@ -242,4 +242,61 @@ class VoiceMemoLogicTest {
             )
         }
     }
+
+    // ── Waveform resampling ───────────────────────────────────────────────────
+
+    @Test fun `resample output size always equals the requested bucket count`() {
+        assertEquals(
+            VOICE_WAVEFORM_BUCKETS,
+            resampleAmplitudes(List(1_000) { 0.5f }, VOICE_WAVEFORM_BUCKETS).size
+        )
+        assertEquals(10, resampleAmplitudes(listOf(0.1f, 0.5f, 0.9f), 10).size)
+        assertEquals(48, resampleAmplitudes(emptyList(), 48).size)
+    }
+
+    @Test fun `empty input resamples to all zeros`() {
+        val out = resampleAmplitudes(emptyList(), 16)
+        assertEquals(16, out.size)
+        assertTrue("expected all zeros, got $out", out.all { it == 0f })
+    }
+
+    @Test fun `a single sample stretches across every bucket`() {
+        val out = resampleAmplitudes(listOf(0.7f), 48)
+        assertEquals(48, out.size)
+        assertTrue("every bar should equal the lone sample, got $out", out.all { it == 0.7f })
+    }
+
+    @Test fun `downsampling keeps the peak of each bucket`() {
+        // 96 samples with one loud spike; downsampled to 48 buckets each bucket owns
+        // two source samples, so the spike's bucket must read 1.0 (max), never an
+        // average that would wash it out.
+        val samples = MutableList(96) { 0.1f }
+        samples[50] = 1.0f
+        val out = resampleAmplitudes(samples, 48)
+        assertEquals(48, out.size)
+        assertEquals(1.0f, out[25], 0f)          // bucket 25 covers source [50, 52)
+        assertTrue("no bar may exceed 1.0, got $out", out.all { it <= 1.0f })
+    }
+
+    @Test fun `fewer samples than buckets stretches to full width`() {
+        val out = resampleAmplitudes(listOf(0.2f, 0.8f, 0.4f), 12)
+        assertEquals(12, out.size)
+        // Stretch invents nothing — every bar is one of the three inputs.
+        assertTrue("stretch must reuse source values, got $out",
+            out.all { it == 0.2f || it == 0.8f || it == 0.4f })
+    }
+
+    @Test fun `non-positive bucket counts resample to an empty list`() {
+        assertTrue(resampleAmplitudes(listOf(0.5f), 0).isEmpty())
+        assertTrue(resampleAmplitudes(listOf(0.5f), -4).isEmpty())
+        assertTrue(resampleAmplitudes(emptyList(), 0).isEmpty())
+    }
+
+    @Test fun `out-of-range sample values clamp into 0 to 1`() {
+        val out = resampleAmplitudes(listOf(-0.5f, 2.0f), 2)
+        assertEquals(2, out.size)
+        assertEquals(0f, out[0], 0f)   // -0.5 clamps up to 0
+        assertEquals(1f, out[1], 0f)   // 2.0 clamps down to 1
+        assertTrue(out.all { it in 0f..1f })
+    }
 }

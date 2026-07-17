@@ -132,3 +132,30 @@ fun formatMemoDuration(ms: Long): String {
  *  the meter, not hover near the floor the way a linear mapping does. */
 fun normalizedRecordingLevel(rawAmplitude: Int): Float =
     sqrt(rawAmplitude.coerceIn(0, 32_767) / 32_767f)
+
+/** Display bar count for chip waveforms — shared by the ViewModel (resample at
+ *  store time) and the renderer. */
+const val VOICE_WAVEFORM_BUCKETS = 48
+
+/** Downsamples/stretches captured amplitude samples to exactly [buckets] bars.
+ *  Bucket value = MAX of the samples mapping into it (peaks read better than means
+ *  for speech). Fewer samples than buckets stretches via index mapping; empty input
+ *  → all zeros; buckets <= 0 → empty list. Output values clamped 0..1. */
+fun resampleAmplitudes(samples: List<Float>, buckets: Int): List<Float> {
+    if (buckets <= 0) return emptyList()
+    if (samples.isEmpty()) return List(buckets) { 0f }
+    return List(buckets) { bucket ->
+        // Half-open [start, end) span of source indices owned by this bucket. When
+        // there are fewer samples than buckets the span collapses to nothing, so a
+        // stretched bucket falls back to the single sample at its mapped index.
+        val start = (bucket * samples.size) / buckets
+        val rawEnd = ((bucket + 1) * samples.size) / buckets
+        val end = if (rawEnd > start) rawEnd else start + 1
+        var peak = 0f
+        for (i in start until end) {
+            val v = samples[i].coerceIn(0f, 1f)
+            if (v > peak) peak = v
+        }
+        peak
+    }
+}

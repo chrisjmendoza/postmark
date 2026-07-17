@@ -35,8 +35,10 @@ import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEffect
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEvent
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
+import com.plusorminustwo.postmark.domain.voicememo.VOICE_WAVEFORM_BUCKETS
 import com.plusorminustwo.postmark.domain.voicememo.isMemoKeepable
 import com.plusorminustwo.postmark.domain.voicememo.normalizedRecordingLevel
+import com.plusorminustwo.postmark.domain.voicememo.resampleAmplitudes
 import com.plusorminustwo.postmark.domain.voicememo.voiceMemoTransition
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.service.audio.VoiceMemoRecorder
@@ -599,6 +601,8 @@ class ThreadViewModel @Inject constructor(
         val updated = _pendingAttachments.value.filterIndexed { i, _ -> i != index }
         _pendingAttachments.value = updated
         savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(updated)
+        // Drop this uri's display waveform (no-op for non-memo attachments).
+        removed?.let { removeWaveform(it.uri) }
         // A removed voice memo's recording file is exclusively owned by this pending
         // entry (unique per recording, never referenced by a message row while pending),
         // so delete it here — no other flow ever will. No-op for non-memo attachments.
@@ -695,6 +699,42 @@ class ThreadViewModel @Inject constructor(
     val recordingLevel: StateFlow<Float> = _recordingLevel.asStateFlow()
     private var recordingLevelJob: Job? = null
 
+    /** Amplitude samples for the current take, appended live by the level ticker below
+     *  (one driver, all on Main — no synchronization needed). Cleared in [startRecorder]
+     *  on success (covers START and RESTART_RECORDING); resampled into [_memoWaveforms]
+     *  when a take is kept. A ~1:42 memo is ≈1,530 floats. */
+    private val waveformBuilder = mutableListOf<Float>()
+
+    /** uri → resampled display waveform for recorded memos still living in the reply bar
+     *  (preview panel + pending strip). Chips look their entry up by uri; a missing entry
+     *  degrades to the plain Slider. Bounded ≤6 by construction (5 pending + 1 preview);
+     *  bubbles never use it. Survives process death via [DRAFT_WAVEFORMS_KEY] (a
+     *  Serializable HashMap<String, FloatArray>), restored below. */
+    private val _memoWaveforms = MutableStateFlow<Map<String, List<Float>>>(
+        savedStateHandle.get<HashMap<String, FloatArray>>(DRAFT_WAVEFORMS_KEY)
+            ?.mapValues { it.value.toList() }
+            ?: emptyMap()
+    )
+    val memoWaveforms: StateFlow<Map<String, List<Float>>> = _memoWaveforms.asStateFlow()
+
+    /** Stores [samples] under [uri], keeping the flow and SavedStateHandle in sync
+     *  (mirrors the [setVoiceMemo] pattern). */
+    private fun putWaveform(uri: String, samples: List<Float>) {
+        _memoWaveforms.update { it + (uri to samples) }
+        persistWaveforms()
+    }
+
+    /** Drops [uri]'s waveform, keeping the flow and SavedStateHandle in sync. */
+    private fun removeWaveform(uri: String) {
+        _memoWaveforms.update { it - uri }
+        persistWaveforms()
+    }
+
+    private fun persistWaveforms() {
+        savedStateHandle[DRAFT_WAVEFORMS_KEY] =
+            HashMap(_memoWaveforms.value.mapValues { it.value.toFloatArray() })
+    }
+
     init {
         // One driver for the meter: poll the recorder only while audio is actually being
         // captured (HELD/LOCKED), and cancel the ticker + zero the level the instant the
@@ -706,8 +746,12 @@ class ThreadViewModel @Inject constructor(
                 if (capturing && recordingLevelJob?.isActive != true) {
                     recordingLevelJob = viewModelScope.launch {
                         while (isActive) {
-                            _recordingLevel.value =
+                            val level =
                                 normalizedRecordingLevel(voiceMemoRecorder.currentMaxAmplitude())
+                            _recordingLevel.value = level
+                            // Same tick feeds the take's amplitude history — captured for
+                            // free here, resampled into a display waveform when kept.
+                            waveformBuilder.add(level)
                             delay(66) // ~15 Hz
                         }
                     }
@@ -746,6 +790,11 @@ class ThreadViewModel @Inject constructor(
             _attachmentRejectedEvent.tryEmit("Couldn't start recording")
             return null
         }
+        // Fresh take → fresh amplitude history. Clearing here (not in the level ticker)
+        // is deliberate: a hands-free RESTART keeps the phase LOCKED, so the ticker never
+        // stops/restarts across it — clearing there would wipe nothing on START and drop
+        // the new take's opening samples on RESTART.
+        waveformBuilder.clear()
         return SystemClock.elapsedRealtime()
     }
 
@@ -808,6 +857,7 @@ class ThreadViewModel @Inject constructor(
                 val uri = stopRecorderForKeep(
                     current.startedAtMs, "Hold the mic button to record a voice memo"
                 ) ?: return
+                putWaveform(uri, resampleAmplitudes(waveformBuilder, VOICE_WAVEFORM_BUCKETS))
                 appendAttachments(listOf(MessageAttachment(uri, "audio/mp4")))
             }
             // Deliberate flow (locked → stop): hold the take for the preview panel.
@@ -817,6 +867,9 @@ class ThreadViewModel @Inject constructor(
                     if (uri != null) current.copy(phase = phase, previewUri = uri)
                     else current.copy(phase = VoiceMemoPhase.IDLE, previewUri = null)
                 )
+                if (uri != null) {
+                    putWaveform(uri, resampleAmplitudes(waveformBuilder, VOICE_WAVEFORM_BUCKETS))
+                }
             }
             VoiceMemoEffect.ATTACH_PREVIEW -> {
                 val uri = current.previewUri
@@ -825,13 +878,19 @@ class ThreadViewModel @Inject constructor(
             }
             VoiceMemoEffect.DISCARD_PREVIEW -> {
                 setVoiceMemo(current.copy(phase = phase, previewUri = null))
-                current.previewUri?.let { deletePreviewTake(it) }
+                current.previewUri?.let {
+                    deletePreviewTake(it)
+                    removeWaveform(it)
+                }
             }
             VoiceMemoEffect.RESTART_RECORDING -> {
                 // Drop the current take — an in-flight locked recording or a held
                 // preview — and immediately record a new one, still hands-free.
                 voiceMemoRecorder.stopAndDiscard()
-                current.previewUri?.let { deletePreviewTake(it) }
+                current.previewUri?.let {
+                    deletePreviewTake(it)
+                    removeWaveform(it)
+                }
                 val startedAt = startRecorder(current.maxDurationMs)
                 setVoiceMemo(
                     if (startedAt != null) current.copy(phase = phase, startedAtMs = startedAt, previewUri = null)
@@ -935,6 +994,9 @@ class ThreadViewModel @Inject constructor(
         // different pinned uri, so a playing one would otherwise orphan. Mirrors the
         // same guard in removeAttachment / deletePreviewTake.
         if (attachments.any { it.uri == audioPlayer.state.value.uri }) audioPlayer.pause()
+        // The reply-bar waveforms were only for review; the bubble chips use the Slider,
+        // so drop every sent attachment's entry.
+        attachments.forEach { removeWaveform(it.uri) }
 
         viewModelScope.launch {
             android.os.Trace.beginSection("ThreadViewModel.sendMessage")
@@ -1191,6 +1253,7 @@ class ThreadViewModel @Inject constructor(
         private const val DRAFT_TEXT_KEY         = "draft_text"
         private const val DRAFT_ATTACHMENTS_KEY  = "draft_attachments"
         private const val DRAFT_PREVIEW_MEMO_KEY = "draft_preview_memo"
+        private const val DRAFT_WAVEFORMS_KEY    = "draft_waveforms"
 
         /** Max attachments per outgoing MMS — shared by the picker's maxItems and
          *  the accumulate-across-picker-trips cap in [appendAttachments]. */
