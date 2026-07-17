@@ -31,7 +31,13 @@ import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEffect
+import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEvent
+import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
+import com.plusorminustwo.postmark.domain.voicememo.isMemoKeepable
+import com.plusorminustwo.postmark.domain.voicememo.voiceMemoTransition
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.service.audio.VoiceMemoRecorder
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
@@ -109,7 +115,8 @@ class ThreadViewModel @Inject constructor(
     private val mmsManagerWrapper: MmsManagerWrapper,
     private val timestampPrefRepo: TimestampPreferenceRepository,
     private val fontScaleRepo: BubbleFontScaleRepository,
-    private val draftRepository: DraftRepository
+    private val draftRepository: DraftRepository,
+    private val voiceMemoRecorder: VoiceMemoRecorder
 ) : ViewModel() {
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
@@ -580,9 +587,18 @@ class ThreadViewModel @Inject constructor(
 
     /** Removes one pending attachment (user taps the × on its preview thumbnail). */
     fun removeAttachment(index: Int) {
+        val removed = _pendingAttachments.value.getOrNull(index)
         val updated = _pendingAttachments.value.filterIndexed { i, _ -> i != index }
         _pendingAttachments.value = updated
         savedStateHandle[DRAFT_ATTACHMENTS_KEY] = encodeAttachmentsJson(updated)
+        // A removed voice memo's recording file is exclusively owned by this pending
+        // entry (unique per recording, never referenced by a message row while pending),
+        // so delete it here — no other flow ever will. No-op for non-memo attachments.
+        removed?.let { att ->
+            viewModelScope.launch(Dispatchers.IO) {
+                MmsManagerWrapper.deleteVoiceMemoCacheFile(context, att)
+            }
+        }
     }
 
     /** Clears all pending attachments. */
@@ -599,6 +615,109 @@ class ThreadViewModel @Inject constructor(
 
     /** Clears the swipe-to-reply quote strip without sending. */
     fun clearReplyingTo() { _replyingToId.value = null }
+
+    // ── Voice memo recording ──────────────────────────────────────────────────
+
+    /** Recording phase + start timestamp for the reply bar's mic button. The UI derives
+     *  the elapsed timer from [startedAtMs]; [maxDurationMs] caps it (MMS byte budget). */
+    data class VoiceMemoUiState(
+        val phase: VoiceMemoPhase = VoiceMemoPhase.IDLE,
+        val startedAtMs: Long = 0L,
+        val maxDurationMs: Long = MmsManagerWrapper.MAX_VOICE_MEMO_DURATION_MS
+    )
+
+    private val _voiceMemo = MutableStateFlow(VoiceMemoUiState())
+    val voiceMemoState: StateFlow<VoiceMemoUiState> = _voiceMemo.asStateFlow()
+
+    /**
+     * Single entry point for every mic-button interaction (press, slide-latch, release,
+     * stop, cancel, duration cap). Applies the pure [voiceMemoTransition] table and
+     * executes the returned effect — the UI never talks to the recorder directly.
+     * Caller guarantees RECORD_AUDIO is granted before sending [VoiceMemoEvent.PRESS].
+     */
+    fun onVoiceMemoEvent(event: VoiceMemoEvent) {
+        val current = _voiceMemo.value
+        val (phase, effect) = voiceMemoTransition(current.phase, event)
+        when (effect) {
+            VoiceMemoEffect.START -> {
+                if (_pendingAttachments.value.size >= MAX_ATTACHMENTS) {
+                    _attachmentRejectedEvent.tryEmit(
+                        "Up to $MAX_ATTACHMENTS attachments per message — remove one to record"
+                    )
+                    return
+                }
+                // One audio pipeline at a time: recording over playback would capture it.
+                audioPlayer.pause()
+                val now = System.currentTimeMillis()
+                val started = voiceMemoRecorder.start(
+                    outputFile    = MmsManagerWrapper.voiceMemoCacheFile(context, now),
+                    maxDurationMs = current.maxDurationMs.toInt(),
+                    bitrateBps    = MmsManagerWrapper.VOICE_MEMO_BITRATE_BPS,
+                    onMaxDurationReached = { onVoiceMemoEvent(VoiceMemoEvent.CAP_REACHED) }
+                )
+                if (!started) {
+                    _attachmentRejectedEvent.tryEmit("Couldn't start recording")
+                    return
+                }
+                _voiceMemo.value = current.copy(phase = phase, startedAtMs = now)
+            }
+            VoiceMemoEffect.STOP_KEEP -> {
+                _voiceMemo.value = current.copy(phase = phase)
+                val elapsedMs = System.currentTimeMillis() - current.startedAtMs
+                if (!isMemoKeepable(elapsedMs)) {
+                    // Accidental tap — discard, and teach the gesture.
+                    voiceMemoRecorder.stopAndDiscard()
+                    _attachmentRejectedEvent.tryEmit("Hold the mic button to record a voice memo")
+                    return
+                }
+                val file = voiceMemoRecorder.stopAndKeep() ?: return
+                val uri = try {
+                    FileProvider.getUriForFile(
+                        context, "${context.packageName}.fileprovider", file
+                    ).toString()
+                } catch (e: Exception) {
+                    runCatching { file.delete() }
+                    _attachmentRejectedEvent.tryEmit("Couldn't save recording")
+                    return
+                }
+                // Into the same pending queue every attachment uses — the preview strip
+                // (play / duration / ×) is the memo's review step before send.
+                appendAttachments(listOf(MessageAttachment(uri, "audio/mp4")))
+            }
+            VoiceMemoEffect.STOP_DISCARD -> {
+                _voiceMemo.value = current.copy(phase = phase)
+                voiceMemoRecorder.stopAndDiscard()
+            }
+            VoiceMemoEffect.NONE -> {
+                if (phase != current.phase) _voiceMemo.value = current.copy(phase = phase)
+            }
+        }
+    }
+
+    // ── Audio playback (one player per thread screen — perf-analysis #30) ─────
+
+    /* The wrapper is cheap to construct (a StateFlow); the ExoPlayer inside is only
+     * built on the first play-tap, so threads without audio never pay for one.
+     * Created/driven on Main (UI callbacks + onCleared), which ExoPlayer requires. */
+    private val audioPlayer = ThreadAudioPlayer(context, viewModelScope)
+
+    /** Playback state for the audio chips; collected per-chip so position ticks
+     *  only recompose chips. */
+    val audioPlayback: StateFlow<AudioPlaybackState> get() = audioPlayer.state
+
+    /** Play/pause toggle for the audio attachment at [uri] (bubble chip or pending
+     *  preview tile). Loading a new URI implicitly stops whatever else was playing. */
+    fun playPauseAudio(uri: String) = audioPlayer.playPause(uri)
+
+    /** Seeks the currently loaded audio to [fraction] of its duration. */
+    fun seekAudio(uri: String, fraction: Float) = audioPlayer.seekTo(uri, fraction)
+
+    override fun onCleared() {
+        // Discard any in-flight recording (deletes its temp file) and free the player.
+        voiceMemoRecorder.stopAndDiscard()
+        audioPlayer.release()
+        super.onCleared()
+    }
 
     /**
      * Sends the current reply text and/or pending attachment.
@@ -706,6 +825,18 @@ class ThreadViewModel @Inject constructor(
                             } else att
                         }
                         messageRepository.updateAttachments(tempId, pinned)
+                        /* Attachments that were re-pinned above now live in the
+                         * mms_attach_ cache, so a voice memo's original recording file
+                         * is referenced by nothing — delete it (no-op for non-memos).
+                         * Un-pinned ones (cache write failed) keep their source file
+                         * as the only readable copy for retries. */
+                        withContext(Dispatchers.IO) {
+                            attachments.forEachIndexed { index, att ->
+                                if (MmsManagerWrapper.attachmentCacheFile(context, tempId, index).exists()) {
+                                    MmsManagerWrapper.deleteVoiceMemoCacheFile(context, att)
+                                }
+                            }
+                        }
                     } catch (_: Exception) { /* keep original picker URIs on error */ }
                 }
             } else {

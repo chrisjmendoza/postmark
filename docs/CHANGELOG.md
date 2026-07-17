@@ -4,6 +4,58 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-17 (voice memos) — first on-device feedback round
+
+Two findings from the owner's first hands-on pass, fixed before the feature ever
+merged. **Pending memo review is now a full-width chip**: the 80 dp square tile
+with a lone play button read as broken; a pending audio attachment now renders as
+the same play/seek/duration `AudioChip` the bubbles use, plus an × — with the
+duration shown immediately from file metadata (`fallbackDurationMs`) instead of
+"Voice memo" until first play. Images/videos keep the 80 dp thumbnail LazyRow;
+the dead audio tile branch was deleted. **The reply bar no longer jumps when
+recording starts with the keyboard open**: pressing the mic removed the focused
+TextField, the IME closed, and `imePadding` slid the whole bar down mid-gesture —
+disorienting, and genuinely broken: the mic sliding under a stationary finger
+registered as an upward *relative* drag, which could spuriously latch the lock.
+A filler panel below the input row (pulsing mic glyph) now grows in exact
+counter-phase to the IME collapse (height captured at record start − live IME
+height, both from `WindowInsets.ime` — no hardcoded pixels), so the input row
+never moves; it shrink-animates away when recording ends and doesn't exist when
+the keyboard was already closed. Same pattern as Google Messages' voice panel —
+an interaction pattern, not copied assets.
+
+---
+
+## 2026-07-16 (voice memos) — record + send, and one audio player to rule them all
+
+New: **voice memos** from the reply bar. The send button becomes a mic while the
+composer is empty; **hold to record**, release to drop the memo into the pending-
+attachment strip for review (play / duration / × — deliberately not auto-sent),
+**slide up to lock** hands-free recording (CONTEXT_CLICK haptic on latch; timer +
+Cancel + Stop), **slide left to cancel** while holding. Capture is AAC mono
+64 kbps in .m4a via a new `VoiceMemoRecorder`, sent as a normal `audio/mp4` MMS
+attachment through the existing path. The phase machine (`IDLE/HELD/LOCKED`) and
+gesture math are pure functions in `domain/voicememo` (25 new tests incl. the
+budget math); the duration cap is *derived* from the MMS byte budget
+(`maxVoiceMemoDurationMs` ≈ 1:42 at the 860 KB default — fixed, not per-carrier,
+so a memo can't become unsendable after a SIM swap) and enforced by
+`setMaxDuration`, auto-stopping into preview. Recording files
+(`filesDir/voice_memo_*.m4a`) join the mms_attach_ delete/sweep lifecycle (24 h
+sweep grace — a pending unsent memo survives process death); × and post-send
+pinning delete eagerly. RECORD_AUDIO is requested on first mic press, denial gets
+a toast. The mic gesture is a single `pointerInput` on the button only — nothing
+new near bubbles (see 2026-07-12).
+
+Bundled because memos make audio a primary flow: **performance-analysis Tier 4
+#30**. All audio playback now goes through one ViewModel-owned ExoPlayer
+(`ThreadAudioPlayer`, built lazily on first play): two chips can no longer play
+simultaneously, playback survives the chip scrolling off-screen, and the per-chip
+raw `MediaPlayer` + manual AudioFocusRequest code is deleted (ExoPlayer handles
+focus). Chips collect the shared `StateFlow<AudioPlaybackState>` themselves, so
+the 5 Hz position ticks recompose only audio chips, never bubbles.
+
+---
+
 ## 2026-07-16 (thread) — four fixes from on-device testing
 
 All four found by the owner on the first staging build. **Date range selection**

@@ -309,6 +309,20 @@ class MmsManagerWrapper @Inject constructor(
          * profiles allowed only a few seconds at a watchable bitrate) while still comfortably
          * fitting T-Mobile/Verizon's ~3-3.5MB caps at a decent bitrate. */
         const val MAX_VIDEO_DURATION_MS = 10_000L
+        /* Voice memos are recorded straight at this bitrate (AAC mono), so unlike video
+         * there is no transcode fallback — the duration cap below is what guarantees the
+         * memo fits the MMS budget. 64 kbps AAC is transparent for speech. */
+        const val VOICE_MEMO_BITRATE_BPS = 64_000
+        /* Same "predictable rule of thumb" role as MAX_VIDEO_DURATION_MS, but derived
+         * rather than hand-picked: the longest memo whose bytes fit the default carrier
+         * budget at the recording bitrate (~1:42). Computed against the conservative
+         * DEFAULT_MAX_MMS_BYTES rather than live carrier config so the cap never varies
+         * between SIMs — a memo recorded on one network must not become unsendable after
+         * a carrier switch. */
+        val MAX_VOICE_MEMO_DURATION_MS = maxVoiceMemoDurationMs(
+            budgetBytes = DEFAULT_MAX_MMS_BYTES - PDU_OVERHEAD_BYTES,
+            bitrateBps  = VOICE_MEMO_BITRATE_BPS
+        )
         /* 860 KB (860,160 bytes) is Signal's proven-safe default ceiling.
          * AT&T and Verizon hard-cap at 1,048,576 bytes (1 MB). Our previous
          * value of 1,200,000 bytes silently exceeded this, causing images just
@@ -351,28 +365,69 @@ class MmsManagerWrapper @Inject constructor(
                 else "mms_attach_${messageId}_$index.bin"
             )
 
+        // ── Voice memo cache files ────────────────────────────────────────────
+        /* Voice memos are the one attachment type that exists as an app-owned file
+         * BEFORE send (recorded straight into filesDir), so they get their own name
+         * pattern and join the same delete/sweep lifecycle as mms_attach_ files. */
+        const val VOICE_MEMO_FILE_PREFIX = "voice_memo_"
+        const val VOICE_MEMO_FILE_SUFFIX = ".m4a"
+        /* A recorded-but-unsent memo can legitimately sit in the pending-attachment
+         * queue for hours (it survives process death via SavedStateHandle), so it
+         * gets a much longer sweep grace than the 1-hour in-flight-send guard —
+         * only a memo abandoned for a full day (e.g. leaked by a crash mid-
+         * recording) is collected. */
+        private const val VOICE_MEMO_SWEEP_MIN_AGE_MS = 24 * 60 * 60 * 1000L
+
+        /** The filesDir file a new voice memo records into. [epochMs] makes the name
+         *  unique per recording. */
+        fun voiceMemoCacheFile(context: Context, epochMs: Long): File =
+            File(context.filesDir, "$VOICE_MEMO_FILE_PREFIX$epochMs$VOICE_MEMO_FILE_SUFFIX")
+
+        /** True for filenames this class owns in filesDir and may delete/sweep. */
+        internal fun isOutgoingCacheFileName(name: String): Boolean =
+            (name.startsWith("mms_attach_") && name.endsWith(".bin")) ||
+            (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX))
+
         /**
-         * Deletes the filesDir cache files (`mms_attach_*.bin`) backing [attachments] of an
-         * outgoing MMS. Received-MMS attachments carry `content://mms/part` URIs whose last
-         * segment isn't a cache-file name, so they're skipped; any non-cache URI is a no-op.
-         * Call after a message is deleted so its cached media doesn't leak.
+         * Deletes the filesDir file backing [attachment] ONLY if it is a voice memo
+         * recording. Used when the user removes a pending memo from the reply bar (×)
+         * and after a send pins the optimistic row to the mms_attach_ copy — in both
+         * cases the recording file is exclusively owned by that pending entry, unlike
+         * mms_attach_ files, which sent rows keep referencing.
+         */
+        fun deleteVoiceMemoCacheFile(context: Context, attachment: MessageAttachment) {
+            val name = Uri.parse(attachment.uri).lastPathSegment ?: return
+            if (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) {
+                runCatching { File(context.filesDir, name).delete() }
+            }
+        }
+
+        /**
+         * Deletes the filesDir cache files (`mms_attach_*.bin`, `voice_memo_*.m4a`)
+         * backing [attachments] of an outgoing MMS. Received-MMS attachments carry
+         * `content://mms/part` URIs whose last segment isn't a cache-file name, so
+         * they're skipped; any non-cache URI is a no-op. Call after a message is
+         * deleted so its cached media doesn't leak.
          */
         fun deleteAttachmentCacheFiles(context: Context, attachments: List<MessageAttachment>) {
             attachments.forEach { att ->
                 val name = Uri.parse(att.uri).lastPathSegment ?: return@forEach
-                if (name.startsWith("mms_attach_") && name.endsWith(".bin")) {
+                if (isOutgoingCacheFileName(name)) {
                     runCatching { File(context.filesDir, name).delete() }
                 }
             }
         }
 
         /**
-         * Deletes `mms_attach_*.bin` cache files in filesDir that no live message references.
-         * Each sent-MMS row (and any still-pending optimistic row) references its own cache
-         * file via a FileProvider URI, so a file whose name is absent from [referencedNames]
-         * is a leftover from a superseded/failed/deleted send. A file is only removed once
-         * [nowMs] − its mtime exceeds [minAgeMs], so a file an in-flight send just wrote but
-         * hasn't yet attached to a row is never swept. Returns the number of files deleted.
+         * Deletes cache files in filesDir (`mms_attach_*.bin`, `voice_memo_*.m4a`) that
+         * no live message references. Each sent-MMS row (and any still-pending optimistic
+         * row) references its own cache file via a FileProvider URI, so a file whose name
+         * is absent from [referencedNames] is a leftover from a superseded/failed/deleted
+         * send — or, for voice memos, from a cancelled/crashed recording. A file is only
+         * removed once [nowMs] − its mtime exceeds its minimum age ([minAgeMs] for
+         * mms_attach_ files, [VOICE_MEMO_SWEEP_MIN_AGE_MS] for memos — a pending unsent
+         * memo isn't referenced by any message row, so it needs the longer grace).
+         * Returns the number of files deleted.
          */
         fun sweepOrphanedAttachmentCache(
             context: Context,
@@ -381,11 +436,14 @@ class MmsManagerWrapper @Inject constructor(
             minAgeMs: Long = 60 * 60 * 1000L
         ): Int {
             val files = context.filesDir.listFiles { f ->
-                f.name.startsWith("mms_attach_") && f.name.endsWith(".bin")
+                isOutgoingCacheFileName(f.name)
             } ?: return 0
             var deleted = 0
             files.forEach { f ->
-                if (f.name !in referencedNames && nowMs - f.lastModified() > minAgeMs) {
+                val minAge = if (f.name.startsWith(VOICE_MEMO_FILE_PREFIX)) {
+                    maxOf(minAgeMs, VOICE_MEMO_SWEEP_MIN_AGE_MS)
+                } else minAgeMs
+                if (f.name !in referencedNames && nowMs - f.lastModified() > minAge) {
                     if (runCatching { f.delete() }.getOrDefault(false)) deleted++
                 }
             }
@@ -655,6 +713,25 @@ internal fun allocateAttachmentBudgets(
         left--
     }
     return budgets.toList()
+}
+
+// ── Voice memo duration budgeting ──────────────────────────────────────────────
+/**
+ * The longest voice memo, in whole seconds expressed as milliseconds, whose encoded
+ * bytes fit within [budgetBytes] at [bitrateBps].
+ *
+ * Pure function (unit-tested on the JVM), the audio analogue of [planVideoTranscode]
+ * run in reverse: instead of fitting a bitrate to a known duration, it fits a duration
+ * cap to the fixed recording bitrate, since audio in the shared attachment budget is
+ * non-compressible ([allocateAttachmentBudgets] fails the send if it doesn't fit).
+ * [CONTAINER_OVERHEAD_FACTOR] reserves MP4 container/muxer overhead the same way the
+ * video path does. Floored to a whole second so the cap shown in the recording timer
+ * ("0:07 / 1:42") is exact.
+ */
+internal fun maxVoiceMemoDurationMs(budgetBytes: Int, bitrateBps: Int): Long {
+    if (budgetBytes <= 0 || bitrateBps <= 0) return 0L
+    val usableBits = budgetBytes * 8.0 * CONTAINER_OVERHEAD_FACTOR
+    return (usableBits / bitrateBps).toLong() * 1000L
 }
 
 // ── Video transcode planning ───────────────────────────────────────────────────

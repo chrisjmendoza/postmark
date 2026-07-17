@@ -10,11 +10,7 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.media.MediaMetadataRetriever
-import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.app.role.RoleManager
@@ -24,10 +20,15 @@ import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -98,6 +99,11 @@ import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.Devices
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEvent
+import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
+import com.plusorminustwo.postmark.domain.voicememo.formatMemoDuration
+import com.plusorminustwo.postmark.domain.voicememo.shouldCancelDrag
+import com.plusorminustwo.postmark.domain.voicememo.shouldLatchLock
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
@@ -111,7 +117,9 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -138,7 +146,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -193,6 +203,8 @@ fun ThreadScreen(
     val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
     // address → name for group threads; empty for 1:1 (doubles as the group signal).
     val participantNames by viewModel.participantNames.collectAsState()
+    // Voice memo recording phase for the reply bar's mic button.
+    val voiceMemo by viewModel.voiceMemoState.collectAsState()
 
     // ── Stable lambdas ────────────────────────────────────────────────────────
     // Wrapped in remember(viewModel) so the same function reference is reused
@@ -250,6 +262,9 @@ fun ThreadScreen(
     val onSearchInThread_         = remember(viewModel, threadId, onSearchInThread) { { onSearchInThread(threadId) } }
     val onAdjustFontScale         = remember(viewModel) { { delta: Float -> viewModel.adjustFontScale(delta) } }
     val onResetFontScale          = remember(viewModel) { { viewModel.resetFontScale() } }
+    val onVoiceMemoEvent          = remember(viewModel) { { event: VoiceMemoEvent -> viewModel.onVoiceMemoEvent(event) } }
+    val onAudioPlayPause          = remember(viewModel) { { uri: String -> viewModel.playPauseAudio(uri) } }
+    val onAudioSeek               = remember(viewModel) { { uri: String, fraction: Float -> viewModel.seekAudio(uri, fraction) } }
 
     ThreadContent(
         uiState = uiState,
@@ -296,7 +311,12 @@ fun ThreadScreen(
         onClearReplyingTo = onClearReplyingTo,
         onSearchInThread = onSearchInThread_,
         onAdjustFontScale = onAdjustFontScale,
-        onResetFontScale = onResetFontScale
+        onResetFontScale = onResetFontScale,
+        voiceMemo = voiceMemo,
+        onVoiceMemoEvent = onVoiceMemoEvent,
+        audioPlayback = viewModel.audioPlayback,
+        onAudioPlayPause = onAudioPlayPause,
+        onAudioSeek = onAudioSeek
     )
 }
 
@@ -380,6 +400,14 @@ private fun ThreadContent(
     onSearchInThread: () -> Unit = {},
     onAdjustFontScale: (Float) -> Unit = {},
     onResetFontScale: () -> Unit = {},
+    // Voice memo recording phase driving the reply bar's mic button / recording row.
+    voiceMemo: ThreadViewModel.VoiceMemoUiState = ThreadViewModel.VoiceMemoUiState(),
+    onVoiceMemoEvent: (VoiceMemoEvent) -> Unit = {},
+    // Shared thread-wide audio player state (perf-analysis #30). A StateFlow (stable)
+    // rather than a value so position ticks recompose only the chips that collect it.
+    audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    onAudioPlayPause: (String) -> Unit = {},
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> },
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -892,7 +920,12 @@ private fun ThreadContent(
                     onAttachmentsSelected = onAttachmentsSelected,
                     onRemoveAttachment    = onRemoveAttachment,
                     onClearReplyingTo     = onClearReplyingTo,
-                    onSend                = { onSendMessage() }
+                    onSend                = { onSendMessage() },
+                    voiceMemo             = voiceMemo,
+                    onVoiceMemoEvent      = onVoiceMemoEvent,
+                    audioPlayback         = audioPlayback,
+                    onAudioPlayPause      = onAudioPlayPause,
+                    onAudioSeek           = onAudioSeek
                 )
             }
         }
@@ -950,7 +983,10 @@ private fun ThreadContent(
                             ) {
                                 participantNames[item.message.address]
                                     ?: formatPhoneNumber(item.message.address)
-                            } else null
+                            } else null,
+                            audioPlayback = audioPlayback,
+                            onAudioPlayPause = onAudioPlayPause,
+                            onAudioSeek = onAudioSeek
                         )
                         is ThreadListItem.DateHeader -> DateHeader(
                             label = item.dateLabel,
@@ -1248,6 +1284,11 @@ private fun MessageBubble(
     // cluster — rendered as a small name label above the bubble so participants
     // are distinguishable (they otherwise all render identically to a 1:1 thread).
     senderName: String? = null,
+    // Shared thread-wide audio player (perf-analysis #30) — audio chips collect the
+    // flow themselves so position ticks never recompose the bubble.
+    audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    onAudioPlayPause: (String) -> Unit = {},
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val baseBubbleColor = if (message.isSent)
@@ -1414,7 +1455,10 @@ private fun MessageBubble(
                                 onImageClick = if (att.mimeType.startsWith("image/"))
                                     { { onImageTap(att.uri) } } else null,
                                 onVideoClick = if (att.mimeType.startsWith("video/"))
-                                    { { onVideoTap(att.uri) } } else null
+                                    { { onVideoTap(att.uri) } } else null,
+                                audioPlayback = audioPlayback,
+                                onAudioPlayPause = onAudioPlayPause,
+                                onAudioSeek = onAudioSeek
                             )
                         } else {
                             // Multiple attachments — 2-column thumbnail grid for images/videos;
@@ -1442,7 +1486,13 @@ private fun MessageBubble(
                                 }
                             }
                             others.forEach { att ->
-                                MmsAttachment(uri = att.uri, mimeType = att.mimeType)
+                                MmsAttachment(
+                                    uri = att.uri,
+                                    mimeType = att.mimeType,
+                                    audioPlayback = audioPlayback,
+                                    onAudioPlayPause = onAudioPlayPause,
+                                    onAudioSeek = onAudioSeek
+                                )
                             }
                         }
                         // Show caption text below the attachment if present.
@@ -1634,7 +1684,11 @@ private fun MmsAttachment(
     // Non-null when the image can be tapped to open the full-screen viewer.
     onImageClick: (() -> Unit)? = null,
     // Non-null when the video thumbnail can be tapped to open the player dialog.
-    onVideoClick: (() -> Unit)? = null
+    onVideoClick: (() -> Unit)? = null,
+    // Shared thread-wide audio player (perf-analysis #30); only the audio branch uses it.
+    audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    onAudioPlayPause: (String) -> Unit = {},
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> }
 ) {
     when {
         // ── Image ──────────────────────────────────────────────────────────────
@@ -1749,203 +1803,12 @@ private fun MmsAttachment(
 
         // ── Audio ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("audio/") == true -> {
-            val ctx = LocalContext.current
-            /* Explicit state objects so the AudioFocusRequest listener lambda can
-             * read/write them safely from inside the remember {} block. */
-            val isPlayingState = remember { mutableStateOf(false) }
-            var isPlaying by isPlayingState
-            var isScrubbing by remember { mutableStateOf(false) }
-            var isPreparing by remember { mutableStateOf(false) }
-            /* Normalised playback position 0f..1f, and total duration in ms.
-             * durationMs stays 0 until the player is prepared for the first time. */
-            var position   by remember { mutableStateOf(0f) }
-            var durationMs by remember { mutableStateOf(0) }
-            val playerRef  = remember { mutableStateOf<MediaPlayer?>(null) }
-            val scope = rememberCoroutineScope()
-
-            val audioManager = remember { ctx.getSystemService(AudioManager::class.java) }
-            /* Request audio focus when playback starts. Only react to full AUDIOFOCUS_LOSS
-             * (e.g. incoming phone call). AUDIOFOCUS_LOSS_TRANSIENT and _CAN_DUCK are
-             * intentionally ignored so notification sounds (new SMS, alarm) do not
-             * interrupt a voice memo the user is actively listening to. */
-            val focusRequest = remember {
-                AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build()
-                    )
-                    .setOnAudioFocusChangeListener { focusChange ->
-                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-                            if (isPlayingState.value) {
-                                playerRef.value?.pause()
-                                isPlayingState.value = false
-                            }
-                        }
-                        // AUDIOFOCUS_LOSS_TRANSIENT / _CAN_DUCK not handled on purpose.
-                    }
-                    .build()
-            }
-
-            /* Poll currentPosition every 200 ms while playing so the slider tracks
-             * progress. The poll is skipped while the user is dragging (isScrubbing)
-             * so the thumb doesn't jump back under their finger. */
-            LaunchedEffect(isPlaying) {
-                while (isPlaying) {
-                    val mp = playerRef.value
-                    if (mp != null && !isScrubbing && durationMs > 0) {
-                        position = mp.currentPosition.toFloat() / durationMs
-                    }
-                    delay(200)
-                }
-            }
-
-            DisposableEffect(uri) {
-                onDispose {
-                    playerRef.value?.release()
-                    playerRef.value = null
-                    audioManager.abandonAudioFocusRequest(focusRequest)
-                }
-            }
-
-            /* Format milliseconds as "m:ss". */
-            fun fmtMs(ms: Int): String {
-                val s = ms / 1000
-                return "%d:%02d".format(s / 60, s % 60)
-            }
-
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    /* Play / Pause button.
-                     * First press: creates and prepares a new MediaPlayer then starts it.
-                     * Subsequent presses toggle pause/resume on the same instance.
-                     * On completion the player is released and position resets to 0. */
-                    IconButton(
-                        onClick = {
-                            if (isPreparing) return@IconButton
-                            if (isPlaying) {
-                                playerRef.value?.pause()
-                                isPlaying = false
-                                audioManager.abandonAudioFocusRequest(focusRequest)
-                            } else {
-                                val existing = playerRef.value
-                                if (existing != null) {
-                                    // Resume from paused position.
-                                    audioManager.requestAudioFocus(focusRequest)
-                                    existing.start()
-                                    isPlaying = true
-                                } else {
-                                    val mp = MediaPlayer()
-                                    playerRef.value = mp
-                                    isPreparing = true
-                                    // prepare() blocks on I/O — run on IO dispatcher to avoid ANR.
-                                    scope.launch(Dispatchers.IO) {
-                                        try {
-                                            mp.setDataSource(ctx, Uri.parse(uri))
-                                            mp.prepare()
-                                            val dur = mp.duration
-                                            withContext(Dispatchers.Main) {
-                                                durationMs = dur
-                                                if (position > 0f && durationMs > 0) {
-                                                    mp.seekTo((position * durationMs).toInt())
-                                                }
-                                                mp.setOnCompletionListener {
-                                                    isPlayingState.value = false
-                                                    position  = 0f
-                                                    playerRef.value?.release()
-                                                    playerRef.value = null
-                                                    audioManager.abandonAudioFocusRequest(focusRequest)
-                                                }
-                                                audioManager.requestAudioFocus(focusRequest)
-                                                mp.start()
-                                                isPlaying = true
-                                                isPreparing = false
-                                            }
-                                        } catch (e: Exception) {
-                                            android.util.Log.e("AudioPlayer", "Playback failed for $uri", e)
-                                            withContext(Dispatchers.Main) {
-                                                mp.release()
-                                                playerRef.value = null
-                                                isPreparing = false
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        if (isPreparing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        } else {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        /* Progress slider — draggable even while paused.
-                         * onValueChange sets isScrubbing=true so the poll loop won't
-                         * overwrite the thumb position during the drag gesture.
-                         * onValueChangeFinished commits the seek to the player. */
-                        Slider(
-                            value    = position,
-                            onValueChange = { newVal ->
-                                isScrubbing = true
-                                position    = newVal
-                            },
-                            onValueChangeFinished = {
-                                val mp = playerRef.value
-                                if (mp != null && durationMs > 0) {
-                                    mp.seekTo((position * durationMs).toInt())
-                                }
-                                isScrubbing = false
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(20.dp),
-                            colors = SliderDefaults.colors(
-                                thumbColor        = MaterialTheme.colorScheme.onSecondaryContainer,
-                                activeTrackColor  = MaterialTheme.colorScheme.onSecondaryContainer,
-                                inactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f)
-                            )
-                        )
-                        // Elapsed time (left) and total duration (right).
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text  = if (durationMs > 0) fmtMs((position * durationMs).toInt()) else "0:00",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                            )
-                            Text(
-                                // Show total duration once known; "Voice memo" until first play.
-                                text  = if (durationMs > 0) fmtMs(durationMs) else "Voice memo",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                            )
-                        }
-                    }
-                }
-            }
+            AudioChip(
+                uri = uri,
+                audioPlayback = audioPlayback,
+                onPlayPause = onAudioPlayPause,
+                onSeek = onAudioSeek
+            )
         }
 
         // ── Unknown attachment ─────────────────────────────────────────────────
@@ -1955,6 +1818,118 @@ private fun MmsAttachment(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+// ── AudioChip ──────────────────────────────────────────────────────────────────
+
+/**
+ * Play/seek chip for an audio attachment, driven entirely by the single
+ * ViewModel-owned player (perf-analysis #30 — replaced a per-chip raw MediaPlayer;
+ * two chips can no longer play at once, and playback survives the chip scrolling
+ * off-screen because nothing player-related is tied to this composition).
+ *
+ * Collects [audioPlayback] itself (rather than taking a value) so the ~5 Hz position
+ * ticks recompose only audio chips, never the bubbles above them.
+ */
+@Composable
+private fun AudioChip(
+    uri: String,
+    audioPlayback: StateFlow<AudioPlaybackState>,
+    onPlayPause: (String) -> Unit,
+    onSeek: (String, Float) -> Unit,
+    // Duration read from file metadata, for chips that must show a real length
+    // before the player has ever loaded this uri (pending-memo review row).
+    // Bubbles pass nothing and keep the lazy "Voice memo" label until first play.
+    fallbackDurationMs: Long? = null
+) {
+    val playback by audioPlayback.collectAsState()
+    val isCurrent  = playback.uri == uri
+    val isPlaying  = isCurrent && playback.isPlaying
+    val isLoading  = isCurrent && playback.isLoading
+    // Player duration drives position math; the fallback only labels the chip.
+    val durationMs = if (isCurrent) playback.durationMs else 0L
+    val displayDurationMs = if (durationMs > 0) durationMs else (fallbackDurationMs ?: 0L)
+
+    /* Non-null only mid-drag: the thumb follows the finger instead of the player's
+     * position ticks, then commits the seek on release. */
+    var scrubFraction by remember { mutableStateOf<Float?>(null) }
+    val position = scrubFraction
+        ?: if (durationMs > 0) (playback.positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            IconButton(
+                onClick = { if (!isLoading) onPlayPause(uri) },
+                modifier = Modifier.size(36.dp)
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                /* Seeking only applies to the loaded item — a chip that isn't playing
+                 * has nothing to seek, so its slider is inert at 0. */
+                Slider(
+                    value    = position,
+                    onValueChange = { scrubFraction = it },
+                    onValueChangeFinished = {
+                        scrubFraction?.let { onSeek(uri, it) }
+                        scrubFraction = null
+                    },
+                    enabled  = isCurrent && durationMs > 0,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(20.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor         = MaterialTheme.colorScheme.onSecondaryContainer,
+                        activeTrackColor   = MaterialTheme.colorScheme.onSecondaryContainer,
+                        inactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f),
+                        disabledThumbColor         = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
+                        disabledActiveTrackColor   = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
+                        disabledInactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f)
+                    )
+                )
+                // Elapsed time (left) and total duration (right).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text  = if (durationMs > 0) formatMemoDuration((position * durationMs).toLong()) else "0:00",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        // Show total duration once known (from the player or the
+                        // metadata fallback); "Voice memo" until first play otherwise.
+                        text  = if (displayDurationMs > 0) formatMemoDuration(displayDurationMs)
+                                else "Voice memo",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                    )
+                }
+            }
         }
     }
 }
@@ -2199,6 +2174,14 @@ private fun ReplyBar(
     onRemoveAttachment: (Int) -> Unit,
     onClearReplyingTo: () -> Unit = {},
     onSend: () -> Unit,
+    // Voice memo recording phase + event sink for the mic button (see VoiceMemoLogic).
+    voiceMemo: ThreadViewModel.VoiceMemoUiState = ThreadViewModel.VoiceMemoUiState(),
+    onVoiceMemoEvent: (VoiceMemoEvent) -> Unit = {},
+    // Shared audio player — lets a pending memo be reviewed (played/scrubbed)
+    // before sending.
+    audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    onAudioPlayPause: (String) -> Unit = {},
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -2233,6 +2216,16 @@ private fun ReplyBar(
     val counterText = if (pendingAttachments.isEmpty()) {
         remember(text.length) { smsCounter(text.length) }
     } else null
+
+    val isRecording = voiceMemo.phase != VoiceMemoPhase.IDLE
+    /* Live IME height (reading it in composition subscribes to every frame of the
+     * open/close animation) and its value frozen at the moment recording began —
+     * together they drive the keyboard-space filler panel below the input row.
+     * Retained (non-snapshot) because it's written during composition. */
+    val density = LocalDensity.current
+    val imeVisiblePx = WindowInsets.ime.getBottom(density)
+    val imeAtRecordStart = remember { Retained(0) }
+    if (!isRecording) imeAtRecordStart.value = imeVisiblePx
 
     Column(modifier = modifier) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -2350,10 +2343,11 @@ private fun ReplyBar(
                         }
                     }
                 }
-                // Pending-attachment previews — one 80 dp thumbnail per attachment,
-                // each with its own × badge, scrolling horizontally when several.
-                // Last non-empty list retained for the shrink-out, like the quote
-                // strip above.
+                // Pending-attachment previews. Audio (usually a just-recorded voice
+                // memo) renders as a full-width play/seek chip — an 80 dp tile with a
+                // lone play button read as broken (found on-device July 17). Images
+                // and videos keep the 80 dp thumbnail LazyRow. Last non-empty list
+                // retained for the shrink-out, like the quote strip above.
                 val lastAttachments = remember { Retained(pendingAttachments) }
                 if (pendingAttachments.isNotEmpty()) lastAttachments.value = pendingAttachments
                 AnimatedVisibility(
@@ -2364,104 +2358,433 @@ private fun ReplyBar(
                     val shown =
                         if (pendingAttachments.isNotEmpty()) pendingAttachments
                         else lastAttachments.value
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(bottom = 6.dp)
+                    Column(
+                        modifier = Modifier.padding(bottom = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        lazyRowItemsIndexed(shown) { index, attachment ->
-                            PendingAttachmentPreview(
-                                attachment = attachment,
-                                onRemove   = {
-                                    // During exit the strip renders the retained stale
-                                    // list; only forward the removal while the tapped
-                                    // thumbnail still matches the live list, so a ×
-                                    // tap can never remove a different attachment.
-                                    if (pendingAttachments.getOrNull(index)?.uri == attachment.uri) {
-                                        onRemoveAttachment(index)
+                        // Indices stay those of the full pending list — that's what
+                        // onRemoveAttachment expects. During exit the strip renders
+                        // the retained stale list; each × only forwards while the
+                        // tapped item still matches the live list, so it can never
+                        // remove a different attachment.
+                        shown.forEachIndexed { index, attachment ->
+                            if (attachment.mimeType.startsWith("audio/")) {
+                                PendingAudioAttachment(
+                                    attachment = attachment,
+                                    audioPlayback = audioPlayback,
+                                    onAudioPlayPause = onAudioPlayPause,
+                                    onAudioSeek = onAudioSeek,
+                                    onRemove = {
+                                        if (pendingAttachments.getOrNull(index)?.uri == attachment.uri) {
+                                            onRemoveAttachment(index)
+                                        }
                                     }
+                                )
+                            }
+                        }
+                        val visual = shown.withIndex()
+                            .filter { !it.value.mimeType.startsWith("audio/") }
+                        if (visual.isNotEmpty()) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                lazyRowItemsIndexed(visual) { _, indexed ->
+                                    val (index, attachment) = indexed
+                                    PendingAttachmentPreview(
+                                        attachment = attachment,
+                                        onRemove   = {
+                                            if (pendingAttachments.getOrNull(index)?.uri == attachment.uri) {
+                                                onRemoveAttachment(index)
+                                            }
+                                        }
+                                    )
                                 }
-                            )
+                            }
                         }
                     }
                 }
 
-                // Text input row: [attach] [field] [send]
+                // Input row. Idle: [attach] [field] [send-or-mic]. Recording (held):
+                // attach + field give way to the timer/hint row, but the mic button
+                // keeps its call site so the node under the user's finger — and the
+                // hold gesture running on it — survives the swap. Locked: the finger
+                // is already up, so the row can freely become [timer] [cancel] [stop].
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Bottom
+                    verticalAlignment = if (isRecording) Alignment.CenterVertically else Alignment.Bottom
                 ) {
-                    // Attach button opens a dropdown with media type choices.
-                    Box {
-                        IconButton(onClick = { showAttachMenu = true }) {
-                            Icon(Icons.Default.AttachFile, contentDescription = "Attach media")
+                    if (voiceMemo.phase == VoiceMemoPhase.LOCKED) {
+                        RecordingStatusRow(
+                            voiceMemo = voiceMemo,
+                            locked = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // Cancel discards the recording; Stop keeps it — it lands in the
+                        // pending-attachment strip for review, it is NOT auto-sent.
+                        TextButton(onClick = { onVoiceMemoEvent(VoiceMemoEvent.CANCEL) }) {
+                            Text("Cancel")
                         }
-                        DropdownMenu(
-                            expanded = showAttachMenu,
-                            onDismissRequest = { showAttachMenu = false }
+                        IconButton(
+                            onClick = { onVoiceMemoEvent(VoiceMemoEvent.STOP_TAP) },
+                            colors  = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor   = MaterialTheme.colorScheme.onPrimary
+                            )
                         ) {
-                            DropdownMenuItem(
-                                text    = { Text("Photos or videos") },
-                                onClick = {
-                                    showAttachMenu = false
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(
-                                            ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                                        )
+                            Icon(Icons.Default.Stop, contentDescription = "Stop recording")
+                        }
+                    } else {
+                        if (!isRecording) {
+                            // Attach button opens a dropdown with media type choices.
+                            Box {
+                                IconButton(onClick = { showAttachMenu = true }) {
+                                    Icon(Icons.Default.AttachFile, contentDescription = "Attach media")
+                                }
+                                DropdownMenu(
+                                    expanded = showAttachMenu,
+                                    onDismissRequest = { showAttachMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text    = { Text("Photos or videos") },
+                                        onClick = {
+                                            showAttachMenu = false
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(
+                                                    ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                                                )
+                                            )
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text    = { Text("Audio file") },
+                                        onClick = {
+                                            showAttachMenu = false
+                                            audioLauncher.launch("audio/*")
+                                        }
                                     )
                                 }
-                            )
-                            DropdownMenuItem(
-                                text    = { Text("Audio file") },
-                                onClick = {
-                                    showAttachMenu = false
-                                    audioLauncher.launch("audio/*")
-                                }
-                            )
+                            }
                         }
-                    }
-                    TextField(
-                        value         = text,
-                        onValueChange = onTextChange,
-                        modifier      = Modifier.weight(1f),
-                        placeholder   = { Text("Message") },
-                        maxLines      = 4,
-                        colors        = TextFieldDefaults.colors(
-                            focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            focusedIndicatorColor   = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            disabledIndicatorColor  = Color.Transparent,
-                        ),
-                        shape         = RoundedCornerShape(24.dp),
-                        textStyle     = MaterialTheme.typography.bodyMedium,
-                        trailingIcon  = counterText?.let { ct ->
-                            {
-                                Text(
-                                    text     = ct,
-                                    style    = MaterialTheme.typography.labelSmall,
-                                    color    = if (text.length > 160) MaterialTheme.colorScheme.error
-                                               else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(end = 8.dp)
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (isRecording) {
+                                RecordingStatusRow(
+                                    voiceMemo = voiceMemo,
+                                    locked = false,
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            } else {
+                                TextField(
+                                    value         = text,
+                                    onValueChange = onTextChange,
+                                    modifier      = Modifier.fillMaxWidth(),
+                                    placeholder   = { Text("Message") },
+                                    maxLines      = 4,
+                                    colors        = TextFieldDefaults.colors(
+                                        focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        focusedIndicatorColor   = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                        disabledIndicatorColor  = Color.Transparent,
+                                    ),
+                                    shape         = RoundedCornerShape(24.dp),
+                                    textStyle     = MaterialTheme.typography.bodyMedium,
+                                    trailingIcon  = counterText?.let { ct ->
+                                        {
+                                            Text(
+                                                text     = ct,
+                                                style    = MaterialTheme.typography.labelSmall,
+                                                color    = if (text.length > 160) MaterialTheme.colorScheme.error
+                                                           else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(end = 8.dp)
+                                            )
+                                        }
+                                    }
                                 )
                             }
                         }
+                        Spacer(Modifier.width(4.dp))
+                        // WhatsApp/Google Messages pattern: the action button is a mic
+                        // while the composer is empty and becomes send once there is
+                        // anything to send. Neither condition can change mid-hold
+                        // (typing and attaching are impossible while holding), so the
+                        // mic branch — and its gesture — is stable during recording.
+                        if (text.isBlank() && pendingAttachments.isEmpty()) {
+                            VoiceMemoMicButton(
+                                isRecording = isRecording,
+                                onEvent = onVoiceMemoEvent
+                            )
+                        } else {
+                            IconButton(
+                                onClick  = onSend,
+                                // Enabled when there is text OR media attachments are pending.
+                                enabled  = text.isNotBlank() || pendingAttachments.isNotEmpty(),
+                                colors   = IconButtonDefaults.iconButtonColors(
+                                    containerColor         = MaterialTheme.colorScheme.primary,
+                                    contentColor           = MaterialTheme.colorScheme.onPrimary,
+                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                )
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                            }
+                        }
+                    }
+                }
+
+                // ── Keyboard-space filler while recording ─────────────────────────
+                // Starting a recording removes the focused TextField, which closes
+                // the IME; the Scaffold's imePadding would then slide this whole bar
+                // down mid-gesture — disorienting, and worse, the mic moving under a
+                // stationary finger reads as an upward relative drag (a spurious
+                // lock latch). This panel grows in exact counter-phase to the IME
+                // collapse (height captured at record start − live height), so the
+                // input row never moves — the standard "voice panel occupies the
+                // keyboard space" pattern. Zero-height (absent) when the keyboard
+                // was already closed; shrinks away when recording ends.
+                val lastFillerPx = remember { Retained(0) }
+                val fillerPx =
+                    if (isRecording) {
+                        (imeAtRecordStart.value - imeVisiblePx).coerceAtLeast(0)
+                            .also { lastFillerPx.value = it }
+                    } else lastFillerPx.value
+                AnimatedVisibility(
+                    visible = isRecording && imeAtRecordStart.value > 0,
+                    enter   = EnterTransition.None,
+                    exit    = shrinkVertically() + fadeOut()
+                ) {
+                    val pulse by rememberInfiniteTransition(label = "recPanelPulse").animateFloat(
+                        initialValue  = 0.25f,
+                        targetValue   = 0.6f,
+                        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+                        label         = "recPanelPulseAlpha"
                     )
-                    Spacer(Modifier.width(4.dp))
-                    IconButton(
-                        onClick  = onSend,
-                        // Enabled when there is text OR media attachments are pending.
-                        enabled  = text.isNotBlank() || pendingAttachments.isNotEmpty(),
-                        colors   = IconButtonDefaults.iconButtonColors(
-                            containerColor         = MaterialTheme.colorScheme.primary,
-                            contentColor           = MaterialTheme.colorScheme.onPrimary,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(with(density) { fillerPx.toDp() }),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                        Icon(
+                            imageVector        = Icons.Default.Mic,
+                            contentDescription = null,
+                            modifier           = Modifier.size(48.dp),
+                            tint               = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = pulse)
+                        )
                     }
                 }
             }
+        }
+    }
+}
+
+// ── Voice memo recording UI ────────────────────────────────────────────────────
+
+/* Mic-button gesture thresholds — dp so they scale with density, converted at the
+ * gesture site (never raw pixels). Lock is a deliberate upward slide; cancel is a
+ * longer leftward slide so it can't fire from drift while talking. */
+private val VOICE_LOCK_DRAG_THRESHOLD   = 72.dp
+private val VOICE_CANCEL_DRAG_THRESHOLD = 96.dp
+
+/**
+ * The mic button and its entire capture gesture: hold to record, slide up to latch
+ * hands-free ([VoiceMemoEvent.LATCH_LOCK], CONTEXT_CLICK haptic), slide left to
+ * cancel, release to stop-and-keep. The pointerInput lives on this button ONLY —
+ * never on or over message bubbles (child detectors there break the bubbles'
+ * combinedClickable; see CHANGELOG 2026-07-12).
+ *
+ * On first press without RECORD_AUDIO, launches the system permission prompt
+ * instead of recording; a denial gets a toast so the button never fails silently.
+ */
+@Composable
+private fun VoiceMemoMicButton(
+    isRecording: Boolean,
+    onEvent: (VoiceMemoEvent) -> Unit
+) {
+    val context = LocalContext.current
+    val view    = LocalView.current
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val lockThresholdPx   = with(density) { VOICE_LOCK_DRAG_THRESHOLD.toPx() }
+    val cancelThresholdPx = with(density) { VOICE_CANCEL_DRAG_THRESHOLD.toPx() }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(
+                context,
+                "Microphone permission is needed to record voice memos",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(
+                if (isRecording) MaterialTheme.colorScheme.primary else Color.Transparent
+            )
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    if (ContextCompat.checkSelfPermission(
+                            context, Manifest.permission.RECORD_AUDIO
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        // First mic press: ask, don't record. The user holds again
+                        // after granting.
+                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        return@awaitEachGesture
+                    }
+                    down.consume()
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onEvent(VoiceMemoEvent.PRESS)
+                    var dragTotal = Offset.Zero
+                    var latched = false
+                    while (true) {
+                        val event  = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            // Lifting after the latch is the point of locking — ignore it.
+                            if (!latched) onEvent(VoiceMemoEvent.RELEASE)
+                            break
+                        }
+                        dragTotal += change.positionChange()
+                        change.consume()
+                        if (!latched && shouldCancelDrag(dragTotal.x, cancelThresholdPx)) {
+                            onEvent(VoiceMemoEvent.CANCEL)
+                            break
+                        }
+                        if (!latched && shouldLatchLock(dragTotal.y, lockThresholdPx)) {
+                            latched = true
+                            view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            onEvent(VoiceMemoEvent.LATCH_LOCK)
+                        }
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector        = Icons.Default.Mic,
+            contentDescription = "Record voice memo",
+            tint               = if (isRecording) MaterialTheme.colorScheme.onPrimary
+                                 else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * The in-progress recording indicator that replaces the text field: pulsing red dot,
+ * elapsed / cap timer, and (while still held) the lock & cancel gesture hints.
+ */
+@Composable
+private fun RecordingStatusRow(
+    voiceMemo: ThreadViewModel.VoiceMemoUiState,
+    locked: Boolean,
+    modifier: Modifier = Modifier
+) {
+    // 10 Hz elapsed ticker — display-only; the hard cap is enforced by MediaRecorder.
+    var elapsedMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(voiceMemo.startedAtMs) {
+        while (true) {
+            elapsedMs = System.currentTimeMillis() - voiceMemo.startedAtMs
+            delay(100)
+        }
+    }
+    val pulse by rememberInfiniteTransition(label = "recPulse").animateFloat(
+        initialValue  = 1f,
+        targetValue   = 0.3f,
+        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+        label         = "recPulseAlpha"
+    )
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.error.copy(alpha = pulse))
+        )
+        Text(
+            text  = "${formatMemoDuration(elapsedMs)} / ${formatMemoDuration(voiceMemo.maxDurationMs)}",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        if (!locked) {
+            Text(
+                text     = "Slide ↑ to lock · ← to cancel",
+                style    = MaterialTheme.typography.labelSmall,
+                color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+/** Duration of the audio at [uri] in ms; null while loading or on failure. Backs the
+ *  pending-memo preview tile, which has no player state until the user taps play. */
+@Composable
+private fun rememberAudioDurationMs(uri: String): Long? {
+    val ctx = LocalContext.current
+    val duration by produceState<Long?>(null, uri) {
+        value = withContext(Dispatchers.IO) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(ctx, Uri.parse(uri))
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()
+            } catch (e: Exception) {
+                null
+            } finally {
+                runCatching { retriever.release() }
+            }
+        }
+    }
+    return duration
+}
+
+// ── PendingAudioAttachment ─────────────────────────────────────────────────────
+
+/**
+ * Full-width review row for a pending audio attachment (usually a just-recorded
+ * voice memo): the same play/seek chip the audio bubbles use, plus an × to discard.
+ * Full-width rather than an 80 dp strip tile because reviewing a memo wants
+ * scrubbing and a visible duration (found on-device July 17). The duration comes
+ * from file metadata so it shows before the player ever loads the file.
+ */
+@Composable
+private fun PendingAudioAttachment(
+    attachment: MessageAttachment,
+    audioPlayback: StateFlow<AudioPlaybackState>,
+    onAudioPlayPause: (String) -> Unit,
+    onAudioSeek: (String, Float) -> Unit,
+    onRemove: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(modifier = Modifier.weight(1f)) {
+            AudioChip(
+                uri = attachment.uri,
+                audioPlayback = audioPlayback,
+                onPlayPause = onAudioPlayPause,
+                onSeek = onAudioSeek,
+                fallbackDurationMs = rememberAudioDurationMs(attachment.uri)
+            )
+        }
+        IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Remove attachment",
+                modifier = Modifier.size(18.dp),
+                tint     = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -2470,8 +2793,9 @@ private fun ReplyBar(
 
 /**
  * One 80 dp preview tile in the reply bar's pending-attachment row: image thumbnail,
- * video first-frame (with play badge), or a labelled placeholder for audio/other.
- * The × badge at the top-right removes just this attachment.
+ * video first-frame (with play badge), or a labelled placeholder for other types.
+ * Audio never reaches this tile — it renders as [PendingAudioAttachment], a
+ * full-width playable chip. The × badge at the top-right removes just this attachment.
  */
 @Composable
 private fun PendingAttachmentPreview(
@@ -2540,7 +2864,7 @@ private fun PendingAttachmentPreview(
                 }
             }
             else -> {
-                // Audio / generic file — labelled placeholder tile.
+                // Generic file — labelled placeholder tile.
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -2549,7 +2873,7 @@ private fun PendingAttachmentPreview(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text  = if (attachment.mimeType.startsWith("audio/")) "🎵 Audio" else "📎 File",
+                        text  = "📎 File",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

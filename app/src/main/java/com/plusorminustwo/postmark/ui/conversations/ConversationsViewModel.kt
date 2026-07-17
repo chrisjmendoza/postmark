@@ -104,10 +104,12 @@ class ConversationsViewModel @Inject constructor(
             }
         }
 
-        // One-shot sweep of orphaned outgoing-MMS cache files (mms_attach_*.bin) left by
-        // superseded/failed sends. Files still referenced by a live message (each sent or
-        // pending row points at its own via a FileProvider URI) are kept; a 1-hour age
-        // guard inside the sweep protects a file an in-flight send just wrote.
+        // One-shot sweep of orphaned outgoing-MMS cache files (mms_attach_*.bin, and
+        // voice_memo_*.m4a leaked by a crash mid-recording) left by superseded/failed
+        // sends. Files still referenced by a live message (each sent or pending row
+        // points at its own via a FileProvider URI) are kept; a 1-hour age guard inside
+        // the sweep protects a file an in-flight send just wrote (24 h for memos, which
+        // can sit unsent in the reply bar's pending queue).
         viewModelScope.launch(Dispatchers.IO) {
             val referenced = messageRepository.getMessagesWithAttachments()
                 .flatMap { it.attachments }

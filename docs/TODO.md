@@ -216,23 +216,40 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       multi-select recipient picker in `NewConversationScreen`. Check
       `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` — some carriers disable group MMS
       and expect N separate 1:1 sends instead ("MMS broadcast" mode).
-- [ ] **Voice memos — record + send** (added July 16 2026) — there is currently
-      no way to record a voice message; audio can only be attached from existing
-      files. Mic button in the reply bar with two capture gestures (WhatsApp /
-      Google Messages pattern):
-      1. **Hold to record** — recording runs while the button is held; releasing
-         stops it (design call at implementation time: send immediately vs. show
-         a preview chip with play/delete before send).
-      2. **Press and slide up to lock** — sliding up while holding latches
-         hands-free recording (button stays "live" without a finger on it) with
-         a visible recording state (timer, stop/cancel controls). Haptic on latch.
-      Also needs: slide-away/cancel affordance while holding, RECORD_AUDIO runtime
-      permission, MediaRecorder capture in an MMS-friendly codec/container (AAC in
-      .m4a or AMR in .3gp) with a duration/size cap derived from the carrier MMS
-      limit (reuse the existing video-size budget logic in MmsManagerWrapper),
-      then hand off to the existing audio-attachment MMS send path. Playback
-      reuses the audio chip — coordinate with performance-analysis.md Tier 4 #30
-      (one ViewModel-owned player) rather than adding another raw MediaPlayer.
+- [x] **Voice memos — record + send** (July 16 2026) — mic button in the reply bar
+      (replaces send while the composer is empty, WhatsApp/Google Messages pattern)
+      with both capture gestures. **Hold to record** → release drops the memo into
+      the pending-attachment strip for review (play/duration/×) — NOT auto-sent.
+      **Slide up to lock** latches hands-free recording (CONTEXT_CLICK haptic;
+      timer + Cancel + Stop controls); **slide left while holding cancels**. The
+      design call in (1) went to preview-before-send. Implementation notes:
+      - State machine is `IDLE/HELD/LOCKED` with pure transitions + gesture
+        threshold math in `domain/voicememo/VoiceMemoLogic.kt` (18 tests); no
+        PREVIEW state — a finished memo lives in the existing `pendingAttachments`
+        queue. `ThreadViewModel.onVoiceMemoEvent()` applies transitions and drives
+        `VoiceMemoRecorder` (MediaRecorder, AAC mono 64 kbps in .m4a, `audio/mp4`).
+      - Duration cap derived from the MMS budget, not hand-picked:
+        `maxVoiceMemoDurationMs()` next to `allocateAttachmentBudgets` → ~1:42
+        against the conservative 860 KB default (deliberately NOT live carrier
+        config, so a memo can't become unsendable after a SIM/carrier switch).
+        Enforced by `MediaRecorder.setMaxDuration` (auto-stops into preview).
+      - Recordings live in `filesDir/voice_memo_<ts>.m4a`; the mms_attach_ orphan
+        sweep + message-delete cleanup now cover that prefix (24 h sweep grace vs
+        1 h, since a pending unsent memo survives process death). × on the preview
+        tile and post-send pinning delete the file eagerly.
+      - RECORD_AUDIO requested on first mic press; denial → toast, never a crash.
+      - Playback: performance-analysis Tier 4 **#30 done as part of this** — one
+        ViewModel-owned Media3 player (`ThreadAudioPlayer`) replaced the per-chip
+        raw MediaPlayers; two chips can't play at once, playback survives the chip
+        scrolling off-screen, audio focus handled by ExoPlayer. Bubbles and the
+        pending review row share it.
+      - July 17 feedback round: pending memo review is a full-width play/seek/
+        duration chip + × (`PendingAudioAttachment`), not an 80 dp tile; and a
+        keyboard-space filler panel keeps the reply bar from jumping (and the
+        drag math from mis-latching) when recording starts with the IME open.
+      Needs on-device verification: record→preview→send over real MMS, lock mode,
+      cancel paths, permission denial, cap auto-stop, received-memo playback,
+      no bar jump when recording with keyboard open.
 - [x] **Group MMS — per-bubble sender attribution** (July 11 2026) — group threads
       now show a small sender-name label above the first received bubble of each
       sender's cluster (`ThreadViewModel.participantNames` resolves the roster via
