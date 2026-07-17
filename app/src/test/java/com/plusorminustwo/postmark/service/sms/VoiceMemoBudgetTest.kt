@@ -51,6 +51,38 @@ class VoiceMemoBudgetTest {
         assertEquals(0L, maxVoiceMemoDurationMs(800_000, -1))
     }
 
+    // ── Carrier-aware duration cap (effectiveVoiceMemoCapMs) ──────────────────
+    // min(fixed, live) can only ever shorten the cap — a memo must never become
+    // unsendable just because the SIM changed to a stricter carrier.
+
+    @Test fun `generous live carrier budget leaves the fixed cap unchanged`() {
+        val fixed   = MmsManagerWrapper.MAX_VOICE_MEMO_DURATION_MS
+        val bitrate = MmsManagerWrapper.VOICE_MEMO_BITRATE_BPS
+        val cap = effectiveVoiceMemoCapMs(fixed, 2_000_000, bitrate)
+        assertEquals(fixed, cap)
+    }
+
+    @Test fun `strict live carrier budget shortens the cap to match maxVoiceMemoDurationMs`() {
+        val fixed     = MmsManagerWrapper.MAX_VOICE_MEMO_DURATION_MS
+        val bitrate   = MmsManagerWrapper.VOICE_MEMO_BITRATE_BPS
+        val liveBytes = 300_000
+        val cap = effectiveVoiceMemoCapMs(fixed, liveBytes, bitrate)
+        assertTrue("cap $cap should be strictly shorter than fixed $fixed", cap < fixed)
+        assertEquals(
+            maxVoiceMemoDurationMs(liveBytes - MmsManagerWrapper.PDU_OVERHEAD_BYTES, bitrate),
+            cap
+        )
+    }
+
+    @Test fun `effective cap never exceeds the fixed cap across carrier budgets`() {
+        val fixed   = MmsManagerWrapper.MAX_VOICE_MEMO_DURATION_MS
+        val bitrate = MmsManagerWrapper.VOICE_MEMO_BITRATE_BPS
+        listOf(300_000, 860_160, 2_000_000).forEach { liveBytes ->
+            val cap = effectiveVoiceMemoCapMs(fixed, liveBytes, bitrate)
+            assertTrue("cap $cap for budget $liveBytes must not exceed fixed $fixed", cap <= fixed)
+        }
+    }
+
     // ── Cache filename predicate (shared by orphan sweep + delete paths) ──────
 
     @Test fun `sweep recognizes both outgoing cache patterns`() {

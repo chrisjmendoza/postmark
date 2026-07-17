@@ -219,4 +219,27 @@ class VoiceMemoLogicTest {
     @Test fun `negative durations clamp to zero`() {
         assertEquals("0:00", formatMemoDuration(-5_000))
     }
+
+    // ── Recording level normalization ─────────────────────────────────────────
+
+    @Test fun `silence maps to a zero level and full scale to one`() {
+        assertEquals(0f, normalizedRecordingLevel(0), 0f)
+        assertEquals(1f, normalizedRecordingLevel(32_767), 0f)
+    }
+
+    @Test fun `out-of-range amplitudes clamp into the 0 to 1 level range`() {
+        assertEquals(0f, normalizedRecordingLevel(-5_000), 0f)
+        assertEquals(1f, normalizedRecordingLevel(90_000), 0f)
+    }
+
+    @Test fun `level rises monotonically with amplitude`() {
+        val levels = listOf(0, 1_000, 5_000, 12_000, 20_000, 32_767)
+            .map { normalizedRecordingLevel(it) }
+        for (i in 1 until levels.size) {
+            assertTrue(
+                "level[$i]=${levels[i]} must be >= level[${i - 1}]=${levels[i - 1]}",
+                levels[i] >= levels[i - 1]
+            )
+        }
+    }
 }

@@ -13,10 +13,13 @@ import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.app.role.RoleManager
 import android.provider.MediaStore
+import android.provider.Settings
 import android.provider.Telephony
 import android.view.HapticFeedbackConstants
+import android.view.View
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -38,6 +41,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -114,10 +118,15 @@ import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -150,7 +159,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
@@ -244,6 +255,18 @@ fun ThreadScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Back during an in-flight memo must park it (onBackDuringMemo), never let
+    // navigation silently discard the take — see the CHANGELOG entry on this. Compose's
+    // OnBackPressedDispatcher gives priority to the most-recently-composed *enabled*
+    // callback, so this is placed as the LAST BackHandler this function composes (there
+    // is no other one in ThreadScreen.kt today — multi-select exits via the top bar's ×
+    // instead of back — but a future one, e.g. a selection-mode close-on-back, would
+    // need to be composed BEFORE this point to keep this one taking precedence while a
+    // memo is active).
+    BackHandler(enabled = voiceMemo.phase != VoiceMemoPhase.IDLE) {
+        viewModel.onBackDuringMemo()
     }
 
     val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
@@ -341,6 +364,7 @@ fun ThreadScreen(
         onResetFontScale = onResetFontScale,
         voiceMemo = voiceMemo,
         onVoiceMemoEvent = onVoiceMemoEvent,
+        recordingLevel = viewModel.recordingLevel,
         audioPlayback = viewModel.audioPlayback,
         onAudioPlayPause = onAudioPlayPause,
         onAudioSeek = onAudioSeek
@@ -430,6 +454,8 @@ private fun ThreadContent(
     // Voice memo recording phase driving the reply bar's mic button / recording row.
     voiceMemo: ThreadViewModel.VoiceMemoUiState = ThreadViewModel.VoiceMemoUiState(),
     onVoiceMemoEvent: (VoiceMemoEvent) -> Unit = {},
+    // Live 0..1 mic input level while recording; collected locally by the level meter.
+    recordingLevel: StateFlow<Float> = MutableStateFlow(0f),
     // Shared thread-wide audio player state (perf-analysis #30). A StateFlow (stable)
     // rather than a value so position ticks recompose only the chips that collect it.
     audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
@@ -950,6 +976,7 @@ private fun ThreadContent(
                     onSend                = { onSendMessage() },
                     voiceMemo             = voiceMemo,
                     onVoiceMemoEvent      = onVoiceMemoEvent,
+                    recordingLevel        = recordingLevel,
                     audioPlayback         = audioPlayback,
                     onAudioPlayPause      = onAudioPlayPause,
                     onAudioSeek           = onAudioSeek
@@ -1834,7 +1861,10 @@ private fun MmsAttachment(
                 uri = uri,
                 audioPlayback = audioPlayback,
                 onPlayPause = onAudioPlayPause,
-                onSeek = onAudioSeek
+                onSeek = onAudioSeek,
+                // One metadata read per visible chip, once ever per uri (cached), so the
+                // real length shows before first play; scrolling past again is free.
+                fallbackDurationMs = rememberAudioDurationMs(uri)
             )
         }
 
@@ -2204,6 +2234,8 @@ private fun ReplyBar(
     // Voice memo recording phase + event sink for the mic button (see VoiceMemoLogic).
     voiceMemo: ThreadViewModel.VoiceMemoUiState = ThreadViewModel.VoiceMemoUiState(),
     onVoiceMemoEvent: (VoiceMemoEvent) -> Unit = {},
+    // Live 0..1 mic input level while recording; feeds the panel's level meter.
+    recordingLevel: StateFlow<Float> = MutableStateFlow(0f),
     // Shared audio player — lets a pending memo be reviewed (played/scrubbed)
     // before sending.
     audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
@@ -2237,6 +2269,15 @@ private fun ReplyBar(
             val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
             onAttachmentsSelected(listOf(MessageAttachment(uri.toString(), mimeType)))
         }
+    }
+
+    // RECORD_AUDIO gate for the attach-menu "Record voice memo" item (the mic button
+    // has its own). On grant do nothing — the user re-taps the menu item, the same
+    // convention the mic button uses; denial routes through the shared Settings helper.
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) onMicPermissionDenied(context)
     }
 
     // Only show the SMS counter when no attachment is pending (pure SMS mode).
@@ -2492,6 +2533,28 @@ private fun ReplyBar(
                                             audioLauncher.launch("audio/*")
                                         }
                                     )
+                                    DropdownMenuItem(
+                                        text    = { Text("Record voice memo") },
+                                        onClick = {
+                                            showAttachMenu = false
+                                            // Tap-to-record straight into hands-free LOCKED
+                                            // via the same PRESS + LATCH_LOCK pair the
+                                            // TalkBack path uses. PRESS's attachment-cap
+                                            // guard and the table's no-ops make it safe from
+                                            // any state; the menu is only reachable while IDLE.
+                                            if (ContextCompat.checkSelfPermission(
+                                                    context, Manifest.permission.RECORD_AUDIO
+                                                ) != PackageManager.PERMISSION_GRANTED
+                                            ) {
+                                                recordAudioPermissionLauncher.launch(
+                                                    Manifest.permission.RECORD_AUDIO
+                                                )
+                                            } else {
+                                                onVoiceMemoEvent(VoiceMemoEvent.PRESS)
+                                                onVoiceMemoEvent(VoiceMemoEvent.LATCH_LOCK)
+                                            }
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -2535,9 +2598,14 @@ private fun ReplyBar(
                         Spacer(Modifier.width(4.dp))
                         // WhatsApp/Google Messages pattern: the action button is a mic
                         // while the composer is empty and becomes send once there is
-                        // anything to send. Neither condition can change mid-hold
-                        // (typing and attaching are impossible while holding), so the
-                        // mic branch — and its gesture — is stable during recording.
+                        // anything to send. Typing and attaching are impossible while
+                        // holding, so text/pendingAttachments can't change mid-hold from
+                        // user input — but CAP_REACHED CAN fire mid-hold (MediaRecorder's
+                        // max-duration callback while HELD auto-attaches the memo), which
+                        // swaps mic -> send right under the still-held finger. That's
+                        // still safe: the freshly composed send button never received the
+                        // pointer-down, so lifting the finger doesn't click it — but don't
+                        // assume this branch is truly static when touching it.
                         if (text.isBlank() && pendingAttachments.isEmpty()) {
                             VoiceMemoMicButton(
                                 isRecording = isRecording,
@@ -2596,6 +2664,7 @@ private fun ReplyBar(
                     VoiceMemoPanel(
                         voiceMemo        = voiceMemo,
                         minHeight        = with(density) { fillerPx.toDp() },
+                        recordingLevel   = recordingLevel,
                         audioPlayback    = audioPlayback,
                         onAudioPlayPause = onAudioPlayPause,
                         onAudioSeek      = onAudioSeek,
@@ -2614,6 +2683,109 @@ private fun ReplyBar(
  * longer leftward slide so it can't fire from drift while talking. */
 private val VOICE_LOCK_DRAG_THRESHOLD   = 72.dp
 private val VOICE_CANCEL_DRAG_THRESHOLD = 96.dp
+
+/* Number of amplitude samples the level meter keeps on screen at once — a count, not a
+ * pixel dimension; the bar geometry is derived from the canvas size and this. */
+private const val VOICE_METER_BAR_COUNT = 30
+
+/** A short confirmation buzz for a successful capture (quick-flow keep, preview attach).
+ *  CONFIRM reads as "done" on API 30+; older devices fall back to the tick we already
+ *  use for the lock latch. */
+private fun View.performConfirmHaptic() {
+    performHapticFeedback(
+        if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM
+        else HapticFeedbackConstants.CONTEXT_CLICK
+    )
+}
+
+/** Denial handling shared by every RECORD_AUDIO request path. A permanent denial
+ *  (rationale flag false after a completed request = "don't ask again" or policy)
+ *  can only be undone in Settings, so deep-link there; a plain denial keeps the
+ *  explanatory toast. */
+private fun onMicPermissionDenied(context: Context) {
+    // Walk the ContextWrapper chain to the hosting Activity (needed for the rationale
+    // check); null if this context isn't Activity-backed.
+    val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }
+        .filterIsInstance<Activity>()
+        .firstOrNull()
+    if (activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(
+            activity, Manifest.permission.RECORD_AUDIO
+        )
+    ) {
+        Toast.makeText(
+            context,
+            "Microphone permission is off — enable it in Settings for voice memos",
+            Toast.LENGTH_LONG
+        ).show()
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.fromParts("package", context.packageName, null))
+            )
+        }
+    } else {
+        Toast.makeText(
+            context,
+            "Microphone permission is needed to record voice memos",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+}
+
+/**
+ * Live input-level meter: a right-anchored history of the most recent
+ * [VOICE_METER_BAR_COUNT] mic-amplitude samples as evenly spaced rounded bars, newest
+ * on the right. Proves the mic is actually capturing — a dead mic renders as a flatline
+ * instead of being discovered only after sending.
+ *
+ * Reads [level] LOCALLY so its ~15 Hz ticks recompose only this Canvas, never the
+ * reply bar around it (the same isolation the AudioChip uses for its playback position).
+ */
+@Composable
+private fun RecordingLevelMeter(
+    level: StateFlow<Float>,
+    modifier: Modifier = Modifier
+) {
+    // Ring buffer of recent samples, appended on the meter's own clock rather than on
+    // flow emissions: StateFlow conflates equal values, so a silent stretch (0f, 0f, …)
+    // emits nothing — collect-driven appends would freeze the scroll mid-pattern with
+    // stale loud bars on screen. Sampling level.value at the tick rate keeps the
+    // history scrolling, so silence visibly flattens out.
+    val samples = remember { mutableStateListOf<Float>() }
+    LaunchedEffect(level) {
+        while (true) {
+            samples.add(level.value)
+            while (samples.size > VOICE_METER_BAR_COUNT) samples.removeAt(0)
+            delay(66) // matches the ViewModel ticker's ~15 Hz
+        }
+    }
+    // Read the theme color OUTSIDE the draw lambda — MaterialTheme can't be read inside
+    // Canvas's DrawScope.
+    val barColor = MaterialTheme.colorScheme.primary
+    Canvas(
+        modifier = modifier
+            .widthIn(max = 240.dp)
+            .fillMaxWidth()
+            .height(48.dp)
+    ) {
+        val slotWidth = size.width / VOICE_METER_BAR_COUNT
+        val barWidth  = slotWidth / 2f
+        val minBarHeight = 4.dp.toPx()
+        val radius = CornerRadius(barWidth / 2f, barWidth / 2f)
+        samples.forEachIndexed { index, sample ->
+            // Newest sample sits in the rightmost slot; a partly-filled buffer hugs the
+            // right edge so the history scrolls in from the right as it grows.
+            val slot = VOICE_METER_BAR_COUNT - samples.size + index
+            val barHeight = maxOf(minBarHeight, sample * size.height)
+            drawRoundRect(
+                color        = barColor,
+                topLeft      = Offset(slot * slotWidth + (slotWidth - barWidth) / 2f, (size.height - barHeight) / 2f),
+                size         = Size(barWidth, barHeight),
+                cornerRadius = radius
+            )
+        }
+    }
+}
 
 /**
  * The mic button and its entire capture gesture: hold to record, slide up to latch
@@ -2640,13 +2812,15 @@ private fun VoiceMemoMicButton(
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (!granted) {
-            Toast.makeText(
-                context,
-                "Microphone permission is needed to record voice memos",
-                Toast.LENGTH_LONG
-            ).show()
-        }
+        if (!granted) onMicPermissionDenied(context)
+    }
+
+    // Shared by the touch gesture below and the TalkBack semantics path, so both
+    // agree on whether a press should record or ask first.
+    val hasMicPermission = {
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     Box(
@@ -2656,13 +2830,34 @@ private fun VoiceMemoMicButton(
             .background(
                 if (isRecording) MaterialTheme.colorScheme.primary else Color.Transparent
             )
+            .semantics(mergeDescendants = true) {
+                // The hold/slide gesture below is invisible to accessibility services
+                // (pointerInput has no semantics of its own) — TalkBack's double-tap
+                // fires this onClick instead, never the pointerInput block below (its
+                // onClick only ever fires for accessibility actions, not physical
+                // touches, so the too-short-press toast path there is unaffected). One
+                // tap always starts a hands-free LOCKED recording; the panel's
+                // Stop/Cancel/Restart/Attach controls are ordinary buttons and already
+                // accessible. Safety is free here: if PRESS's phase guard fails (already
+                // recording) the phase just stays put, and LATCH_LOCK is a table no-op
+                // on every phase but HELD — this can never desync the state machine.
+                onClick(label = "start recording") {
+                    if (!hasMicPermission()) {
+                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        onEvent(VoiceMemoEvent.PRESS)
+                        onEvent(VoiceMemoEvent.LATCH_LOCK)
+                    }
+                    true
+                }
+                // mergeDescendants above folds the Icon's own contentDescription
+                // ("Record voice memo") into this node — no second description needed.
+                if (isRecording) stateDescription = "Recording"
+            }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
-                    if (ContextCompat.checkSelfPermission(
-                            context, Manifest.permission.RECORD_AUDIO
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
+                    if (!hasMicPermission()) {
                         // First mic press: ask, don't record. The user holds again
                         // after granting.
                         permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -2678,7 +2873,12 @@ private fun VoiceMemoMicButton(
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) {
                             // Lifting after the latch is the point of locking — ignore it.
-                            if (!latched) onEvent(VoiceMemoEvent.RELEASE)
+                            // A quick-flow keep gets a confirmation buzz (the latch path
+                            // already buzzed on CONTEXT_CLICK; cancel/discard stay silent).
+                            if (!latched) {
+                                view.performConfirmHaptic()
+                                onEvent(VoiceMemoEvent.RELEASE)
+                            }
                             break
                         }
                         dragTotal += change.positionChange()
@@ -2707,13 +2907,15 @@ private fun VoiceMemoMicButton(
 }
 
 /** 10 Hz elapsed-time ticker for the recording UI — display-only; the hard duration
- *  cap is enforced by MediaRecorder itself. */
+ *  cap is enforced by MediaRecorder itself. [startedAtMs] is an elapsedRealtime()
+ *  timestamp (see VoiceMemoUiState.startedAtMs), so this stays correct across an
+ *  NTP step mid-recording. */
 @Composable
 private fun rememberRecordingElapsedMs(startedAtMs: Long): Long {
     var elapsedMs by remember { mutableStateOf(0L) }
     LaunchedEffect(startedAtMs) {
         while (true) {
-            elapsedMs = System.currentTimeMillis() - startedAtMs
+            elapsedMs = SystemClock.elapsedRealtime() - startedAtMs
             delay(100)
         }
     }
@@ -2733,11 +2935,13 @@ private fun rememberRecordingElapsedMs(startedAtMs: Long): Long {
 private fun VoiceMemoPanel(
     voiceMemo: ThreadViewModel.VoiceMemoUiState,
     minHeight: Dp,
+    recordingLevel: StateFlow<Float>,
     audioPlayback: StateFlow<AudioPlaybackState>,
     onAudioPlayPause: (String) -> Unit,
     onAudioSeek: (String, Float) -> Unit,
     onEvent: (VoiceMemoEvent) -> Unit
 ) {
+    val view = LocalView.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -2747,18 +2951,10 @@ private fun VoiceMemoPanel(
     ) {
         when (voiceMemo.phase) {
             VoiceMemoPhase.HELD -> {
-                val pulse by rememberInfiniteTransition(label = "recPanelPulse").animateFloat(
-                    initialValue  = 0.25f,
-                    targetValue   = 0.6f,
-                    animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-                    label         = "recPanelPulseAlpha"
-                )
-                Icon(
-                    imageVector        = Icons.Default.Mic,
-                    contentDescription = null,
-                    modifier           = Modifier.size(48.dp),
-                    tint               = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = pulse)
-                )
+                // The live meter replaces the old decorative pulsing mic — it pulses with
+                // real input, so a dead mic reads as a flatline instead of a false "alive"
+                // animation the user only discovers is empty after sending.
+                RecordingLevelMeter(level = recordingLevel)
             }
             VoiceMemoPhase.LOCKED -> {
                 Column(
@@ -2770,6 +2966,7 @@ private fun VoiceMemoPanel(
                                 " / " + formatMemoDuration(voiceMemo.maxDurationMs),
                         style = MaterialTheme.typography.headlineSmall
                     )
+                    RecordingLevelMeter(level = recordingLevel)
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -2820,7 +3017,10 @@ private fun VoiceMemoPanel(
                             OutlinedButton(onClick = { onEvent(VoiceMemoEvent.RESTART) }) {
                                 Text("Restart")
                             }
-                            Button(onClick = { onEvent(VoiceMemoEvent.ATTACH) }) {
+                            Button(onClick = {
+                                view.performConfirmHaptic()
+                                onEvent(VoiceMemoEvent.ATTACH)
+                            }) {
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = null,
@@ -2883,18 +3083,32 @@ private fun RecordingStatusRow(
     }
 }
 
+/* Successful uri → duration-ms reads, so a chip labels correctly on its first frame
+ * (no IO) once any prior chip has read the same uri. Failures are never cached — a file
+ * still downloading may succeed later. Bounded so a long-lived process can't grow it. */
+private val audioDurationCache = android.util.LruCache<String, Long>(256)
+
 /** Duration of the audio at [uri] in ms; null while loading or on failure. Backs the
- *  pending-memo preview tile, which has no player state until the user taps play. */
+ *  pending-memo preview tile and the bubble chips, which have no player state until the
+ *  user taps play. Each uri costs exactly one metadata read, ever — the result is cached,
+ *  so a chip scrolling back into view (or another chip on the same uri) is free. */
 @Composable
 private fun rememberAudioDurationMs(uri: String): Long? {
     val ctx = LocalContext.current
-    val duration by produceState<Long?>(null, uri) {
+    // Cache hit seeds the initial value → correct label on the first frame with no IO.
+    val duration by produceState<Long?>(audioDurationCache.get(uri), uri) {
+        // A uri change restarts only this producer — the state keeps the PREVIOUS uri's
+        // value. Re-seed from the cache (null on miss) before deciding to skip the read,
+        // or a recycled call site would keep showing the old attachment's duration.
+        value = audioDurationCache.get(uri)
+        if (value != null) return@produceState
         value = withContext(Dispatchers.IO) {
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(ctx, Uri.parse(uri))
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                     ?.toLongOrNull()
+                    ?.also { audioDurationCache.put(uri, it) }
             } catch (e: Exception) {
                 null
             } finally {

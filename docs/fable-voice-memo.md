@@ -36,55 +36,63 @@ off as they land. Implementation is delegated to Sonnet agents; Fable reviews.
   - `sendMessage`: same check where pending attachments are captured/cleared.
   - Mirrors the guard `deletePreviewTake` already has.
 
-## Round 2 — trust & accessibility
+## Round 2 — trust & accessibility (implemented 2026-07-17, pending on-device verify)
 
-- [ ] **4. Back-press during LOCKED/PREVIEW silently destroys the take.**
-  Navigating away hits `onCleared` → `stopAndDiscard()`. Add a `BackHandler` active
-  while recording that routes to `STOP_TAP` (park to preview) instead of leaving.
-- [ ] **5. Recording unusable with TalkBack.**
+- [x] **4. Back-press during LOCKED/PREVIEW silently destroys the take.**
+  `ThreadViewModel.onBackDuringMemo()` + a `BackHandler` active whenever the memo
+  phase isn't IDLE, routed through the existing table transitions: HELD → `RELEASE`
+  (quick keep), LOCKED → `STOP_TAP` (park to preview), PREVIEW → `ATTACH` (hands it
+  to the pending strip, where it survives as a draft). Back only navigates once the
+  memo state is IDLE again.
+- [x] **5. Recording unusable with TalkBack.**
   The mic button is pointerInput-only — no click semantics, and hold/slide gestures
   don't exist under touch exploration. Fix: semantics `onClick` sends `PRESS` +
   `LATCH_LOCK` when idle (tap = start locked recording), `STOP_TAP` when locked.
   Panel buttons are already ordinary buttons, so the rest is accessible.
-- [ ] **6. No audio focus while recording.**
+- [x] **6. No audio focus while recording.**
   We pause our own player but Spotify keeps playing through the speaker into the
   mic. Request `AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE` for the recording's duration.
 
-## Correctness notes (small)
+## Correctness notes (small) (implemented 2026-07-17, pending on-device verify)
 
-- [ ] Elapsed time uses wall clock (`System.currentTimeMillis`) — an NTP step
+- [x] Elapsed time uses wall clock (`System.currentTimeMillis`) — an NTP step
   mid-recording skews the timer / keepability check. Use
   `SystemClock.elapsedRealtime()` for measurement (epoch stays for filenames).
-- [ ] The "neither condition can change mid-hold" comment on the mic/send swap
+- [x] The "neither condition can change mid-hold" comment on the mic/send swap
   (ThreadScreen ~2510) has one hole: `CAP_REACHED` while HELD attaches mid-hold and
   swaps mic → send under the finger. Outcome is benign; fix the comment so nobody
   simplifies it into a real bug.
-- [ ] A PREVIEW take doesn't survive process death (`previewUri` isn't in
+- [x] A PREVIEW take doesn't survive process death (`previewUri` isn't in
   SavedStateHandle; pending attachments are).
-- [ ] Draft-memo sweep edge: on restoring a draft memo from SavedStateHandle, touch
+- [x] Draft-memo sweep edge: on restoring a draft memo from SavedStateHandle, touch
   the file's mtime — resets the 24 h sweep clock, closing the documented
   ">24 h draft gets swept, send fails" edge.
-- [ ] Fixed duration cap can over-record on low-cap carriers (carrier config clamps
+- [x] Fixed duration cap can over-record on low-cap carriers (carrier config clamps
   as low as 300 KB → memos past ~37 s fail at send). Use
   `min(fixed cap, live-carrier-derived cap)` at record start — can only shorten,
   so a memo still never becomes unsendable by switching SIMs.
 
-## Polish — best-in-class gaps (Google Messages / WhatsApp / Signal parity)
+## Polish — best-in-class gaps (Google Messages / WhatsApp / Signal parity) (implemented 2026-07-17, pending on-device verify)
 
-- [ ] **Live input level / waveform.** `MediaRecorder.getMaxAmplitude()` polled
-  ~15 Hz → level meter in the panel. Doubles as the visible symptom for a dead mic
-  (item 1's failure renders as a flatline instead of being discovered after
-  sending). Recorded samples later become a real waveform in preview/pending chips —
-  the biggest visible-polish delta vs. Google Messages.
-- [ ] Received audio bubbles say "Voice memo" until first play — cache durations
-  (LruCache by uri, or a Room column populated at sync) to show real lengths.
-- [ ] Can't record a memo once anything else is attached (mic hides). Add a
-  "Record voice memo" item to the attach dropdown that sends `PRESS` + `LATCH_LOCK`
-  (tap-to-record, same path as the TalkBack fix) → photo + memo in one message.
-- [ ] Permanent permission denial dead-ends in a repeating toast — detect and offer
-  a Settings deep-link.
-- [ ] No completion haptic — `CONFIRM` (API 30+, fall back to `CONTEXT_CLICK`) on
-  `STOP_KEEP` / `ATTACH_PREVIEW`.
+- [x] **Live input level meter.** `MediaRecorder.getMaxAmplitude()` polled ~15 Hz
+  (single ViewModel-driven ticker gated on the HELD/LOCKED phase), normalized by a pure
+  `normalizedRecordingLevel` (sqrt curve), rendered as a scrolling bar meter in the
+  panel — HELD replaces the old decorative pulsing mic, LOCKED sits between the timer
+  and the controls. Doubles as the visible symptom for a dead mic (item 1's failure now
+  renders as a flatline instead of being discovered after sending).
+  - [ ] Waveform in preview/pending/bubble chips (needs amplitude persistence — future).
+- [x] Received audio bubbles said "Voice memo" until first play — `rememberAudioDurationMs`
+  now seeds from a file-scope `LruCache` (correct label on the first frame after any
+  prior read) and the bubble chip passes `fallbackDurationMs`; one metadata read per uri,
+  ever.
+- [x] Can't record a memo once anything else is attached (mic hides). A "Record voice
+  memo" item in the attach dropdown sends `PRESS` + `LATCH_LOCK` (tap-to-record, same
+  path as the TalkBack fix) → photo + memo in one message.
+- [x] Permanent permission denial dead-ended in a repeating toast — shared
+  `onMicPermissionDenied` detects "don't ask again" (rationale flag false after a
+  completed request) and deep-links to app settings; both RECORD_AUDIO launchers use it.
+- [x] No completion haptic — `CONFIRM` (API 30+, fall back to `CONTEXT_CLICK`) on the
+  quick-flow keep (`RELEASE`) and preview `ATTACH`; cancel/discard stay silent.
 
 ## Explicitly accepted (documented, not planned)
 

@@ -1,5 +1,7 @@
 package com.plusorminustwo.postmark.domain.voicememo
 
+import kotlin.math.sqrt
+
 /**
  * Pure state machine + gesture math for the reply-bar voice memo recorder.
  *
@@ -124,3 +126,9 @@ fun formatMemoDuration(ms: Long): String {
     val totalSec = (ms / 1000).coerceAtLeast(0)
     return "%d:%02d".format(totalSec / 60, totalSec % 60)
 }
+
+/** Normalizes MediaRecorder.getMaxAmplitude() (0..32767) to a 0..1 display level.
+ *  sqrt gives a perceptual-ish curve — speech at normal volume should visibly move
+ *  the meter, not hover near the floor the way a linear mapping does. */
+fun normalizedRecordingLevel(rawAmplitude: Int): Float =
+    sqrt(rawAmplitude.coerceIn(0, 32_767) / 32_767f)

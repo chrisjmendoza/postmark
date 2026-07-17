@@ -1,6 +1,9 @@
 package com.plusorminustwo.postmark.service.audio
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
 import android.util.Log
@@ -24,6 +27,29 @@ class VoiceMemoRecorder @Inject constructor(
 ) {
     private var recorder: MediaRecorder? = null
     private var outputFile: File? = null
+
+    private val audioManager: AudioManager? = context.getSystemService(AudioManager::class.java)
+    /* AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE + USAGE_MEDIA/CONTENT_TYPE_SPEECH: recording
+     * should duck/stop whatever else is playing through the speaker (music, a podcast)
+     * so it isn't picked up by the mic. minSdk is 26, so this Builder path is
+     * unconditional. The focus-change listener is a no-op — we hold focus only for as
+     * long as we're actively recording and abandon it the moment we stop; we never
+     * react to losing it mid-recording (another app reclaiming focus doesn't stop us). */
+    private val focusRequest: AudioFocusRequest by lazy {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener { }
+            .build()
+    }
+
+    private fun abandonFocus() {
+        audioManager?.abandonAudioFocusRequest(focusRequest)
+    }
 
     /**
      * Starts a new recording into [outputFile], stopping (and discarding) any recording
@@ -51,6 +77,12 @@ class VoiceMemoRecorder @Inject constructor(
             @Suppress("DEPRECATION") MediaRecorder()
         }
         return try {
+            val focusResult = audioManager?.requestAudioFocus(focusRequest)
+            if (focusResult != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                // Refusing to record because another app won't yield focus is worse than
+                // that app's audio bleeding into the recording — record anyway.
+                Log.w(TAG, "requestAudioFocus denied (result=$focusResult) — recording anyway")
+            }
             r.setAudioSource(MediaRecorder.AudioSource.MIC)
             r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
@@ -72,6 +104,7 @@ class VoiceMemoRecorder @Inject constructor(
             true
         } catch (e: Exception) {
             Log.e(TAG, "start failed", e)
+            abandonFocus()
             runCatching { r.release() }
             runCatching { outputFile.delete() }
             false
@@ -88,6 +121,7 @@ class VoiceMemoRecorder @Inject constructor(
      */
     fun stopAndKeep(): File? {
         val r = recorder ?: return null
+        abandonFocus()
         val file = outputFile
         recorder = null
         outputFile = null
@@ -101,9 +135,14 @@ class VoiceMemoRecorder @Inject constructor(
         return result
     }
 
+    /** Max amplitude since the last call (MediaRecorder semantics), 0 when idle.
+     *  runCatching: querying a recorder that died mid-recording throws on some OEMs. */
+    fun currentMaxAmplitude(): Int = runCatching { recorder?.maxAmplitude ?: 0 }.getOrDefault(0)
+
     /** Stops the active recording (if any) and deletes its file. Safe to call anytime. */
     fun stopAndDiscard() {
         val r = recorder ?: return
+        abandonFocus()
         val file = outputFile
         recorder = null
         outputFile = null

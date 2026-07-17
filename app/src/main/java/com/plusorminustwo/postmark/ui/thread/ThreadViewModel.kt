@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.app.PendingIntent
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.BlockedNumberContract
 import android.provider.Telephony
 import androidx.core.content.FileProvider
@@ -35,6 +36,7 @@ import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEffect
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEvent
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
 import com.plusorminustwo.postmark.domain.voicememo.isMemoKeepable
+import com.plusorminustwo.postmark.domain.voicememo.normalizedRecordingLevel
 import com.plusorminustwo.postmark.domain.voicememo.voiceMemoTransition
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.service.audio.VoiceMemoRecorder
@@ -44,7 +46,9 @@ import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -622,10 +626,11 @@ class ThreadViewModel @Inject constructor(
 
     // ── Voice memo recording ──────────────────────────────────────────────────
 
-    /** Recording phase + start timestamp for the reply bar's mic button. The UI derives
-     *  the elapsed timer from [startedAtMs]; [maxDurationMs] caps it (MMS byte budget).
-     *  [previewUri] is the stopped-but-not-yet-attached take shown by the preview panel
-     *  (non-null exactly in [VoiceMemoPhase.PREVIEW]). */
+    /** Recording phase + start timestamp for the reply bar's mic button. [startedAtMs] is
+     *  an `elapsedRealtime()` timestamp (monotonic — immune to an NTP step mid-recording),
+     *  NOT wall-clock epoch millis; the UI derives the elapsed timer from it and
+     *  [maxDurationMs] caps it (MMS byte budget). [previewUri] is the stopped-but-not-yet-
+     *  attached take shown by the preview panel (non-null exactly in [VoiceMemoPhase.PREVIEW]). */
     data class VoiceMemoUiState(
         val phase: VoiceMemoPhase = VoiceMemoPhase.IDLE,
         val startedAtMs: Long = 0L,
@@ -633,17 +638,99 @@ class ThreadViewModel @Inject constructor(
         val previewUri: String? = null
     )
 
-    private val _voiceMemo = MutableStateFlow(VoiceMemoUiState())
+    // Restored across process death like _pendingAttachments above: a parked PREVIEW
+    // take otherwise has no survivor — onCleared (which deletes it) only runs on a
+    // normal ViewModel clear, never on process death, so without this the file would
+    // leak until the 24 h sweep and the panel would just vanish on restore.
+    private val _voiceMemo = MutableStateFlow(
+        savedStateHandle.get<String>(DRAFT_PREVIEW_MEMO_KEY)?.let { uri ->
+            VoiceMemoUiState(phase = VoiceMemoPhase.PREVIEW, previewUri = uri)
+        } ?: VoiceMemoUiState()
+    )
     val voiceMemoState: StateFlow<VoiceMemoUiState> = _voiceMemo.asStateFlow()
+
+    /** Every write to [_voiceMemo] goes through here so [DRAFT_PREVIEW_MEMO_KEY] stays in
+     *  sync with [VoiceMemoUiState.previewUri] — the one place a parked PREVIEW take's uri
+     *  is persisted so it survives process death (pending attachments already do via
+     *  SavedStateHandle; a parked preview take didn't until this). */
+    private fun setVoiceMemo(state: VoiceMemoUiState) {
+        _voiceMemo.value = state
+        if (state.previewUri != null) savedStateHandle[DRAFT_PREVIEW_MEMO_KEY] = state.previewUri
+        else savedStateHandle.remove<String>(DRAFT_PREVIEW_MEMO_KEY)
+    }
+
+    init {
+        // Touch every restored draft (pending attachments + a restored PREVIEW take)
+        // so its 24 h orphan-sweep clock restarts — it's being actively kept, not
+        // abandoned, and mtime is otherwise still whatever it was when last written.
+        // No-op (and no IO hop) when nothing was restored, the overwhelmingly common case.
+        val restoredPreviewUri = _voiceMemo.value.previewUri
+        if (_pendingAttachments.value.isNotEmpty() || restoredPreviewUri != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                _pendingAttachments.value.forEach {
+                    MmsManagerWrapper.touchVoiceMemoCacheFile(context, it)
+                }
+                restoredPreviewUri?.let {
+                    MmsManagerWrapper.touchVoiceMemoCacheFile(context, MessageAttachment(it, "audio/mp4"))
+                }
+            }
+        }
+        // The carrier-accurate cap needs a binder call, so it's only known
+        // asynchronously; currentVoiceMemoCapMs() hops to IO itself. This only ever
+        // shortens VoiceMemoUiState's default MAX_VOICE_MEMO_DURATION_MS seed
+        // (effectiveVoiceMemoCapMs can't lengthen it), so a press that races this read
+        // (recording starts before it lands) just uses the fixed default cap — the
+        // memo still fits every carrier that read would have applied, just not as
+        // tightly on the strictest ones.
+        viewModelScope.launch {
+            val capMs = mmsManagerWrapper.currentVoiceMemoCapMs()
+            setVoiceMemo(_voiceMemo.value.copy(maxDurationMs = capMs))
+        }
+    }
+
+    /** Live 0..1 mic input level while recording, 0f otherwise. Exposed as a flow so the
+     *  level meter collects it locally — its ~15 Hz ticks then recompose only the meter,
+     *  never the whole reply bar (the same isolation the audio chips use for playback). */
+    private val _recordingLevel = MutableStateFlow(0f)
+    val recordingLevel: StateFlow<Float> = _recordingLevel.asStateFlow()
+    private var recordingLevelJob: Job? = null
+
+    init {
+        // One driver for the meter: poll the recorder only while audio is actually being
+        // captured (HELD/LOCKED), and cancel the ticker + zero the level the instant the
+        // phase leaves those states. Keyed on the phase alone (distinctUntilChanged) so
+        // the ticker starts and stops exactly once per take.
+        viewModelScope.launch {
+            _voiceMemo.map { it.phase }.distinctUntilChanged().collect { phase ->
+                val capturing = phase == VoiceMemoPhase.HELD || phase == VoiceMemoPhase.LOCKED
+                if (capturing && recordingLevelJob?.isActive != true) {
+                    recordingLevelJob = viewModelScope.launch {
+                        while (isActive) {
+                            _recordingLevel.value =
+                                normalizedRecordingLevel(voiceMemoRecorder.currentMaxAmplitude())
+                            delay(66) // ~15 Hz
+                        }
+                    }
+                } else if (!capturing) {
+                    recordingLevelJob?.cancel()
+                    recordingLevelJob = null
+                    _recordingLevel.value = 0f
+                }
+            }
+        }
+    }
 
     /** Starts a fresh recording; returns its start timestamp, or null (with a user-facing
      *  message) when the recorder couldn't start. */
     private fun startRecorder(maxDurationMs: Long): Long? {
         // One audio pipeline at a time: recording over playback would capture it.
         audioPlayer.pause()
-        val now = System.currentTimeMillis()
+        // Epoch millis names the file (must stay unique/meaningful on disk); elapsed
+        // time is measured separately below via elapsedRealtime() (monotonic — see
+        // VoiceMemoUiState.startedAtMs), since the two have different jobs.
+        val epochMs = System.currentTimeMillis()
         val started = voiceMemoRecorder.start(
-            outputFile    = MmsManagerWrapper.voiceMemoCacheFile(context, now),
+            outputFile    = MmsManagerWrapper.voiceMemoCacheFile(context, epochMs),
             maxDurationMs = maxDurationMs.toInt(),
             bitrateBps    = MmsManagerWrapper.VOICE_MEMO_BITRATE_BPS,
             onMaxDurationReached = { onVoiceMemoEvent(VoiceMemoEvent.CAP_REACHED) },
@@ -659,14 +746,14 @@ class ThreadViewModel @Inject constructor(
             _attachmentRejectedEvent.tryEmit("Couldn't start recording")
             return null
         }
-        return now
+        return SystemClock.elapsedRealtime()
     }
 
     /** Stops the recorder keeping the take, and returns its FileProvider URI — or null
      *  (take discarded, [tooShortMessage] shown when that's the cause) when nothing
      *  usable was captured. */
     private fun stopRecorderForKeep(startedAtMs: Long, tooShortMessage: String): String? {
-        val elapsedMs = System.currentTimeMillis() - startedAtMs
+        val elapsedMs = SystemClock.elapsedRealtime() - startedAtMs
         if (!isMemoKeepable(elapsedMs)) {
             voiceMemoRecorder.stopAndDiscard()
             _attachmentRejectedEvent.tryEmit(tooShortMessage)
@@ -712,12 +799,12 @@ class ThreadViewModel @Inject constructor(
                     return
                 }
                 val startedAt = startRecorder(current.maxDurationMs) ?: return
-                _voiceMemo.value = current.copy(phase = phase, startedAtMs = startedAt)
+                setVoiceMemo(current.copy(phase = phase, startedAtMs = startedAt))
             }
             // Quick flow (held → release): straight into the pending queue; the
             // strip's chip (play / scrub / duration / ×) is the review step.
             VoiceMemoEffect.STOP_KEEP -> {
-                _voiceMemo.value = current.copy(phase = phase)
+                setVoiceMemo(current.copy(phase = phase))
                 val uri = stopRecorderForKeep(
                     current.startedAtMs, "Hold the mic button to record a voice memo"
                 ) ?: return
@@ -726,19 +813,18 @@ class ThreadViewModel @Inject constructor(
             // Deliberate flow (locked → stop): hold the take for the preview panel.
             VoiceMemoEffect.STOP_PREVIEW -> {
                 val uri = stopRecorderForKeep(current.startedAtMs, "Recording was too short")
-                _voiceMemo.value = if (uri != null) {
-                    current.copy(phase = phase, previewUri = uri)
-                } else {
-                    current.copy(phase = VoiceMemoPhase.IDLE, previewUri = null)
-                }
+                setVoiceMemo(
+                    if (uri != null) current.copy(phase = phase, previewUri = uri)
+                    else current.copy(phase = VoiceMemoPhase.IDLE, previewUri = null)
+                )
             }
             VoiceMemoEffect.ATTACH_PREVIEW -> {
                 val uri = current.previewUri
-                _voiceMemo.value = current.copy(phase = phase, previewUri = null)
+                setVoiceMemo(current.copy(phase = phase, previewUri = null))
                 if (uri != null) appendAttachments(listOf(MessageAttachment(uri, "audio/mp4")))
             }
             VoiceMemoEffect.DISCARD_PREVIEW -> {
-                _voiceMemo.value = current.copy(phase = phase, previewUri = null)
+                setVoiceMemo(current.copy(phase = phase, previewUri = null))
                 current.previewUri?.let { deletePreviewTake(it) }
             }
             VoiceMemoEffect.RESTART_RECORDING -> {
@@ -747,18 +833,17 @@ class ThreadViewModel @Inject constructor(
                 voiceMemoRecorder.stopAndDiscard()
                 current.previewUri?.let { deletePreviewTake(it) }
                 val startedAt = startRecorder(current.maxDurationMs)
-                _voiceMemo.value = if (startedAt != null) {
-                    current.copy(phase = phase, startedAtMs = startedAt, previewUri = null)
-                } else {
-                    current.copy(phase = VoiceMemoPhase.IDLE, previewUri = null)
-                }
+                setVoiceMemo(
+                    if (startedAt != null) current.copy(phase = phase, startedAtMs = startedAt, previewUri = null)
+                    else current.copy(phase = VoiceMemoPhase.IDLE, previewUri = null)
+                )
             }
             VoiceMemoEffect.STOP_DISCARD -> {
-                _voiceMemo.value = current.copy(phase = phase)
+                setVoiceMemo(current.copy(phase = phase))
                 voiceMemoRecorder.stopAndDiscard()
             }
             VoiceMemoEffect.NONE -> {
-                if (phase != current.phase) _voiceMemo.value = current.copy(phase = phase)
+                if (phase != current.phase) setVoiceMemo(current.copy(phase = phase))
             }
         }
     }
@@ -772,6 +857,19 @@ class ThreadViewModel @Inject constructor(
             VoiceMemoPhase.LOCKED -> onVoiceMemoEvent(VoiceMemoEvent.STOP_TAP)
             VoiceMemoPhase.HELD   -> onVoiceMemoEvent(VoiceMemoEvent.RELEASE)
             else -> Unit
+        }
+    }
+
+    /** Back-press while a memo is in flight must never destroy the take: HELD keeps it
+     *  via the quick flow, LOCKED parks it in the preview panel, PREVIEW attaches it to
+     *  the pending strip (where it survives as a draft). Back only navigates once the
+     *  memo state is IDLE again. */
+    fun onBackDuringMemo() {
+        when (_voiceMemo.value.phase) {
+            VoiceMemoPhase.HELD    -> onVoiceMemoEvent(VoiceMemoEvent.RELEASE)
+            VoiceMemoPhase.LOCKED  -> onVoiceMemoEvent(VoiceMemoEvent.STOP_TAP)
+            VoiceMemoPhase.PREVIEW -> onVoiceMemoEvent(VoiceMemoEvent.ATTACH)
+            VoiceMemoPhase.IDLE    -> Unit
         }
     }
 
@@ -801,6 +899,10 @@ class ThreadViewModel @Inject constructor(
         _voiceMemo.value.previewUri?.let { uri ->
             MmsManagerWrapper.deleteVoiceMemoCacheFile(context, MessageAttachment(uri, "audio/mp4"))
         }
+        // Process death skips onCleared — which is exactly why the init-block restore
+        // above works. A normal clear reaches here and just deleted the file above, so
+        // the key must go too or a later restore would resurrect a uri to nothing.
+        savedStateHandle.remove<String>(DRAFT_PREVIEW_MEMO_KEY)
         audioPlayer.release()
         super.onCleared()
     }
@@ -1086,8 +1188,9 @@ class ThreadViewModel @Inject constructor(
     }
 
     companion object {
-        private const val DRAFT_TEXT_KEY        = "draft_text"
-        private const val DRAFT_ATTACHMENTS_KEY = "draft_attachments"
+        private const val DRAFT_TEXT_KEY         = "draft_text"
+        private const val DRAFT_ATTACHMENTS_KEY  = "draft_attachments"
+        private const val DRAFT_PREVIEW_MEMO_KEY = "draft_preview_memo"
 
         /** Max attachments per outgoing MMS — shared by the picker's maxItems and
          *  the accumulate-across-picker-trips cap in [appendAttachments]. */

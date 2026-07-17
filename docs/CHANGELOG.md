@@ -4,6 +4,67 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-17 (voice memos) — polish round: live level meter, chip durations, attach-menu recording, permission dead-end, confirm haptics
+
+Fable's polish pass, five items closed (pending on-device verify). **Live input level
+meter** — nothing previously proved the mic was capturing, so a dead mic was only found
+after sending. A new pure `normalizedRecordingLevel` (sqrt curve so speech visibly moves
+the meter) maps `MediaRecorder.getMaxAmplitude()` to 0..1; `VoiceMemoRecorder.currentMaxAmplitude()`
+reads it; a single ViewModel ticker polls at ~15 Hz, driven from one place (a collector on
+the memo phase — runs only while HELD/LOCKED, zeroes on exit). The `RecordingLevelMeter`
+Canvas collects the level flow locally (15 Hz recomposes only the meter) and draws a
+right-anchored scrolling bar history — it replaces the HELD pulsing mic and sits between
+the LOCKED timer and controls. **Chip durations before first play** — bubble audio chips
+said "Voice memo" until played; `rememberAudioDurationMs` now seeds from a bounded
+file-scope `LruCache` (real length on the first frame after any prior read of that uri)
+and the bubble chip passes `fallbackDurationMs`; failures aren't cached (a file mid-download
+may succeed later). **Record straight from the attach menu** — the mic hides once anything
+is attached, so a "Record voice memo" item was added to the attach dropdown; it tap-records
+into hands-free LOCKED via the same `PRESS` + `LATCH_LOCK` pair the TalkBack path uses, so
+photo + memo in one message is now composable. **Permission dead-end** — a shared
+`onMicPermissionDenied` helper detects a permanent "don't ask again" denial (rationale flag
+false after a completed request) and deep-links to app settings instead of re-toasting;
+both RECORD_AUDIO launchers (mic button + attach menu) route through it. **Confirm haptic**
+— a `View.performConfirmHaptic()` (`CONFIRM` on API 30+, `CONTEXT_CLICK` fallback) fires on
+a successful capture: the quick-flow keep (`RELEASE`) and the preview `ATTACH`; cancel and
+discard stay silent so the absence of a buzz is itself the signal.
+
+## 2026-07-17 (voice memos) — hardening rounds 2+3: back-press, TalkBack, audio focus, small correctness
+
+Fable's second review pass, six more findings closed. **Back-press can no longer
+destroy an in-flight take**: `ThreadViewModel.onBackDuringMemo()` plus a `BackHandler`
+active whenever the memo phase isn't IDLE routes back through the existing transition
+table instead of letting navigation reach `onCleared`'s discard — HELD keeps the take
+via the quick flow, LOCKED parks it to the preview panel, PREVIEW attaches it to the
+pending strip (a draft that now survives). **The mic button works with TalkBack**: a
+`.semantics(mergeDescendants = true)` block on the same `Box` as the hold/slide gesture
+adds an `onClick` that starts a hands-free LOCKED recording on a double-tap (`PRESS` +
+`LATCH_LOCK` — safe unconditionally, since a failed `PRESS` leaves the phase alone and
+`LATCH_LOCK` is a no-op everywhere but HELD) plus a "Recording" `stateDescription`; the
+permission check is now a shared `hasMicPermission()` used by both the gesture and the
+semantics path so the two can't drift. **Recording now requests audio focus**
+(`AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE`, `VoiceMemoRecorder`) so music playing through
+the speaker doesn't bleed into the mic — a denied request still records rather than
+refuse outright, since silently-not-recording is worse than a few seconds of bleed.
+Four smaller correctness fixes: elapsed-time measurement moved from
+`System.currentTimeMillis()` to `SystemClock.elapsedRealtime()` (monotonic — immune to
+an NTP step mid-recording; the cache filename keeps the epoch stamp) in
+`startRecorder`/`stopRecorderForKeep`/`rememberRecordingElapsedMs`; the mic/send-swap
+comment now documents the one case it can change mid-hold (`CAP_REACHED` auto-attaching
+while HELD) and why it's still safe; a parked PREVIEW take now survives process death
+via a new `setVoiceMemo()` choke point that mirrors `previewUri` into SavedStateHandle
+(mechanical replacement of every direct `_voiceMemo.value = ...` write); and a memo
+restored from SavedStateHandle (pending attachment or preview) now has its cache file's
+mtime bumped on `ViewModel` init so the 24 h orphan sweep doesn't collect an
+actively-kept draft. Also landed: `MmsManagerWrapper.currentVoiceMemoCapMs()` reads the
+live carrier MMS size limit the same way `sendMms` does and feeds it through a new pure
+`effectiveVoiceMemoCapMs(fixed, live, bitrate)` (`min` of the two — can only shorten),
+applied to `VoiceMemoUiState.maxDurationMs` once at `ViewModel` init; a memo recorded up
+to the fixed ~1:42 cap on a carrier with a stricter budget (down to 300 KB on some)
+could previously record fine and fail at send.
+
+---
+
 ## 2026-07-17 (voice memos) — hardening round 1: screen-off silence, recorder errors, ghost playback
 
 Fable's first review pass on `feat/voice-memos` flagged three blockers, all fixed

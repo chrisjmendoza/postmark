@@ -300,6 +300,23 @@ class MmsManagerWrapper @Inject constructor(
         }
     }
 
+    /**
+     * [MAX_VOICE_MEMO_DURATION_MS] shortened for the SIM currently active, when its
+     * carrier config caps MMS size below the default budget the fixed constant assumes
+     * (as low as 300 KB on some carriers — a memo recorded up to the fixed ~1:42 cap
+     * would record fine and then fail at send there). Reads CarrierConfig the same way
+     * (and with the same fallback/sanity-clamp) as [sendMms]'s size-limit lookup, so the
+     * two never disagree about what this SIM can actually send.
+     */
+    suspend fun currentVoiceMemoCapMs(): Long = withContext(Dispatchers.IO) {
+        val carrierMaxBytes: Int = try {
+            val cfg = smsManager.getCarrierConfigValues()
+            cfg.getInt(SmsManager.MMS_CONFIG_MAX_MESSAGE_SIZE, DEFAULT_MAX_MMS_BYTES)
+                .coerceIn(300_000, 2_000_000)  // sanity-clamp: 300 KB – 2 MB
+        } catch (_: Exception) { DEFAULT_MAX_MMS_BYTES }
+        effectiveVoiceMemoCapMs(MAX_VOICE_MEMO_DURATION_MS, carrierMaxBytes, VOICE_MEMO_BITRATE_BPS)
+    }
+
     companion object {
         private const val TAG = "MmsManagerWrapper"
         /* UX-level cap, independent of the byte-budget math: a hard duration limit gives
@@ -333,8 +350,11 @@ class MmsManagerWrapper @Inject constructor(
         /* Estimated overhead of MMS PDU headers + SMIL part + per-part headers on top
          * of raw media bytes. Subtracted from the carrier limit before budgeting so the
          * total PDU never exceeds what the MMSC accepts. 5 KB is generous: the SMIL for
-         * the max attachment count is < 1 KB and each part header is ~50 bytes. */
-        private const val PDU_OVERHEAD_BYTES = 5_000
+         * the max attachment count is < 1 KB and each part header is ~50 bytes.
+         * internal (not private): shared with the file-scope effectiveVoiceMemoCapMs
+         * below and VoiceMemoBudgetTest, which apply the same reservation to the live
+         * carrier budget that this class applies to the default one. */
+        internal const val PDU_OVERHEAD_BYTES = 5_000
 
         // ── Video compression tuning ──────────────────────────────────────────
         /* Video transcoding is expensive (real seconds-to-minutes per pass on-device),
@@ -399,6 +419,16 @@ class MmsManagerWrapper @Inject constructor(
             val name = Uri.parse(attachment.uri).lastPathSegment ?: return
             if (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) {
                 runCatching { File(context.filesDir, name).delete() }
+            }
+        }
+
+        /** Bumps the mtime of the recording file behind [attachment] if it is a voice memo —
+         *  a draft restored from SavedStateHandle is being actively kept, so its 24 h
+         *  orphan-sweep clock must restart. No-op for anything else. */
+        fun touchVoiceMemoCacheFile(context: Context, attachment: MessageAttachment) {
+            val name = Uri.parse(attachment.uri).lastPathSegment ?: return
+            if (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) {
+                runCatching { File(context.filesDir, name).setLastModified(System.currentTimeMillis()) }
             }
         }
 
@@ -733,6 +763,12 @@ internal fun maxVoiceMemoDurationMs(budgetBytes: Int, bitrateBps: Int): Long {
     val usableBits = budgetBytes * 8.0 * CONTAINER_OVERHEAD_FACTOR
     return (usableBits / bitrateBps).toLong() * 1000L
 }
+
+/** The recording cap actually applied: the fixed default-budget cap, shortened when
+ *  the live carrier budget is stricter. Never longer than the fixed cap — see
+ *  MAX_VOICE_MEMO_DURATION_MS for why the cap must not grow with carrier config. */
+internal fun effectiveVoiceMemoCapMs(fixedCapMs: Long, liveCarrierMaxBytes: Int, bitrateBps: Int): Long =
+    minOf(fixedCapMs, maxVoiceMemoDurationMs(liveCarrierMaxBytes - MmsManagerWrapper.PDU_OVERHEAD_BYTES, bitrateBps))
 
 // ── Video transcode planning ───────────────────────────────────────────────────
 // File-scope (not companion-object) constants: shared by both the pure
