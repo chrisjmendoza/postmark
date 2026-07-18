@@ -138,5 +138,7 @@ class PinnedThreadTest {
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}
         override suspend fun updateAccentColor(threadId: Long, argb: Int?) {}
         override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) {}
+        override suspend fun updateSentColor(threadId: Long, argb: Int?) {}
+        override suspend fun countByChatBackground(id: String): Int = 0
     }
 }

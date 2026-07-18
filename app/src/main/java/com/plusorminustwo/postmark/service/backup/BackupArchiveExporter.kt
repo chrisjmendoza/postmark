@@ -153,7 +153,8 @@ private fun Thread.toRecord() = ThreadRecord(
     lastMessageAt = lastMessageAt,
     lastMessagePreview = lastMessagePreview,
     accentColorArgb = accentColorArgb,
-    chatBackgroundId = chatBackgroundId
+    chatBackgroundId = chatBackgroundId,
+    sentColorArgb = sentColorArgb
 )
 
 private fun Message.toRecord(

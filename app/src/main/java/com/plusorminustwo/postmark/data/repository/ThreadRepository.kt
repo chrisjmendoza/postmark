@@ -96,4 +96,13 @@ class ThreadRepository @Inject constructor(
     /** Saves a Postmark-only chat background id for the thread; pass null to clear it. */
     suspend fun setChatBackground(threadId: Long, backgroundId: String?) =
         dao.updateChatBackground(threadId, backgroundId)
+
+    /** Saves a Postmark-only sent-bubble color (ARGB) for the thread; pass null to clear it. */
+    suspend fun setSentColor(threadId: Long, argb: Int?) =
+        dao.updateSentColor(threadId, argb)
+
+    /** Number of threads whose chat-background override equals [id] — used to decide
+     *  whether a custom image background is still referenced before deleting its file. */
+    suspend fun countByChatBackground(id: String): Int =
+        dao.countByChatBackground(id)
 }

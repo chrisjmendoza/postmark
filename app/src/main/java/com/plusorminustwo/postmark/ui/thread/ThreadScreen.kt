@@ -114,6 +114,7 @@ import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
 import com.plusorminustwo.postmark.domain.voicememo.formatMemoDuration
 import com.plusorminustwo.postmark.domain.voicememo.shouldCancelDrag
 import com.plusorminustwo.postmark.domain.voicememo.shouldLatchLock
+import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
@@ -154,6 +155,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.isUnspecified
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -177,6 +179,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.progressSemantics
+import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 
@@ -188,13 +191,36 @@ import coil.request.ImageRequest
 internal val LocalBubbleFontScale = compositionLocalOf { 1.0f }
 
 /**
- * Container + content colors for sent bubbles when the current thread has a custom
- * [com.plusorminustwo.postmark.domain.model.Thread.accentColorArgb]. Null when the
- * thread uses the default (MessageBubble falls back to primaryContainer / the ambient
- * content color). Set by [ThreadContent], consumed by [MessageBubble].
+ * CompositionLocal carrying the current bubble shape style (rounded / pill / square).
+ * Set by [ThreadContent] and consumed in [MessageBubble] where it feeds [bubbleShape] —
+ * the single owner of the corner-radius math for the bubble's background silhouette
+ * (attachments inside inherit that silhouette; their own fixed inner-corner clips are
+ * unrelated to the style). Defaults to ROUNDED — today's shape — so previews and other
+ * consumers outside the thread view are unaffected.
  */
-internal data class BubbleAccentColors(val container: Color, val content: Color)
-internal val LocalBubbleAccentColors = compositionLocalOf<BubbleAccentColors?> { null }
+internal val LocalBubbleStyle = compositionLocalOf { BubbleStylePreference.ROUNDED }
+
+/**
+ * Container + content colors for a thread's customized bubbles (Phase FB2). The two
+ * directions are independent — a thread may set
+ * [com.plusorminustwo.postmark.domain.model.Thread.accentColorArgb] (the contact's
+ * color: avatar + received bubbles), [com.plusorminustwo.postmark.domain.model.Thread.sentColorArgb]
+ * (sent bubbles), both, or neither, so every field is individually nullable. Null
+ * leaves MessageBubble on its existing default (surfaceVariant for received,
+ * primaryContainer for sent, ambient content color) — EXCEPT `sentContent`, which
+ * [ThreadContent] fills with `onPrimaryContainer` instead of leaving null when a
+ * global app accent is set (Phase I) and this thread has no `sentColorArgb` of its
+ * own; primaryContainer is the accent itself in that case, so ambient content color
+ * is no longer guaranteed legible against it. Set by [ThreadContent], consumed by
+ * [MessageBubble].
+ */
+internal data class BubbleAccentColors(
+    val receivedContainer: Color? = null,
+    val receivedContent: Color? = null,
+    val sentContainer: Color? = null,
+    val sentContent: Color? = null
+)
+internal val LocalBubbleAccentColors = compositionLocalOf { BubbleAccentColors() }
 
 /**
  * Entry-point composable for a single conversation thread.
@@ -231,8 +257,12 @@ fun ThreadScreen(
     val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
     // Bubble font scale — driven by pinch gesture, persisted across sessions.
     val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
+    // Bubble shape style (rounded / pill / square) — global appearance preference.
+    val bubbleStyle by viewModel.bubbleStyle.collectAsState()
     // Global default chat background — overridden per-thread when uiState.thread.chatBackgroundId is set.
     val globalChatBackgroundId by viewModel.globalChatBackgroundId.collectAsState()
+    // Global app accent (Phase I) — feeds the sent-bubble default content-color fallback below.
+    val appAccentArgb by viewModel.appAccentArgb.collectAsState()
     // address → name for group threads; empty for 1:1 (doubles as the group signal).
     val participantNames by viewModel.participantNames.collectAsState()
     // Voice memo recording phase for the reply bar's mic button.
@@ -332,6 +362,9 @@ fun ThreadScreen(
     val onVoiceMemoEvent          = remember(viewModel) { { event: VoiceMemoEvent -> viewModel.onVoiceMemoEvent(event) } }
     val onAudioPlayPause          = remember(viewModel) { { uri: String -> viewModel.playPauseAudio(uri) } }
     val onAudioSeek               = remember(viewModel) { { uri: String, fraction: Float -> viewModel.seekAudio(uri, fraction) } }
+    // Store-free File lookup for a custom-image chat background — ThreadContent resolves
+    // the effective id and calls this; the ViewModel owns the store.
+    val chatBackgroundFile        = remember(viewModel) { { id: String -> viewModel.chatBackgroundImageFile(id) } }
 
     ThreadContent(
         uiState = uiState,
@@ -339,7 +372,10 @@ fun ThreadScreen(
         activeDates = activeDates,
         quickReactionEmojis = quickReactionEmojis,
         bubbleFontScale = bubbleFontScale,
+        bubbleStyle = bubbleStyle,
         globalChatBackgroundId = globalChatBackgroundId,
+        chatBackgroundFile = chatBackgroundFile,
+        appAccentArgb = appAccentArgb,
         participantNames = participantNames,
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
@@ -429,9 +465,18 @@ private fun ThreadContent(
     activeDates: Set<LocalDate>,
     quickReactionEmojis: List<String>,
     bubbleFontScale: Float = 1.0f,
+    bubbleStyle: BubbleStylePreference = BubbleStylePreference.ROUNDED,
     // Global default chat-background id (Phase C customization); null = none set.
     // A per-thread override on uiState.thread.chatBackgroundId always wins.
     globalChatBackgroundId: String? = null,
+    // Resolves a custom-image chat-background id to its File (Phase J); returns null for
+    // non-image ids or a missing file. Supplied by ThreadScreen (ViewModel owns the store).
+    chatBackgroundFile: (String) -> java.io.File? = { null },
+    // Global app accent (Phase I customization); null = Postmark's own brand blue.
+    // Feeds the sent-bubble default content-color fallback in bubbleAccentColors below —
+    // PostmarkTheme applies the accent to primaryContainer itself; this is the other
+    // half, keeping un-customized sent-bubble TEXT legible against it.
+    appAccentArgb: Int? = null,
     // address → contact name for group threads; empty for 1:1 threads.
     participantNames: Map<String, String> = emptyMap(),
     scrollToMessageId: Long = -1L,
@@ -526,24 +571,58 @@ private fun ThreadContent(
     // hoisted here too since the image viewer's header needs it for the "You"/contact label.
     val contactDisplayName = uiState.thread?.let { t -> t.nickname ?: formatPhoneNumber(t.displayName) } ?: ""
 
-    // Per-thread sent-bubble accent (Phase B customization). Null (no accent set) leaves
-    // MessageBubble on its existing primaryContainer / ambient content color.
+    // Per-thread bubble colors (Phase FB2 customization). accentColorArgb is the
+    // CONTACT's color (received bubbles); sentColorArgb is independent (sent bubbles).
+    // Either, both, or neither may be set — unset sides leave MessageBubble on its
+    // existing surfaceVariant/primaryContainer + ambient content color defaults.
     val isDarkTheme = isAppInDarkTheme()
-    val bubbleAccentColors = remember(uiState.thread?.accentColorArgb, isDarkTheme) {
-        uiState.thread?.accentColorArgb?.let { accent ->
-            BubbleAccentColors(
-                container = Color(ContactPalette.bubbleContainerColor(accent, isDarkTheme)),
-                content = Color(ContactPalette.onBubbleContentColor(accent, isDarkTheme))
-            )
-        }
+    // Phase H legibility guard: a free-form custom accent can land too close to the
+    // theme background (e.g. a near-white pick in light theme) and effectively
+    // vanish. Route both directions through adjustAccentForBackground first — it's
+    // the identity for every ContactPalette preset (proven in ColorMathTest), so
+    // un-customized/preset threads are unaffected; only genuinely low-contrast
+    // custom picks get nudged.
+    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
+    // Phase I: when a global app accent is set, PostmarkTheme has already made
+    // primaryContainer the vivid accent itself — the same fill an un-customized sent
+    // bubble falls back to below in MessageBubble. Its paired onPrimaryContainer is
+    // therefore the correct white/black-by-contrast text color for that fill; the
+    // *ambient* content color MessageBubble would otherwise fall back to was tuned for
+    // the old, muted default primaryContainer, not an arbitrary vivid accent. Only
+    // applies when this thread has no sentColorArgb of its own (a per-thread override
+    // always wins) and only when appAccentArgb is actually set — leaving it null keeps
+    // un-customized-everywhere threads byte-identical to pre-Phase-I behavior.
+    val appAccentOnPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
+    val bubbleAccentColors = remember(
+        uiState.thread?.accentColorArgb, uiState.thread?.sentColorArgb, isDarkTheme, backgroundArgb,
+        appAccentArgb, appAccentOnPrimaryContainer
+    ) {
+        val resolved = ContactPalette.resolveThreadBubbleColors(
+            accentColorArgb = uiState.thread?.accentColorArgb,
+            sentColorArgb = uiState.thread?.sentColorArgb,
+            appAccentArgb = appAccentArgb,
+            appAccentOnPrimaryContainerArgb = appAccentOnPrimaryContainer.toArgb(),
+            isDark = isDarkTheme,
+            backgroundArgb = backgroundArgb
+        )
+        BubbleAccentColors(
+            receivedContainer = resolved.receivedContainerArgb?.let { Color(it) },
+            receivedContent = resolved.receivedContentArgb?.let { Color(it) },
+            sentContainer = resolved.sentContainerArgb?.let { Color(it) },
+            sentContent = resolved.sentContentArgb?.let { Color(it) }
+        )
     }
 
-    // Chat background (Phase C customization): thread override falls back to the
-    // global default, then to None. Brush is remembered keyed on (id, isDarkTheme) so
-    // it's built once per background/theme change, never per frame — this paints the
-    // Box wrapping the message LazyColumn below. Null (None) means no background
-    // modifier is applied at all, so un-customized threads render pixel-identical.
+    // Chat background: thread override falls back to the global default, then to None.
+    // A custom "image:" id (Phase J) resolves to a File and is rendered by Coil below;
+    // every built-in id resolves via ChatBackgrounds.resolve to a gradient Brush (Phase C).
+    // Both are remembered keyed on the id (+ theme) so they're built once per change,
+    // never per frame. Null on both paths means no background — un-customized threads
+    // (and a missing image file, e.g. after a restore) render pixel-identical.
     val chatBackgroundId = uiState.thread?.chatBackgroundId ?: globalChatBackgroundId
+    val chatBackgroundImageFile = remember(chatBackgroundId) {
+        ChatBackgrounds.resolveImageFile(chatBackgroundId, chatBackgroundFile)
+    }
     val chatBackground = ChatBackgrounds.resolve(chatBackgroundId)
     val chatBackgroundBrush = remember(chatBackground.id, isDarkTheme) {
         if (chatBackground == ChatBackgrounds.None) null
@@ -816,6 +895,7 @@ private fun ThreadContent(
     // scale via onAdjustFontScale.
     CompositionLocalProvider(
         LocalBubbleFontScale provides bubbleFontScale,
+        LocalBubbleStyle provides bubbleStyle,
         LocalBubbleAccentColors provides bubbleAccentColors
     ) {
     Box(
@@ -952,6 +1032,13 @@ private fun ThreadContent(
                                     onClick = { menuExpanded = false; onViewStats() }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text("Customize appearance") },
+                                    // Same destination as tapping the contact name/avatar —
+                                    // the ⋮ entry exists purely for discoverability (device
+                                    // feedback: the top-bar tap wasn't discoverable enough).
+                                    onClick = { menuExpanded = false; onViewContact() }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Select messages") },
                                     onClick = { menuExpanded = false; onEnterSelectionMode() }
                                 )
@@ -1051,6 +1138,27 @@ private fun ThreadContent(
                     else Modifier
                 )
         ) {
+            // Custom image background (Phase J): fills the Box behind the LazyColumn,
+            // cropped to fill, under a theme-aware legibility scrim (Black/White @ 40%).
+            if (chatBackgroundImageFile != null) {
+                val ctx = LocalContext.current
+                AsyncImage(
+                    model = remember(chatBackgroundImageFile) {
+                        ImageRequest.Builder(ctx).data(chatBackgroundImageFile).crossfade(true).build()
+                    },
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            if (isDarkTheme) Color.Black.copy(alpha = 0.4f)
+                            else Color.White.copy(alpha = 0.4f)
+                        )
+                )
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 state = listState,
@@ -1414,13 +1522,14 @@ private fun MessageBubble(
     // Read directly (like LocalBubbleFontScale) rather than threaded as a parameter —
     // it's a thread-wide render input, not per-message state.
     val accentColors = LocalBubbleAccentColors.current
+    val bubbleStyle = LocalBubbleStyle.current
     val baseBubbleColor = if (message.isSent)
-        accentColors?.container ?: MaterialTheme.colorScheme.primaryContainer
+        accentColors.sentContainer ?: MaterialTheme.colorScheme.primaryContainer
     else
-        MaterialTheme.colorScheme.surfaceVariant
-    // Sent-bubble text color when a custom accent is set; null falls back to the
-    // ambient LocalContentColor read at each Text below, unchanged from before.
-    val sentContentColor = if (message.isSent) accentColors?.content else null
+        accentColors.receivedContainer ?: MaterialTheme.colorScheme.surfaceVariant
+    // Bubble text color when a custom fill is set for this direction; null falls back
+    // to the ambient LocalContentColor read at each Text below, unchanged from before.
+    val bubbleContentColor = if (message.isSent) accentColors.sentContent else accentColors.receivedContent
     // Search-jump / "Go to chat" highlight. The ViewModel drops highlightedMessageId
     // 2 s after the jump; animating the colour turns that hard flip into a quick
     // tint-in and a gentle fade back to the resting bubble colour.
@@ -1560,7 +1669,7 @@ private fun MessageBubble(
             ) {
             Box(
                 modifier = Modifier
-                    .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
+                    .background(bubbleColor, bubbleShape(bubbleStyle, message.isSent, clusterPosition))
                     .then(
                         // Tighter padding when an attachment fills the bubble edges.
                         if (message.attachments.isNotEmpty())
@@ -1625,7 +1734,7 @@ private fun MessageBubble(
                         if (message.body.isNotEmpty()) {
                             val fontScale   = LocalBubbleFontScale.current
                             val linkColor   = MaterialTheme.colorScheme.primary
-                            val textColor   = sentContentColor ?: LocalContentColor.current
+                            val textColor   = bubbleContentColor ?: LocalContentColor.current
                             val baseStyle   = MaterialTheme.typography.bodyMedium
                             val ctx         = LocalContext.current
                             val annotated   = remember(message.body, linkColor, ctx) {
@@ -1645,7 +1754,7 @@ private fun MessageBubble(
                     // Plain SMS bubble — linkify URLs and phone numbers.
                     val fontScale  = LocalBubbleFontScale.current
                     val linkColor  = MaterialTheme.colorScheme.primary
-                    val textColor  = sentContentColor ?: LocalContentColor.current
+                    val textColor  = bubbleContentColor ?: LocalContentColor.current
                     val baseStyle  = MaterialTheme.typography.bodyMedium
                     val ctx        = LocalContext.current
                     val annotated  = remember(message.body, linkColor, ctx) {
@@ -3510,28 +3619,54 @@ private fun localDateToLabel(date: LocalDate): String = date.format(DAY_FORMATTE
 /**
  * Corner radii for message bubbles.
  * The "sender side" (right for sent, left for received) gets the small corner radius
- * wherever the bubble attaches to its cluster neighbour.
+ * wherever the bubble attaches to its cluster neighbour. ROUNDED is Postmark's default;
+ * PILL keeps the same tail asymmetry with a much larger radius; SQUARE is uniform.
  *
- * All eight shapes are precomputed: bubbleShape() is called per visible bubble per
+ * All shapes are precomputed: bubbleShape() is called per visible bubble per
  * recomposition, and RoundedCornerShape allocation in that path is pure churn.
  */
-private val bubbleFull  = 16.dp
-private val bubbleSmall = 4.dp
-private val sentShapes = mapOf(
+private val bubbleFull     = 16.dp
+private val bubbleSmall    = 4.dp
+private val bubblePillFull = 24.dp
+private val bubbleSquare   = 6.dp
+
+private val roundedSentShapes = mapOf(
     ClusterPosition.SINGLE to RoundedCornerShape(bubbleFull),
     ClusterPosition.TOP    to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleFull,  bottomEnd = bubbleSmall, bottomStart = bubbleFull),
     ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleSmall, bottomEnd = bubbleSmall, bottomStart = bubbleFull),
     ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleSmall, bottomEnd = bubbleFull,  bottomStart = bubbleFull)
 )
-private val receivedShapes = mapOf(
+private val roundedReceivedShapes = mapOf(
     ClusterPosition.SINGLE to RoundedCornerShape(bubbleFull),
     ClusterPosition.TOP    to RoundedCornerShape(topStart = bubbleFull,  topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleSmall),
     ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleSmall),
     ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleFull)
 )
 
-private fun bubbleShape(isSent: Boolean, position: ClusterPosition): RoundedCornerShape =
-    (if (isSent) sentShapes else receivedShapes).getValue(position)
+private val pillSentShapes = mapOf(
+    ClusterPosition.SINGLE to RoundedCornerShape(bubblePillFull),
+    ClusterPosition.TOP    to RoundedCornerShape(topStart = bubblePillFull, topEnd = bubblePillFull,  bottomEnd = bubbleSmall, bottomStart = bubblePillFull),
+    ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubblePillFull, topEnd = bubbleSmall, bottomEnd = bubbleSmall, bottomStart = bubblePillFull),
+    ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubblePillFull, topEnd = bubbleSmall, bottomEnd = bubblePillFull,  bottomStart = bubblePillFull)
+)
+private val pillReceivedShapes = mapOf(
+    ClusterPosition.SINGLE to RoundedCornerShape(bubblePillFull),
+    ClusterPosition.TOP    to RoundedCornerShape(topStart = bubblePillFull,  topEnd = bubblePillFull, bottomEnd = bubblePillFull, bottomStart = bubbleSmall),
+    ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubblePillFull, bottomEnd = bubblePillFull, bottomStart = bubbleSmall),
+    ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubblePillFull, bottomEnd = bubblePillFull, bottomStart = bubblePillFull)
+)
+
+private val squareShape = RoundedCornerShape(bubbleSquare)
+
+internal fun bubbleShape(
+    style: BubbleStylePreference,
+    isSent: Boolean,
+    position: ClusterPosition
+): RoundedCornerShape = when (style) {
+    BubbleStylePreference.ROUNDED -> (if (isSent) roundedSentShapes else roundedReceivedShapes).getValue(position)
+    BubbleStylePreference.PILL    -> (if (isSent) pillSentShapes else pillReceivedShapes).getValue(position)
+    BubbleStylePreference.SQUARE  -> squareShape
+}
 
 /**
  * Calculates the top-Y offset (in pixels) for the emoji reaction pill.

@@ -25,10 +25,15 @@ import androidx.compose.runtime.Immutable
  *                                 so most UI does not need to read this directly — it exists
  *                                 for logic that needs to know "is this a group thread?"
  *                                 (e.g. gating group-aware sending, which isn't implemented yet).
- * @param accentColorArgb          Postmark-only per-contact accent color (ARGB). Null means
- *                                 use the app default everywhere the accent would apply.
+ * @param accentColorArgb          Postmark-only contact color (ARGB) — the contact's
+ *                                 avatar and their received-message bubbles. Null means
+ *                                 use the app default (hash-derived avatar color, neutral
+ *                                 received bubble).
  * @param chatBackgroundId         Postmark-only per-thread chat background id. Null falls
  *                                 back to the global default background (also null = none).
+ * @param sentColorArgb            Postmark-only sent-bubble color (ARGB), independent of
+ *                                 [accentColorArgb]. Null means use the app default
+ *                                 (primaryContainer).
  */
 // @Immutable: the participants List makes Thread inferred-unstable, which made every
 // visible ThreadRow unskippable — all rows recomposed on each threads/unreadCounts
@@ -47,8 +52,10 @@ data class Thread(
     // Postmark-only alias — null means fall back to displayName in the UI.
     val nickname: String? = null,
     val participants: List<String> = emptyList(),
-    // Postmark-only accent color (ARGB). Null means use the default.
+    // Postmark-only contact color (ARGB) — avatar + received bubbles. Null means default.
     val accentColorArgb: Int? = null,
     // Postmark-only chat background id. Null falls back to the global default.
-    val chatBackgroundId: String? = null
+    val chatBackgroundId: String? = null,
+    // Postmark-only sent-bubble color (ARGB), independent of accentColorArgb. Null = default.
+    val sentColorArgb: Int? = null
 )

@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  *
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity].
  *
- * Current schema version: 17.
+ * Current schema version: 18.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
         ReactionEntity::class,
         MessageFtsEntity::class
     ],
-    version = 17,
+    version = 18,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -212,6 +212,16 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // NULL (i.e. fall back to the default accent / no chat background).
                 db.execSQL("ALTER TABLE threads ADD COLUMN accentColorArgb INTEGER")
                 db.execSQL("ALTER TABLE threads ADD COLUMN chatBackgroundId TEXT")
+            }
+        }
+
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Postmark-only sent-bubble color (ARGB) — nullable, no default. Existing
+                // rows get NULL (sent bubbles keep the default primaryContainer fill).
+                // accentColorArgb (v17) is now the CONTACT's color — avatar + received
+                // bubbles; this column is the independent sent-bubble override.
+                db.execSQL("ALTER TABLE threads ADD COLUMN sentColorArgb INTEGER")
             }
         }
 

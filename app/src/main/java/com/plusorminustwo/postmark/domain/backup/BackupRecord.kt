@@ -55,7 +55,9 @@ data class ThreadRecord(
     // Additive fields (Phase A of user customization) — default null so older callers
     // and the v1 reader keep compiling without naming them.
     val accentColorArgb: Int? = null,
-    val chatBackgroundId: String? = null
+    val chatBackgroundId: String? = null,
+    // Additive field (Phase FB2 of user customization) — same rationale as above.
+    val sentColorArgb: Int? = null
 )
 
 /** One message as backed up — full fidelity minus device-local ids. */
@@ -108,7 +110,8 @@ fun encodeThreadLine(thread: ThreadRecord): String = encodeJson(
         "lastMessageAt" to thread.lastMessageAt,
         "lastMessagePreview" to thread.lastMessagePreview,
         "accentColorArgb" to thread.accentColorArgb,
-        "chatBackgroundId" to thread.chatBackgroundId
+        "chatBackgroundId" to thread.chatBackgroundId,
+        "sentColorArgb" to thread.sentColorArgb
     )
 )
 
@@ -187,7 +190,8 @@ private fun decodeThreadRecord(map: Map<*, *>): ThreadRecord = ThreadRecord(
     lastMessagePreview = map.str("lastMessagePreview") ?: "",
     // Absent in archives written before this field existed — tolerate missing keys.
     accentColorArgb = map.int("accentColorArgb"),
-    chatBackgroundId = map.str("chatBackgroundId")
+    chatBackgroundId = map.str("chatBackgroundId"),
+    sentColorArgb = map.int("sentColorArgb")
 )
 
 private fun decodeMessageRecord(map: Map<*, *>): MessageRecord = MessageRecord(

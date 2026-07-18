@@ -292,7 +292,8 @@ class RestoreWorker @AssistedInject constructor(
                     nickname = record.nickname,
                     participants = record.participants,
                     accentColorArgb = record.accentColorArgb,
-                    chatBackgroundId = record.chatBackgroundId
+                    chatBackgroundId = record.chatBackgroundId,
+                    sentColorArgb = record.sentColorArgb
                 )
             )
         } else {
@@ -304,6 +305,7 @@ class RestoreWorker @AssistedInject constructor(
             updates.backupPolicy?.let { threadRepository.updateBackupPolicy(threadId, it) }
             updates.accentColorArgb?.let { threadRepository.setAccentColor(threadId, it) }
             updates.chatBackgroundId?.let { threadRepository.setChatBackground(threadId, it) }
+            updates.sentColorArgb?.let { threadRepository.setSentColor(threadId, it) }
         }
 
         val index = RestoreMessageIndex()

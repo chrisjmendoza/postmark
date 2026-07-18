@@ -92,6 +92,15 @@ interface ThreadDao {
     @Query("UPDATE threads SET chatBackgroundId = :backgroundId WHERE id = :threadId")
     suspend fun updateChatBackground(threadId: Long, backgroundId: String?)
 
+    /** Saves a Postmark-only sent-bubble color (ARGB) for the thread; pass null to clear it. */
+    @Query("UPDATE threads SET sentColorArgb = :argb WHERE id = :threadId")
+    suspend fun updateSentColor(threadId: Long, argb: Int?)
+
+    /** Number of threads whose per-thread chat-background override equals [id]. Feeds the
+     *  orphan-cleanup decision for custom image backgrounds (Phase J). */
+    @Query("SELECT COUNT(*) FROM threads WHERE chatBackgroundId = :id")
+    suspend fun countByChatBackground(id: String): Int
+
     @Query("DELETE FROM threads")
     suspend fun deleteAll()
 

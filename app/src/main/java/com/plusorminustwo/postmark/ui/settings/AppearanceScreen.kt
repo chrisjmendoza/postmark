@@ -1,13 +1,21 @@
 package com.plusorminustwo.postmark.ui.settings
 
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -18,19 +26,29 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
+import com.plusorminustwo.postmark.ui.components.AccentColorDialog
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundDialog
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundPreview
+import com.plusorminustwo.postmark.ui.components.ChatBackgroundThumbnail
+import com.plusorminustwo.postmark.ui.components.accentSubtitle
+import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.FontFamilyPreference
 import com.plusorminustwo.postmark.ui.theme.ThemePreference
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 
+/** Postmark's default sent-bubble/primary accent (matches ContactPalette's "Blue"
+ *  preset and Theme.kt's brand `AccentBlue`) — shown as the leading swatch for the
+ *  "App accent color" row when no override is set. */
+private const val DEFAULT_APP_ACCENT_ARGB = 0xFF378ADD.toInt()
+
 /**
- * Appearance settings screen: theme, font family, message text size, and the global
- * default chat background. Reached from Settings' single "Appearance" summary row.
+ * Appearance settings screen: theme, font family, bubble style, message text size, and
+ * the global default chat background. Reached from Settings' single "Appearance" summary row.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,12 +59,27 @@ fun AppearanceScreen(
     val themePreference by viewModel.themePreference.collectAsState()
     val fontFamilyPreference by viewModel.fontFamilyPreference.collectAsState()
     val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
+    val bubbleStyle by viewModel.bubbleStyle.collectAsState()
     val globalChatBackgroundId by viewModel.globalChatBackgroundId.collectAsState()
+    val useDynamicColor by viewModel.useDynamicColor.collectAsState()
+    val appAccentArgb by viewModel.appAccentArgb.collectAsState()
 
     val isDarkTheme = isAppInDarkTheme()
     var showChatBackgroundDialog by remember { mutableStateOf(false) }
+    var showAppAccentDialog by remember { mutableStateOf(false) }
+
+    // Android Photo Picker for a custom global chat-background image (Jetpack-backed,
+    // works down to minSdk 26). A save failure is a silent no-op (see setImageBackground).
+    val backgroundImagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) viewModel.setImageBackground(uri)
+    }
 
     if (showChatBackgroundDialog) {
+        val currentImageFile = remember(globalChatBackgroundId) {
+            ChatBackgrounds.resolveImageFile(globalChatBackgroundId, viewModel::chatBackgroundImageFile)
+        }
         ChatBackgroundDialog(
             // No "Default" cell here (showFollowGlobal=false), so normalize the
             // repository's null ("unset") to ChatBackgrounds.None's id so the None
@@ -54,11 +87,34 @@ fun AppearanceScreen(
             currentId = ChatBackgrounds.fromGlobalPreferenceId(globalChatBackgroundId),
             showFollowGlobal = false,
             isDarkTheme = isDarkTheme,
+            currentImageFile = currentImageFile,
             onSelect = { id ->
                 viewModel.setChatBackground(id)
                 showChatBackgroundDialog = false
             },
+            onPickImage = {
+                showChatBackgroundDialog = false
+                backgroundImagePicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
             onDismiss = { showChatBackgroundDialog = false }
+        )
+    }
+
+    // Only reachable while Material You is off — the row that opens this is disabled
+    // (and non-clickable) whenever useDynamicColor is true, so this dialog can't be
+    // shown at the same time dynamic color would be overriding the choice anyway.
+    if (showAppAccentDialog) {
+        AccentColorDialog(
+            title = "App accent color",
+            defaultHint = "Default uses Postmark's own accent blue.",
+            currentArgb = appAccentArgb,
+            onSelect = { argb ->
+                viewModel.setAppAccent(argb)
+                showAppAccentDialog = false
+            },
+            onDismiss = { showAppAccentDialog = false }
         )
     }
 
@@ -92,6 +148,34 @@ fun AppearanceScreen(
             )
             HorizontalDivider()
 
+            // Material You is only available on API 31+ (Android 12) — the platform
+            // APIs `dynamicDarkColorScheme`/`dynamicLightColorScheme` require it.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                ToggleSettingRow(
+                    icon = { Icon(Icons.Default.AutoAwesome, null) },
+                    title = "Material You colors",
+                    subtitle = "Use system wallpaper colors",
+                    checked = useDynamicColor,
+                    onCheckedChange = viewModel::setDynamicColor
+                )
+                HorizontalDivider()
+            }
+
+            SettingsRow(
+                icon = {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .background(Color(appAccentArgb ?: DEFAULT_APP_ACCENT_ARGB), CircleShape)
+                    )
+                },
+                title = "App accent color",
+                subtitle = if (useDynamicColor) "Controlled by Material You" else accentSubtitle(appAccentArgb, "Default"),
+                onClick = { showAppAccentDialog = true },
+                enabled = !useDynamicColor
+            )
+            HorizontalDivider()
+
             RadioSettingRow(
                 icon = { Icon(Icons.Default.TextFields, null) },
                 title = "Font family",
@@ -105,6 +189,19 @@ fun AppearanceScreen(
             )
             HorizontalDivider()
 
+            RadioSettingRow(
+                icon = { Icon(Icons.Default.RoundedCorner, null) },
+                title = "Bubble style",
+                options = listOf(
+                    Triple(BubbleStylePreference.ROUNDED, "Rounded", "Postmark default"),
+                    Triple(BubbleStylePreference.PILL,    "Pill",    "Fully rounded"),
+                    Triple(BubbleStylePreference.SQUARE,  "Square",  "Minimal corners")
+                ),
+                current = bubbleStyle,
+                onSelect = viewModel::setBubbleStyle
+            )
+            HorizontalDivider()
+
             FontScaleSettingRow(
                 scale = bubbleFontScale,
                 onScaleChange = viewModel::setBubbleFontScale,
@@ -112,17 +209,28 @@ fun AppearanceScreen(
             )
             HorizontalDivider()
 
+            val isImageBackground = ChatBackgrounds.isImageId(globalChatBackgroundId)
             val globalChatBackground = ChatBackgrounds.resolve(globalChatBackgroundId)
+            val backgroundImageFile = remember(globalChatBackgroundId) {
+                ChatBackgrounds.resolveImageFile(globalChatBackgroundId, viewModel::chatBackgroundImageFile)
+            }
             SettingsRow(
                 icon = {
-                    ChatBackgroundPreview(
-                        background = globalChatBackground,
-                        isDarkTheme = isDarkTheme,
-                        modifier = Modifier.size(width = 28.dp, height = 22.dp)
-                    )
+                    if (isImageBackground) {
+                        ChatBackgroundThumbnail(
+                            file = backgroundImageFile,
+                            modifier = Modifier.size(width = 28.dp, height = 22.dp)
+                        )
+                    } else {
+                        ChatBackgroundPreview(
+                            background = globalChatBackground,
+                            isDarkTheme = isDarkTheme,
+                            modifier = Modifier.size(width = 28.dp, height = 22.dp)
+                        )
+                    }
                 },
                 title = "Chat background",
-                subtitle = globalChatBackground.displayName,
+                subtitle = if (isImageBackground) ChatBackgrounds.CUSTOM_IMAGE_LABEL else globalChatBackground.displayName,
                 onClick = { showChatBackgroundDialog = true }
             )
         }

@@ -48,7 +48,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             val themePreference by themeViewModel.themePreference.collectAsState()
             val fontFamilyPreference by themeViewModel.fontFamilyPreference.collectAsState()
-            PostmarkTheme(themePreference = themePreference, fontFamilyPreference = fontFamilyPreference) {
+            val useDynamicColor by themeViewModel.useDynamicColor.collectAsState()
+            val appAccentArgb by themeViewModel.appAccentArgb.collectAsState()
+            PostmarkTheme(
+                themePreference = themePreference,
+                fontFamilyPreference = fontFamilyPreference,
+                useDynamicColor = useDynamicColor,
+                appAccentArgb = appAccentArgb
+            ) {
                 AppNavigation(showOnboarding = showOnboarding)
             }
         }

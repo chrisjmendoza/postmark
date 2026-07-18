@@ -1,6 +1,6 @@
 # Postmark
 
-A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark is a full default SMS replacement that maintains its own local copy of your messages, enabling photo/video/voice-memo messaging, fast full-text search, rich conversation export, detailed activity stats, and flexible per-thread backup control — all without any cloud dependency.
+A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark is a full default SMS replacement that maintains its own local copy of your messages, enabling photo/video/voice-memo messaging, fast full-text search, rich conversation export, detailed activity stats, deep per-conversation personalization, and flexible per-thread backup control — all without any cloud dependency.
 
 ---
 
@@ -62,8 +62,14 @@ A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark 
 - Handles un-react ("Removed a heart from...") correctly
 - Stored as reactions, not messages — fully searchable and exportable
 
-### Privacy & Appearance
-- Dark theme by default, with Follow system / Always dark / Always light options
+### Personalization
+- **Per-contact colors** — give each contact their own color (12 presets or any custom color): it fills their avatar and their incoming bubbles, with an optional separate color for your sent bubbles; text stays legible automatically (white/black chosen by WCAG contrast, ≥ 4.5:1 guaranteed)
+- **Chat backgrounds** — six built-in gradients or any photo from your gallery (copied into app storage and downscaled; rendered behind the thread with a theme-aware scrim), settable per conversation or as a global default
+- **Custom color picker** — full HSV panel + hue slider + hex entry behind a "Custom…" tile, with a legibility guard so no pick can make bubbles vanish into the background
+- **Appearance screen** — theme (Follow system / Always dark / Always light), Material You wallpaper colors (Android 12+), global app accent color, font family (System / Serif / Monospace), bubble style (Rounded / Pill / Square), and message text size (also pinch-to-zoom in any thread)
+- Reachable from Settings → Appearance, the contact page, or "Customize appearance" in any thread's ⋮ menu; per-contact choices ride backups and restores
+
+### Privacy
 - All data stored locally — no analytics, no cloud sync, no ads
 
 ---
@@ -114,6 +120,7 @@ app/src/main/java/com/plusorminustwo/postmark/
 ├── di/                 # Hilt modules (DatabaseModule, RepositoryModule, BackupModule)
 ├── domain/
 │   ├── backup/         # Backup archive format v2 (pure, JVM-testable)
+│   ├── customization/  # ContactPalette, ChatBackgrounds, ColorMath (pure color math)
 │   ├── formatter/      # ExportFormatter, date/phone formatters
 │   ├── logging/        # Log PII redaction
 │   ├── model/          # Clean domain models (Message, Thread, MessageAttachment, ...)
@@ -121,11 +128,12 @@ app/src/main/java/com/plusorminustwo/postmark/
 ├── search/             # FtsQueryBuilder (SearchDao/SearchRepository live under data/)
 ├── service/
 │   ├── audio/          # VoiceMemoRecorder (MediaRecorder wrapper)
+│   ├── customization/  # ChatBackgroundImageStore (custom background photos)
 │   ├── sms/            # SmsReceiver, send/receive wrappers, MmsManagerWrapper
 │   │                   # (attachment budget allocation, video transcode planning)
 │   └── backup/         # BackupWorker, ExportWorker, RestoreWorker, scheduler
 ├── ui/
-│   ├── components/     # Shared composables (avatars, date-range sheet)
+│   ├── components/     # Shared composables (avatars, color/background pickers)
 │   ├── contact/        # Contact detail screen
 │   ├── conversations/  # Conversation list, new-conversation screen
 │   ├── forward/        # Forward destination picker

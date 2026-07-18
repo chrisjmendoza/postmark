@@ -4,6 +4,55 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-18 (feat/customization) — customization v2: bubble styles, Material You, dual bubble colors, custom picker, image backgrounds
+
+Post-review addendum: deleted the dead `PostmarkColors`/`LocalPostmarkColors`
+extended-color system from `Theme.kt` (~55 lines incl. the now-orphaned `TextTertiary`/
+`AccentAmber` constants and the `CompositionLocalProvider` wrapper) at Chris's direction —
+fable-analysis item #22, previously deliberately kept, now formally superseded by the
+customization feature set. BRIEFING.md theme section updated to match.
+
+User customization v2, phases F–K. **Bubble shape styles**: global
+`BubbleStylePreference { ROUNDED, PILL, SQUARE }` applied inside the pure `bubbleShape()`
+owner and reaching `MessageBubble` via `LocalBubbleStyle`; ROUNDED is byte-identical to the
+old shapes, PILL/SQUARE are new. **Material You**: `DynamicColorPreferenceRepository` +
+`PostmarkTheme` dynamic schemes on API 31+ (single pure `shouldUseDynamicColor` gate); the
+Appearance toggle is hidden below 31, and when on it overrides the global app accent
+(dynamic wins). **Vivid dual per-contact bubble colors**: two rounds of on-device feedback
+reshaped the model — `accentColorArgb` is now the CONTACT's color (their avatar + their
+**received** bubbles), and a new `sentColorArgb` (schema 17→18, additive) colors sent
+bubbles independently; either/both nullable, null = today's neutral defaults. Containers are
+the raw accent (iMessage-style vivid, not a blend-toward-black that read as "still black" on
+device), content is white/black by WCAG contrast (floor proven ≥ 4.5 for all 12 presets).
+The built-in background catalog was recalibrated out of the near-invisible ±2%/>79%
+luminance band into a clearly-visible, saturated band (same persisted ids). **Custom color
+picker**: an HSV panel + hue slider + hex field ("Custom…" tile in the shared
+`AccentColorDialog`), all color math pure in `domain/customization/ColorMath` (hsv↔argb,
+parse/format hex → null never throws) plus `adjustAccentForBackground`, a legibility guard
+that nudges a low-contrast custom pick until it clears the theme background. **Global app
+accent**: `AppAccentPreferenceRepository` (Int?, null = brand blue); `PostmarkTheme`
+overrides only the primary family, disabled under Material You. **Custom image chat
+backgrounds**: an `image:<fileName>` id scheme reusing the existing string columns/pref;
+`ChatBackgroundImageStore` copies + downscales picked photos (max 1440px, JPEG q85) off the
+main thread; rendered via Coil with a theme-aware scrim; a missing file (e.g. after restore)
+falls back to no background; orphaned images are GC'd when no thread and not the global
+default reference them.
+
+Phase K review pass — applied verified findings. **Critical:** `ChatBackgroundImageStore.save()`
+always returned null — the bounds-only decode (`inJustDecodeBounds`) returns null *by design*,
+but the `?.use{} ?: return null` treated that as failure, so no image background could ever be
+saved. Fixed to null-check only the stream (the `outWidth/outHeight <= 0` guard already
+catches undecodable input). Also: hoisted per-frame `Brush` allocations out of the HSV
+picker's draw scopes; wrapped the remaining un-`remember`ed Coil `ImageRequest`s; consolidated
+the byte-identical `ChatBackgroundThumbnail` into `ui/components` and the duplicated
+image-file / accent-subtitle / bubble-color-resolution logic into pure domain functions
+(`ChatBackgrounds.resolveImageFile`, `ContactPalette.deriveAccentPair` /
+`resolveThreadBubbleColors`, a shared `accentSubtitle` restoring the preset-name subtitle);
+moved orphan-image cleanup ownership into the store (`cleanupAfterChange`), collapsing both
+ViewModels; unified bitmap scaling into `util/BitmapScaling.kt` (deleting
+`MmsManagerWrapper.scaleBitmapToFit`); `applyAppAccent` now shares `deriveAccentPair`. Full
+suite: 735 passed, 0 failed. `compileDebugAndroidTestSources` clean; `assembleDebug` succeeded.
+
 ## 2026-07-17 (feat/customization) — per-contact accent colors, chat backgrounds, Appearance settings
 
 User customization v1, five phases (A–E) end to end. **Per-contact accent color**:

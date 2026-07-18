@@ -31,6 +31,7 @@ import androidx.media3.transformer.VideoEncoderSettings
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.logging.redactPhone
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
+import com.plusorminustwo.postmark.util.scaleToMaxDimension
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -674,7 +675,7 @@ class MmsManagerWrapper @Inject constructor(
         /* ── Phase 2: scale down pixel dimensions ────────────────────────────── */
         val scaleSteps = listOf(2000, 1600, 1280, 960, 800)
         for ((stepIdx, maxDim) in scaleSteps.withIndex()) {
-            val scaled = scaleBitmapToFit(bitmap, maxDim)
+            val scaled = scaleToMaxDimension(bitmap, maxDim)
             val out = ByteArrayOutputStream()
             scaled.compress(compressFormat, 70, out)
             val bytes = out.toByteArray()
@@ -691,16 +692,6 @@ class MmsManagerWrapper @Inject constructor(
         // Image is still too large at the smallest scale — cannot send.
         bitmap.recycle()
         return null
-    }
-
-    /** Scales [bitmap] down so its longest edge fits within [maxDim] px. Returns the
-     *  original bitmap unchanged if it already fits. */
-    private fun scaleBitmapToFit(bitmap: Bitmap, maxDim: Int): Bitmap {
-        val w = bitmap.width
-        val h = bitmap.height
-        if (w <= maxDim && h <= maxDim) return bitmap
-        val scale = maxDim.toFloat() / maxOf(w, h)
-        return Bitmap.createScaledBitmap(bitmap, (w * scale).toInt(), (h * scale).toInt(), true)
     }
 
     // ── Video compression helper ──────────────────────────────────────────────

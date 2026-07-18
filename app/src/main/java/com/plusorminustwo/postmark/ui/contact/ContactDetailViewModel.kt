@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.ui.contact
 
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -7,11 +8,13 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -30,7 +33,8 @@ import javax.inject.Inject
 class ContactDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val threadRepository: ThreadRepository,
-    private val messageRepository: MessageRepository
+    private val messageRepository: MessageRepository,
+    private val imageStore: ChatBackgroundImageStore
 ) : ViewModel() {
 
     // ── Thread ID ─────────────────────────────────────────────────────────────
@@ -60,14 +64,26 @@ class ContactDetailViewModel @Inject constructor(
         viewModelScope.launch { threadRepository.setNickname(threadId, normalized) }
     }
 
-    // ── Accent color ──────────────────────────────────────────────────────────
+    // ── Accent color (contact color: avatar + received bubbles) ────────────────
 
     /**
-     * Saves a Postmark-only per-contact accent color (ARGB) for this thread.
+     * Saves a Postmark-only contact color (ARGB) for this thread — used for the
+     * contact's avatar and their received-message bubbles.
      * Passing null clears it, falling back to the default hash-derived color.
      */
     fun setAccentColor(argb: Int?) {
         viewModelScope.launch { threadRepository.setAccentColor(threadId, argb) }
+    }
+
+    // ── Sent-bubble color ────────────────────────────────────────────────────
+
+    /**
+     * Saves a Postmark-only sent-bubble color (ARGB) for this thread, independent
+     * of [setAccentColor]. Passing null clears it, falling back to the app default
+     * (primaryContainer).
+     */
+    fun setSentColor(argb: Int?) {
+        viewModelScope.launch { threadRepository.setSentColor(threadId, argb) }
     }
 
     // ── Chat background ───────────────────────────────────────────────────────
@@ -77,7 +93,30 @@ class ContactDetailViewModel @Inject constructor(
      * Passing null clears it, falling back to the global default.
      */
     fun setChatBackground(id: String?) {
-        viewModelScope.launch { threadRepository.setChatBackground(threadId, id) }
+        viewModelScope.launch { applyChatBackground(id) }
+    }
+
+    /**
+     * Picks up a gallery image: copies + downscales it into app storage, then sets the
+     * resulting `image:<fileName>` id as this thread's override. A save failure (bad uri,
+     * decode/IO error) is a silent no-op beyond the store's own log (v1-simple).
+     */
+    fun setImageBackground(uri: Uri) {
+        viewModelScope.launch {
+            val id = imageStore.save(uri) ?: return@launch
+            applyChatBackground(id)
+        }
+    }
+
+    /** Resolved file for a custom-image [id] (for the dialog thumbnail); null if missing. */
+    fun chatBackgroundImageFile(id: String): File? = imageStore.fileFor(id)
+
+    /** Overwrites the per-thread background, then lets the store garbage-collect the
+     *  PREVIOUS image if it was a custom one now referenced by nothing. */
+    private suspend fun applyChatBackground(id: String?) {
+        val old = thread.value?.chatBackgroundId
+        threadRepository.setChatBackground(threadId, id)
+        imageStore.cleanupAfterChange(old, id)
     }
 
     // ── Toggles (mirror the ⋮ menu in ThreadScreen) ───────────────────────────

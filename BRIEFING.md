@@ -123,8 +123,10 @@ Accent amber:         #FF9F0A  (warnings)
 Sent bubble:          #378ADD
 Received bubble:      #2C2C2E  border #3A3A3C
 
-Extended colors in PostmarkColors via
-LocalPostmarkColors CompositionLocal.
+(The PostmarkColors/LocalPostmarkColors extended-color
+system was removed July 18, 2026 — it was never wired in,
+and customization v1/v2 superseded it: bubble colors come
+from colorScheme + per-thread accents via ContactPalette.)
 ThemePreferenceRepository (Hilt singleton) exposes
 StateFlow<ThemePreference> — theme changes are
 instantaneous, no activity restart needed.
@@ -134,6 +136,48 @@ Always dark / Always light.
 ═══════════════════════════════════════════════════════
 WHAT IS WORKING (tested on device)
 ═══════════════════════════════════════════════════════
+✅ User customization v2 (July 18, 2026):
+   - Bubble shape styles: global BubbleStylePreference
+     { ROUNDED, PILL, SQUARE } applied inside the pure
+     bubbleShape() owner, reaching MessageBubble via
+     LocalBubbleStyle. ROUNDED byte-identical to before.
+   - Material You (API 31+): DynamicColorPreferenceRepository
+     + dynamic schemes in PostmarkTheme (one pure
+     shouldUseDynamicColor gate). Appearance toggle hidden
+     below 31; when on it overrides the global app accent.
+   - Dual per-contact bubble colors (accent semantics
+     CHANGED after two device-feedback rounds):
+     accentColorArgb is now the CONTACT's color — their
+     avatar + their RECEIVED bubbles. New sentColorArgb
+     (schema v17 → v18, MIGRATION_17_18, additive) colors
+     sent bubbles independently. Either/both nullable; null
+     = today's neutral defaults. Containers are the raw
+     accent (vivid, iMessage-style), content white/black by
+     WCAG contrast (floor >= 4.5 for all 12 presets).
+     Background catalog recalibrated into a clearly-visible
+     saturated luminance band (same persisted ids).
+   - Custom color picker: HSV panel + hue slider + hex
+     field ("Custom…" tile in the shared AccentColorDialog);
+     all math pure in domain/customization/ColorMath
+     (hsv<->argb, hex parse/format → null never throws) plus
+     adjustAccentForBackground, a legibility guard that
+     nudges a low-contrast custom pick off the background.
+   - Global app accent: AppAccentPreferenceRepository (Int?,
+     null = brand blue); PostmarkTheme overrides only the
+     primary family, disabled under Material You.
+   - Custom image chat backgrounds: image:<fileName> id
+     scheme reusing the existing string columns/pref;
+     ChatBackgroundImageStore copies + downscales picked
+     photos (max 1440px, JPEG q85) off-main; Coil render
+     with a theme-aware scrim; missing file → no background;
+     orphaned images GC'd when unreferenced.
+   - Phase K review: fixed a CRITICAL save() bug (bounds-only
+     decode returns null by design, was mistaken for failure
+     → no image background ever saved); hoisted per-frame
+     brushes; consolidated duplicated composables/helpers
+     into pure domain functions; shared bitmap scaling in
+     util/BitmapScaling.kt. Full suite: 735 passed, 0 failed;
+     compileDebugAndroidTestSources + assembleDebug clean.
 ✅ User customization v1 (July 17, 2026):
    - Per-contact accent color: threads.accentColorArgb
      (nullable Int ARGB, schema v17). Swatch-grid picker

@@ -29,10 +29,14 @@ data class ThreadEntity(
     val nickname: String? = null,
     // JSON array of group MMS participant addresses. Null for ordinary 1:1 threads.
     val participantsJson: String? = null,
-    // Postmark-only per-contact accent color (ARGB). Null means use the default.
+    // Postmark-only contact color (ARGB) — avatar + received-bubble fill. Null means
+    // use the default (LetterAvatar hash color / neutral surfaceVariant bubble).
     val accentColorArgb: Int? = null,
     // Postmark-only per-thread chat background id. Null falls back to the global default.
-    val chatBackgroundId: String? = null
+    val chatBackgroundId: String? = null,
+    // Postmark-only sent-bubble fill (ARGB), independent of accentColorArgb. Null means
+    // use the default primaryContainer.
+    val sentColorArgb: Int? = null
 )
 
 /**
@@ -52,7 +56,8 @@ fun ThreadEntity.toDomain() = Thread(
     nickname = nickname,
     participants = decodeParticipantsJson(participantsJson),
     accentColorArgb = accentColorArgb,
-    chatBackgroundId = chatBackgroundId
+    chatBackgroundId = chatBackgroundId,
+    sentColorArgb = sentColorArgb
 )
 
 /**
@@ -72,5 +77,6 @@ fun Thread.toEntity() = ThreadEntity(
     nickname = nickname,
     participantsJson = encodeParticipantsJson(participants),
     accentColorArgb = accentColorArgb,
-    chatBackgroundId = chatBackgroundId
+    chatBackgroundId = chatBackgroundId,
+    sentColorArgb = sentColorArgb
 )

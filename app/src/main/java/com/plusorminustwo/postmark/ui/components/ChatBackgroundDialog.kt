@@ -6,7 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -20,10 +22,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.plusorminustwo.postmark.domain.customization.ChatBackground
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
+import java.io.File
 
 /**
  * Small rounded-rect swatch previewing [background]'s gradient in the current theme
@@ -55,11 +62,18 @@ fun ChatBackgroundPreview(background: ChatBackground, isDarkTheme: Boolean, modi
  * [com.plusorminustwo.postmark.ui.settings.SettingsScreen] (global default —
  * [showFollowGlobal] = false, just [ChatBackgrounds.all]).
  *
- * @param currentId        Currently selected id: null for "Default"/unset, otherwise
- *                          a [ChatBackground.id] (including [ChatBackgrounds.None]'s "none").
+ * @param currentId        Currently selected id: null for "Default"/unset, a
+ *                          [ChatBackground.id] (including [ChatBackgrounds.None]'s "none"),
+ *                          or a custom `image:<fileName>` id.
  * @param showFollowGlobal Whether to show the leading "Default" (follow global) tile.
  * @param isDarkTheme       Selects which theme variant of each background to preview.
+ * @param currentImageFile When [currentId] is a custom-image id, its resolved file (for the
+ *                          "Custom image" tile's thumbnail); null otherwise. The host
+ *                          resolves it via its ViewModel so this composable stays store-free.
  * @param onSelect          Called with the chosen id: null for "Default", or a catalog id.
+ * @param onPickImage       Called when the user taps "From gallery" (or the current custom
+ *                          tile) — the host launches the photo picker and, on a result,
+ *                          calls its ViewModel's setImageBackground. The dialog sets nothing.
  * @param onDismiss         Called when the dialog is dismissed without a new selection.
  */
 @Composable
@@ -67,31 +81,49 @@ fun ChatBackgroundDialog(
     currentId: String?,
     showFollowGlobal: Boolean,
     isDarkTheme: Boolean,
+    currentImageFile: File? = null,
     onSelect: (String?) -> Unit,
+    onPickImage: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Chat background") },
         text = {
-            val cells: List<Pair<String, String?>> =
-                (if (showFollowGlobal) listOf("Default" to null) else emptyList()) +
-                    ChatBackgrounds.all.map { it.displayName to it.id }
+            val tiles: List<ChatBgTile> = buildList {
+                if (showFollowGlobal) add(ChatBgTile.Preset("Default", null))
+                ChatBackgrounds.all.forEach { add(ChatBgTile.Preset(it.displayName, it.id)) }
+                // Selected custom image gets its own ringed tile so it reads as chosen —
+                // no catalog entry matches an "image:" id (resolve() returns None for it).
+                if (ChatBackgrounds.isImageId(currentId)) add(ChatBgTile.CustomImage(currentImageFile))
+                add(ChatBgTile.Gallery)
+            }
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                cells.chunked(3).forEach { row ->
+                tiles.chunked(3).forEach { row ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        row.forEach { (name, id) ->
-                            BackgroundTile(
-                                name = name,
-                                background = id?.let { ChatBackgrounds.resolve(it) },
-                                isDarkTheme = isDarkTheme,
-                                selected = id == currentId,
-                                onClick = { onSelect(id) },
-                                modifier = Modifier.weight(1f)
-                            )
+                        row.forEach { tile ->
+                            when (tile) {
+                                is ChatBgTile.Preset -> BackgroundTile(
+                                    name = tile.name,
+                                    background = tile.id?.let { ChatBackgrounds.resolve(it) },
+                                    isDarkTheme = isDarkTheme,
+                                    selected = tile.id == currentId,
+                                    onClick = { onSelect(tile.id) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                is ChatBgTile.CustomImage -> CustomImageTile(
+                                    file = tile.file,
+                                    onClick = onPickImage,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                ChatBgTile.Gallery -> GalleryTile(
+                                    onClick = onPickImage,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
                         repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
@@ -102,6 +134,13 @@ fun ChatBackgroundDialog(
             TextButton(onClick = onDismiss) { Text("Done") }
         }
     )
+}
+
+/** Grid cells rendered by [ChatBackgroundDialog]. */
+private sealed interface ChatBgTile {
+    data class Preset(val name: String, val id: String?) : ChatBgTile
+    data class CustomImage(val file: File?) : ChatBgTile
+    data object Gallery : ChatBgTile
 }
 
 /**
@@ -160,6 +199,127 @@ private fun BackgroundTile(
         Spacer(Modifier.height(2.dp))
         Text(
             text = name,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/**
+ * Ringed "Custom image" tile shown when the current selection is a custom-image id.
+ * Renders [file]'s thumbnail via Coil when present, else a generic image icon (e.g. the
+ * file went missing after a restore). Tapping re-opens the picker to replace the image.
+ */
+@Composable
+private fun CustomImageTile(
+    file: File?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1.4f)
+                .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                .padding(3.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (file != null) {
+                val ctx = LocalContext.current
+                AsyncImage(
+                    model = remember(file) { ImageRequest.Builder(ctx).data(file).crossfade(true).build() },
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Image,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = ChatBackgrounds.CUSTOM_IMAGE_LABEL,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/**
+ * Small thumbnail of a custom-image chat background for a "Chat background" row's icon
+ * slot. Renders [file] via Coil when present, else a neutral tile with an image icon (the
+ * file went missing — e.g. after a restore on a new device). Shared by ContactDetailScreen
+ * and AppearanceScreen (the row-level counterpart to [CustomImageTile]).
+ */
+@Composable
+fun ChatBackgroundThumbnail(file: File?, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        if (file != null) {
+            val ctx = LocalContext.current
+            AsyncImage(
+                model = remember(file) { ImageRequest.Builder(ctx).data(file).crossfade(true).build() },
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Image,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+    }
+}
+
+/** "From gallery" action tile — invokes [onClick] to launch the photo picker; sets nothing. */
+@Composable
+private fun GalleryTile(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1.4f)
+                .padding(3.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.AddPhotoAlternate,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = "From gallery",
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

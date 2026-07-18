@@ -558,6 +558,8 @@ private class ActionsThreadDao : ThreadDao {
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
     override suspend fun updateAccentColor(threadId: Long, argb: Int?) = Unit
     override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) = Unit
+    override suspend fun countByChatBackground(id: String): Int = 0
+    override suspend fun updateSentColor(threadId: Long, argb: Int?) = Unit
 }
 
 private class ActionsReactionDao : ReactionDao {

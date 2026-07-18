@@ -12,9 +12,11 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Unit tests for the Phase A customization fields:
+ * Unit tests for the Phase A / FB2 / J customization fields:
  *  - [ThreadRepository.setAccentColor] delegates to the DAO with correct values.
  *  - [ThreadRepository.setChatBackground] delegates to the DAO with correct values.
+ *  - [ThreadRepository.setSentColor] delegates to the DAO with correct values.
+ *  - [ThreadRepository.countByChatBackground] delegates to the DAO with the given id.
  */
 class ThreadCustomizationTest {
 
@@ -57,11 +59,39 @@ class ThreadCustomizationTest {
         assertEquals(7L to null, fakeDao.lastBackgroundUpdate)
     }
 
+    // ── setSentColor ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `setSentColor delegates to DAO with the given argb`() = runTest {
+        repository.setSentColor(42L, 0xFF00AAFF.toInt())
+        assertEquals(42L to 0xFF00AAFF.toInt(), fakeDao.lastSentColorUpdate)
+    }
+
+    @Test
+    fun `setSentColor with null clears the sent color`() = runTest {
+        repository.setSentColor(42L, 0xFF00AAFF.toInt())
+        repository.setSentColor(42L, null)
+        assertEquals(42L to null, fakeDao.lastSentColorUpdate)
+    }
+
+    // ── countByChatBackground ────────────────────────────────────────────────
+
+    @Test
+    fun `countByChatBackground delegates to DAO with the given id and returns its count`() = runTest {
+        fakeDao.chatBackgroundCount = 3
+        val result = repository.countByChatBackground("image:bg_1.jpg")
+        assertEquals("image:bg_1.jpg", fakeDao.lastCountByChatBackgroundId)
+        assertEquals(3, result)
+    }
+
     // ── Fake DAO ──────────────────────────────────────────────────────────────
 
     private class CustomizationFakeThreadDao : ThreadDao {
         var lastAccentUpdate: Pair<Long, Int?>? = null
         var lastBackgroundUpdate: Pair<Long, String?>? = null
+        var lastSentColorUpdate: Pair<Long, Int?>? = null
+        var lastCountByChatBackgroundId: String? = null
+        var chatBackgroundCount: Int = 0
         private val _threads = MutableStateFlow<List<ThreadEntity>>(emptyList())
 
         override fun observeAll(): Flow<List<ThreadEntity>> = _threads
@@ -95,6 +125,15 @@ class ThreadCustomizationTest {
 
         override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) {
             lastBackgroundUpdate = threadId to backgroundId
+        }
+
+        override suspend fun updateSentColor(threadId: Long, argb: Int?) {
+            lastSentColorUpdate = threadId to argb
+        }
+
+        override suspend fun countByChatBackground(id: String): Int {
+            lastCountByChatBackgroundId = id
+            return chatBackgroundCount
         }
     }
 }

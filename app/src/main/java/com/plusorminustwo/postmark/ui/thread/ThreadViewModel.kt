@@ -16,7 +16,9 @@ import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
+import com.plusorminustwo.postmark.data.preferences.AppAccentPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
+import com.plusorminustwo.postmark.data.preferences.BubbleStylePreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.ChatBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.DraftRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
@@ -41,8 +43,10 @@ import com.plusorminustwo.postmark.domain.voicememo.isMemoKeepable
 import com.plusorminustwo.postmark.domain.voicememo.normalizedRecordingLevel
 import com.plusorminustwo.postmark.domain.voicememo.resampleAmplitudes
 import com.plusorminustwo.postmark.domain.voicememo.voiceMemoTransition
+import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.service.audio.VoiceMemoRecorder
+import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
@@ -122,7 +126,10 @@ class ThreadViewModel @Inject constructor(
     private val mmsManagerWrapper: MmsManagerWrapper,
     private val timestampPrefRepo: TimestampPreferenceRepository,
     private val fontScaleRepo: BubbleFontScaleRepository,
+    private val bubbleStyleRepo: BubbleStylePreferenceRepository,
     private val chatBackgroundPrefRepo: ChatBackgroundPreferenceRepository,
+    private val chatBackgroundImageStore: ChatBackgroundImageStore,
+    private val appAccentPrefRepo: AppAccentPreferenceRepository,
     private val draftRepository: DraftRepository,
     private val voiceMemoRecorder: VoiceMemoRecorder
 ) : ViewModel() {
@@ -187,6 +194,18 @@ class ThreadViewModel @Inject constructor(
     /** Global default chat-background id (null = none); overridden per-thread by
      *  [com.plusorminustwo.postmark.domain.model.Thread.chatBackgroundId] when set. */
     val globalChatBackgroundId: StateFlow<String?> = chatBackgroundPrefRepo.backgroundId
+
+    /** Resolved file for a custom-image chat-background [id], or null if it's not an image
+     *  id or the file is missing (e.g. an id restored on a device without the bytes).
+     *  Exposed so [ThreadContent] can render the image without injecting the store. */
+    fun chatBackgroundImageFile(id: String): java.io.File? = chatBackgroundImageStore.fileFor(id)
+
+    /** Global app accent (packed ARGB); null = Postmark's own brand blue. Read here
+     *  (not just by [com.plusorminustwo.postmark.ui.theme.PostmarkTheme]) so an
+     *  un-customized thread's sent-bubble default TEXT color can follow the accent's
+     *  `onPrimaryContainer` instead of the ambient content color once its CONTAINER
+     *  is the vivid accent — see the `bubbleAccentColors` derivation in ThreadContent. */
+    val appAccentArgb: StateFlow<Int?> = appAccentPrefRepo.accentArgb
 
     /**
      * Everything derived from the raw message list — built once per Room emission on
@@ -506,6 +525,9 @@ class ThreadViewModel @Inject constructor(
      * Triggered by a pinch gesture on the thread content area.
      */
     fun adjustFontScale(delta: Float) { fontScaleRepo.adjust(delta) }
+
+    /** Global bubble shape style (rounded / pill / square). Set from AppearanceScreen. */
+    val bubbleStyle: StateFlow<BubbleStylePreference> = bubbleStyleRepo.preference
 
     /** Resets bubble font scale to 1.0 (e.g. from the ⋮ menu). */
     fun resetFontScale() { fontScaleRepo.reset() }

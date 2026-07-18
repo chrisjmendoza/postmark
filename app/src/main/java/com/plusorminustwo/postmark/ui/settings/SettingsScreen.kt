@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -233,17 +234,28 @@ private fun themePreferenceLabel(pref: ThemePreference): String = when (pref) {
     ThemePreference.ALWAYS_LIGHT -> "Always light"
 }
 
+/** Standard Material "disabled content" alpha, applied to a whole [SettingsRow] when
+ *  [SettingsRow.enabled] is false. */
+private const val DISABLED_ROW_ALPHA = 0.38f
+
+/**
+ * @param enabled When false, the row is drawn at reduced (Material disabled-content)
+ *  alpha and [onClick] is never wired up — used by the Appearance screen's app accent
+ *  row while Material You is on (that toggle overrides any accent choice).
+ */
 @Composable
 fun SettingsRow(
     icon: @Composable () -> Unit,
     title: String,
     subtitle: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    enabled: Boolean = true
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .alpha(if (enabled) 1f else DISABLED_ROW_ALPHA)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -311,8 +323,9 @@ fun <T> RadioSettingRow(
     }
 }
 
+/** Shared by [AppearanceScreen] (Material You) and this screen (privacy mode). */
 @Composable
-private fun ToggleSettingRow(
+fun ToggleSettingRow(
     icon: @Composable () -> Unit,
     title: String,
     subtitle: String,
