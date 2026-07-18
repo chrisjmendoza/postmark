@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  *
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity].
  *
- * Current schema version: 16.
+ * Current schema version: 17.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
         ReactionEntity::class,
         MessageFtsEntity::class
     ],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -203,6 +203,15 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_isRead_threadId ON messages(isRead, threadId)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_isMms ON messages(isMms)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_isStarred ON messages(isStarred)")
+            }
+        }
+
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // User-customization columns — nullable, no default. Existing rows get
+                // NULL (i.e. fall back to the default accent / no chat background).
+                db.execSQL("ALTER TABLE threads ADD COLUMN accentColorArgb INTEGER")
+                db.execSQL("ALTER TABLE threads ADD COLUMN chatBackgroundId TEXT")
             }
         }
 

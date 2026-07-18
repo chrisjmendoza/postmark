@@ -38,13 +38,16 @@ import kotlinx.coroutines.withContext
  * @param name      Display name; forwarded to [LetterAvatar] as the letter source.
  * @param colorSeed Color seed for [LetterAvatar] (usually the raw address for stability).
  * @param size      Diameter of the avatar circle.
+ * @param overrideColor When non-null, used instead of the hash-derived avatar color —
+ *                      the per-contact accent color, when the caller has a Thread in hand.
  */
 @Composable
 fun ContactAvatar(
     address: String,
     name: String,
     colorSeed: String = address,
-    size: Dp = 44.dp
+    size: Dp = 44.dp,
+    overrideColor: Color? = null
 ) {
     // Null = loading/unknown, empty string = no photo found, non-empty = photo URI.
     // Seeded synchronously from the cache so a previously resolved address renders
@@ -109,19 +112,19 @@ fun ContactAvatar(
                     .clip(CircleShape),
                 error = {
                     // Photo URI resolved but image failed to load (e.g. contact deleted)
-                    LetterAvatar(name = name, colorSeed = colorSeed, size = size)
+                    LetterAvatar(name = name, colorSeed = colorSeed, size = size, overrideColor = overrideColor)
                 },
                 loading = {
                     // Show a plain circle in the avatar background color while loading
                     Box(
                         modifier = Modifier
                             .size(size)
-                            .background(avatarColor(colorSeed), CircleShape)
+                            .background(overrideColor ?: avatarColor(colorSeed), CircleShape)
                     )
                 }
             )
         }
         // Still resolving OR no photo — show LetterAvatar (no flash, same visual)
-        else -> LetterAvatar(name = name, colorSeed = colorSeed, size = size)
+        else -> LetterAvatar(name = name, colorSeed = colorSeed, size = size, overrideColor = overrideColor)
     }
 }

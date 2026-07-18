@@ -17,6 +17,7 @@ import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
+import com.plusorminustwo.postmark.data.preferences.ChatBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.DraftRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
@@ -121,6 +122,7 @@ class ThreadViewModel @Inject constructor(
     private val mmsManagerWrapper: MmsManagerWrapper,
     private val timestampPrefRepo: TimestampPreferenceRepository,
     private val fontScaleRepo: BubbleFontScaleRepository,
+    private val chatBackgroundPrefRepo: ChatBackgroundPreferenceRepository,
     private val draftRepository: DraftRepository,
     private val voiceMemoRecorder: VoiceMemoRecorder
 ) : ViewModel() {
@@ -181,6 +183,10 @@ class ThreadViewModel @Inject constructor(
     val attachmentRejectedEvent: SharedFlow<String> = _attachmentRejectedEvent.asSharedFlow()
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
+
+    /** Global default chat-background id (null = none); overridden per-thread by
+     *  [com.plusorminustwo.postmark.domain.model.Thread.chatBackgroundId] when set. */
+    val globalChatBackgroundId: StateFlow<String?> = chatBackgroundPrefRepo.backgroundId
 
     /**
      * Everything derived from the raw message list — built once per Room emission on

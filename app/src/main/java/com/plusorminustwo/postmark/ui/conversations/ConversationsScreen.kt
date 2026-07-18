@@ -40,6 +40,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -415,7 +416,11 @@ private fun ThreadRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        ContactAvatar(address = thread.address, name = thread.nickname ?: thread.displayName)
+        ContactAvatar(
+            address = thread.address,
+            name = thread.nickname ?: thread.displayName,
+            overrideColor = thread.accentColorArgb?.let { Color(it) }
+        )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = thread.nickname ?: formatPhoneNumber(thread.displayName),

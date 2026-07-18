@@ -84,6 +84,14 @@ interface ThreadDao {
     @Query("UPDATE threads SET nickname = :nickname WHERE id = :threadId")
     suspend fun updateNickname(threadId: Long, nickname: String?)
 
+    /** Saves a Postmark-only accent color (ARGB) for the thread; pass null to clear it. */
+    @Query("UPDATE threads SET accentColorArgb = :argb WHERE id = :threadId")
+    suspend fun updateAccentColor(threadId: Long, argb: Int?)
+
+    /** Saves a Postmark-only chat background id for the thread; pass null to clear it. */
+    @Query("UPDATE threads SET chatBackgroundId = :backgroundId WHERE id = :threadId")
+    suspend fun updateChatBackground(threadId: Long, backgroundId: String?)
+
     @Query("DELETE FROM threads")
     suspend fun deleteAll()
 

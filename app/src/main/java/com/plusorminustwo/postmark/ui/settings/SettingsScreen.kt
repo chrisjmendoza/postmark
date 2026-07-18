@@ -11,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -20,7 +19,6 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Message
@@ -36,7 +34,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -44,15 +41,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
 import com.plusorminustwo.postmark.ui.theme.ThemePreference
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    onAppearanceClick: () -> Unit,
     onBackupSettingsClick: () -> Unit,
     onDevOptionsClick: () -> Unit,
     onStarredImagesClick: () -> Unit = {},
@@ -62,7 +58,6 @@ fun SettingsScreen(
     val themePreference by viewModel.themePreference.collectAsState()
     val timestampPreference by viewModel.timestampPreference.collectAsState()
     val privacyModeEnabled by viewModel.privacyModeEnabled.collectAsState()
-    val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
 
     val context = LocalContext.current
 
@@ -150,11 +145,11 @@ fun SettingsScreen(
             HorizontalDivider()
 
             SettingsSectionHeader(title = "Appearance")
-            AppearanceRow(
+            SettingsRow(
                 icon = { Icon(Icons.Default.Palette, null) },
-                title = "Theme",
-                current = themePreference,
-                onSelect = viewModel::setTheme
+                title = "Appearance",
+                subtitle = themePreferenceLabel(themePreference),
+                onClick = onAppearanceClick
             )
             HorizontalDivider()
 
@@ -169,13 +164,6 @@ fun SettingsScreen(
                 ),
                 current = timestampPreference,
                 onSelect = viewModel::setTimestamp
-            )
-            HorizontalDivider()
-
-            FontScaleSettingRow(
-                scale = bubbleFontScale,
-                onScaleChange = viewModel::setBubbleFontScale,
-                onReset = viewModel::resetBubbleFontScale
             )
             HorizontalDivider()
 
@@ -237,67 +225,16 @@ private fun SettingsSectionHeader(title: String) {
     )
 }
 
-@Composable
-private fun AppearanceRow(
-    icon: @Composable () -> Unit,
-    title: String,
-    current: ThemePreference,
-    onSelect: (ThemePreference) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            icon()
-            Spacer(modifier = Modifier.width(16.dp))
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-        }
-
-        ThemeOption(
-            label = "Follow system",
-            selected = current == ThemePreference.SYSTEM,
-            onClick = { onSelect(ThemePreference.SYSTEM) }
-        )
-        ThemeOption(
-            label = "Always dark",
-            selected = current == ThemePreference.ALWAYS_DARK,
-            onClick = { onSelect(ThemePreference.ALWAYS_DARK) }
-        )
-        ThemeOption(
-            label = "Always light",
-            selected = current == ThemePreference.ALWAYS_LIGHT,
-            onClick = { onSelect(ThemePreference.ALWAYS_LIGHT) }
-        )
-    }
+/** Summary subtitle for the Appearance row — mirrors the labels used in
+ *  [AppearanceScreen]'s theme selector. */
+private fun themePreferenceLabel(pref: ThemePreference): String = when (pref) {
+    ThemePreference.SYSTEM       -> "Follow system"
+    ThemePreference.ALWAYS_DARK  -> "Always dark"
+    ThemePreference.ALWAYS_LIGHT -> "Always light"
 }
 
 @Composable
-private fun ThemeOption(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RadioButton(
-            selected = selected,
-            onClick = onClick
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(label, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@Composable
-private fun SettingsRow(
+fun SettingsRow(
     icon: @Composable () -> Unit,
     title: String,
     subtitle: String,
@@ -329,8 +266,9 @@ private fun SettingsRow(
     }
 }
 
+/** Shared by [AppearanceScreen] (font family) and this screen (message timestamps). */
 @Composable
-private fun <T> RadioSettingRow(
+fun <T> RadioSettingRow(
     icon: @Composable () -> Unit,
     title: String,
     options: List<Triple<T, String, String>>,  // value, label, subtitle
@@ -360,11 +298,13 @@ private fun <T> RadioSettingRow(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(label, style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (subtitle.isNotBlank()) {
+                        Text(
+                            subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -444,92 +384,3 @@ private fun DefaultSmsStatusRow(isDefault: Boolean, onClick: () -> Unit) {
     }
 }
 
-// ── FontScaleSettingRow ───────────────────────────────────────────────────────
-
-/**
- * Settings row for adjusting bubble text size.
- *
- * Shows:
- *  - A header row with a format-size icon, title, and "Reset" button
- *  - A [Slider] spanning MIN_SCALE (0.8) to MAX_SCALE (1.6)
- *  - A small preview bubble with sample text at the current scale so the
- *    user sees the effect before leaving the screen
- *
- * @param scale        Current scale value (0.8–1.6).
- * @param onScaleChange Called on every slider position change (live update).
- * @param onReset      Called when the user taps "Reset" — restores scale to 1.0.
- */
-@Composable
-private fun FontScaleSettingRow(
-    scale: Float,
-    onScaleChange: (Float) -> Unit,
-    onReset: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // ── Header: icon + title + Reset button ──────────────────────────────
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.FormatSize, contentDescription = null)
-            Spacer(Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Text size", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    // Show percentage so users have a concrete reference (100% = default).
-                    "%.0f%%".format(scale * 100f),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            // Reset button — only enabled when scale differs from default.
-            TextButton(
-                onClick = onReset,
-                enabled = scale != BubbleFontScaleRepository.DEFAULT_SCALE
-            ) {
-                Text("Reset")
-            }
-        }
-
-        // ── Slider ────────────────────────────────────────────────────────────
-        // Steps = 8 gives quarter-turn detents at 0.80, 0.90, 1.00, 1.10, 1.20, 1.30, 1.40, 1.50, 1.60
-        Slider(
-            value = scale,
-            onValueChange = onScaleChange,
-            valueRange = BubbleFontScaleRepository.MIN_SCALE..BubbleFontScaleRepository.MAX_SCALE,
-            steps = 7,   // 9 positions → 7 internal steps
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        // ── Preview bubble ────────────────────────────────────────────────────
-        // Mimics a received message bubble so the user sees exactly how their
-        // messages will look at the chosen scale.
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.wrapContentWidth()
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text(
-                    text = "Hey, are you free this weekend?",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize * scale
-                    )
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = "Preview",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = MaterialTheme.typography.labelSmall.fontSize * scale
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}

@@ -153,6 +153,8 @@ class SearchJumpTest {
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}
+        override suspend fun updateAccentColor(threadId: Long, argb: Int?) {}
+        override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) {}
     }
 
     private class FakeReactionDao : ReactionDao {

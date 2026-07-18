@@ -47,7 +47,8 @@ class MainActivity : ComponentActivity() {
         val showOnboarding = !prefs.getBoolean("onboarding_completed", false)
         setContent {
             val themePreference by themeViewModel.themePreference.collectAsState()
-            PostmarkTheme(themePreference = themePreference) {
+            val fontFamilyPreference by themeViewModel.fontFamilyPreference.collectAsState()
+            PostmarkTheme(themePreference = themePreference, fontFamilyPreference = fontFamilyPreference) {
                 AppNavigation(showOnboarding = showOnboarding)
             }
         }

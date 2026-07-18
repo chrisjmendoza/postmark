@@ -308,6 +308,8 @@ private class RecordingThreadDao : ThreadDao {
     override suspend fun isMutedByAddress(address: String): Boolean? = null
     override suspend fun getDisplayNameByAddress(address: String): String? = null
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
+    override suspend fun updateAccentColor(threadId: Long, argb: Int?) = Unit
+    override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
 }

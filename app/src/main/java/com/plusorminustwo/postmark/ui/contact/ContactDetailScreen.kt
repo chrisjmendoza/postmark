@@ -6,11 +6,13 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.ContactsContract
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -28,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -36,10 +39,17 @@ import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
+import com.plusorminustwo.postmark.domain.customization.ContactPalette
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.ui.components.ChatBackgroundDialog
+import com.plusorminustwo.postmark.ui.components.ChatBackgroundPreview
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
+import com.plusorminustwo.postmark.ui.components.avatarColor
+import com.plusorminustwo.postmark.ui.settings.SettingsRow
+import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -76,6 +86,13 @@ fun ContactDetailScreen(
     var showNicknameDialog by remember { mutableStateOf(false) }
     var nicknameInput      by remember { mutableStateOf("") }
 
+    // ── Accent color dialog state ─────────────────────────────────────────────
+    var showAccentColorDialog by remember { mutableStateOf(false) }
+
+    // ── Chat background dialog state ──────────────────────────────────────────
+    var showChatBackgroundDialog by remember { mutableStateOf(false) }
+    val isDarkTheme = isAppInDarkTheme()
+
     // ── Full-screen viewer state ───────────────────────────────────────────────
     var fullScreenUri by remember { mutableStateOf<String?>(null) }
 
@@ -89,6 +106,36 @@ fun ContactDetailScreen(
             },
             onDismiss = { showNicknameDialog = false }
         )
+    }
+
+    // ── Accent color dialog ───────────────────────────────────────────────────
+    if (showAccentColorDialog) {
+        thread?.let { t ->
+            AccentColorDialog(
+                currentArgb = t.accentColorArgb,
+                onSelect = { argb ->
+                    viewModel.setAccentColor(argb)
+                    showAccentColorDialog = false
+                },
+                onDismiss = { showAccentColorDialog = false }
+            )
+        }
+    }
+
+    // ── Chat background dialog ────────────────────────────────────────────────
+    if (showChatBackgroundDialog) {
+        thread?.let { t ->
+            ChatBackgroundDialog(
+                currentId = t.chatBackgroundId,
+                showFollowGlobal = true,
+                isDarkTheme = isDarkTheme,
+                onSelect = { id ->
+                    viewModel.setChatBackground(id)
+                    showChatBackgroundDialog = false
+                },
+                onDismiss = { showChatBackgroundDialog = false }
+            )
+        }
     }
 
     // ── Full-screen image viewer ───────────────────────────────────────────────
@@ -125,7 +172,8 @@ fun ContactDetailScreen(
                     ContactAvatar(
                         address   = t.address,
                         name      = resolvedName,
-                        size      = 80.dp
+                        size      = 80.dp,
+                        overrideColor = t.accentColorArgb?.let { Color(it) }
                     )
 
                     Spacer(Modifier.height(12.dp))
@@ -207,9 +255,12 @@ fun ContactDetailScreen(
                 thread?.let { t ->
                     ContactActionsSection(
                         thread              = t,
+                        isDarkTheme         = isDarkTheme,
                         onToggleMute        = viewModel::toggleMute,
                         onTogglePin         = viewModel::togglePin,
-                        onToggleNotifications = viewModel::toggleNotifications
+                        onToggleNotifications = viewModel::toggleNotifications,
+                        onOpenColorPicker   = { showAccentColorDialog = true },
+                        onOpenChatBackgroundPicker = { showChatBackgroundDialog = true }
                     )
                 }
                 HorizontalDivider()
@@ -323,16 +374,19 @@ private fun NicknameDialog(
 
 /**
  * Three toggle rows that mirror the ⋮ menu actions from [ThreadScreen]:
- * Mute, Pin, and Notifications.
+ * Mute, Pin, and Notifications — plus the "Conversation color" picker row.
  *
- * Each row uses a leading icon, a label, and a trailing Switch for clarity.
+ * Each toggle row uses a leading icon, a label, and a trailing Switch for clarity.
  */
 @Composable
 private fun ContactActionsSection(
     thread: Thread,
+    isDarkTheme: Boolean,
     onToggleMute: () -> Unit,
     onTogglePin: () -> Unit,
-    onToggleNotifications: () -> Unit
+    onToggleNotifications: () -> Unit,
+    onOpenColorPicker: () -> Unit,
+    onOpenChatBackgroundPicker: () -> Unit
 ) {
     // Mute toggle row.
     ContactActionRow(
@@ -357,6 +411,137 @@ private fun ContactActionsSection(
         checked = thread.notificationsEnabled,
         onToggle = onToggleNotifications
     )
+
+    // Conversation color row — opens the swatch-grid picker. Effective accent color is
+    // custom if set, else the default hash-derived avatarColor.
+    val accentArgb = thread.accentColorArgb
+    SettingsRow(
+        icon = {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .background(accentArgb?.let { Color(it) } ?: avatarColor(thread.address), CircleShape)
+            )
+        },
+        title = "Conversation color",
+        subtitle = accentArgb?.let { argb -> ContactPalette.colors.firstOrNull { it.argb == argb }?.name ?: "Custom" }
+            ?: "Default",
+        onClick = onOpenColorPicker
+    )
+
+    // Chat background row — opens the preview-tile picker. thread.chatBackgroundId null
+    // means "no override" (follow global) — ChatBackgroundDialog distinguishes that from
+    // an explicit ChatBackgrounds.None via the subtitle here.
+    val backgroundId = thread.chatBackgroundId
+    val resolvedBackground = ChatBackgrounds.resolve(backgroundId)
+    SettingsRow(
+        icon = {
+            ChatBackgroundPreview(
+                background = resolvedBackground,
+                isDarkTheme = isDarkTheme,
+                modifier = Modifier.size(width = 28.dp, height = 22.dp)
+            )
+        },
+        title = "Chat background",
+        subtitle = if (backgroundId == null) "Default" else resolvedBackground.displayName,
+        onClick = onOpenChatBackgroundPicker
+    )
+}
+
+/**
+ * AlertDialog with a swatch grid for picking the thread's accent color: "Default"
+ * (clears to null, falls back to the hash-derived avatar color) plus the 12
+ * [ContactPalette] presets. The current selection is ringed.
+ *
+ * @param currentArgb Current accentColorArgb, or null if unset.
+ * @param onSelect    Called with the chosen ARGB, or null for "Default".
+ * @param onDismiss   Called when the dialog is dismissed without a new selection.
+ */
+@Composable
+private fun AccentColorDialog(
+    currentArgb: Int?,
+    onSelect: (Int?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Conversation color") },
+        text = {
+            val cells: List<Pair<String, Int?>> =
+                listOf("Default" to null) + ContactPalette.colors.map { it.name to it.argb }
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                cells.chunked(4).forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        row.forEach { (name, argb) ->
+                            ColorSwatch(
+                                name     = name,
+                                argb     = argb,
+                                selected = argb == currentArgb,
+                                onClick  = { onSelect(argb) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
+}
+
+/**
+ * A single swatch cell in [AccentColorDialog]'s grid: a colored circle (or a neutral
+ * "no color" circle for the Default cell) with a ring around it when [selected], and
+ * the color's name below.
+ */
+@Composable
+private fun ColorSwatch(
+    name: String,
+    argb: Int?,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .then(
+                    if (selected)
+                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                    else Modifier
+                )
+                .padding(3.dp)
+                .clip(CircleShape)
+                .background(argb?.let { Color(it) } ?: MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (argb == null) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = name,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
 }
 
 /**

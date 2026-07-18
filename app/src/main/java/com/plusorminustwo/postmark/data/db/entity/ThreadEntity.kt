@@ -28,7 +28,11 @@ data class ThreadEntity(
     // Postmark-only display alias — null means use displayName everywhere in the UI.
     val nickname: String? = null,
     // JSON array of group MMS participant addresses. Null for ordinary 1:1 threads.
-    val participantsJson: String? = null
+    val participantsJson: String? = null,
+    // Postmark-only per-contact accent color (ARGB). Null means use the default.
+    val accentColorArgb: Int? = null,
+    // Postmark-only per-thread chat background id. Null falls back to the global default.
+    val chatBackgroundId: String? = null
 )
 
 /**
@@ -46,7 +50,9 @@ fun ThreadEntity.toDomain() = Thread(
     isPinned = isPinned,
     notificationsEnabled = notificationsEnabled,
     nickname = nickname,
-    participants = decodeParticipantsJson(participantsJson)
+    participants = decodeParticipantsJson(participantsJson),
+    accentColorArgb = accentColorArgb,
+    chatBackgroundId = chatBackgroundId
 )
 
 /**
@@ -64,5 +70,7 @@ fun Thread.toEntity() = ThreadEntity(
     isPinned = isPinned,
     notificationsEnabled = notificationsEnabled,
     nickname = nickname,
-    participantsJson = encodeParticipantsJson(participants)
+    participantsJson = encodeParticipantsJson(participants),
+    accentColorArgb = accentColorArgb,
+    chatBackgroundId = chatBackgroundId
 )

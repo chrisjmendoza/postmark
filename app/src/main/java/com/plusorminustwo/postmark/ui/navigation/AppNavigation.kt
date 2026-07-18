@@ -28,6 +28,7 @@ import com.plusorminustwo.postmark.ui.contact.ContactDetailScreen
 import com.plusorminustwo.postmark.ui.forward.ForwardPickerScreen
 import com.plusorminustwo.postmark.ui.onboarding.OnboardingScreen
 import com.plusorminustwo.postmark.ui.search.SearchScreen
+import com.plusorminustwo.postmark.ui.settings.AppearanceScreen
 import com.plusorminustwo.postmark.ui.settings.BackupSettingsScreen
 import com.plusorminustwo.postmark.ui.settings.DevOptionsScreen
 import com.plusorminustwo.postmark.ui.settings.export.ExportScreen
@@ -70,6 +71,8 @@ sealed class Screen(val route: String) {
     }
     /** Top-level Settings screen. */
     data object Settings : Screen("settings")
+    /** Appearance settings screen — theme, font family, text size, chat background. */
+    data object Appearance : Screen("settings/appearance")
     /** Backup & restore settings screen. */
     data object BackupSettings : Screen("settings/backup")
     /** Selective export — pick conversations/date range, save an archive anywhere. */
@@ -207,9 +210,16 @@ fun AppNavigation(showOnboarding: Boolean) {
 
         composable(Screen.Settings.route) {
             SettingsScreen(
+                onAppearanceClick = { navController.navigate(Screen.Appearance.route) },
                 onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) },
                 onDevOptionsClick = { navController.navigate(Screen.DevOptions.route) },
                 onStarredImagesClick = { navController.navigate(Screen.StarredImages.route) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.Appearance.route) {
+            AppearanceScreen(
                 onBack = { navController.popBackStack() }
             )
         }

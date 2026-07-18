@@ -4,6 +4,43 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-17 (feat/customization) — per-contact accent colors, chat backgrounds, Appearance settings
+
+User customization v1, five phases (A–E) end to end. **Per-contact accent color**:
+`threads.accentColorArgb` (nullable Int ARGB, schema v17), set via a swatch-grid picker
+(Default + 12 named presets) in ContactDetailScreen. New pure
+`domain/customization/ContactPalette.kt` derives `bubbleContainerColor` /
+`onBubbleContentColor` from the accent (WCAG-contrast-tested >= 3.0 in both themes).
+Applied to the contact's avatar everywhere a `Thread` is already in hand — conversations
+list, thread top bar, contact detail, and (this pass) the export selection list and
+forward-picker's recent-threads rows, which Phase B had missed — and to the sent-bubble
+container color in that thread. StatsScreen and the contacts-search-based pickers
+(NewConversationScreen, ForwardPickerScreen's contact search) are unchanged: no `Thread`
+in hand there. **Chat backgrounds**: `threads.chatBackgroundId` (nullable TEXT, schema
+v17) plus a global default in `ChatBackgroundPreferenceRepository`; resolution order is
+thread override → global default → None. New pure `domain/customization/ChatBackgrounds.kt`
+catalogs None plus 6 curated gradients, luminance-calibrated per theme. Per-thread null
+means "follow global"; the global preference has no such concept, so `ChatBackgrounds.None`'s
+id collapses to null on write and expands back to `None.id` on read — now two small pure
+functions on the `ChatBackgrounds` object (`toGlobalPreferenceId`/`fromGlobalPreferenceId`)
+rather than hand-rolled at each call site. **Appearance screen**: new `settings/appearance`
+sub-screen collects theme, font family (SYSTEM/SERIF/MONOSPACE via a `Typography` built in
+`PostmarkTheme`, now `remember`ed keyed on the font family so it isn't rebuilt every
+recomposition), the text-size slider, and the global chat-background row — moved off the
+main Settings screen once they outgrew it. Room schema 16→17 (`MIGRATION_16_17`, additive);
+both new fields flow through backup export/restore additively (absent-on-restore tolerated).
+
+Phase E review pass: added the two missed `overrideColor` wirings above; wrapped the
+per-tile gradient `Brush` in `ChatBackgroundPreview` in `remember` (was rebuilding on every
+recomposition, same fix already applied to `ThreadScreen`'s chat-background brush); added
+a shared `isAppInDarkTheme()` composable to `Theme.kt` replacing three copies of the same
+luminance-derivation one-liner; made `SettingsScreen`'s `SettingsRow` non-private and
+deleted three near-duplicate row composables (`ConversationColorRow`, `ChatBackgroundRow`,
+`ChatBackgroundSettingRow`) in favor of calling it directly; replaced the theme radio group
+(`AppearanceRow`/`ThemeOption`) with the already-shared `RadioSettingRow`, after adding a
+one-line guard so an empty subtitle renders no second line. Full suite: 669 passed, 0
+failed. `compileDebugAndroidTestSources` clean; `./gradlew clean assembleDebug` succeeded.
+
 ## 2026-07-17 — sent MMS persisted to the provider; optimistic→real handoff matched per-row
 
 Two related MMS send bugs fixed. **Sent MMS were invisible everywhere but Postmark.**

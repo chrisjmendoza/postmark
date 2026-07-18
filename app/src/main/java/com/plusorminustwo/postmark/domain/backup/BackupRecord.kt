@@ -51,7 +51,11 @@ data class ThreadRecord(
     val backupPolicy: String,
     val participants: List<String>,
     val lastMessageAt: Long,
-    val lastMessagePreview: String
+    val lastMessagePreview: String,
+    // Additive fields (Phase A of user customization) — default null so older callers
+    // and the v1 reader keep compiling without naming them.
+    val accentColorArgb: Int? = null,
+    val chatBackgroundId: String? = null
 )
 
 /** One message as backed up — full fidelity minus device-local ids. */
@@ -102,7 +106,9 @@ fun encodeThreadLine(thread: ThreadRecord): String = encodeJson(
         "backupPolicy" to thread.backupPolicy,
         "participants" to thread.participants,
         "lastMessageAt" to thread.lastMessageAt,
-        "lastMessagePreview" to thread.lastMessagePreview
+        "lastMessagePreview" to thread.lastMessagePreview,
+        "accentColorArgb" to thread.accentColorArgb,
+        "chatBackgroundId" to thread.chatBackgroundId
     )
 )
 
@@ -178,7 +184,10 @@ private fun decodeThreadRecord(map: Map<*, *>): ThreadRecord = ThreadRecord(
     participants = (map["participants"] as? List<*>)?.filterIsInstance<String>()
         ?: emptyList(),
     lastMessageAt = map.long("lastMessageAt") ?: 0L,
-    lastMessagePreview = map.str("lastMessagePreview") ?: ""
+    lastMessagePreview = map.str("lastMessagePreview") ?: "",
+    // Absent in archives written before this field existed — tolerate missing keys.
+    accentColorArgb = map.int("accentColorArgb"),
+    chatBackgroundId = map.str("chatBackgroundId")
 )
 
 private fun decodeMessageRecord(map: Map<*, *>): MessageRecord = MessageRecord(

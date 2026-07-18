@@ -134,6 +134,43 @@ Always dark / Always light.
 ═══════════════════════════════════════════════════════
 WHAT IS WORKING (tested on device)
 ═══════════════════════════════════════════════════════
+✅ User customization v1 (July 17, 2026):
+   - Per-contact accent color: threads.accentColorArgb
+     (nullable Int ARGB, schema v17). Swatch-grid picker
+     (Default + 12 named presets) in ContactDetailScreen.
+     domain/customization/ContactPalette.kt derives
+     bubbleContainerColor/onBubbleContentColor (pure,
+     contrast-tested >= 3.0 both themes). Applied to the
+     contact's avatar everywhere a Thread is in hand
+     (conversations list, thread top bar, contact detail,
+     export/forward picker rows) and to the sent-bubble
+     container in that thread; StatsScreen intentionally
+     unchanged (no Thread in hand there).
+   - Chat backgrounds: threads.chatBackgroundId (nullable
+     TEXT, schema v17) + global default in
+     ChatBackgroundPreferenceRepository. Resolution:
+     thread override ?: global default ?: None.
+     domain/customization/ChatBackgrounds.kt is a pure
+     catalog (None + 6 curated gradients, luminance-
+     calibrated per theme). Per-thread null means "follow
+     global"; the global preference has no such concept,
+     so None's id collapses to null on write and expands
+     back on read (ChatBackgrounds.to/fromGlobalPreferenceId).
+     Picker dialog + preview swatch shared between
+     ContactDetailScreen and AppearanceScreen.
+   - New Settings → Appearance sub-screen: theme,
+     font family (SYSTEM/SERIF/MONOSPACE, applied via a
+     remembered Typography in PostmarkTheme), text size
+     slider, and the global chat background row — moved
+     off the main Settings screen once they outgrew it.
+   - Room schema v16 → v17 (MIGRATION_16_17, additive).
+     Both new fields flow through backup export/restore
+     (BackupRecord/RestoreMerge) additively — absent on
+     restore is tolerated.
+   - domain/customization test coverage: ContactPaletteTest
+     (14 cases), ChatBackgroundsTest (19 cases incl. the
+     global-preference-id round-trip). Full suite: 669
+     passed, 0 failed.
 ✅ App installs and launches on physical Android device
 ✅ Onboarding screen on first launch:
    - Explains default SMS role requirement

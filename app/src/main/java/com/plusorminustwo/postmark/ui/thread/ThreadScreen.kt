@@ -107,6 +107,8 @@ import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.Devices
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
+import com.plusorminustwo.postmark.domain.customization.ContactPalette
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEvent
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
 import com.plusorminustwo.postmark.domain.voicememo.formatMemoDuration
@@ -114,6 +116,7 @@ import com.plusorminustwo.postmark.domain.voicememo.shouldCancelDrag
 import com.plusorminustwo.postmark.domain.voicememo.shouldLatchLock
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -147,6 +150,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed as lazyRowItemsIndexed
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.isUnspecified
@@ -184,6 +188,15 @@ import coil.request.ImageRequest
 internal val LocalBubbleFontScale = compositionLocalOf { 1.0f }
 
 /**
+ * Container + content colors for sent bubbles when the current thread has a custom
+ * [com.plusorminustwo.postmark.domain.model.Thread.accentColorArgb]. Null when the
+ * thread uses the default (MessageBubble falls back to primaryContainer / the ambient
+ * content color). Set by [ThreadContent], consumed by [MessageBubble].
+ */
+internal data class BubbleAccentColors(val container: Color, val content: Color)
+internal val LocalBubbleAccentColors = compositionLocalOf<BubbleAccentColors?> { null }
+
+/**
  * Entry-point composable for a single conversation thread.
  *
  * Thin shell: collects state from [ThreadViewModel] and forwards it to [ThreadContent].
@@ -218,6 +231,8 @@ fun ThreadScreen(
     val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
     // Bubble font scale — driven by pinch gesture, persisted across sessions.
     val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
+    // Global default chat background — overridden per-thread when uiState.thread.chatBackgroundId is set.
+    val globalChatBackgroundId by viewModel.globalChatBackgroundId.collectAsState()
     // address → name for group threads; empty for 1:1 (doubles as the group signal).
     val participantNames by viewModel.participantNames.collectAsState()
     // Voice memo recording phase for the reply bar's mic button.
@@ -324,6 +339,7 @@ fun ThreadScreen(
         activeDates = activeDates,
         quickReactionEmojis = quickReactionEmojis,
         bubbleFontScale = bubbleFontScale,
+        globalChatBackgroundId = globalChatBackgroundId,
         participantNames = participantNames,
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
@@ -413,6 +429,9 @@ private fun ThreadContent(
     activeDates: Set<LocalDate>,
     quickReactionEmojis: List<String>,
     bubbleFontScale: Float = 1.0f,
+    // Global default chat-background id (Phase C customization); null = none set.
+    // A per-thread override on uiState.thread.chatBackgroundId always wins.
+    globalChatBackgroundId: String? = null,
     // address → contact name for group threads; empty for 1:1 threads.
     participantNames: Map<String, String> = emptyMap(),
     scrollToMessageId: Long = -1L,
@@ -506,6 +525,33 @@ private fun ThreadContent(
     // Same nickname-falls-back-to-formatted-number resolution as the top app bar title —
     // hoisted here too since the image viewer's header needs it for the "You"/contact label.
     val contactDisplayName = uiState.thread?.let { t -> t.nickname ?: formatPhoneNumber(t.displayName) } ?: ""
+
+    // Per-thread sent-bubble accent (Phase B customization). Null (no accent set) leaves
+    // MessageBubble on its existing primaryContainer / ambient content color.
+    val isDarkTheme = isAppInDarkTheme()
+    val bubbleAccentColors = remember(uiState.thread?.accentColorArgb, isDarkTheme) {
+        uiState.thread?.accentColorArgb?.let { accent ->
+            BubbleAccentColors(
+                container = Color(ContactPalette.bubbleContainerColor(accent, isDarkTheme)),
+                content = Color(ContactPalette.onBubbleContentColor(accent, isDarkTheme))
+            )
+        }
+    }
+
+    // Chat background (Phase C customization): thread override falls back to the
+    // global default, then to None. Brush is remembered keyed on (id, isDarkTheme) so
+    // it's built once per background/theme change, never per frame — this paints the
+    // Box wrapping the message LazyColumn below. Null (None) means no background
+    // modifier is applied at all, so un-customized threads render pixel-identical.
+    val chatBackgroundId = uiState.thread?.chatBackgroundId ?: globalChatBackgroundId
+    val chatBackground = ChatBackgrounds.resolve(chatBackgroundId)
+    val chatBackgroundBrush = remember(chatBackground.id, isDarkTheme) {
+        if (chatBackground == ChatBackgrounds.None) null
+        else Brush.verticalGradient(
+            (if (isDarkTheme) chatBackground.darkColorsArgb else chatBackground.lightColorsArgb)
+                .map { Color(it) }
+        )
+    }
 
     // Real navigation-bar height, read from THIS (Activity) window — not the image
     // viewer/video player Dialogs' own windows, whose WindowInsets reporting proved
@@ -765,9 +811,13 @@ private fun ThreadContent(
 
     // ── Scaffold + overlay ────────────────────────────────────────────────────
 
-    // Provide the current font scale to all bubble composables via CompositionLocal.
-    // A two-finger pinch anywhere on the thread area updates the scale via onAdjustFontScale.
-    CompositionLocalProvider(LocalBubbleFontScale provides bubbleFontScale) {
+    // Provide the current font scale and per-thread accent to all bubble composables
+    // via CompositionLocal. A two-finger pinch anywhere on the thread area updates the
+    // scale via onAdjustFontScale.
+    CompositionLocalProvider(
+        LocalBubbleFontScale provides bubbleFontScale,
+        LocalBubbleAccentColors provides bubbleAccentColors
+    ) {
     Box(
         Modifier
             .fillMaxSize()
@@ -876,7 +926,8 @@ private fun ThreadContent(
                             ContactAvatar(
                                 address = uiState.thread?.address ?: "",
                                 name = name,
-                                size = 36.dp
+                                size = 36.dp,
+                                overrideColor = uiState.thread?.accentColorArgb?.let { Color(it) }
                             )
                             Text(name)
                         }
@@ -991,7 +1042,15 @@ private fun ThreadContent(
             }
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .then(
+                    if (chatBackgroundBrush != null) Modifier.background(chatBackgroundBrush)
+                    else Modifier
+                )
+        ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 state = listState,
@@ -1352,10 +1411,16 @@ private fun MessageBubble(
     onAudioSeek: (String, Float) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
+    // Read directly (like LocalBubbleFontScale) rather than threaded as a parameter —
+    // it's a thread-wide render input, not per-message state.
+    val accentColors = LocalBubbleAccentColors.current
     val baseBubbleColor = if (message.isSent)
-        MaterialTheme.colorScheme.primaryContainer
+        accentColors?.container ?: MaterialTheme.colorScheme.primaryContainer
     else
         MaterialTheme.colorScheme.surfaceVariant
+    // Sent-bubble text color when a custom accent is set; null falls back to the
+    // ambient LocalContentColor read at each Text below, unchanged from before.
+    val sentContentColor = if (message.isSent) accentColors?.content else null
     // Search-jump / "Go to chat" highlight. The ViewModel drops highlightedMessageId
     // 2 s after the jump; animating the colour turns that hard flip into a quick
     // tint-in and a gentle fade back to the resting bubble colour.
@@ -1560,7 +1625,7 @@ private fun MessageBubble(
                         if (message.body.isNotEmpty()) {
                             val fontScale   = LocalBubbleFontScale.current
                             val linkColor   = MaterialTheme.colorScheme.primary
-                            val textColor   = LocalContentColor.current
+                            val textColor   = sentContentColor ?: LocalContentColor.current
                             val baseStyle   = MaterialTheme.typography.bodyMedium
                             val ctx         = LocalContext.current
                             val annotated   = remember(message.body, linkColor, ctx) {
@@ -1580,7 +1645,7 @@ private fun MessageBubble(
                     // Plain SMS bubble — linkify URLs and phone numbers.
                     val fontScale  = LocalBubbleFontScale.current
                     val linkColor  = MaterialTheme.colorScheme.primary
-                    val textColor  = LocalContentColor.current
+                    val textColor  = sentContentColor ?: LocalContentColor.current
                     val baseStyle  = MaterialTheme.typography.bodyMedium
                     val ctx        = LocalContext.current
                     val annotated  = remember(message.body, linkColor, ctx) {

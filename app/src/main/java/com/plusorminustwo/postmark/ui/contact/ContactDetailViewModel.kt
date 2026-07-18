@@ -60,6 +60,26 @@ class ContactDetailViewModel @Inject constructor(
         viewModelScope.launch { threadRepository.setNickname(threadId, normalized) }
     }
 
+    // ── Accent color ──────────────────────────────────────────────────────────
+
+    /**
+     * Saves a Postmark-only per-contact accent color (ARGB) for this thread.
+     * Passing null clears it, falling back to the default hash-derived color.
+     */
+    fun setAccentColor(argb: Int?) {
+        viewModelScope.launch { threadRepository.setAccentColor(threadId, argb) }
+    }
+
+    // ── Chat background ───────────────────────────────────────────────────────
+
+    /**
+     * Saves a per-thread chat background override.
+     * Passing null clears it, falling back to the global default.
+     */
+    fun setChatBackground(id: String?) {
+        viewModelScope.launch { threadRepository.setChatBackground(threadId, id) }
+    }
+
     // ── Toggles (mirror the ⋮ menu in ThreadScreen) ───────────────────────────
 
     /** Toggles the muted state; no-op if the thread hasn't loaded yet. */

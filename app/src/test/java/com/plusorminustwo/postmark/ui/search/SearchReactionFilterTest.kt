@@ -202,6 +202,8 @@ class SearchReactionFilterTest {
         override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
         override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}
+        override suspend fun updateAccentColor(threadId: Long, argb: Int?) {}
+        override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) {}
     }
 
     private class FakeReactionDao : ReactionDao {

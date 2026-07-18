@@ -304,6 +304,8 @@ private class FakeThreadDao : ThreadDao {
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
+    override suspend fun updateAccentColor(threadId: Long, argb: Int?) = Unit
+    override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) = Unit
 }
 
 private class FakeReactionDao : ReactionDao {

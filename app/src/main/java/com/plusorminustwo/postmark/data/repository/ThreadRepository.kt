@@ -88,4 +88,12 @@ class ThreadRepository @Inject constructor(
     /** Saves a Postmark-only nickname for the thread; pass null to clear it. */
     suspend fun setNickname(threadId: Long, nickname: String?) =
         dao.updateNickname(threadId, nickname)
+
+    /** Saves a Postmark-only accent color (ARGB) for the thread; pass null to clear it. */
+    suspend fun setAccentColor(threadId: Long, argb: Int?) =
+        dao.updateAccentColor(threadId, argb)
+
+    /** Saves a Postmark-only chat background id for the thread; pass null to clear it. */
+    suspend fun setChatBackground(threadId: Long, backgroundId: String?) =
+        dao.updateChatBackground(threadId, backgroundId)
 }

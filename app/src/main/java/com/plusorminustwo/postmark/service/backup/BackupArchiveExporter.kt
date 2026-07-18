@@ -151,7 +151,9 @@ private fun Thread.toRecord() = ThreadRecord(
     backupPolicy = backupPolicy.name,
     participants = participants,
     lastMessageAt = lastMessageAt,
-    lastMessagePreview = lastMessagePreview
+    lastMessagePreview = lastMessagePreview,
+    accentColorArgb = accentColorArgb,
+    chatBackgroundId = chatBackgroundId
 )
 
 private fun Message.toRecord(

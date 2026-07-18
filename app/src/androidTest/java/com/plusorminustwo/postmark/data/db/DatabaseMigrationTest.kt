@@ -469,10 +469,10 @@ class DatabaseMigrationTest {
         db13.close()
     }
 
-    // ── Full chain 1 → 16 ─────────────────────────────────────────────────
+    // ── Full chain 1 → 17 ─────────────────────────────────────────────────
 
     @Test
-    fun fullMigrationChain_v1DataSurvivesToV16() {
+    fun fullMigrationChain_v1DataSurvivesToV17() {
         val db = helper.createDatabase("test_chain", 1)
         db.execSQL(
             "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
@@ -491,11 +491,12 @@ class DatabaseMigrationTest {
             PostmarkDatabase.MIGRATION_9_10, PostmarkDatabase.MIGRATION_10_11,
             PostmarkDatabase.MIGRATION_11_12, PostmarkDatabase.MIGRATION_12_13,
             PostmarkDatabase.MIGRATION_13_14, PostmarkDatabase.MIGRATION_14_15,
-            PostmarkDatabase.MIGRATION_15_16
+            PostmarkDatabase.MIGRATION_15_16, PostmarkDatabase.MIGRATION_16_17
         ).forEach { it.migrate(db) }
 
         db.query(
-            "SELECT m.body, m.deliveryStatus, m.isMms, m.isRead, m.isStarred, t.isPinned, t.notificationsEnabled" +
+            "SELECT m.body, m.deliveryStatus, m.isMms, m.isRead, m.isStarred, t.isPinned, t.notificationsEnabled," +
+            " t.accentColorArgb, t.chatBackgroundId" +
             " FROM messages m JOIN threads t ON t.id = m.threadId WHERE m.id = 42"
         ).use { c ->
             assertTrue(c.moveToFirst())
@@ -506,6 +507,8 @@ class DatabaseMigrationTest {
             assertEquals(0, c.getInt(4))  // not starred
             assertEquals(0, c.getInt(5))  // not pinned
             assertEquals(1, c.getInt(6))  // notifications on
+            assertTrue(c.isNull(7))       // no accent color
+            assertTrue(c.isNull(8))       // no chat background
         }
         db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_stats','global_stats')").use { c ->
             assertFalse(c.moveToFirst())
@@ -581,5 +584,31 @@ class DatabaseMigrationTest {
             assertTrue(c.moveToFirst())
             assertEquals("indexed message", c.getString(0))
         }
+    }
+
+    // ── MIGRATION 16 → 17 ─────────────────────────────────────────────────
+
+    @Test
+    fun migration16To17_addsNullableAccentColorAndChatBackground() {
+        val db16 = helper.createDatabase("test_m1617", 16)
+        db16.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
+        )
+
+        PostmarkDatabase.MIGRATION_16_17.migrate(db16)
+
+        db16.query("SELECT accentColorArgb, chatBackgroundId FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+            assertTrue(c.isNull(1))
+        }
+        db16.execSQL("UPDATE threads SET accentColorArgb = -65536, chatBackgroundId = 'sunset' WHERE id = 1")
+        db16.query("SELECT accentColorArgb, chatBackgroundId FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(-65536, c.getInt(0))
+            assertEquals("sunset", c.getString(1))
+        }
+        db16.close()
     }
 }

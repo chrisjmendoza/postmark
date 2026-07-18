@@ -25,6 +25,10 @@ import androidx.compose.runtime.Immutable
  *                                 so most UI does not need to read this directly — it exists
  *                                 for logic that needs to know "is this a group thread?"
  *                                 (e.g. gating group-aware sending, which isn't implemented yet).
+ * @param accentColorArgb          Postmark-only per-contact accent color (ARGB). Null means
+ *                                 use the app default everywhere the accent would apply.
+ * @param chatBackgroundId         Postmark-only per-thread chat background id. Null falls
+ *                                 back to the global default background (also null = none).
  */
 // @Immutable: the participants List makes Thread inferred-unstable, which made every
 // visible ThreadRow unskippable — all rows recomposed on each threads/unreadCounts
@@ -42,5 +46,9 @@ data class Thread(
     val notificationsEnabled: Boolean = true,
     // Postmark-only alias — null means fall back to displayName in the UI.
     val nickname: String? = null,
-    val participants: List<String> = emptyList()
+    val participants: List<String> = emptyList(),
+    // Postmark-only accent color (ARGB). Null means use the default.
+    val accentColorArgb: Int? = null,
+    // Postmark-only chat background id. Null falls back to the global default.
+    val chatBackgroundId: String? = null
 )
