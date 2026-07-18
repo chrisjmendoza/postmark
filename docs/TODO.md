@@ -297,16 +297,24 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `MessageDao`) and expose a `showUnreadOnly: Boolean` toggle in
       `ConversationsViewModel`. Badge the button with the current unread
       thread count so the user knows at a glance how many are waiting.
-- [ ] **Unread count badge** — unread message count pill on each
-      thread row. Requires `isRead` flag on `MessageEntity`.
+- [x] **Unread count badge** — unread message count pill on each
+      thread row. Requires `isRead` flag on `MessageEntity`. *(Was already shipped —
+      `isRead` landed with the 9→10 migration and `ConversationsScreen` renders the
+      Badge; ticked July 18 2026 when the fable end-user review caught the stale
+      checkbox.)*
 - [ ] **Swipe actions on conversation list** — swipe left: delete/archive with undo
       snackbar. Swipe right: mark as read. Standard Android expectation.
 - [x] **Swipe actions on message bubbles** — swipe right to reply (quote the
       message inline in the reply bar); quote strip shows sender label, 2-line
       preview, × to dismiss; springs back via Animatable; disabled in selection
       mode; quote visual-only (carrier SMS unmodified).
-- [ ] **Long-press multi-select** — select multiple threads for
-      bulk delete/archive/mute.
+- [x] **Long-press multi-select** (July 18 2026) — long-press enters selection mode
+      (check-circle avatars, selection top bar with count); bulk mark read /
+      mark unread / pin / mute / delete. Delete is confirm-gated and default-SMS-only,
+      removing the conversations from the telephony provider + Room. Mark-unread flips
+      `isRead` on the thread's latest message only — no schema change, the existing
+      badge pipeline does the rest. One-time "long-press to select" hint row. (No
+      archive — the app has no archive concept.)
 - [x] **Pinned conversations** — `isPinned` on `ThreadEntity`; pins float
       to top; Pin/Unpin in thread ⋮ menu; `PushPin` icon in conversation row.
 - [ ] **Friendly timestamps** — "just now", "2m", "9:41 AM", "Mon",

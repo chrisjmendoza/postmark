@@ -21,6 +21,7 @@ import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
 import com.plusorminustwo.postmark.data.preferences.BubbleStylePreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.ChatBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.DraftRepository
+import com.plusorminustwo.postmark.data.preferences.GestureHintsRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -131,6 +132,7 @@ class ThreadViewModel @Inject constructor(
     private val chatBackgroundImageStore: ChatBackgroundImageStore,
     private val appAccentPrefRepo: AppAccentPreferenceRepository,
     private val draftRepository: DraftRepository,
+    private val gestureHintsRepo: GestureHintsRepository,
     private val voiceMemoRecorder: VoiceMemoRecorder
 ) : ViewModel() {
 
@@ -188,6 +190,19 @@ class ThreadViewModel @Inject constructor(
      *  [MmsManagerWrapper.MAX_VIDEO_DURATION_MS] — the UI shows this as a Snackbar. */
     private val _attachmentRejectedEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val attachmentRejectedEvent: SharedFlow<String> = _attachmentRejectedEvent.asSharedFlow()
+
+    /** Fires the FIRST time the user ever toggles a reaction, carrying [REACTIONS_LOCAL_NOTICE].
+     *  Reactions are local-only annotations that are never transmitted, but the pill UI reads
+     *  as two-way — this one-shot Snackbar sets that expectation honestly, then never again. */
+    private val _reactionsLocalNoticeEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val reactionsLocalNoticeEvent: SharedFlow<String> = _reactionsLocalNoticeEvent.asSharedFlow()
+
+    /** One-time thread gesture-tips card visibility (un-dismissed = true). The card also
+     *  gates on message count in the UI via [shouldShowThreadTips]. */
+    val threadTipsDismissed: StateFlow<Boolean> = gestureHintsRepo.threadTipsDismissed
+
+    /** Dismisses the thread gesture-tips card permanently. */
+    fun dismissThreadTips() = gestureHintsRepo.markThreadTipsDismissed()
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
 
@@ -504,6 +519,13 @@ class ThreadViewModel @Inject constructor(
                 )
             }
             dismissReactionPicker()
+            // First-ever reaction (add OR remove): reactions live only on this device and
+            // are never sent, so a private note doesn't silently masquerade as a two-way
+            // reaction. Show the notice once, then mark it shown forever.
+            if (!gestureHintsRepo.reactionsLocalNoticeShown.value) {
+                gestureHintsRepo.markReactionsLocalNoticeShown()
+                _reactionsLocalNoticeEvent.tryEmit(REACTIONS_LOCAL_NOTICE)
+            }
         }
     }
 
@@ -1271,6 +1293,22 @@ class ThreadViewModel @Inject constructor(
         const val MAX_ATTACHMENTS = 5
 
         val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "🔥")
+
+        /** One-time Snackbar shown after the user's first reaction toggle — reactions are
+         *  local annotations, never transmitted, so the pill UI's two-way look is set straight. */
+        const val REACTIONS_LOCAL_NOTICE =
+            "Reactions stay on your phone — the other person doesn't see them."
+
+        /**
+         * Whether the thread gesture-tips card should be visible: only while the user hasn't
+         * [dismissed] it AND the thread actually has at least one message ([messageCount] > 0).
+         * The message-count gate keeps the card off a brand-new empty thread, where there is
+         * nothing to swipe, long-press, or pinch yet.
+         *
+         * Extracted here so the visibility rule can be tested without composing the UI.
+         */
+        internal fun shouldShowThreadTips(dismissed: Boolean, messageCount: Int): Boolean =
+            !dismissed && messageCount > 0
 
         /**
          * Merges [topUsed] (most-used first) with [defaults], deduplicating, and caps the result

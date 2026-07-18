@@ -126,6 +126,15 @@ interface MessageDao {
     @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId AND isRead = 0")
     suspend fun markAllRead(threadId: Long)
 
+    /** Marks a thread unread by clearing isRead on its single latest message only.
+     *  Reuses the whole existing unread-badge pipeline ([observeUnreadCounts]) with no
+     *  schema change: one unread row is enough to surface the badge and the "Unread"
+     *  filter, and marking exactly one row keeps the reverse of [markAllRead] cheap
+     *  (no bulk FTS-trigger rewrite). Called by the conversations-list "Mark unread"
+     *  bulk action, per selected thread. */
+    @Query("UPDATE messages SET isRead = 0 WHERE id = (SELECT id FROM messages WHERE threadId = :threadId ORDER BY timestamp DESC LIMIT 1)")
+    suspend fun markLatestUnread(threadId: Long)
+
     /** All messages in a thread that carry a media attachment, newest first.
      *  Used by ContactDetailScreen to build the shared-media grid. */
     @Query("SELECT * FROM messages WHERE threadId = :threadId AND attachmentUri IS NOT NULL ORDER BY timestamp DESC")

@@ -4,22 +4,28 @@ import android.app.role.RoleManager
 import android.content.Intent
 import android.os.Build
 import android.provider.Telephony
-import android.view.HapticFeedbackConstants
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
@@ -30,6 +36,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,19 +47,19 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
-import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.selection.bulkToggleTarget
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import java.util.Locale
 
@@ -72,6 +79,9 @@ fun ConversationsScreen(
     val syncProgress by viewModel.syncProgress.collectAsState()
     val isDefaultSmsApp by viewModel.isDefaultSmsApp.collectAsState()
     val roleBannerDismissed by viewModel.roleBannerDismissed.collectAsState()
+    // One-time long-press-to-multi-select hint (un-dismissed); further gated on a
+    // non-empty, non-selecting list below via shouldShowMultiSelectHint.
+    val multiSelectHintDismissed by viewModel.multiSelectHintDismissed.collectAsState()
     // Live unread-message counts keyed by threadId — drives the badge in ThreadRow.
     val unreadCounts by viewModel.unreadCounts.collectAsState()
     // Whether the "unread only" filter chip is active.
@@ -80,6 +90,28 @@ fun ConversationsScreen(
     // how many conversations are waiting even before activating the filter.
     val unreadThreadCount = remember(unreadCounts) { unreadCounts.count { (_, v) -> v > 0 } }
     val threadList = threads  // local val so Kotlin can smart-cast the nullable
+
+    // ── Multi-select ───────────────────────────────────────────────────────────
+    // Set of selected thread ids; a non-empty set means selection mode is active.
+    val selectedIds by viewModel.selectedThreadIds.collectAsState()
+    val selectionMode = selectedIds.isNotEmpty()
+    // The currently-listed threads that are selected — drives the selection bar's
+    // apply-to-all Pin/Mute labels. Selection can only include visible rows, so this
+    // resolves to exactly the selected threads.
+    val selectedThreads = remember(threadList, selectedIds) {
+        threadList?.filter { it.id in selectedIds } ?: emptyList()
+    }
+
+    // One-shot delete-result messages surfaced through the Scaffold Snackbar.
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(Unit) {
+        viewModel.snackbarMessages.collect { snackbarHostState.showSnackbar(it) }
+    }
+    // Confirmation dialog visibility for the destructive bulk delete.
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    // Back exits selection mode rather than leaving the screen.
+    BackHandler(enabled = selectionMode) { viewModel.clearSelection() }
 
     // Re-check whether we hold the default SMS role every time this screen resumes
     // (e.g. after returning from the system default-apps settings screen).
@@ -101,26 +133,47 @@ fun ConversationsScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = { Text("Postmark") },
-                actions = {
-                    IconButton(onClick = onSearchClick) {
-                        Icon(Icons.Default.Search, contentDescription = "Search")
+            // Selection replaces the normal top bar while active (mirrors ThreadScreen).
+            if (selectionMode) {
+                ConversationSelectionTopBar(
+                    selectedCount = selectedIds.size,
+                    // Same apply-to-all decision the ViewModel action makes, so the
+                    // menu label always matches what tapping it will do.
+                    pinAll = bulkToggleTarget(selectedThreads.map { it.isPinned }),
+                    muteAll = bulkToggleTarget(selectedThreads.map { it.isMuted }),
+                    showDelete = isDefaultSmsApp,
+                    onClose = { viewModel.clearSelection() },
+                    onMarkRead = { viewModel.markSelectedRead() },
+                    onMarkUnread = { viewModel.markSelectedUnread() },
+                    onTogglePin = { viewModel.pinSelected() },
+                    onToggleMute = { viewModel.muteSelected() },
+                    onDelete = { showDeleteDialog = true }
+                )
+            } else {
+                TopAppBar(
+                    title = { Text("Postmark") },
+                    actions = {
+                        IconButton(onClick = onSearchClick) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
+                        }
+                        IconButton(onClick = onStatsClick) {
+                            Icon(Icons.Default.BarChart, contentDescription = "Stats")
+                        }
+                        IconButton(onClick = onSettingsClick) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
                     }
-                    IconButton(onClick = onStatsClick) {
-                        Icon(Icons.Default.BarChart, contentDescription = "Stats")
-                    }
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                }
-            )
+                )
+            }
         },
-        // FAB: compose a new message to any contact or number.
+        // FAB: compose a new message to any contact or number. Hidden during selection.
         floatingActionButton = {
-            FloatingActionButton(onClick = onNewConversationClick) {
-                Icon(Icons.Default.Edit, contentDescription = "New message")
+            if (!selectionMode) {
+                FloatingActionButton(onClick = onNewConversationClick) {
+                    Icon(Icons.Default.Edit, contentDescription = "New message")
+                }
             }
         }
     ) { padding ->
@@ -129,7 +182,7 @@ fun ConversationsScreen(
             // Only shown when there are unread threads so the bar doesn't appear
             // in an all-read inbox where it would just be visual noise.
             AnimatedVisibility(
-                visible = unreadThreadCount > 0 || showUnreadOnly,
+                visible = (unreadThreadCount > 0 || showUnreadOnly) && !selectionMode,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
@@ -156,7 +209,7 @@ fun ConversationsScreen(
             }
             // Role denial banner — shown when the app is not the default SMS app
             // and the user hasn't dismissed it this install.
-            if (!isDefaultSmsApp && !roleBannerDismissed) {
+            if (!isDefaultSmsApp && !roleBannerDismissed && !selectionMode) {
                 val context = LocalContext.current
                 RoleDenialBanner(
                     onDismiss = viewModel::dismissRoleBanner,
@@ -178,6 +231,12 @@ fun ConversationsScreen(
                         }
                     }
                 )
+            }
+            // Slim one-time hint teaching the long-press multi-select gesture. Sits below
+            // the filter/role bars and above the list; hidden once dismissed, on an empty
+            // list, or while selection is already active.
+            if (shouldShowMultiSelectHint(multiSelectHintDismissed, threadList?.size ?: 0, selectionMode)) {
+                MultiSelectHintRow(onDismiss = viewModel::dismissMultiSelectHint)
             }
             when {
                 threadList == null -> {
@@ -227,10 +286,11 @@ fun ConversationsScreen(
                                 ThreadRow(
                                     thread = thread,
                                     unreadCount = unreadCounts[thread.id] ?: 0,
+                                    selectionMode = selectionMode,
+                                    selected = thread.id in selectedIds,
                                     onClick = { onThreadClick(thread.id) },
-                                    onTogglePin = { viewModel.togglePin(thread.id, thread.isPinned) },
-                                    onToggleMute = { viewModel.toggleMute(thread.id, thread.isMuted) },
-                                    onMarkRead = { viewModel.markThreadRead(thread.id) }
+                                    onToggleSelect = { viewModel.toggleThreadSelection(thread.id) },
+                                    onLongPress = { viewModel.enterSelection(thread.id) }
                                 )
                                 HorizontalDivider()
                             }
@@ -241,6 +301,38 @@ fun ConversationsScreen(
                     }
                 }
             }
+        }
+
+        // ── Delete confirmation ─────────────────────────────────────────────────
+        // The one permitted destructive path: deletes the selected conversations from
+        // the phone's SMS/MMS providers. Only reachable when Postmark is the default
+        // SMS app (the selection bar hides Delete otherwise).
+        if (showDeleteDialog) {
+            val count = selectedIds.size
+            AlertDialog(
+                onDismissRequest = { showDeleteDialog = false },
+                title = {
+                    Text(if (count == 1) "Delete 1 conversation?" else "Delete $count conversations?")
+                },
+                text = {
+                    Text(
+                        "This removes " +
+                            (if (count == 1) "it" else "them") +
+                            " and all their messages from this phone. This can’t be undone."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteDialog = false
+                        viewModel.deleteSelected()
+                    }) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+                }
+            )
         }
     }
 }
@@ -382,45 +474,96 @@ private fun RoleDenialBanner(onDismiss: () -> Unit, onSetDefault: () -> Unit) {
     }
 }
 
-/** A single conversation row. Long-press opens a context menu with Pin/Unpin,
- *  Mute/Unmute, and (when unread) Mark as read. */
+// ── Multi-select discovery hint ─────────────────────────────────────────────────
+/** Slim one-time hint teaching the (otherwise invisible) long-press-to-multi-select
+ *  gesture. A surfaceVariant container keeps it informational rather than shouting; the ×
+ *  ([IconButton], 48dp touch target) dismisses it for good. colorScheme roles only, so it
+ *  stays legible in light and dark. */
+@Composable
+private fun MultiSelectHintRow(onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Tip: long-press a conversation to select several at once",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Dismiss tip",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+/** A single conversation row. In normal mode a tap opens the thread and a long-press
+ *  enters multi-select with this row selected. While selection mode is active a tap
+ *  toggles this row instead of navigating. Selected rows tint their container and swap
+ *  the avatar for a check so the selection is unmistakable. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThreadRow(
     thread: Thread,
     unreadCount: Int,
+    selectionMode: Boolean,
+    selected: Boolean,
     onClick: () -> Unit,
-    onTogglePin: () -> Unit,
-    onToggleMute: () -> Unit,
-    onMarkRead: () -> Unit,
+    onToggleSelect: () -> Unit,
+    onLongPress: () -> Unit,
 ) {
-    // Controls visibility of the long-press dropdown menu.
-    var menuExpanded by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
-    // Pin/unpin uses View haptics directly: this Compose BOM's HapticFeedbackType
-    // only offers LongPress/TextHandleMove, neither of which fits a confirm action.
-    val view = LocalView.current
 
-    Box {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        menuExpanded = true
-                    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+            )
+            .combinedClickable(
+                onClick = { if (selectionMode) onToggleSelect() else onClick() },
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongPress()
+                }
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Avatar area doubles as the selection indicator: a filled check circle replaces
+        // the contact avatar while selected.
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = MaterialTheme.colorScheme.onPrimary
                 )
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-        ContactAvatar(
-            address = thread.address,
-            name = thread.nickname ?: thread.displayName,
-            overrideColor = thread.accentColorArgb?.let { Color(it) }
-        )
+            }
+        } else {
+            ContactAvatar(
+                address = thread.address,
+                name = thread.nickname ?: thread.displayName,
+                overrideColor = thread.accentColorArgb?.let { Color(it) }
+            )
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = thread.nickname ?: formatPhoneNumber(thread.displayName),
@@ -464,37 +607,67 @@ private fun ThreadRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        } // end Row
+    }
+}
 
-        // ── Context menu (long-press) ───────────────────────────────────────
-        // Anchored to the Row so it appears near the long-pressed item.
-        DropdownMenu(
-            expanded = menuExpanded,
-            onDismissRequest = { menuExpanded = false }
-        ) {
-            DropdownMenuItem(
-                text = { Text(if (thread.isPinned) "Unpin" else "Pin") },
-                onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                    menuExpanded = false
-                    onTogglePin()
+// ── Selection top bar ─────────────────────────────────────────────────────────
+/** Replaces the normal top bar while conversations are selected (mirrors ThreadScreen's
+ *  SELECTION mode). Surfaces Mark-read and Delete as icons and the stateful Pin/Mute plus
+ *  Mark-unread actions in an overflow menu (their labels reflect the apply-to-all decision).
+ *  Delete is only offered when Postmark is the default SMS app. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConversationSelectionTopBar(
+    selectedCount: Int,
+    pinAll: Boolean,
+    muteAll: Boolean,
+    showDelete: Boolean,
+    onClose: () -> Unit,
+    onMarkRead: () -> Unit,
+    onMarkUnread: () -> Unit,
+    onTogglePin: () -> Unit,
+    onToggleMute: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var overflowExpanded by remember { mutableStateOf(false) }
+    TopAppBar(
+        title = { Text("$selectedCount selected") },
+        navigationIcon = {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Default.Close, contentDescription = "Cancel selection")
+            }
+        },
+        actions = {
+            IconButton(onClick = onMarkRead) {
+                Icon(Icons.Default.DoneAll, contentDescription = "Mark read")
+            }
+            if (showDelete) {
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, contentDescription = "Delete")
                 }
-            )
-            DropdownMenuItem(
-                text = { Text(if (thread.isMuted) "Unmute" else "Mute") },
-                onClick = { menuExpanded = false; onToggleMute() }
-            )
-            // Only offered while there is something to mark — markAllRead is a
-            // no-op on read threads anyway (isRead = 0 predicate), this just
-            // keeps the menu honest.
-            if (unreadCount > 0) {
+            }
+            IconButton(onClick = { overflowExpanded = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "More actions")
+            }
+            DropdownMenu(
+                expanded = overflowExpanded,
+                onDismissRequest = { overflowExpanded = false }
+            ) {
                 DropdownMenuItem(
-                    text = { Text("Mark as read") },
-                    onClick = { menuExpanded = false; onMarkRead() }
+                    text = { Text(if (pinAll) "Pin all" else "Unpin all") },
+                    onClick = { overflowExpanded = false; onTogglePin() }
+                )
+                DropdownMenuItem(
+                    text = { Text(if (muteAll) "Mute all" else "Unmute all") },
+                    onClick = { overflowExpanded = false; onToggleMute() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Mark unread") },
+                    onClick = { overflowExpanded = false; onMarkUnread() }
                 )
             }
         }
-    } // end Box
+    )
 }
 
 /**

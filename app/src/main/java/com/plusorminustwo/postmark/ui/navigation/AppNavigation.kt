@@ -10,6 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -37,6 +40,8 @@ import com.plusorminustwo.postmark.ui.settings.SyncLogScreen
 import com.plusorminustwo.postmark.ui.starred.StarredImagesScreen
 import com.plusorminustwo.postmark.ui.stats.StatsScreen
 import com.plusorminustwo.postmark.ui.thread.ThreadScreen
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Sealed class representing every navigation destination in the app.
@@ -100,10 +105,31 @@ private val SLIDE_OUT = tween<IntOffset>(220)
 private val FADE_IN   = tween<Float>(280)
 private val FADE_OUT  = tween<Float>(220)
 
+/**
+ * @param pendingOpenThreadId thread id a message notification asked to open, or null.
+ *        When it becomes non-null we navigate to that thread and clear it via
+ *        [onThreadOpened]. Dropped without navigating while onboarding is the start
+ *        destination (setup isn't finished, so there's no thread to land on yet).
+ */
 @Composable
-fun AppNavigation(showOnboarding: Boolean) {
+fun AppNavigation(
+    showOnboarding: Boolean,
+    pendingOpenThreadId: StateFlow<Long?> = MutableStateFlow(null),
+    onThreadOpened: () -> Unit = {}
+) {
     val navController = rememberNavController()
     val startDestination = if (showOnboarding) Screen.Onboarding.route else Screen.Conversations.route
+
+    // Deep-link from a message notification: navigate to the requested thread once,
+    // then clear the pending id so re-composition or a later null->null emission is a no-op.
+    val openThreadId by pendingOpenThreadId.collectAsState()
+    LaunchedEffect(openThreadId) {
+        val id = openThreadId ?: return@LaunchedEffect
+        if (!showOnboarding) {
+            navController.navigate(Screen.Thread.route(id))
+        }
+        onThreadOpened()
+    }
 
     // Stamps the current route onto JankStats frame data ("screen" state) so the
     // log-only jank listener in MainActivity can attribute hitches to a screen.

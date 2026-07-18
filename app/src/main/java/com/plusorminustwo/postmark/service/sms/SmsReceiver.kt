@@ -187,12 +187,28 @@ class SmsReceiver : BroadcastReceiver() {
         val displayTitle = if (privacyMode) context.getString(R.string.privacy_mode_notification_title) else displayName
         val displayBody  = if (privacyMode) "" else body
 
-        // ── Content intent — opens the conversation list ──────────────────────────
+        // ── Content intent — deep-links straight to this conversation ─────────────
+        /* Resolve the canonical telephony thread id for this address. It is the same
+         * id space Room's ThreadEntity uses (SmsSyncHandler stores Telephony.Sms.THREAD_ID
+         * directly as ThreadEntity.id), so MainActivity can hand it to Screen.Thread as-is.
+         * getOrCreateThreadId only "gets" here (the row was just received), and a negative
+         * result falls back to the old open-the-list behaviour. */
+        val threadId: Long = try {
+            Telephony.Threads.getOrCreateThreadId(context, address)
+        } catch (e: Exception) {
+            Log.w(TAG, "getOrCreateThreadId failed for notification deep-link", e)
+            -1L
+        }
+        /* requestCode MUST vary per thread: PendingIntent equality ignores extras, so the
+         * old shared requestCode 0 made every thread's content intent collide under
+         * FLAG_UPDATE_CURRENT, clobbering each other. threadId.toInt() gives each thread
+         * its own PendingIntent. */
         val openIntent = PendingIntent.getActivity(
             context,
-            0,
+            if (threadId > 0L) threadId.toInt() else 0,
             Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (threadId > 0L) putExtra(MainActivity.EXTRA_OPEN_THREAD_ID, threadId)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

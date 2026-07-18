@@ -114,6 +114,7 @@ class FailedSendRetryTest {
         override suspend fun deleteById(messageId: Long) = Unit
         override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
         override suspend fun markAllRead(threadId: Long) = Unit
+        override suspend fun markLatestUnread(threadId: Long) = Unit
         override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
         override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
         override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()

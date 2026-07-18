@@ -75,6 +75,11 @@ class MessageRepository @Inject constructor(
     // Marks all messages in a thread as read; called when the user opens the thread.
     suspend fun markAllRead(threadId: Long) = messageDao.markAllRead(threadId)
 
+    /** Marks a thread unread by clearing isRead on only its latest message — enough to
+     *  light the unread badge via the existing pipeline. Backs the conversations-list
+     *  "Mark unread" bulk action. */
+    suspend fun markLatestUnread(threadId: Long) = messageDao.markLatestUnread(threadId)
+
     // Emits a live Map<threadId, unreadCount> for driving unread badges.
     fun observeUnreadCounts(): Flow<Map<Long, Int>> =
         messageDao.observeUnreadCounts().map { list -> list.associate { it.threadId to it.count } }

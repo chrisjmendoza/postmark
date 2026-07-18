@@ -168,6 +168,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
@@ -177,7 +178,6 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.progressSemantics
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
@@ -267,6 +267,8 @@ fun ThreadScreen(
     val participantNames by viewModel.participantNames.collectAsState()
     // Voice memo recording phase for the reply bar's mic button.
     val voiceMemo by viewModel.voiceMemoState.collectAsState()
+    // One-time gesture-tips card visibility (un-dismissed); UI also gates on message count.
+    val threadTipsDismissed by viewModel.threadTipsDismissed.collectAsState()
 
     // ── Stable lambdas ────────────────────────────────────────────────────────
     // Wrapped in remember(viewModel) so the same function reference is reused
@@ -359,6 +361,7 @@ fun ThreadScreen(
     val onSearchInThread_         = remember(viewModel, threadId, onSearchInThread) { { onSearchInThread(threadId) } }
     val onAdjustFontScale         = remember(viewModel) { { delta: Float -> viewModel.adjustFontScale(delta) } }
     val onResetFontScale          = remember(viewModel) { { viewModel.resetFontScale() } }
+    val onDismissThreadTips       = remember(viewModel) { { viewModel.dismissThreadTips() } }
     val onVoiceMemoEvent          = remember(viewModel) { { event: VoiceMemoEvent -> viewModel.onVoiceMemoEvent(event) } }
     val onAudioPlayPause          = remember(viewModel) { { uri: String -> viewModel.playPauseAudio(uri) } }
     val onAudioSeek               = remember(viewModel) { { uri: String, fraction: Float -> viewModel.seekAudio(uri, fraction) } }
@@ -382,6 +385,9 @@ fun ThreadScreen(
         scrollToBottomEvent = viewModel.scrollToBottomEvent,
         attachmentRejectedEvent = viewModel.attachmentRejectedEvent,
         blockResultEvent = viewModel.blockResultEvent,
+        reactionsLocalNoticeEvent = viewModel.reactionsLocalNoticeEvent,
+        threadTipsDismissed = threadTipsDismissed,
+        onDismissThreadTips = onDismissThreadTips,
         onBack = onBack,
         onViewContact = onViewContact,
         onViewStats = onViewStats,
@@ -484,6 +490,12 @@ private fun ThreadContent(
     scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
     attachmentRejectedEvent: SharedFlow<String> = MutableSharedFlow(),
     blockResultEvent: SharedFlow<String> = MutableSharedFlow(),
+    // One-shot notice fired on the user's first reaction toggle — shown via the thread Snackbar.
+    reactionsLocalNoticeEvent: SharedFlow<String> = MutableSharedFlow(),
+    // Whether the one-time gesture-tips card has been dismissed; the card also gates on
+    // message count (see shouldShowThreadTips) so it never shows on an empty thread.
+    threadTipsDismissed: Boolean = true,
+    onDismissThreadTips: () -> Unit = {},
     onBack: () -> Unit,
     onViewContact: () -> Unit = {},
     onViewStats: () -> Unit,
@@ -545,6 +557,12 @@ private fun ThreadContent(
 
     LaunchedEffect(blockResultEvent) {
         blockResultEvent.collect { message ->
+            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
+        }
+    }
+
+    LaunchedEffect(reactionsLocalNoticeEvent) {
+        reactionsLocalNoticeEvent.collect { message ->
             snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
         }
     }
@@ -901,13 +919,38 @@ private fun ThreadContent(
     Box(
         Modifier
             .fillMaxSize()
-            // Detect two-finger pinch anywhere on the thread to adjust font scale.
+            // Two-finger pinch anywhere on the thread adjusts the bubble font scale.
+            //
+            // Hand-rolled and gated on pointer count instead of detectTransformGestures,
+            // observing in PointerEventPass.Initial — the parent Box sees each event
+            // BEFORE the LazyColumn does. detectTransformGestures cancels the instant a
+            // child consumes any change, and the list's vertical scroll (Main pass, which
+            // runs child-first) consumes the vertical component of a two-finger spread
+            // almost immediately, so the transform handler effectively never fired and
+            // pinch did nothing. Watching the Initial pass and only consuming once a
+            // second finger is down lets us claim the pinch before the scroll can. Same
+            // arbitration the full-screen image viewer uses (see ZoomableImage's
+            // `isPinch = event.changes.size > 1`).
+            //
+            // While fewer than 2 pointers are down we consume nothing and change nothing,
+            // so single-finger scroll, tap, long-press, swipe-to-reply and selection-mode
+            // taps are completely unaffected.
             .pointerInput(Unit) {
-                detectTransformGestures { _, _, zoomFactor, _ ->
-                    // zoomFactor > 1 = spreading (bigger), < 1 = pinching (smaller).
-                    // Map zoom to a delta relative to default 1.0, dampened so a single
-                    // gesture sweep doesn't jump the full range.
-                    onAdjustFontScale((zoomFactor - 1f) * 0.5f)
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.changes.count { it.pressed } >= 2) {
+                            // zoom > 1 = spreading (bigger), < 1 = pinching (smaller).
+                            // Dampened so one gesture sweep doesn't jump the full range.
+                            onAdjustFontScale((event.calculateZoom() - 1f) * 0.5f)
+                            // Claim every moving pointer so the list can't scroll or fling
+                            // underneath the pinch. When the gesture drops back below 2
+                            // pointers this branch is skipped, so we stop consuming and the
+                            // tail falls through to the list; the loop ends once all lift.
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
                 }
             }
     ) {
@@ -1100,7 +1143,14 @@ private fun ThreadContent(
             // Keep ReplyBar in layout even when picker is open (alpha=0) so the
             // Scaffold doesn't resize and shift message positions.
             if (!uiState.isSelectionMode) {
-                ReplyBar(
+                Column {
+                    // Gesture-tips card pinned directly above the composer. Gated on message
+                    // count so an empty thread — nothing to swipe, long-press, or pinch yet —
+                    // never teaches gestures that have no target.
+                    if (ThreadViewModel.shouldShowThreadTips(threadTipsDismissed, uiState.messages.size)) {
+                        ThreadGestureTipsCard(onDismiss = onDismissThreadTips)
+                    }
+                    ReplyBar(
                     text                  = uiState.replyText,
                     pendingAttachments    = uiState.pendingAttachments,
                     // O(1) via the prebuilt index — a linear find here ran per keystroke
@@ -1126,6 +1176,7 @@ private fun ThreadContent(
                     onAudioPlayPause      = onAudioPlayPause,
                     onAudioSeek           = onAudioSeek
                 )
+                }
             }
         }
     ) { padding ->
@@ -2477,6 +2528,69 @@ private fun DeliveryStatusIndicator(
     } else {
         Icon(imageVector = icon, contentDescription = description,
             modifier = modifier.size(12.dp), tint = tint)
+    }
+}
+
+// ── Gesture-tips card ────────────────────────────────────────────────────────
+/**
+ * One-time discovery card teaching the thread's otherwise-invisible power gestures.
+ * Pinned above the composer; dismissed for good via the × (an [IconButton], whose
+ * default 48dp min-size satisfies the touch-target floor). Uses only colorScheme roles
+ * so it reads correctly in both light and dark themes.
+ */
+@Composable
+private fun ThreadGestureTipsCard(onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(top = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GestureTipRow(Icons.AutoMirrored.Filled.Reply, "Swipe a message to reply")
+                GestureTipRow(Icons.Default.Mood, "Long-press a message to react")
+                GestureTipRow(Icons.Default.FormatSize, "Pinch to resize text")
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Dismiss tips",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GestureTipRow(icon: ImageVector, text: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

@@ -6,7 +6,6 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Build
 import android.provider.Telephony
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -34,6 +33,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.ui.theme.ThemePreference
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,6 +80,9 @@ fun SettingsScreen(
         isDefaultSmsApp = context.isDefaultSmsApp()
     }
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -88,7 +93,8 @@ fun SettingsScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(modifier = Modifier
             .fillMaxSize()
@@ -118,6 +124,12 @@ fun SettingsScreen(
                     }
                 )
             }
+            Text(
+                text = "SMS/MMS only — RCS chats fall back to standard texting.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 56.dp, end = 16.dp, bottom = 12.dp)
+            )
             HorizontalDivider()
 
             SettingsRow(
@@ -179,7 +191,14 @@ fun SettingsScreen(
             HorizontalDivider()
 
             SettingsSectionHeader(title = "About")
-            AboutRow(context = context)
+            AboutRow(
+                context = context,
+                onCopied = {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Build info copied")
+                    }
+                }
+            )
         }
     }
 }
@@ -190,7 +209,7 @@ fun SettingsScreen(
 // new build rather than silently staying on a stale one. Tap copies the full
 // string to the clipboard for pasting into a bug report.
 @Composable
-private fun AboutRow(context: android.content.Context) {
+private fun AboutRow(context: android.content.Context, onCopied: () -> Unit) {
     val buildInfo = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}, ${BuildConfig.GIT_SHA})"
     Row(
         modifier = Modifier
@@ -198,7 +217,7 @@ private fun AboutRow(context: android.content.Context) {
             .clickable {
                 val clipboard = context.getSystemService(ClipboardManager::class.java)
                 clipboard?.setPrimaryClip(ClipData.newPlainText("Postmark build", buildInfo))
-                Toast.makeText(context, "Build info copied", Toast.LENGTH_SHORT).show()
+                onCopied()
             }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically

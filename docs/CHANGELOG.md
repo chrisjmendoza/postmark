@@ -4,6 +4,56 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-18 (fix/fable-round4) — notification deep-link, conversations multi-select, pinch-to-zoom root cause, gesture hints, honest disclosures
+
+Fable-analysis round 4 (specs + review by Fable, implementation delegated to Opus/Sonnet
+agents; tracking in `docs/fable-round4.md`).
+
+**Notification tap now opens the conversation** (end-user finding): `SmsReceiver`'s
+content intent carries `MainActivity.EXTRA_OPEN_THREAD_ID` (the provider thread id —
+verified identical to Room's `ThreadEntity.id`, which `SmsSyncHandler` stores verbatim);
+`MainActivity` is now `singleTask`, reads the extra in `onCreate`/`onNewIntent` into a
+`StateFlow`, and `AppNavigation` navigates to `Screen.Thread.route(id)` (dropped during
+onboarding). Root-caused a latent second bug on the way: every thread's PendingIntent
+shared `requestCode 0` under `FLAG_UPDATE_CURRENT` — extras don't participate in
+PendingIntent equality, so threads clobbered each other's intents; requestCode is now
+the threadId.
+
+**Conversations multi-select**: long-press enters selection mode (dropdown menu retired;
+its actions moved to a selection top bar mirroring ThreadScreen's SELECTION mode). Bulk
+mark read / mark unread / pin / mute / delete. Mark-unread is one new DAO query flipping
+`isRead` on the thread's latest message — no schema change, the existing badge pipeline
+does the rest. Bulk pin/mute use a pure any-off→all-on decision (`bulkToggleTarget`,
+tested). Delete is the codebase's one CLAUDE.md-permitted provider delete: confirm
+dialog, default-SMS-gated, `Telephony.Threads.CONTENT_URI` per thread on IO, then Room
+cascade; provider failure leaves the Room row (a resync would resurrect it anyway) and
+is counted honestly in the result Snackbar.
+
+**Pinch-to-zoom text never worked** (owner report confirmed): `detectTransformGestures`
+on the wrapper Box cancels the moment any child consumes a pointer change, and the
+LazyColumn's scroll consumes the vertical component of a two-finger spread almost
+immediately — the handler could never fire. Re-implemented hand-rolled in
+`PointerEventPass.Initial`, gated on ≥2 pressed pointers (the image viewer's own
+arbitration pattern), consuming only during an actual pinch so single-finger scroll,
+tap, long-press, and swipe-to-reply are untouched.
+
+**Gesture discovery + honest disclosures**: new `GestureHintsRepository` (three one-shot
+flags). One-time tips card above the thread composer (swipe-to-reply / long-press-react /
+pinch-to-resize; gated on the thread having messages), a one-time "long-press to select"
+hint row on the conversations list, and — the end-user review's "reactions look two-way
+but go nowhere" dealbreaker — a first-reaction Snackbar: "Reactions stay on your phone —
+the other person doesn't see them." RCS fallback is now disclosed in the onboarding
+default-SMS card and as a Settings caption (README already covered it).
+
+**Housekeeping**: the last remaining Toast in `ui/` ("Build info copied") converted to
+Snackbar — fable #31 closed; 11 already-merged local branches deleted (remote deletion
+command left for the owner in `docs/fable-round4.md`). All unit tests green after each
+wave (`./gradlew test`); new tests for `bulkToggleTarget`, `deleteResultMessage`, and
+both hint-visibility rules. On-device verification still owed: pinch, multi-select
+delete, notification tap, hint surfaces.
+
+---
+
 ## 2026-07-18 (feat/customization) — customization v2: bubble styles, Material You, dual bubble colors, custom picker, image backgrounds
 
 Post-review addendum: deleted the dead `PostmarkColors`/`LocalPostmarkColors`
