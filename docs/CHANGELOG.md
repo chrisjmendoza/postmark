@@ -6,6 +6,13 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-18 (feat/theme-presets) — chat-background EXIF fix + placement editor
 
+**Post-review regression fix (on-device report: picking any photo did nothing, no editor,
+no error):** `orientedSize` and `decodeOriented` chained `?: return null` onto the
+`use { BitmapFactory.decodeStream(bounds) }` result — but a bounds-only decode returns
+null BY DESIGN, so every pick bailed before the editor opened. Same trap Phase K fixed
+in the original `save()`; the placement rewrite dropped the guard comment and re-made it.
+Stream null-check separated again and the warning comment restored at both sites.
+
 **EXIF orientation fix:** picking a Samsung portrait (landscape pixels + a "rotate 90°"
 EXIF tag) no longer produces a sideways landscape background. `ChatBackgroundImageStore`
 now decodes EXIF-corrected — an `ExifInterface(stream).rotationDegrees` read before the

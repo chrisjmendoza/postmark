@@ -141,10 +141,13 @@ class ChatBackgroundImageStore @Inject constructor(
      *  EXIF rotation is 90/270. Null on an unreadable/undecodable source. Drives the editor math. */
     suspend fun orientedSize(source: Uri): Pair<Int, Int>? = withContext(Dispatchers.IO) {
         try {
+            // The bounds-only decode returns null BY DESIGN (inJustDecodeBounds), so only
+            // the STREAM is null-checked — chaining ?: onto the use{} result bails on every
+            // image. This trap has bitten twice (Phase K, then the 2026-07-18 placement
+            // rewrite); keep the stream check separate.
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(source)?.use {
-                BitmapFactory.decodeStream(it, null, bounds)
-            } ?: return@withContext null
+            val stream = context.contentResolver.openInputStream(source) ?: return@withContext null
+            stream.use { BitmapFactory.decodeStream(it, null, bounds) }
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
             val rotation = try {
                 context.contentResolver.openInputStream(source)?.use { ExifInterface(it).rotationDegrees } ?: 0
@@ -207,10 +210,11 @@ class ChatBackgroundImageStore @Inject constructor(
      * [com.plusorminustwo.postmark.service.sms.MmsManagerWrapper]'s compressImage pattern.
      */
     private fun decodeOriented(source: Uri): Bitmap? {
+        // Bounds-only decode returns null BY DESIGN — null-check the STREAM only (see the
+        // matching comment in orientedSize; the ?: -on-use{} form broke every save twice).
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(source)?.use {
-            BitmapFactory.decodeStream(it, null, bounds)
-        } ?: return null
+        val stream = context.contentResolver.openInputStream(source) ?: return null
+        stream.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
         val rotationDegrees = try {

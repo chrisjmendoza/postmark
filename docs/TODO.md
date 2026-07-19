@@ -664,6 +664,21 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       and `DATABASE_NAME`.
 - [ ] **`.gitattributes`** — add `* text=auto` to suppress CRLF
       line-ending warnings.
+- [ ] **AGP 10 deprecation cleanup** (noted July 18 2026, Android Studio build
+      output) — six legacy-behavior flags in `gradle.properties` (lines 7–15)
+      are deprecated and will be REMOVED in AGP 10 (currently on AGP 9.2.1;
+      they were almost certainly written by the AGP Upgrade Assistant to
+      freeze old behavior). Each needs its real migration, not just deletion:
+      `android.newDsl=false` and `android.builtInKotlin=false` are the meaty
+      ones (new AGP DSL + AGP built-in Kotlin replacing the standalone
+      kotlin-android plugin); the rest are small (`resvalues=true` → declare
+      `buildFeatures { resValues = true }` where used; explicit `targetSdk`;
+      compile-time R class; drop any `<uses-sdk>` manifest tag). Also one
+      obsolete-API warning: `applicationVariants` → `androidComponents` —
+      NOT in our build scripts (grep clean), so it comes from a third-party
+      plugin; identify it (likely google-services/Firebase) and update.
+      Do this as its own branch/PR with a full `./gradlew test` +
+      staging-build verification; behavior flips can be subtle.
 
 ### Accessibility
 - [ ] **Content descriptions** on all icon buttons for screen readers.

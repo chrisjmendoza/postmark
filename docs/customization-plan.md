@@ -974,3 +974,10 @@ Spec: `docs/fable-bg-placement-spec.md` (decision-complete, bake-at-accept desig
   and wrote `docs/fable-bg-placement-spec.md`; an Opus agent implemented it verbatim; Fable
   reviewed the diff (faithful, no deviations). Bake-at-accept design keeps ThreadScreen
   untouched. `./gradlew test`: green incl. new BackgroundPlacementTest (10 cases).
+- 2026-07-18 Fable: Phase L regression found on-device by Chris (any photo pick = silent
+  no-op). The Opus rewrite reintroduced the Phase K bounds-decode-null trap in
+  orientedSize + decodeOriented (`?:` chained onto the use{} result of a
+  inJustDecodeBounds decode, which is null by design). Fable review had missed it; the
+  math-only JVM tests cannot catch Android I/O. Fixed both sites, restored the warning
+  comments. Lesson recorded: any agent touching BitmapFactory bounds decodes must keep
+  the stream null-check separate.
