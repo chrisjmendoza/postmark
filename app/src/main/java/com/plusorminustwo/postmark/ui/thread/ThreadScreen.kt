@@ -140,6 +140,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -488,7 +489,7 @@ private fun ThreadContent(
     participantNames: Map<String, String> = emptyMap(),
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
-    scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
+    scrollToBottomEvent: SharedFlow<Long> = MutableSharedFlow(),
     attachmentRejectedEvent: SharedFlow<String> = MutableSharedFlow(),
     blockResultEvent: SharedFlow<String> = MutableSharedFlow(),
     // One-shot notice fired on the user's first reaction toggle — shown via the thread Snackbar.
@@ -740,7 +741,7 @@ private fun ThreadContent(
 
     // Scroll effects — each isolated in its own helper composable so unrelated
     // state changes don't trigger other effects unnecessarily.
-    ThreadScrollToBottomEffect(scrollToBottomEvent, listState)
+    ThreadScrollToBottomEffect(scrollToBottomEvent, listState, currentRenderState)
     ThreadNewMessageScrollEffect(
         messageCount = uiState.messages.size,
         listState    = listState,
@@ -1378,6 +1379,12 @@ private fun ThreadContent(
                     fabVisible = false
                     scope.launch { listState.animateScrollToItem(0) }
                 },
+                // Same fallback an un-customized sent bubble uses (Phase I comment above,
+                // ~:619-627) so the FAB matches the thread's sent-bubble colors.
+                containerColor = bubbleAccentColors.sentContainer
+                    ?: MaterialTheme.colorScheme.primaryContainer,
+                contentColor = bubbleAccentColors.sentContent
+                    ?: MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 16.dp)
@@ -1467,6 +1474,8 @@ private fun SelectionTopBar(
 private fun ScrollToLatestButton(
     visible: Boolean,
     onClick: () -> Unit,
+    containerColor: Color,
+    contentColor: Color,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -1477,8 +1486,8 @@ private fun ScrollToLatestButton(
     ) {
         SmallFloatingActionButton(
             onClick = onClick,
-            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+            containerColor = containerColor,
+            contentColor = contentColor
         ) {
             Icon(Icons.Default.VerticalAlignBottom, contentDescription = "Scroll to latest")
         }
@@ -5220,16 +5229,31 @@ private fun ActionItem(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Scrolls the list to the bottom whenever a scroll-to-bottom event is emitted.
- * Triggered by the user sending a message.
+ * Scrolls the list to the bottom when the user sends a message. Each event carries the
+ * optimistic message's id; the effect waits until that row is present in [renderState]
+ * before scrolling, so the animation targets the newly sent message rather than the old
+ * newest item. Scrolling a frame early lands on the old newest row and the keyed
+ * LazyColumn re-anchors there when the sent row arrives — the reported no-scroll bug.
  */
 @Composable
 private fun ThreadScrollToBottomEffect(
-    scrollToBottomEvent: kotlinx.coroutines.flow.Flow<Unit>,
-    listState: androidx.compose.foundation.lazy.LazyListState
+    scrollToBottomEvent: kotlinx.coroutines.flow.Flow<Long>,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    renderState: androidx.compose.runtime.State<ThreadRenderState>
 ) {
     LaunchedEffect(Unit) {
-        scrollToBottomEvent.collect { listState.animateScrollToItem(0) }
+        scrollToBottomEvent.collect { sentId ->
+            // Wait for the optimistic row to reach the composed list — scrolling
+            // before it exists lands on the old newest item and the keyed list
+            // re-anchors there when the row arrives (the reported no-scroll bug).
+            // withTimeoutOrNull guard: collect is sequential, so an id that never
+            // appears must not wedge every later send's scroll — on timeout, scroll anyway.
+            withTimeoutOrNull(1_000) {
+                snapshotFlow { renderState.value.messageIdToIndex.containsKey(sentId) }
+                    .first { it }
+            }
+            listState.animateScrollToItem(0)
+        }
     }
 }
 

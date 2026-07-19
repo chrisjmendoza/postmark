@@ -180,11 +180,12 @@ class ThreadViewModel @Inject constructor(
     // ID of the message the user is replying to (swipe-to-reply); null = no active quote.
     private val _replyingToId         = MutableStateFlow<Long?>(null)
 
-    /* Fires once per send so the UI unconditionally scrolls to the bottom
-     * regardless of the current scroll position. extraBufferCapacity=1 means
-     * the emit never suspends even if the collector hasn't consumed yet. */
-    private val _scrollToBottomEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    val scrollToBottomEvent: SharedFlow<Unit> = _scrollToBottomEvent.asSharedFlow()
+    /* Fires once per send carrying the optimistic message's tempId, so the UI can
+     * wait for that row to reach the composed list before scrolling to the bottom
+     * (see ThreadScrollToBottomEffect). extraBufferCapacity=1 means the emit never
+     * suspends even if the collector hasn't consumed yet. */
+    private val _scrollToBottomEvent = MutableSharedFlow<Long>(extraBufferCapacity = 1)
+    val scrollToBottomEvent: SharedFlow<Long> = _scrollToBottomEvent.asSharedFlow()
 
     /** Fires when [onAttachmentsSelected] drops a video for exceeding
      *  [MmsManagerWrapper.MAX_VIDEO_DURATION_MS] — the UI shows this as a Snackbar. */
@@ -1071,10 +1072,11 @@ class ThreadViewModel @Inject constructor(
                     attachments    = attachments
                 )
                 messageRepository.insert(optimistic)
-                /* Signal scroll AFTER the insert so the message is already in the list
-                 * when the UI receives the event — avoids a frame where the scroll lands
-                 * on the old last message instead of the new one. */
-                _scrollToBottomEvent.tryEmit(Unit)
+                /* Emit the optimistic row's id so the UI can wait until that row has
+                 * re-emitted, recomposed, and laid out before scrolling — insert order
+                 * alone never guaranteed the row was in the composed list, which let the
+                 * scroll land on the old newest message instead of the new one. */
+                _scrollToBottomEvent.tryEmit(tempId)
                 /* PendingIntent for MmsSentReceiver — updates Room when the MMSC
                  * responds. EXTRA_SENT_AT_MS becomes the provider row's date when the
                  * receiver persists the sent MMS (persistSentMms), keeping send-time order. */
@@ -1144,8 +1146,9 @@ class ThreadViewModel @Inject constructor(
                     deliveryStatus = DELIVERY_STATUS_PENDING
                 )
                 messageRepository.insert(optimistic)
-                /* Signal scroll AFTER the insert — same rationale as the MMS path above. */
-                _scrollToBottomEvent.tryEmit(Unit)
+                /* Emit the optimistic row's id so the UI waits for it — same rationale
+                 * as the MMS path above. */
+                _scrollToBottomEvent.tryEmit(tempId)
                 smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
             }
             _isSending.value = false

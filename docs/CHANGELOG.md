@@ -4,7 +4,25 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
-## 2026-07-19 (feat/theme-presets) — placement-editor insets fix + build upgrade
+## 2026-07-19 (feat/theme-presets) — placement-editor insets fix, send auto-scroll, FAB theming
+
+**Sending a message now always scrolls to it (on-device report: only the
+scroll-to-latest FAB appeared):** the send path emitted the scroll event right after
+the Room insert, but the list updates asynchronously — the scroll ran against the old
+list and the keyed LazyColumn re-anchored to the old newest item when the optimistic
+row landed, leaving the sent message below the fold. The event now carries the
+optimistic row's id and `ThreadScrollToBottomEffect` waits (snapshotFlow over
+`renderState.messageIdToIndex`, 1 s timeout guard) until the row is in the composed
+list before scrolling — the same wait-for-presence pattern search-jump uses.
+Incoming-message behavior (`ThreadNewMessageScrollEffect`) unchanged. Spec:
+`docs/fable-thread-scroll-spec.md` (Fable spec, Opus implementation).
+
+**Scroll-to-latest FAB matches the thread theme:** the FAB now uses the thread's
+resolved sent-bubble colors (`bubbleAccentColors.sentContainer`/`sentContent`, falling
+back to `primaryContainer`/`onPrimaryContainer` exactly like an un-customized sent
+bubble) instead of fixed `tertiaryContainer`. (Sonnet implementation.)
+
+
 
 **Placement editor buttons behind the nav bar (on-device report):** the editor's
 Cancel/Fit/Fill/Set-background row shipped WITH `navigationBarsPadding()` — but inset
