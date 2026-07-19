@@ -6,12 +6,13 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -88,6 +89,10 @@ fun BackgroundPlacementEditor(
     onAccept: (BackgroundPlacement, viewportW: Int, viewportH: Int) -> Unit,
     onCancel: () -> Unit
 ) {
+    // Inset modifiers resolve to zero inside the Dialog's own window on some devices
+    // (issuetracker.google.com/246909281), so capture the activity window's insets out
+    // here — where every other screen reads them correctly — and pad the chrome with them.
+    val safeInsets = WindowInsets.safeDrawing.asPaddingValues()
     Dialog(
         onDismissRequest = onCancel,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
@@ -151,50 +156,57 @@ fun BackgroundPlacementEditor(
                         }
                 )
 
-                Text(
-                    text = "Pinch to zoom · Drag to position",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.9f),
+                // Chrome layer — inset by the activity's safe-drawing padding so the hint
+                // and action row clear the status/navigation bars while the image stays
+                // full-bleed behind them.
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .statusBarsPadding()
-                        .padding(16.dp)
-                )
-
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .fillMaxSize()
+                        .padding(safeInsets)
                 ) {
-                    TextButton(
-                        onClick = onCancel,
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
-                    ) { Text("Cancel") }
+                    Text(
+                        text = "Pinch to zoom · Drag to position",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(16.dp)
+                    )
 
-                    OutlinedButton(
-                        onClick = {
-                            placement = BackgroundPlacement(
-                                0.5f, 0.5f, BackgroundPlacementMath.minZoom(imageWidth, imageHeight, vw, vh)
-                            )
-                        },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                    ) { Text("Fit") }
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = onCancel,
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                        ) { Text("Cancel") }
 
-                    OutlinedButton(
-                        onClick = {
-                            val (cx, cy) = BackgroundPlacementMath.clampCenter(
-                                imageWidth, imageHeight, vw, vh, 1f, placement.cx, placement.cy
-                            )
-                            placement = BackgroundPlacement(cx, cy, 1f)
-                        },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                    ) { Text("Fill") }
+                        OutlinedButton(
+                            onClick = {
+                                placement = BackgroundPlacement(
+                                    0.5f, 0.5f, BackgroundPlacementMath.minZoom(imageWidth, imageHeight, vw, vh)
+                                )
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) { Text("Fit") }
 
-                    Button(onClick = { onAccept(placement, vw, vh) }) { Text("Set background") }
+                        OutlinedButton(
+                            onClick = {
+                                val (cx, cy) = BackgroundPlacementMath.clampCenter(
+                                    imageWidth, imageHeight, vw, vh, 1f, placement.cx, placement.cy
+                                )
+                                placement = BackgroundPlacement(cx, cy, 1f)
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) { Text("Fill") }
+
+                        Button(onClick = { onAccept(placement, vw, vh) }) { Text("Set background") }
+                    }
                 }
             }
         }

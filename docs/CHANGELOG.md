@@ -4,6 +4,27 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-19 (feat/theme-presets) — placement-editor insets fix + build upgrade
+
+**Placement editor buttons behind the nav bar (on-device report):** the editor's
+Cancel/Fit/Fill/Set-background row shipped WITH `navigationBarsPadding()` — but inset
+modifiers resolve to zero inside a full-screen `Dialog`'s own window on some devices
+(issuetracker.google.com/246909281; the status-bar hint padded fine while the bottom
+row got nothing). Fix in `BackgroundPlacementEditor`: capture the ACTIVITY window's
+`WindowInsets.safeDrawing` outside the `Dialog {}` block — where every other screen
+reads insets correctly — and pad a full-size chrome layer (hint + action row) with it;
+the photo stays full-bleed behind. Same pre-compute-outside pattern ThreadScreen's
+image/video viewers already use. Rule recorded in CLAUDE.md: check all four screen
+edges against system bars on every screen change.
+
+**Build:** Android Studio upgraded AGP 9.2.1 → 9.3.0 and enabled
+`org.gradle.tooling.parallel` (wrapper already Gradle 9.6.1). Audit of the build tab's
+deprecation warnings: six deprecated `android.*` compat flags in gradle.properties must
+be migrated before AGP 10 (tracked for a future pass; `newDsl` and `builtInKotlin` are
+the risky two), plus three trivial code-level deprecations.
+
+---
+
 ## 2026-07-18 (feat/theme-presets) — chat-background EXIF fix + placement editor
 
 **Post-review regression fix (on-device report: picking any photo did nothing, no editor,

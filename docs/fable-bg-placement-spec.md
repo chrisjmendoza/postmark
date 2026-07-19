@@ -247,3 +247,14 @@ Run `export JAVA_HOME="C:/Program Files/Android/Android Studio/jbr" && ./gradlew
 Append a `docs/CHANGELOG.md` entry (match the existing entry format) covering: EXIF
 orientation fix, placement editor (pan/zoom/fit/fill, accept/cancel), adjust-or-replace
 flow for an existing photo.
+
+## 8. Post-ship fix — dialog window insets (2026-07-19) — [x]
+
+On-device: the Cancel/Fit/Fill/Set-background row rendered behind the Android nav bar
+despite `.navigationBarsPadding()` being present since the first commit. Inset modifiers
+resolve to zero inside a full-screen `Dialog`'s own window on some devices
+(issuetracker.google.com/246909281). Fix: capture `WindowInsets.safeDrawing.asPaddingValues()`
+in the composition OUTSIDE the `Dialog {}` block (activity window — call sites are outside
+any Scaffold/consumeWindowInsets, so values are unconsumed) and pad a full-size chrome
+layer inside with it; the image stays full-bleed. Matches ThreadScreen's image/video
+viewer pattern (pre-computed nav-bar padding passed into the dialog).
