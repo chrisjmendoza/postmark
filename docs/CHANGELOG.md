@@ -4,6 +4,32 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-18 (feat/theme-presets) — chat-background EXIF fix + placement editor
+
+**EXIF orientation fix:** picking a Samsung portrait (landscape pixels + a "rotate 90°"
+EXIF tag) no longer produces a sideways landscape background. `ChatBackgroundImageStore`
+now decodes EXIF-corrected — an `ExifInterface(stream).rotationDegrees` read before the
+full decode and a `Matrix.postRotate` after — mirroring `MmsManagerWrapper.compressImage`.
+
+**Placement editor (`ui/components/BackgroundPlacementEditor.kt`):** a full-screen
+pan/zoom editor opens after a pick (and via "Adjust placement" on an existing photo).
+Pinch to zoom, drag to position, "Fit" (letterbox the whole image with black bands),
+"Fill" (cover the viewport), "Cancel" / "Set background". All geometry is pure Kotlin in
+`domain/customization/BackgroundPlacement.kt` (`BackgroundPlacementMath` — fill/fit/min-zoom,
+gesture apply, center clamp, visible-rect, bake mapping, editor transform), covered by
+`BackgroundPlacementTest` (the reported 3000×4000 / 1080×2340 repro).
+
+**Bake-at-accept + adjust-or-replace:** on accept the store bakes the visible region into
+the displayed JPEG at the viewport aspect ("fit with bands"), so ThreadScreen's existing
+`ContentScale.Crop` path is untouched — the baked file IS the placement. Each background is
+now a trio: `bg_<t>.jpg` (baked display, the id target), `bg_<t>.src.jpg` (EXIF-corrected
+1440px source), `bg_<t>.placement.txt` (the placement). "Adjust placement" re-opens the
+editor from the kept source and re-bakes a fresh trio losslessly; "Choose a different photo"
+re-picks. Tapping the current-image tile in the background picker opens these two options.
+The id format (`image:bg_<millis>.jpg` → the baked file) is unchanged, so render, thumbnails,
+GC-by-count, and backups keep working; `delete` now removes the whole trio. Legacy images
+(no sidecars) render as before and fall back to the display file with a Fill initial placement.
+
 ## 2026-07-18 (feat/theme-presets) — theme presets + share format, then two on-device feedback rounds
 
 **Theme presets (P1+P2, see `docs/theme-presets-plan.md`):** 10 curated sent/contact/

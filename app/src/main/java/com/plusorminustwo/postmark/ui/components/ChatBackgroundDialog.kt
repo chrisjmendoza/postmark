@@ -71,9 +71,12 @@ fun ChatBackgroundPreview(background: ChatBackground, isDarkTheme: Boolean, modi
  *                          "Custom image" tile's thumbnail); null otherwise. The host
  *                          resolves it via its ViewModel so this composable stays store-free.
  * @param onSelect          Called with the chosen id: null for "Default", or a catalog id.
- * @param onPickImage       Called when the user taps "From gallery" (or the current custom
- *                          tile) — the host launches the photo picker and, on a result,
- *                          calls its ViewModel's setImageBackground. The dialog sets nothing.
+ * @param onPickImage       Called when the user taps "From gallery" — the host launches the
+ *                          photo picker and, on a result, begins the placement flow. The
+ *                          dialog sets nothing.
+ * @param onCurrentImageOptions Called when the user taps the current custom-image tile — the
+ *                          host opens the "Background photo" options (adjust placement / choose
+ *                          a different photo). Only reachable while an image is selected.
  * @param onDismiss         Called when the dialog is dismissed without a new selection.
  */
 @Composable
@@ -84,6 +87,7 @@ fun ChatBackgroundDialog(
     currentImageFile: File? = null,
     onSelect: (String?) -> Unit,
     onPickImage: () -> Unit = {},
+    onCurrentImageOptions: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -116,7 +120,7 @@ fun ChatBackgroundDialog(
                                 )
                                 is ChatBgTile.CustomImage -> CustomImageTile(
                                     file = tile.file,
-                                    onClick = onPickImage,
+                                    onClick = onCurrentImageOptions,
                                     modifier = Modifier.weight(1f)
                                 )
                                 ChatBgTile.Gallery -> GalleryTile(
@@ -209,7 +213,8 @@ private fun BackgroundTile(
 /**
  * Ringed "Custom image" tile shown when the current selection is a custom-image id.
  * Renders [file]'s thumbnail via Coil when present, else a generic image icon (e.g. the
- * file went missing after a restore). Tapping re-opens the picker to replace the image.
+ * file went missing after a restore). Tapping opens the "Background photo" options (adjust
+ * placement / choose a different photo).
  */
 @Composable
 private fun CustomImageTile(

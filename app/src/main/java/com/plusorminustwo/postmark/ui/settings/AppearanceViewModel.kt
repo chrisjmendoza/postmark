@@ -10,12 +10,15 @@ import com.plusorminustwo.postmark.data.preferences.ChatBackgroundPreferenceRepo
 import com.plusorminustwo.postmark.data.preferences.DynamicColorPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.FontFamilyPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.ThemePreferenceRepository
+import com.plusorminustwo.postmark.domain.customization.BackgroundPlacement
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
 import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
+import com.plusorminustwo.postmark.ui.components.PlacementRequest
 import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.FontFamilyPreference
 import com.plusorminustwo.postmark.ui.theme.ThemePreference
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.File
@@ -88,15 +91,63 @@ class AppearanceViewModel @Inject constructor(
     fun setChatBackground(id: String?) =
         applyGlobalBackground(ChatBackgrounds.toGlobalPreferenceId(id))
 
+    // ── Placement editor ──────────────────────────────────────────────────────
+
+    /** A pending placement-editor request, or null when the editor is closed. */
+    private val _placementRequest = MutableStateFlow<PlacementRequest?>(null)
+    val placementRequest: StateFlow<PlacementRequest?> = _placementRequest
+
     /**
-     * Picks up a gallery image: copies + downscales it into app storage, then sets the
-     * resulting `image:<fileName>` id as the global default. A save failure is a silent
-     * no-op beyond the store's own log (v1-simple).
+     * Opens the placement editor for a freshly-picked gallery [uri]. Reads its oriented size
+     * (silent no-op if unreadable — the store logs it) and opens on [BackgroundPlacement.FILL].
      */
-    fun setImageBackground(uri: Uri) {
+    fun beginPlacementForPick(uri: Uri) {
         viewModelScope.launch {
-            val id = imageStore.save(uri) ?: return@launch
-            applyGlobalBackground(id)
+            val (w, h) = imageStore.orientedSize(uri) ?: return@launch
+            _placementRequest.value = PlacementRequest(
+                model = uri, imageWidth = w, imageHeight = h,
+                initial = BackgroundPlacement.FILL, sourceUri = uri, adjustId = null
+            )
+        }
+    }
+
+    /**
+     * Re-opens the editor for the CURRENT global image background to adjust its placement. A
+     * no-op unless the global default is an image id; opens on the stored placement, or
+     * [BackgroundPlacement.FILL] for a legacy image with no sidecar.
+     */
+    fun beginPlacementForAdjust() {
+        val id = chatBackgroundRepo.backgroundId.value ?: return
+        if (!ChatBackgrounds.isImageId(id)) return
+        viewModelScope.launch {
+            val srcFile = imageStore.srcFileFor(id) ?: return@launch
+            val (w, h) = imageStore.sourceSize(srcFile) ?: return@launch
+            _placementRequest.value = PlacementRequest(
+                model = srcFile, imageWidth = w, imageHeight = h,
+                initial = imageStore.placementFor(id) ?: BackgroundPlacement.FILL,
+                sourceUri = null, adjustId = id
+            )
+        }
+    }
+
+    /** Dismisses the placement editor without changing the background. */
+    fun cancelPlacement() { _placementRequest.value = null }
+
+    /**
+     * Bakes [p] over the editor viewport and applies the result as the global default: a fresh
+     * save for a pick, or a re-bake for an adjust. The existing [applyGlobalBackground]
+     * garbage-collects the previous image. A save failure just closes the editor.
+     */
+    fun confirmPlacement(p: BackgroundPlacement, vw: Int, vh: Int) {
+        val request = _placementRequest.value ?: return
+        viewModelScope.launch {
+            val newId = when {
+                request.sourceUri != null -> imageStore.saveWithPlacement(request.sourceUri, p, vw, vh)
+                request.adjustId != null -> imageStore.rebakeWithPlacement(request.adjustId, p, vw, vh)
+                else -> null
+            }
+            if (newId != null) applyGlobalBackground(newId)
+            _placementRequest.value = null
         }
     }
 

@@ -231,6 +231,7 @@ Second round of device feedback. REVISED DECISIONS:
 - [x] `image:<fileName>` id codec (pure, in ChatBackgrounds) + resolution fallback tests.
 - [x] ChatBackgroundImageStore (@Singleton): save(uri)→id (downscale/copy on IO),
       fileFor, delete; orphan cleanup via pure decision fn + ThreadDao usage query.
+      (save(uri) superseded 2026-07-18 by the placement flow — see Phase L.)
 - [x] Pickers: "From gallery" tile in both dialog variants; PickVisualMedia launched from
       host screens (ContactDetail, Appearance); wire ViewModels.
 - [x] ThreadScreen: Coil image + scrim behind LazyColumn for image: ids; missing file →
@@ -240,6 +241,22 @@ Second round of device feedback. REVISED DECISIONS:
 ### Phase K — v2 review & docs  [status: DONE]
 - [x] /code-review high over the v2 diff; fix confirmed findings.
 - [x] BRIEFING.md + docs/CHANGELOG.md entries; update this doc's statuses.
+
+### Phase L — image background EXIF fix + placement editor  [status: DONE, pending on-device test]
+Spec: `docs/fable-bg-placement-spec.md` (decision-complete, bake-at-accept design).
+- [x] EXIF orientation applied on save (`decodeOriented`, mirrors MmsManagerWrapper) —
+      fixes portrait picks rendering sideways.
+- [x] `domain/customization/BackgroundPlacement.kt`: placement model + codec +
+      `BackgroundPlacementMath` (fill/fit/min-zoom, gesture apply, center clamp,
+      visible-rect, bake mapping, editor transform). `BackgroundPlacementTest` (10 cases).
+- [x] Store: `saveWithPlacement` / `rebakeWithPlacement` bake the placement into the
+      displayed JPEG (file trio `bg_<t>.jpg` + `.src.jpg` + `.placement.txt`; id format
+      and ThreadScreen render path unchanged); `delete` removes the trio.
+- [x] `ui/components/BackgroundPlacementEditor.kt`: full-screen pan/pinch editor
+      (Fit / Fill / Cancel / Set background) shown before anything is saved.
+- [x] Adjust-or-replace: current-image tile → "Adjust placement" (lossless re-bake from
+      kept source) / "Choose a different photo"; both host screens + ViewModels mirrored.
+- [x] `./gradlew test` green.
 
 ## Agent log
 - 2026-07-17 Fable: explored codebase (Explore/sonnet), wrote this spec. Implementation not started.
@@ -952,3 +969,8 @@ Second round of device feedback. REVISED DECISIONS:
   AppAccentTest passes unchanged (black-box). Left the dead PostmarkColors/LocalPostmarkColors
   block alone (recorded owner decision). `./gradlew test`: 735 passed, 0 failed.
   `compileDebugAndroidTestSources`: clean. `./gradlew assembleDebug`: BUILD SUCCESSFUL.
+- 2026-07-18 Fable+Opus: Phase L. Chris reported a 3000x4000 portrait pick rendering as
+  landscape with no placement control. Fable diagnosed (EXIF rotation dropped on re-encode)
+  and wrote `docs/fable-bg-placement-spec.md`; an Opus agent implemented it verbatim; Fable
+  reviewed the diff (faithful, no deviations). Bake-at-accept design keeps ThreadScreen
+  untouched. `./gradlew test`: green incl. new BackgroundPlacementTest (10 cases).

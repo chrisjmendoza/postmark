@@ -32,6 +32,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
 import com.plusorminustwo.postmark.ui.components.AccentColorDialog
+import com.plusorminustwo.postmark.ui.components.BackgroundPlacementEditor
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundDialog
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundPreview
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundThumbnail
@@ -66,14 +67,16 @@ fun AppearanceScreen(
 
     val isDarkTheme = isAppInDarkTheme()
     var showChatBackgroundDialog by remember { mutableStateOf(false) }
+    var showImageOptions by remember { mutableStateOf(false) }
     var showAppAccentDialog by remember { mutableStateOf(false) }
+    val placementRequest by viewModel.placementRequest.collectAsState()
 
     // Android Photo Picker for a custom global chat-background image (Jetpack-backed,
-    // works down to minSdk 26). A save failure is a silent no-op (see setImageBackground).
+    // works down to minSdk 26). On a result the placement editor opens before saving.
     val backgroundImagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null) viewModel.setImageBackground(uri)
+        if (uri != null) viewModel.beginPlacementForPick(uri)
     }
 
     if (showChatBackgroundDialog) {
@@ -98,7 +101,48 @@ fun AppearanceScreen(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                 )
             },
+            onCurrentImageOptions = {
+                showChatBackgroundDialog = false
+                showImageOptions = true
+            },
             onDismiss = { showChatBackgroundDialog = false }
+        )
+    }
+
+    // ── Background photo options (adjust placement / choose a different photo) ──
+    if (showImageOptions) {
+        AlertDialog(
+            onDismissRequest = { showImageOptions = false },
+            title = { Text("Background photo") },
+            text = {
+                Column {
+                    TextButton(onClick = {
+                        showImageOptions = false
+                        viewModel.beginPlacementForAdjust()
+                    }) { Text("Adjust placement") }
+                    TextButton(onClick = {
+                        showImageOptions = false
+                        backgroundImagePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }) { Text("Choose a different photo") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showImageOptions = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // ── Placement editor ──────────────────────────────────────────────────────
+    placementRequest?.let { req ->
+        BackgroundPlacementEditor(
+            model = req.model,
+            imageWidth = req.imageWidth,
+            imageHeight = req.imageHeight,
+            initial = req.initial,
+            onAccept = { p, vw, vh -> viewModel.confirmPlacement(p, vw, vh) },
+            onCancel = { viewModel.cancelPlacement() }
         )
     }
 
