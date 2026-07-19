@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.domain.customization
 
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -54,16 +55,31 @@ object ContactPalette {
     data class AccentColorPair(val containerArgb: Int, val contentArgb: Int)
 
     /**
-     * Derives one accented bubble's container/content pair from a raw [accentArgb]:
-     * the container is the accent guarded away from [backgroundArgb] by
-     * [ColorMath.adjustAccentForBackground] (the identity for every preset — proven in
-     * ColorMathTest — so un-customized/preset colors are unchanged), and the content is
-     * white/black-by-contrast against that (possibly-nudged) container. The single owner
-     * of "what an accented bubble looks like", shared by [resolveThreadBubbleColors] and
+     * Derives one accented bubble's container/content pair from a raw [accentArgb]: the
+     * container is the accent guarded away from the background it will sit on, and the content
+     * is white/black-by-contrast against that (possibly-nudged) container. The single owner of
+     * "what an accented bubble looks like", shared by [resolveThreadBubbleColors] and
      * PostmarkTheme's global app accent.
+     *
+     * When [backgroundStopsArgb] is non-empty (a built-in chat-background GRADIENT's stops for
+     * the current theme variant) the container is guarded against those stops via
+     * [ColorMath.adjustAccentForBackgroundStops]; otherwise it's guarded against the single
+     * [backgroundArgb] (the plain theme background, or a custom-image background) via
+     * [ColorMath.adjustAccentForBackground] — the identity for every preset against the plain
+     * theme backgrounds (proven in ColorMathTest), so un-customized/preset colors on an
+     * un-backgrounded thread are unchanged.
      */
-    fun deriveAccentPair(accentArgb: Int, backgroundArgb: Int, isDark: Boolean): AccentColorPair {
-        val container = ColorMath.adjustAccentForBackground(accentArgb, backgroundArgb)
+    fun deriveAccentPair(
+        accentArgb: Int,
+        backgroundArgb: Int,
+        isDark: Boolean,
+        backgroundStopsArgb: List<Int> = emptyList()
+    ): AccentColorPair {
+        val container =
+            if (backgroundStopsArgb.isNotEmpty())
+                ColorMath.adjustAccentForBackgroundStops(accentArgb, backgroundStopsArgb)
+            else
+                ColorMath.adjustAccentForBackground(accentArgb, backgroundArgb)
         return AccentColorPair(container, onBubbleContentColor(container, isDark))
     }
 
@@ -87,6 +103,11 @@ object ContactPalette {
      * the vivid accent, so the sent CONTENT falls back to [appAccentOnPrimaryContainerArgb]
      * (its matching white/black-by-contrast color) to stay legible — the sole exception to
      * "null = theme default".
+     *
+     * [backgroundStopsArgb] carries the active chat background the bubbles will sit on: a
+     * built-in gradient's stops for the current theme variant guard the containers away from
+     * the gradient (so a sent bubble can't blend into it); empty (no background, or a custom
+     * image) falls back to guarding the single [backgroundArgb]. Both directions use it.
      */
     fun resolveThreadBubbleColors(
         accentColorArgb: Int?,
@@ -94,10 +115,11 @@ object ContactPalette {
         appAccentArgb: Int?,
         appAccentOnPrimaryContainerArgb: Int,
         isDark: Boolean,
-        backgroundArgb: Int
+        backgroundArgb: Int,
+        backgroundStopsArgb: List<Int> = emptyList()
     ): ThreadBubbleColors {
-        val received = accentColorArgb?.let { deriveAccentPair(it, backgroundArgb, isDark) }
-        val sent = sentColorArgb?.let { deriveAccentPair(it, backgroundArgb, isDark) }
+        val received = accentColorArgb?.let { deriveAccentPair(it, backgroundArgb, isDark, backgroundStopsArgb) }
+        val sent = sentColorArgb?.let { deriveAccentPair(it, backgroundArgb, isDark, backgroundStopsArgb) }
         val sentContentFallback =
             if (appAccentArgb != null && sentColorArgb == null) appAccentOnPrimaryContainerArgb else null
         return ThreadBubbleColors(
@@ -106,6 +128,53 @@ object ContactPalette {
             sentContainerArgb = sent?.containerArgb,
             sentContentArgb = sent?.contentArgb ?: sentContentFallback
         )
+    }
+
+    // ── Bubble depth gradient (Phase FB2) ────────────────────────────────────────
+
+    /** Nominal HSV-value nudge for each bubble-gradient stop: the top is +[this], the
+     *  bottom −[this]. Kept small so a bubble reads as gently lit, not striped. */
+    const val BUBBLE_GRADIENT_V_DELTA = 0.06f
+    private const val BUBBLE_GRADIENT_V_STEP = 0.01f
+    private const val CONTENT_CONTRAST_FLOOR = 4.5
+
+    /**
+     * Two vertical-gradient stops — top then bottom — that give a solid bubble
+     * [containerArgb] a subtle top-lit look without changing its hue or breaking its
+     * legibility. The top raises the container's HSV *value* by [BUBBLE_GRADIENT_V_DELTA],
+     * the bottom lowers it by the same, so the fill reads as gently lit rather than flat.
+     * Callers wrap each stop in `Color(...)` and build a `Brush.verticalGradient`.
+     *
+     * Each stop is guarded so the container's own content color ([onBubbleContentColor],
+     * white/black-by-contrast) still clears the [CONTENT_CONTRAST_FLOOR] WCAG floor against
+     * it: a full-delta stop that would drop below the floor is walked back toward the base
+     * container in [BUBBLE_GRADIENT_V_STEP] steps until it clears. The base container itself
+     * always clears it (white/black-by-contrast is >= 4.58 for any opaque color), so this
+     * always terminates. Only a few borderline mid-tone presets ever hit the guard, and only
+     * on one of the two stops, so the gradient stays perceptible everywhere. Hue and
+     * saturation are always preserved. Same packed-ARGB convention as the rest of this object.
+     */
+    fun bubbleGradientStops(containerArgb: Int): List<Int> {
+        val (h, s, v) = ColorMath.argbToHsv(containerArgb)
+        val content = onBubbleContentColor(containerArgb, isDark = true)
+        return listOf(
+            legibleGradientStop(h, s, v, BUBBLE_GRADIENT_V_DELTA, content),
+            legibleGradientStop(h, s, v, -BUBBLE_GRADIENT_V_DELTA, content)
+        )
+    }
+
+    /** One gradient stop at HSV ([h],[s],[v]+[delta]), its value-nudge walked back toward 0
+     *  in [BUBBLE_GRADIENT_V_STEP] steps until [contentArgb] clears [CONTENT_CONTRAST_FLOOR]
+     *  against it (the base container, delta 0, always clears — so this terminates). */
+    private fun legibleGradientStop(h: Float, s: Float, v: Float, delta: Float, contentArgb: Int): Int {
+        val sign = if (delta >= 0f) 1f else -1f
+        var magnitude = abs(delta)
+        while (magnitude > 0f) {
+            val stop = ColorMath.hsvToArgb(h, s, (v + sign * magnitude).coerceIn(0f, 1f))
+            if (contrastRatio(stop, contentArgb) >= CONTENT_CONTRAST_FLOOR) return stop
+            magnitude -= BUBBLE_GRADIENT_V_STEP
+        }
+        return ColorMath.hsvToArgb(h, s, v)
     }
 
     /** WCAG relative luminance (0..1) of an opaque ARGB color. */

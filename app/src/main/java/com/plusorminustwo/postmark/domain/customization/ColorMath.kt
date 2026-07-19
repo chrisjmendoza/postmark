@@ -87,34 +87,67 @@ object ColorMath {
     /** Formats an ARGB Int as uppercase "#RRGGBB"; alpha is ignored. */
     fun formatHexColor(argb: Int): String = "#%06X".format(argb and 0xFFFFFF)
 
-    // ── Legibility guard against the theme background ───────────────────────────
+    // ── Legibility guard against the chat background ────────────────────────────
 
+    /** Anti-vanish floor for a single, EXTREME background — the near-black/near-white
+     *  theme background, or a custom image whose content is unknowable. Deliberately low:
+     *  it only stops a custom pick from disappearing into the screen (e.g. a near-white
+     *  pick in light theme), not to guarantee text-level legibility. Every [ContactPalette]
+     *  preset already clears it, so presets pass through byte-identical. */
     private const val MIN_BACKGROUND_CONTRAST = 1.3
+
+    /** Separation floor for a built-in chat-background GRADIENT (Phase TP). Its stops are
+     *  saturated mid-tones that can share the bubble's own hue (e.g. a violet sent bubble on
+     *  the Deep Plum gradient), so a much stronger floor than [MIN_BACKGROUND_CONTRAST] is
+     *  needed for the bubble to read as a distinct object rather than blend in. 2.0 is the
+     *  highest round floor every [ThemePresets] bubble can actually REACH against both stops
+     *  of its paired gradient in both theme variants while only nudging HSV value and
+     *  preserving hue (pinned in ColorMathTest); the tightest case — Sunset's violet sent
+     *  bubble on Deep Plum's brighter dark stop — tops out at ~2.69 at full value, so 2.0
+     *  leaves headroom. */
+    private const val MIN_GRADIENT_CONTRAST = 2.0
+
     private const val VALUE_STEP = 0.04f
     private const val MAX_STEPS = 30
 
     /**
-     * Nudges [accentArgb]'s HSV value (lightness) away from [backgroundArgb]'s
-     * luminance, in bounded [VALUE_STEP] increments, until the WCAG contrast ratio
-     * between the two is >= [MIN_BACKGROUND_CONTRAST]. This is a much lower bar than
-     * [ContactPalette]'s own content-vs-container floor — it exists only to stop a
-     * custom accent from visually vanishing into the chat background/screen (e.g. a
-     * near-white pick in light theme), not to guarantee text-level legibility.
-     *
-     * Accents that already clear the bar are returned completely unchanged (no HSV
-     * round-trip at all) — this is what keeps every [ContactPalette] preset
-     * byte-identical against both theme backgrounds. Darkens when [backgroundArgb]
-     * is the lighter of the two (its luminance >= 0.5); lightens otherwise.
-     * [MAX_STEPS] bounds the walk so this always terminates; if the cap is somehow
-     * hit (accent and background sit on opposite sides of the same ~0.5 luminance
-     * midpoint with no headroom left in the accent's hue/saturation) the last
-     * candidate is returned rather than looping forever.
+     * Single-background entry point: nudges [accentArgb]'s HSV value away from
+     * [backgroundArgb]'s luminance until their WCAG contrast clears [MIN_BACKGROUND_CONTRAST].
+     * Used for the plain theme background and for custom-IMAGE chat backgrounds (image pixels
+     * are unknowable, so the theme background is the best available proxy). Accents that
+     * already clear the bar are returned completely unchanged (no HSV round-trip) — this is
+     * what keeps every [ContactPalette] preset byte-identical against both theme backgrounds.
+     * See [adjustAccentToClearStops] for the walk itself.
      */
-    fun adjustAccentForBackground(accentArgb: Int, backgroundArgb: Int): Int {
-        if (ContactPalette.contrastRatio(accentArgb, backgroundArgb) >= MIN_BACKGROUND_CONTRAST) {
-            return accentArgb
-        }
-        val darken = ContactPalette.relativeLuminance(backgroundArgb) >= 0.5
+    fun adjustAccentForBackground(accentArgb: Int, backgroundArgb: Int): Int =
+        adjustAccentToClearStops(accentArgb, listOf(backgroundArgb), MIN_BACKGROUND_CONTRAST)
+
+    /**
+     * Built-in chat-background-gradient counterpart of [adjustAccentForBackground]: nudges
+     * [accentArgb] away until it clears the stronger [MIN_GRADIENT_CONTRAST] against EVERY
+     * stop in [backgroundStopsArgb] — a gradient's stops for the CURRENT theme variant (dark
+     * stops in dark theme). Empty stops ("no background") return [accentArgb] unchanged. The
+     * curated gradients keep their two stops close together and on one side of mid-grey, so a
+     * single value walk (direction chosen from the stops' average luminance) clears both at
+     * once while preserving hue. This is the guard that stops a sent bubble from blending into
+     * its chat-background gradient.
+     */
+    fun adjustAccentForBackgroundStops(accentArgb: Int, backgroundStopsArgb: List<Int>): Int =
+        if (backgroundStopsArgb.isEmpty()) accentArgb
+        else adjustAccentToClearStops(accentArgb, backgroundStopsArgb, MIN_GRADIENT_CONTRAST)
+
+    /**
+     * Walks [accentArgb]'s HSV *value* (lightness) in bounded [VALUE_STEP] increments — away
+     * from [stops]' average luminance (darkening when they're the lighter side, lightening
+     * when they're the darker side) — until its WCAG contrast clears [floor] against EVERY
+     * stop, preserving hue and saturation. Accents that already clear the floor against all
+     * stops are returned completely unchanged (no HSV round-trip). [MAX_STEPS] bounds the walk
+     * so it always terminates; if the value extreme is reached without clearing (no headroom
+     * left in the accent's hue/saturation) the last candidate is returned rather than looping.
+     */
+    private fun adjustAccentToClearStops(accentArgb: Int, stops: List<Int>, floor: Double): Int {
+        if (stops.all { ContactPalette.contrastRatio(accentArgb, it) >= floor }) return accentArgb
+        val darken = stops.map { ContactPalette.relativeLuminance(it) }.average() >= 0.5
         val (hue, sat, initialValue) = argbToHsv(accentArgb)
         var value = initialValue
         var candidate = accentArgb
@@ -122,7 +155,7 @@ object ColorMath {
             value = if (darken) (value - VALUE_STEP).coerceAtLeast(0f)
             else (value + VALUE_STEP).coerceAtMost(1f)
             candidate = hsvToArgb(hue, sat, value)
-            if (ContactPalette.contrastRatio(candidate, backgroundArgb) >= MIN_BACKGROUND_CONTRAST) break
+            if (stops.all { ContactPalette.contrastRatio(candidate, it) >= floor }) break
         }
         return candidate
     }

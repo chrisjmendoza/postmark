@@ -204,4 +204,68 @@ class ColorMathTest {
         assertNotEquals(lightThemeBg, lightResult)
         assertTrue(ContactPalette.contrastRatio(lightResult, lightThemeBg) >= 1.3)
     }
+
+    // ── adjustAccentForBackgroundStops (chat-background gradient guard) ───────────
+    // The gradient separation floor is ColorMath's private MIN_GRADIENT_CONTRAST (= 2.0),
+    // the value ThemePresetsTest pins the whole preset×background matrix to.
+    private val gradientFloor = 2.0
+    // Deep Plum's dark-theme stops (Sunset's paired background) — the owner's real case.
+    private val deepPlumDarkStops = listOf(0xFF561C72.toInt(), 0xFF3D1452.toInt())
+
+    private fun hueClose(a: Float, b: Float, tolerance: Float): Boolean {
+        val d = abs(a - b) % 360f
+        return minOf(d, 360f - d) <= tolerance
+    }
+
+    @Test
+    fun `empty stops leave the accent unchanged`() {
+        for (color in ContactPalette.colors) {
+            assertEquals(color.argb, ColorMath.adjustAccentForBackgroundStops(color.argb, emptyList()))
+        }
+    }
+
+    @Test
+    fun `accent already clear of every stop passes through unchanged`() {
+        val coral = 0xFFF2694B.toInt() // sunset contact — bright, well above the dark plum stops
+        assertTrue(deepPlumDarkStops.all { ContactPalette.contrastRatio(coral, it) >= gradientFloor })
+        assertEquals(coral, ColorMath.adjustAccentForBackgroundStops(coral, deepPlumDarkStops))
+    }
+
+    @Test
+    fun `blending accent is nudged to clear the floor against both stops, hue preserved`() {
+        // Sunset's violet sent bubble on Deep Plum's dark stops: near-identical hue, ~1.83
+        // contrast against the brighter stop — the reported "sent bubble blends in" bug.
+        val violet = 0xFF7C3AC9.toInt()
+        assertTrue(
+            "baseline should be below the floor for the nudge to matter",
+            deepPlumDarkStops.any { ContactPalette.contrastRatio(violet, it) < gradientFloor }
+        )
+
+        val adjusted = ColorMath.adjustAccentForBackgroundStops(violet, deepPlumDarkStops)
+        assertNotEquals(violet, adjusted)
+        for (stop in deepPlumDarkStops) {
+            assertTrue(
+                "adjusted ${ColorMath.formatHexColor(adjusted)} vs ${ColorMath.formatHexColor(stop)} below floor",
+                ContactPalette.contrastRatio(adjusted, stop) >= gradientFloor
+            )
+        }
+        // Lightened away from the dark stops, with hue preserved (value-only nudge).
+        assertTrue(ContactPalette.relativeLuminance(adjusted) > ContactPalette.relativeLuminance(violet))
+        val (hueBefore, _, _) = ColorMath.argbToHsv(violet)
+        val (hueAfter, _, _) = ColorMath.argbToHsv(adjusted)
+        assertTrue("hue drifted $hueBefore -> $hueAfter", hueClose(hueBefore, hueAfter, 3f))
+    }
+
+    @Test
+    fun `light stops darken a too-close accent to clear the floor`() {
+        // A deep bubble against a pale gradient should be pushed DARKER, not lighter.
+        val stops = listOf(0xFFF0E3F6.toInt(), 0xFFDFC5EC.toInt()) // deep plum light
+        val muddy = 0xFFB08A8A.toInt() // a dusty rose that sits too close to the pale stops
+        assertTrue(stops.any { ContactPalette.contrastRatio(muddy, it) < gradientFloor })
+        val adjusted = ColorMath.adjustAccentForBackgroundStops(muddy, stops)
+        assertTrue(ContactPalette.relativeLuminance(adjusted) < ContactPalette.relativeLuminance(muddy))
+        for (stop in stops) {
+            assertTrue(ContactPalette.contrastRatio(adjusted, stop) >= gradientFloor)
+        }
+    }
 }

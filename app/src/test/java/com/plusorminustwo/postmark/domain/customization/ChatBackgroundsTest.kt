@@ -79,7 +79,9 @@ class ChatBackgroundsTest {
     // Reuses ContactPalette.relativeLuminance (Phase B) rather than duplicating the
     // WCAG math here. Phase FB widened + shifted these bands after on-device testing
     // (S24 Ultra) showed v1's <2%/>79% bands were "barely noticeable" against the
-    // theme background — the new bands target a visible, obviously-colored gradient.
+    // theme background. Phase FB2 pulled the DARK band back down to [0.018, 0.045]
+    // after Phase FB's ~0.04–0.09 band read as a "loud" wall of color on OLED — the
+    // new band is a deep-but-not-bright colored wallpaper. The light band is unchanged.
 
     @Test
     fun `every dark-variant stop stays in the visible dark luminance band`() {
@@ -87,8 +89,8 @@ class ChatBackgroundsTest {
             for (argb in background.darkColorsArgb) {
                 val luminance = ContactPalette.relativeLuminance(argb)
                 assertTrue(
-                    "${background.id}: dark stop luminance $luminance not in [0.02, 0.12]",
-                    luminance in 0.02..0.12
+                    "${background.id}: dark stop luminance $luminance not in [0.018, 0.045]",
+                    luminance in 0.018..0.045
                 )
             }
         }

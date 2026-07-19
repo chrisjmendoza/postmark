@@ -28,11 +28,17 @@ data class ChatBackground(
  * Phase FB recalibration: v1's stops were calibrated to stay within ~8% luminance of
  * the theme background (#1C1C1E dark / #F2F2F7 light, see ui/theme/Theme.kt) — on
  * device (S24 Ultra, dark theme, Dark Mauve) that read as "barely noticeable" next to
- * the ~0.008-luminance OLED background. Dark-variant stops now sit at ~0.04–0.09
- * relative luminance with strong, obviously-hued saturation (the feel of a deep
- * colored wallpaper, not a tinted black); light-variant stops are clear pastels at
- * ~0.61–0.80. IDs and display names are unchanged from v1 — they're already persisted
- * per-thread on-device. See
+ * the ~0.008-luminance OLED background.
+ *
+ * Phase FB2 re-recalibration: Phase FB over-corrected — its dark stops at ~0.04–0.09
+ * relative luminance read as a "loud" wall of color on OLED (owner, S24 Ultra, dark
+ * theme, Dark Mauve: a bright magenta background). The middle ground: dark-variant
+ * stops now sit at ~0.02–0.04 relative luminance (top brighter, bottom darker, ~0.019
+ * luminance delta so each still reads as a gradient). The retarget dropped HSV *value*
+ * substantially while holding hue and slightly raising saturation, so the result is a
+ * DEEP colored wallpaper — darker, not grayer. Light-variant stops are unchanged from
+ * Phase FB (clear pastels at ~0.61–0.80, unverified on-device). IDs and display names
+ * are unchanged from v1 — they're already persisted per-thread on-device. See
  * [ChatBackgroundsTest][com.plusorminustwo.postmark.domain.customization.ChatBackgroundsTest]
  * for the luminance-band + gradient-delta guards.
  */
@@ -49,42 +55,42 @@ object ChatBackgrounds {
     private val DeepNavy = ChatBackground(
         id = "deep_navy",
         displayName = "Deep Navy",
-        darkColorsArgb = listOf(0xFF2C4F97.toInt(), 0xFF203B6F.toInt()),
+        darkColorsArgb = listOf(0xFF1B366E.toInt(), 0xFF12274D.toInt()),
         lightColorsArgb = listOf(0xFFE0E8F6.toInt(), 0xFFBFCEED.toInt())
     )
 
     private val DeepForest = ChatBackground(
         id = "deep_forest",
         displayName = "Deep Forest",
-        darkColorsArgb = listOf(0xFF1B5F32.toInt(), 0xFF144524.toInt()),
+        darkColorsArgb = listOf(0xFF0F4120.toInt(), 0xFF0B2E17.toInt()),
         lightColorsArgb = listOf(0xFFCEEFD9.toInt(), 0xFF99DDAF.toInt())
     )
 
     private val DeepPlum = ChatBackground(
         id = "deep_plum",
         displayName = "Deep Plum",
-        darkColorsArgb = listOf(0xFF792E9E.toInt(), 0xFF592274.toInt()),
+        darkColorsArgb = listOf(0xFF561C72.toInt(), 0xFF3D1452.toInt()),
         lightColorsArgb = listOf(0xFFF0E3F6.toInt(), 0xFFDFC5EC.toInt())
     )
 
     private val WarmCharcoal = ChatBackground(
         id = "warm_charcoal",
         displayName = "Warm Charcoal",
-        darkColorsArgb = listOf(0xFF704B25.toInt(), 0xFF52361B.toInt()),
+        darkColorsArgb = listOf(0xFF4E3216.toInt(), 0xFF382310.toInt()),
         lightColorsArgb = listOf(0xFFF1E5DA.toInt(), 0xFFE2C9B1.toInt())
     )
 
     private val MidnightTeal = ChatBackground(
         id = "midnight_teal",
         displayName = "Midnight Teal",
-        darkColorsArgb = listOf(0xFF1B5B56.toInt(), 0xFF13423F.toInt()),
+        darkColorsArgb = listOf(0xFF103F3B.toInt(), 0xFF0B2D2B.toInt()),
         lightColorsArgb = listOf(0xFFCCEEEB.toInt(), 0xFF91DAD4.toInt())
     )
 
     private val DarkMauve = ChatBackground(
         id = "dark_mauve",
         displayName = "Dark Mauve",
-        darkColorsArgb = listOf(0xFF8C2F5E.toInt(), 0xFF672245.toInt()),
+        darkColorsArgb = listOf(0xFF651D41.toInt(), 0xFF48142F.toInt()),
         lightColorsArgb = listOf(0xFFF4E3EB.toInt(), 0xFFE8C4D6.toInt())
     )
 

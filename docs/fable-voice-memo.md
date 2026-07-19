@@ -81,7 +81,11 @@ off as they land. Implementation is delegated to Sonnet agents; Fable reviews.
   and the controls. Doubles as the visible symptom for a dead mic (item 1's failure now
   renders as a flatline instead of being discovered after sending).
   - [x] Waveform in preview/pending chips (recorded memos — live capture, no decode)
-  - [ ] Waveform in bubble chips for sent/received audio (needs a decode pass — future)
+  - [x] Waveform in bubble chips for sent/received audio (2026-07-18) — `rememberAudioWaveform`
+    decodes the amplitude shape off the file (MediaExtractor/MediaCodec, one cached decode per
+    uri, IO dispatcher); bubbles render it **display-only** (`WaveformBars`, no gesture detectors —
+    compose-gesture-conflict rule), scrubbing stays reply-bar-only. Flat-Slider fallback on decode
+    failure.
 - [x] Received audio bubbles said "Voice memo" until first play — `rememberAudioDurationMs`
   now seeds from a file-scope `LruCache` (correct label on the first frame after any
   prior read) and the bubble chip passes `fallbackDurationMs`; one metadata read per uri,

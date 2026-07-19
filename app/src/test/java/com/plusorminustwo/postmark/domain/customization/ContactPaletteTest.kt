@@ -210,6 +210,61 @@ class ContactPaletteTest {
         assertNotEquals(darkThemeBg, r.sentContainerArgb)
     }
 
+    // ── bubbleGradientStops (Phase FB2 bubble depth) ─────────────────────────────
+    // Every accented bubble container in the app — the 12 ContactPalette presets and the
+    // 20 ThemePresets sent/contact colors — must keep its white/black content color legible
+    // (>= 4.5) against BOTH gradient stops, and the gradient must actually read as a gradient.
+
+    private val gradientContainers: List<Int> =
+        ContactPalette.colors.map { it.argb } +
+            ThemePresets.all.flatMap { listOf(it.sentArgb, it.contactArgb) }
+
+    @Test
+    fun `bubbleGradientStops returns exactly a top and bottom stop`() {
+        for (argb in gradientContainers) {
+            assertEquals("stops for ${ColorMath.formatHexColor(argb)}", 2, ContactPalette.bubbleGradientStops(argb).size)
+        }
+    }
+
+    @Test
+    fun `bubbleGradientStops preserves hue and saturation of the container`() {
+        for (argb in gradientContainers) {
+            val (h, s, _) = ColorMath.argbToHsv(argb)
+            for (stop in ContactPalette.bubbleGradientStops(argb)) {
+                val (hs, ss, _) = ColorMath.argbToHsv(stop)
+                // Only HSV value moves; hue/saturation survive within 8-bit quantization
+                // error (hue is quantization-sensitive for low-saturation colors, ~1.4° worst).
+                assertEquals("hue drift for ${ColorMath.formatHexColor(argb)}", h, hs, 2.5f)
+                assertEquals("saturation drift for ${ColorMath.formatHexColor(argb)}", s, ss, 0.02f)
+            }
+        }
+    }
+
+    @Test
+    fun `bubbleGradientStops keeps the content color above the 4point5 floor against both stops`() {
+        for (argb in gradientContainers) {
+            val content = ContactPalette.onBubbleContentColor(argb, isDark = true)
+            for (stop in ContactPalette.bubbleGradientStops(argb)) {
+                assertTrue(
+                    "${ColorMath.formatHexColor(argb)}: content contrast ${ContactPalette.contrastRatio(content, stop)} below 4.5",
+                    ContactPalette.contrastRatio(content, stop) >= 4.5
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `bubbleGradientStops top stop is lighter than the bottom stop by a perceptible margin`() {
+        for (argb in gradientContainers) {
+            val (top, bottom) = ContactPalette.bubbleGradientStops(argb)
+            val delta = ContactPalette.relativeLuminance(top) - ContactPalette.relativeLuminance(bottom)
+            assertTrue(
+                "${ColorMath.formatHexColor(argb)}: gradient luminance delta $delta not perceptible",
+                delta >= 0.02
+            )
+        }
+    }
+
     // ── contrastRatio sanity ─────────────────────────────────────────────────────
 
     @Test

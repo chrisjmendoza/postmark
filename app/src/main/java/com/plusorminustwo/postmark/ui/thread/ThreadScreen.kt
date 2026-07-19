@@ -168,6 +168,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -594,6 +595,19 @@ private fun ThreadContent(
     // Either, both, or neither may be set — unset sides leave MessageBubble on its
     // existing surfaceVariant/primaryContainer + ambient content color defaults.
     val isDarkTheme = isAppInDarkTheme()
+    // The chat background these bubbles will actually sit on (thread override → global →
+    // none), resolved up here because the bubble-color guard needs it. A built-in gradient
+    // contributes its stops for the CURRENT theme variant so the guard can push a bubble
+    // off a same-hue background (e.g. a violet sent bubble on Deep Plum); a custom image
+    // contributes no stops (its pixels are unknowable), so those threads fall back to
+    // guarding the plain theme background below. Remembered so it's rebuilt only on change.
+    val chatBackgroundId = uiState.thread?.chatBackgroundId ?: globalChatBackgroundId
+    val activeBackgroundStopsArgb: List<Int> = remember(chatBackgroundId, isDarkTheme) {
+        if (ChatBackgrounds.isImageId(chatBackgroundId)) emptyList()
+        else ChatBackgrounds.resolve(chatBackgroundId).let { bg ->
+            if (isDarkTheme) bg.darkColorsArgb else bg.lightColorsArgb
+        }
+    }
     // Phase H legibility guard: a free-form custom accent can land too close to the
     // theme background (e.g. a near-white pick in light theme) and effectively
     // vanish. Route both directions through adjustAccentForBackground first — it's
@@ -613,7 +627,7 @@ private fun ThreadContent(
     val appAccentOnPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
     val bubbleAccentColors = remember(
         uiState.thread?.accentColorArgb, uiState.thread?.sentColorArgb, isDarkTheme, backgroundArgb,
-        appAccentArgb, appAccentOnPrimaryContainer
+        activeBackgroundStopsArgb, appAccentArgb, appAccentOnPrimaryContainer
     ) {
         val resolved = ContactPalette.resolveThreadBubbleColors(
             accentColorArgb = uiState.thread?.accentColorArgb,
@@ -621,7 +635,8 @@ private fun ThreadContent(
             appAccentArgb = appAccentArgb,
             appAccentOnPrimaryContainerArgb = appAccentOnPrimaryContainer.toArgb(),
             isDark = isDarkTheme,
-            backgroundArgb = backgroundArgb
+            backgroundArgb = backgroundArgb,
+            backgroundStopsArgb = activeBackgroundStopsArgb
         )
         BubbleAccentColors(
             receivedContainer = resolved.receivedContainerArgb?.let { Color(it) },
@@ -631,13 +646,12 @@ private fun ThreadContent(
         )
     }
 
-    // Chat background: thread override falls back to the global default, then to None.
-    // A custom "image:" id (Phase J) resolves to a File and is rendered by Coil below;
-    // every built-in id resolves via ChatBackgrounds.resolve to a gradient Brush (Phase C).
-    // Both are remembered keyed on the id (+ theme) so they're built once per change,
-    // never per frame. Null on both paths means no background — un-customized threads
-    // (and a missing image file, e.g. after a restore) render pixel-identical.
-    val chatBackgroundId = uiState.thread?.chatBackgroundId ?: globalChatBackgroundId
+    // Chat background: `chatBackgroundId` (thread override → global default → None) was
+    // resolved above where the bubble-color guard needed it. A custom "image:" id (Phase J)
+    // resolves to a File and is rendered by Coil below; every built-in id resolves via
+    // ChatBackgrounds.resolve to a gradient Brush (Phase C). Both are remembered keyed on the
+    // id (+ theme) so they're built once per change, never per frame. Null on both paths means
+    // no background — un-customized threads (and a missing image file) render pixel-identical.
     val chatBackgroundImageFile = remember(chatBackgroundId) {
         ChatBackgrounds.resolveImageFile(chatBackgroundId, chatBackgroundFile)
     }
@@ -1590,6 +1604,16 @@ private fun MessageBubble(
         animationSpec = tween(durationMillis = if (isHighlighted) 150 else 600),
         label = "bubbleHighlight"
     )
+    // Phase FB2: give the flat container a subtle top-lit vertical gradient so bubbles
+    // read as gently lit rather than flat. remember keyed on the (rarely-changing) bubble
+    // color so scrolling and audio-position ticks never re-derive it — only the brief
+    // highlight animation recomputes, which is negligible.
+    val bubbleBrush = remember(bubbleColor) {
+        Brush.verticalGradient(ContactPalette.bubbleGradientStops(bubbleColor.toArgb()).map { Color(it) })
+    }
+    // Concrete content color for a contained audio chip (item 3): the message's own accent
+    // content when customized, else the ambient content color the text bubble also uses.
+    val chipContentColor = bubbleContentColor ?: LocalContentColor.current
 
     val alignment = if (message.isSent) Alignment.End else Alignment.Start
 
@@ -1720,7 +1744,7 @@ private fun MessageBubble(
             ) {
             Box(
                 modifier = Modifier
-                    .background(bubbleColor, bubbleShape(bubbleStyle, message.isSent, clusterPosition))
+                    .background(bubbleBrush, bubbleShape(bubbleStyle, message.isSent, clusterPosition))
                     .then(
                         // Tighter padding when an attachment fills the bubble edges.
                         if (message.attachments.isNotEmpty())
@@ -1744,7 +1768,9 @@ private fun MessageBubble(
                                     { { onVideoTap(att.uri) } } else null,
                                 audioPlayback = audioPlayback,
                                 onAudioPlayPause = onAudioPlayPause,
-                                onAudioSeek = onAudioSeek
+                                onAudioSeek = onAudioSeek,
+                                audioContainerColor = bubbleColor,
+                                audioContentColor = chipContentColor
                             )
                         } else {
                             // Multiple attachments — 2-column thumbnail grid for images/videos;
@@ -1777,14 +1803,20 @@ private fun MessageBubble(
                                     mimeType = att.mimeType,
                                     audioPlayback = audioPlayback,
                                     onAudioPlayPause = onAudioPlayPause,
-                                    onAudioSeek = onAudioSeek
+                                    onAudioSeek = onAudioSeek,
+                                    audioContainerColor = bubbleColor,
+                                    audioContentColor = chipContentColor
                                 )
                             }
                         }
                         // Show caption text below the attachment if present.
                         if (message.body.isNotEmpty()) {
                             val fontScale   = LocalBubbleFontScale.current
-                            val linkColor   = MaterialTheme.colorScheme.primary
+                            // On a custom-colored bubble, the default link blue/purple is
+                            // near-invisible — use the bubble's own content color instead
+                            // (linkifyText still underlines it, iMessage-style). Default
+                            // bubbles keep the primary link color unchanged.
+                            val linkColor   = bubbleContentColor ?: MaterialTheme.colorScheme.primary
                             val textColor   = bubbleContentColor ?: LocalContentColor.current
                             val baseStyle   = MaterialTheme.typography.bodyMedium
                             val ctx         = LocalContext.current
@@ -1804,7 +1836,11 @@ private fun MessageBubble(
                 } else {
                     // Plain SMS bubble — linkify URLs and phone numbers.
                     val fontScale  = LocalBubbleFontScale.current
-                    val linkColor  = MaterialTheme.colorScheme.primary
+                    // On a custom-colored bubble, the default link blue/purple is
+                    // near-invisible — use the bubble's own content color instead
+                    // (linkifyText still underlines it, iMessage-style). Default
+                    // bubbles keep the primary link color unchanged.
+                    val linkColor  = bubbleContentColor ?: MaterialTheme.colorScheme.primary
                     val textColor  = bubbleContentColor ?: LocalContentColor.current
                     val baseStyle  = MaterialTheme.typography.bodyMedium
                     val ctx        = LocalContext.current
@@ -1974,7 +2010,11 @@ private fun MmsAttachment(
     // Shared thread-wide audio player (perf-analysis #30); only the audio branch uses it.
     audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
     onAudioPlayPause: (String) -> Unit = {},
-    onAudioSeek: (String, Float) -> Unit = { _, _ -> }
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> },
+    // Bubble accent pair for the audio chip (item 3) — only the audio branch uses these.
+    // Default to the theme secondary role so non-bubble callers keep the old look.
+    audioContainerColor: Color = MaterialTheme.colorScheme.secondaryContainer,
+    audioContentColor: Color = MaterialTheme.colorScheme.onSecondaryContainer
 ) {
     when {
         // ── Image ──────────────────────────────────────────────────────────────
@@ -2096,7 +2136,13 @@ private fun MmsAttachment(
                 onSeek = onAudioSeek,
                 // One metadata read per visible chip, once ever per uri (cached), so the
                 // real length shows before first play; scrolling past again is free.
-                fallbackDurationMs = rememberAudioDurationMs(uri)
+                fallbackDurationMs = rememberAudioDurationMs(uri),
+                // Item 4: real amplitude waveform decoded lazily off the audio file (once
+                // per uri, cached), so both sent and received audio bubbles show a real
+                // waveform instead of a flat bar. Null while decoding / on failure → Slider.
+                waveform = rememberAudioWaveform(uri),
+                containerColor = audioContainerColor,
+                contentColor = audioContentColor
             )
         }
 
@@ -2132,10 +2178,22 @@ private fun AudioChip(
     // before the player has ever loaded this uri (pending-memo review row).
     // Bubbles pass nothing and keep the lazy "Voice memo" label until first play.
     fallbackDurationMs: Long? = null,
-    // Real amplitude waveform for recorded memos (reply-bar chips only). Non-empty →
-    // replaces the Slider with a WaveformScrubber; null/empty → Slider (bubbles, and
-    // any chip whose map entry is missing — e.g. an exit-animation stale render).
-    waveform: List<Float>? = null
+    // Real amplitude waveform. Non-empty → replaces the Slider with a waveform; null/empty
+    // → Slider (any chip whose data is missing — e.g. an undecodable file, or an
+    // exit-animation stale render). Reply-bar chips pass their live-captured samples;
+    // bubbles pass samples decoded lazily off the file (item 4).
+    waveform: List<Float>? = null,
+    // Item 3: the chip paints the message's own accent pair (container fill + content for
+    // the play icon, waveform and labels) instead of the theme secondary (green) role.
+    // Defaults keep the reply-bar chips on the theme secondary, since a draft memo has no
+    // sent/received direction yet.
+    containerColor: Color = MaterialTheme.colorScheme.secondaryContainer,
+    contentColor: Color = MaterialTheme.colorScheme.onSecondaryContainer,
+    // Whether the waveform may attach its own scrub gesture detectors. FALSE inside message
+    // bubbles (compose-gesture-conflict rule — raw drag/tap detectors over a bubble silently
+    // break its long-press/selection), so bubbles get a display-only waveform. TRUE only for
+    // the reply-bar / preview chips, which are not inside a bubble.
+    allowWaveformScrub: Boolean = false
 ) {
     val playback by audioPlayback.collectAsState()
     val isCurrent  = playback.uri == uri
@@ -2151,10 +2209,18 @@ private fun AudioChip(
     val position = scrubFraction
         ?: if (durationMs > 0) (playback.positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
 
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        modifier = Modifier.fillMaxWidth()
+    // Item 2 + 3: the chip fill is the message's container color with the same subtle
+    // top-lit gradient the bubble uses. remember keyed on the color so the ~5 Hz position
+    // ticks that recompose this chip never re-derive the brush.
+    val shape = RoundedCornerShape(8.dp)
+    val chipBrush = remember(containerColor) {
+        Brush.verticalGradient(ContactPalette.bubbleGradientStops(containerColor.toArgb()).map { Color(it) })
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(chipBrush)
     ) {
         Row(
             modifier = Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
@@ -2169,13 +2235,14 @@ private fun AudioChip(
                     CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                        color = contentColor
                     )
                 } else {
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(24.dp),
+                        tint = contentColor
                     )
                 }
             }
@@ -2186,17 +2253,31 @@ private fun AudioChip(
                  * memos with captured amplitudes get the waveform; everything else (and
                  * any missing/empty entry) keeps the Slider. */
                 if (waveform != null && waveform.isNotEmpty()) {
-                    WaveformScrubber(
-                        samples          = waveform,
-                        positionFraction = position,
-                        enabled          = isCurrent && durationMs > 0,
-                        onScrub          = { scrubFraction = it },
-                        onScrubFinished  = {
-                            scrubFraction?.let { onSeek(uri, it) }
-                            scrubFraction = null
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (allowWaveformScrub) {
+                        // Reply-bar / preview chip — safe to scrub (not inside a bubble).
+                        WaveformScrubber(
+                            samples          = waveform,
+                            positionFraction = position,
+                            enabled          = isCurrent && durationMs > 0,
+                            baseColor        = contentColor,
+                            onScrub          = { scrubFraction = it },
+                            onScrubFinished  = {
+                                scrubFraction?.let { onSeek(uri, it) }
+                                scrubFraction = null
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        // Bubble chip — display only, no gesture detectors (bubbles keep
+                        // their long-press/selection; see compose-gesture-conflict rule).
+                        WaveformBars(
+                            samples          = waveform,
+                            positionFraction = position,
+                            enabled          = isCurrent && durationMs > 0,
+                            baseColor        = contentColor,
+                            modifier         = Modifier.fillMaxWidth()
+                        )
+                    }
                 } else {
                     Slider(
                         value    = position,
@@ -2210,12 +2291,12 @@ private fun AudioChip(
                             .fillMaxWidth()
                             .height(20.dp),
                         colors = SliderDefaults.colors(
-                            thumbColor         = MaterialTheme.colorScheme.onSecondaryContainer,
-                            activeTrackColor   = MaterialTheme.colorScheme.onSecondaryContainer,
-                            inactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f),
-                            disabledThumbColor         = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
-                            disabledActiveTrackColor   = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f),
-                            disabledInactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f)
+                            thumbColor         = contentColor,
+                            activeTrackColor   = contentColor,
+                            inactiveTrackColor = contentColor.copy(alpha = 0.3f),
+                            disabledThumbColor         = contentColor.copy(alpha = 0.5f),
+                            disabledActiveTrackColor   = contentColor.copy(alpha = 0.5f),
+                            disabledInactiveTrackColor = contentColor.copy(alpha = 0.3f)
                         )
                     )
                 }
@@ -2227,7 +2308,7 @@ private fun AudioChip(
                     Text(
                         text  = if (durationMs > 0) formatMemoDuration((position * durationMs).toLong()) else "0:00",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                        color = contentColor.copy(alpha = 0.7f)
                     )
                     Text(
                         // Show total duration once known (from the player or the
@@ -2235,7 +2316,7 @@ private fun AudioChip(
                         text  = if (displayDurationMs > 0) formatMemoDuration(displayDurationMs)
                                 else "Voice memo",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                        color = contentColor.copy(alpha = 0.7f)
                     )
                 }
             }
@@ -2243,19 +2324,77 @@ private fun AudioChip(
     }
 }
 
-// ── WaveformScrubber ─────────────────────────────────────────────────────────
+// ── Waveform ──────────────────────────────────────────────────────────────────
+
+/**
+ * Shared bar-drawing for both waveform composables. Bars are split played/unplayed at
+ * [positionFraction] * width. All geometry is derived from the canvas size and sample
+ * count — no raw pixels. Colors are passed in (MaterialTheme can't be read in a DrawScope).
+ */
+private fun DrawScope.drawWaveformBars(
+    samples: List<Float>,
+    positionFraction: Float,
+    playedColor: Color,
+    unplayedColor: Color
+) {
+    val slotWidth    = size.width / samples.size
+    val barWidth     = slotWidth * 0.6f
+    val minBarHeight = 3.dp.toPx()
+    val radius       = CornerRadius(barWidth / 2f, barWidth / 2f)
+    val cutoff       = positionFraction * size.width
+    samples.forEachIndexed { index, sample ->
+        val barHeight = maxOf(minBarHeight, sample.coerceIn(0f, 1f) * size.height)
+        val barCenter = index * slotWidth + slotWidth / 2f
+        drawRoundRect(
+            color        = if (barCenter <= cutoff) playedColor else unplayedColor,
+            topLeft      = Offset(index * slotWidth + (slotWidth - barWidth) / 2f, (size.height - barHeight) / 2f),
+            size         = Size(barWidth, barHeight),
+            cornerRadius = radius
+        )
+    }
+}
+
+/** Played vs unplayed bar colors derived from a chip's content [base]: full-strength when
+ *  enabled (0.5-alpha when not), unplayed always at 0.3 alpha — matching the Slider's colors. */
+private fun waveformBarColors(base: Color, enabled: Boolean): Pair<Color, Color> =
+    (if (enabled) base else base.copy(alpha = 0.5f)) to base.copy(alpha = 0.3f)
+
+/**
+ * Display-only amplitude waveform for the bubble audio chips (item 4). NO gesture
+ * detectors — bubbles keep their own long-press/selection (compose-gesture-conflict
+ * rule), so a bubble waveform shows playback progress but is not itself a scrub control.
+ */
+@Composable
+private fun WaveformBars(
+    samples: List<Float>,
+    positionFraction: Float,
+    enabled: Boolean,
+    baseColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val (playedColor, unplayedColor) = waveformBarColors(baseColor, enabled)
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .progressSemantics(positionFraction)
+    ) {
+        drawWaveformBars(samples, positionFraction, playedColor, unplayedColor)
+    }
+}
 
 /**
  * Google-Messages-style amplitude waveform that doubles as the seek control for a
- * recorded memo chip (reply-bar preview + pending strip only — bubbles keep the
- * Slider; see the compose-gesture-conflict rule, these detectors must never sit on
- * or over a message bubble).
+ * recorded memo chip (reply-bar preview + pending strip only — bubbles use the
+ * display-only [WaveformBars]; see the compose-gesture-conflict rule, these detectors
+ * must never sit on or over a message bubble).
  *
  * Fed values, never a collector: [positionFraction] follows the finger mid-drag
  * (the caller passes its scrub value) and the player's position otherwise, so the
  * bar split never freezes on a conflated flow.
  *
  * @param positionFraction 0..1 played/unplayed split point.
+ * @param baseColor        the chip's content color; bars derive from it.
  * @param onScrub          finger-follow — set the caller's scrubFraction.
  * @param onScrubFinished  commit — seek + clear scrubFraction.
  */
@@ -2264,16 +2403,12 @@ private fun WaveformScrubber(
     samples: List<Float>,
     positionFraction: Float,
     enabled: Boolean,
+    baseColor: Color,
     onScrub: (Float) -> Unit,
     onScrubFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Colors read OUTSIDE the draw lambda (MaterialTheme can't be read inside a
-    // DrawScope). Unplayed is always the 0.3-alpha track; played is full-strength
-    // when enabled, 0.5-alpha when not — matching the Slider's disabled colors.
-    val base          = MaterialTheme.colorScheme.onSecondaryContainer
-    val playedColor   = if (enabled) base else base.copy(alpha = 0.5f)
-    val unplayedColor = base.copy(alpha = 0.3f)
+    val (playedColor, unplayedColor) = waveformBarColors(baseColor, enabled)
     Canvas(
         modifier = modifier
             .fillMaxWidth()
@@ -2296,22 +2431,7 @@ private fun WaveformScrubber(
                 }
             }
     ) {
-        // All geometry derived from the canvas size and sample count — no raw pixels.
-        val slotWidth    = size.width / samples.size
-        val barWidth     = slotWidth * 0.6f
-        val minBarHeight = 3.dp.toPx()
-        val radius       = CornerRadius(barWidth / 2f, barWidth / 2f)
-        val cutoff       = positionFraction * size.width
-        samples.forEachIndexed { index, sample ->
-            val barHeight = maxOf(minBarHeight, sample.coerceIn(0f, 1f) * size.height)
-            val barCenter = index * slotWidth + slotWidth / 2f
-            drawRoundRect(
-                color        = if (barCenter <= cutoff) playedColor else unplayedColor,
-                topLeft      = Offset(index * slotWidth + (slotWidth - barWidth) / 2f, (size.height - barHeight) / 2f),
-                size         = Size(barWidth, barHeight),
-                cornerRadius = radius
-            )
-        }
+        drawWaveformBars(samples, positionFraction, playedColor, unplayedColor)
     }
 }
 
@@ -3406,7 +3526,9 @@ private fun VoiceMemoPanel(
                             onPlayPause = onAudioPlayPause,
                             onSeek = onAudioSeek,
                             fallbackDurationMs = rememberAudioDurationMs(uri),
-                            waveform = previewWaveform
+                            waveform = previewWaveform,
+                            // Reply-bar preview chip — not inside a bubble, so scrubbing is safe.
+                            allowWaveformScrub = true
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -3550,7 +3672,9 @@ private fun PendingAudioAttachment(
                 onPlayPause = onAudioPlayPause,
                 onSeek = onAudioSeek,
                 fallbackDurationMs = rememberAudioDurationMs(attachment.uri),
-                waveform = waveform
+                waveform = waveform,
+                // Reply-bar pending chip — not inside a bubble, so scrubbing is safe.
+                allowWaveformScrub = true
             )
         }
         IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
@@ -3822,7 +3946,9 @@ private fun smsCounter(length: Int): String? {
  * double-annotating telephone numbers embedded in URLs (e.g. `tel:` links).
  *
  * @param text      Raw message body.
- * @param linkColor Colour applied to detected links; pass `MaterialTheme.colorScheme.primary`.
+ * @param linkColor Colour applied to detected links (always underlined). Callers pass the
+ *                  bubble's own content color on a custom-colored bubble, else
+ *                  `MaterialTheme.colorScheme.primary`.
  */
 private fun linkifyText(
     text: String,

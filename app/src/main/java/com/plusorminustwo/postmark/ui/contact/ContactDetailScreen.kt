@@ -50,6 +50,7 @@ import com.plusorminustwo.postmark.ui.components.ChatBackgroundDialog
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundPreview
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundThumbnail
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
+import com.plusorminustwo.postmark.ui.components.ThemePresetDialog
 import com.plusorminustwo.postmark.ui.components.accentSubtitle
 import com.plusorminustwo.postmark.ui.components.avatarColor
 import com.plusorminustwo.postmark.ui.settings.SettingsRow
@@ -98,6 +99,9 @@ fun ContactDetailScreen(
     // ── Chat background dialog state ──────────────────────────────────────────
     var showChatBackgroundDialog by remember { mutableStateOf(false) }
     val isDarkTheme = isAppInDarkTheme()
+
+    // ── Theme preset dialog state ─────────────────────────────────────────────
+    var showThemePresetDialog by remember { mutableStateOf(false) }
 
     // Android Photo Picker for a custom chat-background image — mirrors the ReplyBar
     // attachment launcher (Jetpack-backed, so it works down to minSdk 26). A save
@@ -179,6 +183,23 @@ fun ContactDetailScreen(
                 onDismiss = { showChatBackgroundDialog = false }
             )
         }
+    }
+
+    // ── Theme preset dialog ───────────────────────────────────────────────────
+    // Applies a ready-made combo by COPYING all three look fields onto this thread via
+    // the same per-thread setters the individual rows use. A null preset background maps
+    // to ChatBackgrounds.None.id — the exact path the background dialog's "None" tile uses.
+    if (showThemePresetDialog) {
+        ThemePresetDialog(
+            isDarkTheme = isDarkTheme,
+            onPresetSelected = { preset ->
+                viewModel.setAccentColor(preset.contactArgb)
+                viewModel.setSentColor(preset.sentArgb)
+                viewModel.setChatBackground(preset.backgroundId ?: ChatBackgrounds.None.id)
+                showThemePresetDialog = false
+            },
+            onDismiss = { showThemePresetDialog = false }
+        )
     }
 
     // ── Full-screen image viewer ───────────────────────────────────────────────
@@ -306,6 +327,7 @@ fun ContactDetailScreen(
                         onToggleMute        = viewModel::toggleMute,
                         onTogglePin         = viewModel::togglePin,
                         onToggleNotifications = viewModel::toggleNotifications,
+                        onOpenThemePresetPicker = { showThemePresetDialog = true },
                         onOpenColorPicker   = { showAccentColorDialog = true },
                         onOpenSentColorPicker = { showSentColorDialog = true },
                         onOpenChatBackgroundPicker = { showChatBackgroundDialog = true }
@@ -435,6 +457,7 @@ private fun ContactActionsSection(
     onToggleMute: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleNotifications: () -> Unit,
+    onOpenThemePresetPicker: () -> Unit,
     onOpenColorPicker: () -> Unit,
     onOpenSentColorPicker: () -> Unit,
     onOpenChatBackgroundPicker: () -> Unit
@@ -461,6 +484,22 @@ private fun ContactActionsSection(
         label   = "Notifications",
         checked = thread.notificationsEnabled,
         onToggle = onToggleNotifications
+    )
+
+    // Theme preset row — applies a ready-made sent/contact/background combo in one tap,
+    // copying the values onto this thread. The individual override rows below fine-tune it.
+    SettingsRow(
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Palette,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp)
+            )
+        },
+        title = "Theme preset",
+        subtitle = "Ready-made color combos",
+        onClick = onOpenThemePresetPicker
     )
 
     // Their color row — opens the swatch-grid picker. Effective color is the custom

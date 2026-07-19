@@ -4,7 +4,49 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
-## 2026-07-18 (fix/fable-round4) — notification deep-link, conversations multi-select, pinch-to-zoom root cause, gesture hints, honest disclosures
+## 2026-07-18 (feat/theme-presets) — theme presets + share format, then two on-device feedback rounds
+
+**Theme presets (P1+P2, see `docs/theme-presets-plan.md`):** 10 curated sent/contact/
+background combos (`domain/customization/ThemePresets.kt`) — every color clears the
+4.5:1 content floor (lowest 4.92) and every pair passes a distinguishability rule
+(hue ≥ 40° or luminance contrast ≥ 1.4), both pinned in tests. `ThemePresetCodec`
+reads/writes the `.postmarktheme` share format (the seed of the future file-based
+theme market — no INTERNET permission, ever), riding the existing pure `BackupJson`
+tokenizer rather than a second parser. "Theme preset" row in ContactDetail opens a
+preview-card dialog; applying COPIES the three per-thread fields via the existing
+setters (no stored reference).
+
+**Berry feedback round (S24 Ultra, dark):** (1) Phase FB2 background re-recalibration
+— FB's dark stops (~0.045–0.086 luminance) read as a loud color wall; all 6 dark
+variants retargeted to ~0.021–0.040, hue held, saturation up (darker not grayer),
+band re-pinned in ChatBackgroundsTest; light variants untouched. (2) Bubble "pop":
+`bubbleGradientStops` derives a ±0.06 HSV-value top-lit gradient per container, with
+a clamp-back loop keeping content ≥ 4.5 vs both stops; applied to all bubble shapes
++ the audio chip via remember-keyed brushes. (3) Audio chips dropped the green theme
+`secondaryContainer` role for the message's own sent/received pair; all tints derive
+from content color (composer draft chip deliberately stays theme-colored). (4)
+Waveforms: amplitudes only ever existed live during recording (deleted on send;
+bubbles were scoped out in the original spec) — new `rememberAudioWaveform` does a
+bounded one-shot MediaExtractor/MediaCodec peak decode (IO-only, released in finally,
+LruCache'd, failures cached), so sent AND received audio render real waveforms.
+In-bubble waveforms are display-only (`WaveformBars`, zero gesture detectors — the
+compose-gesture-conflict rule); scrubbing stays in the reply bar.
+
+**Sunset feedback round:** (1) links in custom bubbles were theme-primary blue on
+violet — `linkifyText`'s two call sites now use the bubble content color (underlined)
+when a custom pair is active; default bubbles unchanged; gesture wiring untouched.
+(2) Root cause of sent-bubbles-blending-into-background: the anti-blend guard
+compared against the plain THEME background (near-black → never engaged), not the
+active chat-background gradient. New `adjustAccentForBackgroundStops` guards both
+current-variant gradient stops at ≥ 2.0 contrast (floor chosen because the reported
+case sat at 1.83 — a 1.5 floor would have fixed nothing); Sunset sent nudges
+#7C3AC9→#8940DD in dark. Custom-image backgrounds keep the conservative 1.3 guard
+(pixels unknowable). Preset × background matrix pinned in tests, both variants.
+Review pass caught the preset dialog previewing RAW colors while threads render
+ADJUSTED ones — previews now run the same adjustment.
+
+All rounds: implemented by Opus agents against Fable specs, independently
+Opus-reviewed, full `./gradlew test` green after each round.
 
 Fable-analysis round 4 (specs + review by Fable, implementation delegated to Opus/Sonnet
 agents; tracking in `docs/fable-round4.md`).
