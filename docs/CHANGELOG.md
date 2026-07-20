@@ -4,6 +4,69 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-19 (feat/theme-presets) — notification avatars, home-screen background, bundled fonts
+
+Three user-facing customization/polish items. Builds green, 829 tests passing. **None of
+this is verified on device yet** — the specific things to look at are called out per item.
+
+**Notification showed the app icon instead of the sender's photo (on-device report):**
+`IncomingNotifier` only ever called `setSmallIcon`, so every incoming-message notification
+fell back to the launcher icon regardless of sender — the contact photo lookup existed but
+lived inside the `ContactAvatar` composable, unreachable from the service layer. Extracted
+it to `data/contacts/ContactPhotoLookup.kt` as `lookupContactPhotoUri` /
+`loadContactPhotoBitmap`, mirroring the `lookupContactName` next to it (same PhoneLookup
+normalisation, same `ContactCaches` sentinel policy, same never-cache-a-failure rule);
+`ContactAvatar` now calls it, which deleted ~35 lines of duplicated cursor code from the
+composable. The notification sets a circular large icon from that photo, falling back to
+the same letter-on-color avatar the conversation list draws (seeded on address, so a
+contact's color matches in-app) rather than to nothing — otherwise every unsaved number
+would still look identical. Skipped entirely under privacy mode, which already redacts the
+name and body: a face identifies a sender as plainly as their name. The circle is cropped
+by hand rather than via `IconCompat.createWithAdaptiveBitmap`, which masks to the adaptive
+safe zone and would clip the edges of a face. Shared builder, so SMS and MMS both get it.
+**Check on device:** a contact with no photo (the letter-avatar path).
+
+**Home-screen background (requested):** the conversation list now takes a background —
+the same six built-in gradients or a gallery photo — set from Settings → Appearance →
+"Home screen background". Deliberately NOT a new system: it reuses the chat-background
+catalog, the photo picker, the pan/zoom placement editor, and `ChatBackgroundImageStore`
+unchanged. New code is one preference (`HomeBackgroundPreferenceRepository`) plus a
+`BackgroundTarget` (CHAT/HOME) threaded through `AppearanceViewModel`, so the picker, the
+photo-options dialog, and the placement editor are each instantiated once and
+parameterized rather than copied. Both preferences implement a shared
+`BackgroundIdPreference` so the ViewModel can select one and treat them identically.
+Painted behind the Scaffold rather than in its content slot, so it runs edge-to-edge under
+the status bar and top app bar like a wallpaper instead of starting below the bar as a
+panel; the top bar goes transparent only while a background is set, and with none set the
+screen renders exactly as before. Photo backgrounds get the same theme-aware 40% scrim
+ThreadScreen uses. **Check on device:** whether 40% is enough for a busy photo — unlike
+the thread screen, conversation rows are bare text on a transparent surface, not text in
+bubbles.
+
+**Image GC bug found while building the above (not user-reported):**
+`ChatBackgroundImageStore.cleanupAfterChange` deleted an image once no thread and not the
+global chat default referenced it. With a second surface able to hold an image id, setting
+one photo as both backgrounds and then changing the chat background would have deleted the
+file out from under the home screen. "Referenced" now spans every surface an id can live
+on; `shouldDeleteImage`'s second parameter widened from `isGlobalDefault` to
+`referencedByAnyPreference`, and its unit test pins the home-only case.
+
+**More fonts (requested — "only two" built-in generics):** six bundled OFL families —
+Inter, Poppins, Nunito, Lora, Playfair Display, JetBrains Mono — alongside the three
+system generics, so nine options. Five ship as single VARIABLE font files with each weight
+pinned to a `wght` axis value (needs API 26 to honour variation settings, which is exactly
+minSdk — no fallback path), which is why the set costs 1.06 MB in the APK rather than the
+~4 MB static Regular/Bold pairs would. Every axis was checked to span 400–700 so nothing
+clamps; note Nunito's default instance is ExtraLight, so this would have rendered visibly
+thin had the variation settings not been wired. Poppins has no variable release and ships
+static Regular + Bold. The three-way radio row became `FontFamilyDialog`, which renders
+each font's name IN that font — with nine options a plain list names typefaces the user
+can't picture without applying each one. License texts in `docs/font-licenses/`.
+**Check on device:** Poppins titles, whose W500 requests resolve down to Regular for lack
+of a real medium.
+
+---
+
 ## 2026-07-19 (feat/theme-presets) — group messaging complete: misclassification fix, group send, group compose, MMS notifications
 
 Full implementation of `docs/GROUP_MESSAGING_SPEC.md` (Fable spec + orchestration/review;

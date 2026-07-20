@@ -662,11 +662,27 @@ instance, but flagged:
       link to GitHub (this was a one-row addition, not a full About screen).
 - [ ] **Real app icon** — replace the placeholder envelope with
       proper branded artwork.
-- [ ] **Custom font selection** — Settings → Appearance; let user
-      choose a font family for message bubbles (e.g. Default / Serif /
-      Monospace / a curated set of Google Fonts). Persisted to
-      SharedPreferences and applied via a custom `FontFamily`
-      CompositionLocal so all bubble text updates without restart.
+- [x] **Custom font selection** (July 19 2026) — Settings → Appearance → "Font"
+      opens `FontFamilyDialog`, which renders each option's name in its own
+      typeface. Nine options: the three system generics plus six bundled OFL
+      families (Inter, Poppins, Nunito, Lora, Playfair Display, JetBrains Mono).
+      Applies app-wide via `PostmarkTheme`'s existing `Typography` rebuild, not a
+      bubble-only CompositionLocal as originally sketched. Five families ship as
+      single variable font files with weights pinned to the `wght` axis (1.06 MB
+      in-APK total); licenses in `docs/font-licenses/`. Adding a family = one file
+      in `res/font` + one enum entry + one `when` branch in `toFontFamilyOrNull`.
+      Enum entries are persisted BY NAME — never rename or remove one.
+- [x] **Home-screen background** (July 19 2026, on-device request) — the
+      conversation list takes a built-in gradient or a gallery photo, set from
+      Settings → Appearance → "Home screen background". Reuses the chat-background
+      catalog, picker, placement editor, and `ChatBackgroundImageStore` wholesale;
+      the only new pieces are `HomeBackgroundPreferenceRepository` and a
+      `BackgroundTarget` (CHAT/HOME) threaded through `AppearanceViewModel`. Both
+      preferences implement `BackgroundIdPreference`. Painted behind the Scaffold
+      (edge-to-edge under the top bar), with the same 40% scrim over photos that
+      ThreadScreen uses. NOTE for anything that adds a THIRD surface holding a
+      background id: `ChatBackgroundImageStore.cleanupAfterChange` must learn about
+      it, or its image gets garbage-collected out from under you.
 - [ ] **Per-thread appearance override** — font family, text size, and
       bubble styling (color/theme accent) configurable per conversation
       thread, not just the global Settings → Appearance default. Entry
