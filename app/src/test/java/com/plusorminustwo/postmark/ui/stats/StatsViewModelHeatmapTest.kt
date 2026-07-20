@@ -271,6 +271,7 @@ private class FakeMessageDao : MessageDao {
     override suspend fun hasAnyMessages(): Boolean = false
     override suspend fun getMaxRestoredId(): Long? = null
     override suspend fun deleteById(messageId: Long) = Unit
+    override suspend fun deleteByIds(ids: List<Long>) = Unit
     override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
     override suspend fun markAllRead(threadId: Long) = Unit
     override suspend fun markLatestUnread(threadId: Long) = Unit
@@ -296,6 +297,8 @@ private class FakeThreadDao : ThreadDao {
     override suspend fun updatePinned(threadId: Long, isPinned: Boolean) = Unit
     override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
+    override suspend fun getThreadsWithParticipants(): List<ThreadEntity> = emptyList()
+    override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
     override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) = Unit
     override suspend fun updateLastMessagePreview(threadId: Long, preview: String) = Unit
     override suspend fun isMutedByAddress(address: String): Boolean? = null

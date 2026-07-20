@@ -68,6 +68,16 @@ interface ThreadDao {
     @Query("SELECT * FROM threads WHERE backupPolicy = :policy")
     suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity>
 
+    /* Group threads only: participantsJson is non-null exactly when a >1 roster was
+     * stored. Feeds the one-shot roster repair pass (GROUP_MESSAGING_SPEC §1.4). */
+    @Query("SELECT * FROM threads WHERE participantsJson IS NOT NULL")
+    suspend fun getThreadsWithParticipants(): List<ThreadEntity>
+
+    /* Roster repair write: replaces the stored roster and its comma-joined display name
+     * in one statement, leaving user-set fields (pin/mute/colors) untouched. */
+    @Query("UPDATE threads SET participantsJson = :participantsJson, displayName = :displayName WHERE id = :threadId")
+    suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String)
+
     @Query("UPDATE threads SET lastMessageAt = :timestamp WHERE id = :threadId")
     suspend fun updateLastMessageAt(threadId: Long, timestamp: Long)
 

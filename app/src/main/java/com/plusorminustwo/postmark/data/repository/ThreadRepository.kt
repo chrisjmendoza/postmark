@@ -5,6 +5,7 @@ import com.plusorminustwo.postmark.data.db.entity.toDomain
 import com.plusorminustwo.postmark.data.db.entity.toEntity
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.model.encodeParticipantsJson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -56,6 +57,15 @@ class ThreadRepository @Inject constructor(
 
     suspend fun getThreadsForBackup(): List<Thread> =
         dao.getThreadsForBackup().map { it.toDomain() }
+
+    /** Group threads only (roster stored). Used by the one-shot roster repair pass. */
+    suspend fun getThreadsWithParticipants(): List<Thread> =
+        dao.getThreadsWithParticipants().map { it.toDomain() }
+
+    /** Repair write: replaces the roster + comma-joined display name for [threadId].
+     *  Pass an empty list to demote a mis-classified group back to a 1:1 thread. */
+    suspend fun updateRoster(threadId: Long, participants: List<String>, displayName: String) =
+        dao.updateRoster(threadId, encodeParticipantsJson(participants), displayName)
 
     suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) =
         dao.updateLastMessageAt(threadId, timestamp)

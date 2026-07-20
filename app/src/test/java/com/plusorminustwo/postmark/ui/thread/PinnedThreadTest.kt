@@ -127,6 +127,8 @@ class PinnedThreadTest {
         }
         override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
         override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
+        override suspend fun getThreadsWithParticipants(): List<ThreadEntity> = emptyList()
+        override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
         override suspend fun isMutedByAddress(address: String): Boolean? = null

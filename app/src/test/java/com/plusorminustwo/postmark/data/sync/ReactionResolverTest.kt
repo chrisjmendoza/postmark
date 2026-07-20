@@ -210,6 +210,7 @@ private class InMemoryMessageDao : MessageDao {
         rows.values.filter { it.threadId == threadId }.sortedBy { it.timestamp }
     override suspend fun getAllThreadIds(): List<Long> = rows.values.map { it.threadId }.distinct()
     override suspend fun deleteById(messageId: Long) { rows.remove(messageId) }
+    override suspend fun deleteByIds(ids: List<Long>) { ids.forEach { rows.remove(it) } }
     override suspend fun getLatestForThread(threadId: Long): MessageEntity? =
         rows.values.filter { it.threadId == threadId }.maxByOrNull { it.timestamp }
     override suspend fun insert(message: MessageEntity): Long { rows[message.id] = message; return message.id }
@@ -306,6 +307,8 @@ private class RecordingThreadDao : ThreadDao {
     override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
     override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
+    override suspend fun getThreadsWithParticipants(): List<ThreadEntity> = emptyList()
+    override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
     override suspend fun isMutedByAddress(address: String): Boolean? = null
     override suspend fun getDisplayNameByAddress(address: String): String? = null
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
