@@ -62,7 +62,7 @@ This is spec-compliant but means common types like `video/mp4` and `audio/amr` a
 
 ### 1.4 Multi-Recipient / Group MMS
 
-**Sending still not implemented.** `buildPdu()` writes a single `FIELD_TO` header. Sending to a group is not possible. The CarrierConfig key `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` is never checked. **Receiving/display fixed (July 6 2026)** — see §2.3 below. Because sending remains 1:1-only, replying inside a thread that now correctly displays as a group would silently reach only `thread.address` (one participant) rather than the group; `ThreadScreen`'s `ReplyBar` shows a warning banner ("Group replies aren't supported yet") whenever `thread.participants.size > 1` so this isn't a silent trap.
+~~**Sending still not implemented.**~~ **Update (2026-07-19): implemented** — `buildPdu()` takes `toAddresses: List<String>` and writes one repeated `FIELD_TO` header per recipient; text-only group replies go as MMS (SMIL text-only slide added); `persistSentMms` derives the thread id from the full roster (`getOrCreateThreadId` Set overload) and writes one TO addr row per recipient; failed sends retry to the full roster. `MMS_CONFIG_GROUP_MMS_ENABLED` is now checked — when a carrier disables group MMS the ReplyBar keeps a (reworded) warning banner and sends fall back to 1:1; no broadcast mode was built. The old "Group replies aren't supported yet" banner is otherwise gone. Also note §2.3's limitation (1) below is resolved: rosters now come from the canonical telephony tables (`CanonicalRoster.kt`), which exclude the local number by construction, with the per-PDU scan as a logged fallback and a one-shot repair for previously persisted rosters. See `docs/GROUP_MESSAGING_SPEC.md` for the full implementation record.
 
 ---
 
@@ -242,7 +242,7 @@ Note: Emulator has no MMSC simulation — MMS testing requires a physical device
 | 3 | Video/audio not size-checked before sending | Critical | Low | `MmsManagerWrapper.kt` | [x] |
 | 4 | EXIF orientation stripped on outgoing images | High | Low (dep) | `MmsManagerWrapper.kt` | [x] |
 | 5 | Audio `prepare()` on main thread (ANR risk) | High | Low | `ThreadScreen.kt` | [x] |
-| 6 | Group MMS — receive/display roster fixed; sending still not implemented | High | High | Multiple | [~] |
+| 6 | Group MMS — receive/display roster fixed; sending implemented 2026-07-19 (GROUP_MESSAGING_SPEC) | High | High | Multiple | [x] |
 | 7 | Samsung fallback omits `NOT IN (3, 5)` filter | Medium | Trivial | `SmsHistoryImportWorker.kt` | [x] |
 | 8 | Manual PDU construction — no library backing | Medium | High | `MmsManagerWrapper.kt` | [ ] |
 | 9 | GIF animations destroyed by compression | Medium | Medium | `MmsManagerWrapper.kt` | [x] |

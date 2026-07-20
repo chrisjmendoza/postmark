@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: July 16, 2026
+Last updated: July 19, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -208,7 +208,15 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       thread-creation time, so `ConversationsScreen`/`ThreadScreen` needed no changes.
       `ReplyBar` shows a warning when `participants.size > 1` since sending is still
       1:1-only (see next item).
-- [ ] **Group MMS — sending** — `MmsPduBuilder.buildPdu()` still writes a single
+- [x] **Group MMS — 1:1 threads misclassified as groups (P0 bug, found on-device
+      July 19 2026; FIXED same day)** — a new contact's 1:1 MMS-born thread showed
+      as a group with the user's own name in the title + the "group replies" banner.
+      Root cause: `parseMmsParticipants` keeps the own-number TO row of an incoming
+      MMS, and the roster drives `isGroupThread`. Fixed per spec §1: rosters now come
+      from the canonical telephony tables (`CanonicalRoster.kt`), per-PDU scan is a
+      logged fallback, one-shot repair (`roster_repair_v1_done`) heals persisted rows.
+      On-device confirmation of the demoted thread still pending.
+- [x] **Group MMS — sending** (July 19 2026) — `MmsPduBuilder.buildPdu()` wrote a single
       `FIELD_TO` header; there's no way to originate a new outgoing group MMS or
       have a reply inside an existing group thread reach everyone (it reaches only
       `thread.address`, one participant). Needs multi-recipient PDU construction
@@ -216,6 +224,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       multi-select recipient picker in `NewConversationScreen`. Check
       `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` — some carriers disable group MMS
       and expect N separate 1:1 sends instead ("MMS broadcast" mode).
+      **IMPLEMENTED July 19 2026 — all phases of `docs/GROUP_MESSAGING_SPEC.md`**
+      (Fable spec/review, Opus P0/P1, Sonnet P2/P3): multi-recipient PDU +
+      text-only group MMS + roster-wide persist/retry (P1), "Start group
+      conversation" multi-select compose (P2), MMS notifications (none existed
+      at all before) + m_type artifact filter/cleanup + roster staleness (P3).
+      Carrier-disabled group MMS keeps a reworded banner + 1:1 send; no broadcast
+      mode. Remaining: on-device verification matrix (spec §5) and the flagged
+      `MarkAsReadReceiver` MMS read-state gap.
 - [x] **Voice memos — record + send** (July 16 2026) — mic button in the reply bar
       (replaces send while the composer is empty, WhatsApp/Google Messages pattern)
       with both capture gestures. **Hold to record** → release drops the memo into
@@ -455,6 +471,21 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 
 ## 🟢 TIER 3 — Polish and Depth
 
+### Window insets — audit follow-ups (July 19 2026)
+Context: placement-editor buttons shipped behind the nav bar (inset modifiers
+resolve to zero inside a Dialog's own window — fixed, see CLAUDE.md rule +
+docs/fable-bg-placement-spec.md §8). A full-app audit found no other live
+instance, but flagged:
+- [ ] **Device-check the three bottom sheets without explicit nav-bar
+      padding** — `DateRangeSheet`'s Cancel/Select row and both SearchScreen
+      filter sheets rely on M3 `ModalBottomSheet` default `contentWindowInsets`
+      alone, while `EmojiPickerBottomSheet` explicitly adds
+      `navigationBarsPadding()` — inconsistent; if any clips on-device,
+      it's a one-line fix.
+- [ ] **OnboardingScreen bottom clipping on short screens** — content is
+      vertically centered with no `safeDrawingPadding()`; "Skip for now"
+      could clip under the nav bar if content overflows. Low priority.
+
 ### Delivery timestamps + read receipts
 - [ ] **Store sentAt + deliveredAt** — add `sentAt: Long?` and
       `readAt: Long?` to `MessageEntity`. Room migration required.
@@ -665,10 +696,11 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **`.gitattributes`** — add `* text=auto` to suppress CRLF
       line-ending warnings.
 - [ ] **AGP 10 deprecation cleanup** (noted July 18 2026, Android Studio build
-      output) — six legacy-behavior flags in `gradle.properties` (lines 7–15)
-      are deprecated and will be REMOVED in AGP 10 (currently on AGP 9.2.1;
-      they were almost certainly written by the AGP Upgrade Assistant to
-      freeze old behavior). Each needs its real migration, not just deletion:
+      output; still present July 19 on AGP 9.3.0 — Android Studio bumped
+      9.2.1 → 9.3.0 and added `org.gradle.tooling.parallel`, wrapper already
+      Gradle 9.6.1) — six legacy-behavior flags in `gradle.properties`
+      are deprecated and will be REMOVED in AGP 10 (they were almost
+      certainly written by the AGP Upgrade Assistant to freeze old behavior). Each needs its real migration, not just deletion:
       `android.newDsl=false` and `android.builtInKotlin=false` are the meaty
       ones (new AGP DSL + AGP built-in Kotlin replacing the standalone
       kotlin-android plugin); the rest are small (`resvalues=true` → declare

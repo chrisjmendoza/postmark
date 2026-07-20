@@ -4,7 +4,54 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
-## 2026-07-19 (feat/theme-presets) — placement-editor insets fix, send auto-scroll, FAB theming
+## 2026-07-19 (feat/theme-presets) — group messaging complete: misclassification fix, group send, group compose, MMS notifications
+
+Full implementation of `docs/GROUP_MESSAGING_SPEC.md` (Fable spec + orchestration/review;
+Opus implemented P0/P1, Sonnet P2/P3). 829 tests green. On-device verification (spec §5)
+still pending — MMS has no emulator path.
+
+**P0 — 1:1 MMS threads misclassified as groups (on-device report, the "Bri" thread):**
+a new contact's 1:1 conversation rendered as a group titled with the user's own name,
+plus the group-reply warning banner. Root cause: the thread roster was built from the
+PDU's raw `addr` rows, and an incoming MMS carries TO = your own number — `isGroupThread`
+is `participants.size > 1`, so self-inclusion flipped the thread to a group. Rosters now
+come from the canonical telephony tables (`recipient_ids` → `canonical-addresses`), which
+exclude self by construction — the per-PDU scan survives only as a logged fallback
+(`CanonicalRoster.kt`). A one-shot repair pass (`roster_repair_v1_done`) demotes
+already-persisted misclassified threads and strips self from real group titles. Room
+writes only.
+
+**P1 — group reply sending:** replies in a group thread now reach every participant as
+one group MMS. Repeated `FIELD_TO` headers in `MmsPduBuilder` (WSP repeated-header rule),
+text-only group replies go as MMS (a SMIL text-only slide had to be added — `buildSmil`
+previously emitted an empty body for zero media), `persistSentMms` writes one TO addr row
+per recipient and derives the thread id from the full roster (`getOrCreateThreadId` Set
+overload). 1:1 text stays on the cheap SMS path. Failed group sends retry to the full
+roster, never one participant. Carrier gate: `MMS_CONFIG_GROUP_MMS_ENABLED == false`
+keeps the (reworded) banner and 1:1 behavior instead of a speculative broadcast mode.
+ReplyBar's "group replies aren't supported" banner is gone otherwise.
+
+**P2 — originate group conversations:** New Conversation screen gained a pinned
+"Start group conversation" row (visible entry point per the discoverable-UI rule) plus
+long-press-a-contact as shortcut; chip strip with dedupe (digit-normalized, NANP-aware —
+`RecipientSelection.kt`), manual numbers add as chips, X/back exits selection mode.
+Single-recipient flow is byte-for-byte unchanged.
+
+**P3 — polish:** (1) Incoming MMS posted **no notification at all** — never had.
+Extracted `SmsReceiver`'s builder into a shared `IncomingNotifier`; the MMS sync path now
+notifies on new incoming messages ("Sender — Group name" titles for groups, direct-reply
+suppressed for groups since it could only reach one person — also fixed the P1-era
+address-keyed suppression that could false-positive on 1:1 threads). Initial-import and
+re-sync passes never notify (watermark + `first_sync_completed` gate). (2) The empty
+"Unknown" bubble from the on-device report: non-displayable PDUs (M-Notification.ind
+etc.) were imported as messages; both sync paths now skip `m_type` ∉ {128, 132}
+(NULL-safe — never drops OEM rows without the column), with a one-shot Room-only cleanup
+(`mtype_cleanup_v1_done`) of previously imported artifacts. (3) Roster staleness: an
+SMS-born 1:1 thread that later receives a group MMS now picks up the canonical roster.
+
+**Known gap (flagged, not fixed):** `MarkAsReadReceiver` writes read-state only to
+`content://sms`; the "Mark read" action on the new MMS notifications dismisses the
+notification but is a provider no-op for MMS.
 
 **Sending a message now always scrolls to it (on-device report: only the
 scroll-to-latest FAB appeared):** the send path emitted the scroll event right after
