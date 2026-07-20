@@ -1,25 +1,17 @@
 package com.plusorminustwo.postmark.service.sms
 
-import android.app.Notification
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.app.RemoteInput
-import com.plusorminustwo.postmark.PostmarkApplication
-import com.plusorminustwo.postmark.R
 import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.logging.redactPhone
-import com.plusorminustwo.postmark.ui.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +37,7 @@ class SmsReceiver : BroadcastReceiver() {
     @Inject lateinit var threadRepository: ThreadRepository
     @Inject lateinit var privacyModeRepository: PrivacyModeRepository
     @Inject lateinit var syncLogger: SyncLogger
+    @Inject lateinit var incomingNotifier: IncomingNotifier
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -100,12 +93,32 @@ class SmsReceiver : BroadcastReceiver() {
                                 ?: threadRepository.getDisplayNameByAddress(rawSender)
                                 ?: sender
                             syncLogger.log("SmsReceiver", "notification: address=${rawSender.redactPhone()} nameResolved=${displayName != sender}")
-                            postIncomingNotification(
-                                context,
+                            /* Resolve the canonical thread id once, reused for the deep-link
+                             * and the group check below. */
+                            val threadId: Long = try {
+                                Telephony.Threads.getOrCreateThreadId(context, rawSender)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "getOrCreateThreadId failed for notification", e)
+                                -1L
+                            }
+                            /* Suppress the inline reply action on group threads: a single-
+                             * address SMS reply can't reach the whole group. Keyed on the
+                             * resolved thread's roster, not the address — a group thread's
+                             * address column holds one member's number, which also keys that
+                             * member's own 1:1 thread, so an address check would only ever
+                             * false-positive (GROUP_MESSAGING_SPEC §2.2). Always false for
+                             * incoming SMS today (group traffic is MMS); correct future-
+                             * proofing for when MMS notifications land (P3). */
+                            val isGroupThread =
+                                threadId > 0L && (threadRepository.getById(threadId)?.participants?.size ?: 0) > 1
+                            incomingNotifier.notify(
+                                notifKey = rawSender.hashCode(),
+                                threadId = threadId,
                                 address = rawSender,
-                                displayName = displayName,
+                                title = displayName,
                                 body = body,
-                                privacyMode = privacyModeRepository.isEnabled()
+                                privacyMode = privacyModeRepository.isEnabled(),
+                                allowDirectReply = !isGroupThread
                             )
                         }
                     } finally {
@@ -161,186 +174,6 @@ class SmsReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             syncLogger.logError("SmsReceiver", "Write to content://sms/inbox FAILED for sender=${rawSender.redactPhone()}", e)
         }
-    }
-
-    /**
-     * @param address     the raw phone number — threaded into the Reply / Mark-as-read
-     *                    receiver extras, which need a sendable/queryable address.
-     *                    Passing the display name here breaks both actions for any
-     *                    contact with a saved name.
-     * @param displayName human-readable label used only for the notification title.
-     */
-    private fun postIncomingNotification(
-        context: Context,
-        address: String,
-        displayName: String,
-        body: String,
-        privacyMode: Boolean
-    ) {
-        /* Keyed on the address, not the display name — the address is stable even if
-         * the user renames the contact between two messages, so both messages update
-         * the same notification instead of forking into two. */
-        val notifId = address.hashCode()
-        val nm = context.getSystemService(NotificationManager::class.java)
-
-        // ── Privacy mode: redact sender and body so bystanders can't read the screen ──
-        val displayTitle = if (privacyMode) context.getString(R.string.privacy_mode_notification_title) else displayName
-        val displayBody  = if (privacyMode) "" else body
-
-        // ── Content intent — deep-links straight to this conversation ─────────────
-        /* Resolve the canonical telephony thread id for this address. It is the same
-         * id space Room's ThreadEntity uses (SmsSyncHandler stores Telephony.Sms.THREAD_ID
-         * directly as ThreadEntity.id), so MainActivity can hand it to Screen.Thread as-is.
-         * getOrCreateThreadId only "gets" here (the row was just received), and a negative
-         * result falls back to the old open-the-list behaviour. */
-        val threadId: Long = try {
-            Telephony.Threads.getOrCreateThreadId(context, address)
-        } catch (e: Exception) {
-            Log.w(TAG, "getOrCreateThreadId failed for notification deep-link", e)
-            -1L
-        }
-        /* requestCode MUST vary per thread: PendingIntent equality ignores extras, so the
-         * old shared requestCode 0 made every thread's content intent collide under
-         * FLAG_UPDATE_CURRENT, clobbering each other. threadId.toInt() gives each thread
-         * its own PendingIntent. */
-        val openIntent = PendingIntent.getActivity(
-            context,
-            if (threadId > 0L) threadId.toInt() else 0,
-            Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                if (threadId > 0L) putExtra(MainActivity.EXTRA_OPEN_THREAD_ID, threadId)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // ── Reply action ──────────────────────────────────────────────────────────
-        /* RemoteInput lets the user type a reply directly in the notification shade.
-         * FLAG_MUTABLE is required so the system can inject the typed text into the
-         * PendingIntent extras before delivering it to DirectReplyReceiver. */
-        val remoteInput = RemoteInput.Builder(DirectReplyReceiver.KEY_TEXT_REPLY)
-            .setLabel(context.getString(R.string.reply))
-            .build()
-
-        val replyPendingIntent = PendingIntent.getBroadcast(
-            context,
-            notifId xor 0x0100_0000,
-            Intent(context, DirectReplyReceiver::class.java).apply {
-                putExtra(DirectReplyReceiver.EXTRA_ADDRESS, address)
-                putExtra(DirectReplyReceiver.EXTRA_NOTIF_ID, notifId)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-        )
-
-        val replyAction = NotificationCompat.Action.Builder(
-            R.drawable.ic_notification,
-            context.getString(R.string.reply),
-            replyPendingIntent
-        ).addRemoteInput(remoteInput).build()
-
-        // ── Mark as read action ───────────────────────────────────────────────────
-        /* A distinct request code (xor 0x0200_0000) avoids colliding with the reply
-         * PendingIntent that uses 0x0100_0000. FLAG_IMMUTABLE is safe here because
-         * no dynamic data needs to be injected into this intent by the system. */
-        val markReadPendingIntent = PendingIntent.getBroadcast(
-            context,
-            notifId xor 0x0200_0000,
-            Intent(context, MarkAsReadReceiver::class.java).apply {
-                putExtra(MarkAsReadReceiver.EXTRA_ADDRESS, address)
-                putExtra(MarkAsReadReceiver.EXTRA_NOTIF_ID, notifId)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val markReadAction = NotificationCompat.Action.Builder(
-            R.drawable.ic_notification,
-            context.getString(R.string.mark_as_read),
-            markReadPendingIntent
-        ).build()
-
-        // ── Individual per-thread notification ────────────────────────────────────
-        /* setGroup() registers this notification with the shared SMS bundle so Android
-         * can collapse multiple per-thread notifications in the shade into one group row.
-         * When privacy mode is on, actions are omitted so the reply RemoteInput
-         * can't be used to reveal who the sender is. */
-        val builder = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(displayTitle)
-            .setContentText(displayBody)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(openIntent)
-            .setAutoCancel(true)
-            .setGroup(PostmarkApplication.GROUP_KEY_SMS)
-
-        if (!privacyMode) {
-            builder.addAction(replyAction).addAction(markReadAction)
-        }
-
-        nm.notify(notifId, builder.build())
-
-        // ── Summary notification ──────────────────────────────────────────────────
-        /* Must be posted (or refreshed) after every per-thread notification so
-         * Android can display the collapsed group row on API 24+ devices. */
-        updateSummaryNotification(context, nm)
-    }
-
-    /**
-     * Posts or refreshes the InboxStyle summary notification that heads the SMS group.
-     *
-     * Reads the currently active notifications in the [PostmarkApplication.GROUP_KEY_SMS]
-     * group (excluding the summary itself), builds one line per thread, and posts a
-     * summary with [NotificationCompat.InboxStyle].
-     *
-     * If no group members remain (e.g. all were dismissed), the summary is cancelled.
-     */
-    private fun updateSummaryNotification(context: Context, nm: NotificationManager) {
-        /* ── Count active group members ──────────────────────────────────────────
-         * activeNotifications is available from API 23; minSdk = 26 so always safe. */
-        val groupNotifs = nm.activeNotifications.filter { sbn ->
-            sbn.notification.group == PostmarkApplication.GROUP_KEY_SMS &&
-                sbn.id != PostmarkApplication.NOTIF_ID_SMS_SUMMARY
-        }
-
-        if (groupNotifs.isEmpty()) {
-            nm.cancel(PostmarkApplication.NOTIF_ID_SMS_SUMMARY)
-            return
-        }
-
-        val count = groupNotifs.size
-        val summaryText = context.resources.getQuantityString(
-            R.plurals.notification_summary_new_messages, count, count
-        )
-
-        // ── Build InboxStyle lines: one "Sender  preview" per thread ──────────────────
-        val inboxStyle = NotificationCompat.InboxStyle()
-            .setSummaryText(context.getString(R.string.app_name))
-        groupNotifs.forEach { sbn ->
-            val title = sbn.notification.extras.getString(Notification.EXTRA_TITLE) ?: ""
-            val text  = sbn.notification.extras.getCharSequence(Notification.EXTRA_TEXT) ?: ""
-            inboxStyle.addLine(if (title.isNotEmpty()) "$title  $text" else "$text")
-        }
-
-        val openIntent = PendingIntent.getActivity(
-            context,
-            0,
-            Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val summary = NotificationCompat.Builder(context, PostmarkApplication.CHANNEL_INCOMING_SMS)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(summaryText)
-            .setContentText(summaryText)
-            .setStyle(inboxStyle)
-            .setGroup(PostmarkApplication.GROUP_KEY_SMS)
-            .setGroupSummary(true)
-            .setAutoCancel(true)
-            .setContentIntent(openIntent)
-            .build()
-
-        nm.notify(PostmarkApplication.NOTIF_ID_SMS_SUMMARY, summary)
     }
 
     companion object {

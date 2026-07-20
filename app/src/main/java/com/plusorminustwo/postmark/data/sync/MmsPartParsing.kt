@@ -80,11 +80,15 @@ internal const val PDU_HEADER_CC   = 130
  * (MMS_AUDIT §2.3: previously only the first FROM/TO row was read, so every other
  * participant was silently dropped).
  *
- * Filters the Samsung "insert-address-token" placeholder and blank addresses.
- * Cannot reliably exclude the local device's own number — no row in the PDU's
- * addr table identifies "this is you" — so it may occasionally appear in the
- * roster. That's a cosmetic imperfection, not a correctness bug: every real
- * participant is preserved, which is the property that matters here.
+ * FALLBACK PATH ONLY. The primary roster source is the OS's canonical threads table
+ * (GROUP_MESSAGING_SPEC §1.3, see [queryCanonicalParticipants]); this per-PDU scan is
+ * used only when the canonical query can't answer. It filters the Samsung
+ * "insert-address-token" placeholder and blank addresses, but cannot reliably exclude
+ * the local device's own number — an incoming 1:1 M-Retrieve.conf carries a TO row for
+ * the user's own line, so self appears in the roster and flips a genuine 1:1 thread
+ * into a 2-person "group". That is a known correctness defect of this fallback (not a
+ * cosmetic one); the canonical path avoids it because AOSP's PduPersister excludes the
+ * device's own line from `recipient_ids`.
  */
 internal fun parseMmsParticipants(rows: List<MmsAddrRow>): List<String> {
     val seen = LinkedHashSet<String>()
@@ -96,3 +100,23 @@ internal fun parseMmsParticipants(rows: List<MmsAddrRow>): List<String> {
     }
     return seen.toList()
 }
+
+// content://mms `m_type` PDU header values relevant to display filtering (WAP MMS
+// Encapsulation spec §6.1.2). Every row in content://mms is one PDU, not just a
+// user-composed message — the same table also stores M-Notification.ind (130, "you
+// have an MMS, fetch it"), delivery-report (134) and read-report (136) PDUs. Those
+// carry no text/media parts and previously imported as empty "Unknown" bubbles
+// (GROUP_MESSAGING_SPEC §4.2).
+internal const val PDU_MTYPE_SEND_REQ      = 128 // m-send-req: outgoing MMS the user composed
+internal const val PDU_MTYPE_RETRIEVE_CONF = 132 // m-retrieve-conf: a fully downloaded incoming MMS
+
+/**
+ * Pure function: whether an MMS PDU row should be imported as a visible message.
+ *
+ * Only Send.req (128) and Retrieve.conf (132) carry actual message content; every
+ * other `m_type` is protocol bookkeeping. A null [mType] is treated as displayable —
+ * some OEMs omit the column, and dropping on missing data would silently lose real
+ * messages rather than just filtering junk.
+ */
+internal fun isDisplayableMmsType(mType: Int?): Boolean =
+    mType == null || mType == PDU_MTYPE_SEND_REQ || mType == PDU_MTYPE_RETRIEVE_CONF

@@ -103,6 +103,12 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteById(messageId: Long)
 
+    /** Deletes several rows by id in one statement. Used by the one-shot non-displayable
+     *  MMS cleanup (GROUP_MESSAGING_SPEC §4.2) — Room-side only, never touches the
+     *  telephony provider. */
+    @Query("DELETE FROM messages WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
     /** Latest message in a thread by timestamp — used to refresh the thread preview after
      *  reaction cleanup. No reaction filtering (the former name `getLatestNonReactionForThread`
      *  falsely implied it). */

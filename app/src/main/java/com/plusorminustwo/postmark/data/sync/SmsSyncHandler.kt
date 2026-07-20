@@ -10,12 +10,14 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
+import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
+import com.plusorminustwo.postmark.service.sms.IncomingNotifier
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
@@ -55,6 +57,8 @@ class SmsSyncHandler @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val reactionParser: ReactionFallbackParser,
+    private val privacyModeRepository: PrivacyModeRepository,
+    private val incomingNotifier: IncomingNotifier,
     private val syncLogger: SyncLogger
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -114,6 +118,10 @@ class SmsSyncHandler @Inject constructor(
         // Must match the key used by SmsHistoryImportWorker.
         private const val PREFS_NAME = "postmark_prefs"
         private const val KEY_FIRST_SYNC_DONE = "first_sync_completed"
+        // One-shot flag for the roster repair pass (GROUP_MESSAGING_SPEC §1.4).
+        private const val KEY_ROSTER_REPAIR_DONE = "roster_repair_v1_done"
+        // One-shot flag for the non-displayable-PDU Room cleanup (GROUP_MESSAGING_SPEC §4.2).
+        private const val KEY_MTYPE_CLEANUP_DONE = "mtype_cleanup_v1_done"
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -138,8 +146,94 @@ class SmsSyncHandler @Inject constructor(
      * Main.immediate, stalling frames on every idle pass.
      */
     suspend fun triggerCatchUp() = withContext(Dispatchers.IO) {
+        repairRostersOnce()
+        cleanupNonDisplayableMmsOnce()
         smsMutex.withLock { syncLatestSms() }
         mmsMutex.withLock { syncLatestMms() }
+    }
+
+    /*
+     * One-shot repair for Room threads whose roster was captured before the canonical
+     * fix (GROUP_MESSAGING_SPEC §1.4): the old per-PDU scan included the device's own
+     * number, so genuine 1:1 MMS threads were persisted as 2-person "groups" (self in
+     * the title, group-reply banner). Re-derives the canonical roster for every stored
+     * group thread and either demotes it back to 1:1 or replaces its roster.
+     *
+     * Room writes ONLY — never touches the telephony provider (CLAUDE.md CRITICAL).
+     * Gated by a SharedPreferences flag; the flag is set only on a clean pass, so a
+     * transient provider failure simply retries on the next catch-up.
+     */
+    private suspend fun repairRostersOnce() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_ROSTER_REPAIR_DONE, false)) return
+        try {
+            val threads = threadRepository.getThreadsWithParticipants()
+            var demoted = 0; var replaced = 0; var kept = 0; var skipped = 0
+            for (thread in threads) {
+                val current = thread.participants
+                if (current.size <= 1) continue
+                // null → canonical query failed; skip rather than corrupt a real group.
+                val canonical = context.queryCanonicalParticipants(thread.id)
+                if (canonical == null) { skipped++; continue }
+                when (repairAction(canonical, current)) {
+                    RepairAction.KEEP -> kept++
+                    RepairAction.DEMOTE -> {
+                        val name = context.lookupContactName(thread.address) ?: thread.address.ifEmpty { "Unknown" }
+                        threadRepository.updateRoster(thread.id, emptyList(), name)
+                        demoted++
+                    }
+                    RepairAction.REPLACE -> {
+                        val name = canonical.joinToString(", ") { context.lookupContactName(it) ?: it }
+                        threadRepository.updateRoster(thread.id, canonical, name)
+                        replaced++
+                    }
+                }
+            }
+            syncLogger.log(TAG, "roster repair v1: demoted=$demoted replaced=$replaced kept=$kept skipped=$skipped of ${threads.size} group thread(s)")
+            prefs.edit().putBoolean(KEY_ROSTER_REPAIR_DONE, true).apply()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "roster repair failed — will retry on next catch-up", e)
+        }
+    }
+
+    /*
+     * One-shot cleanup of already-imported artifact rows (GROUP_MESSAGING_SPEC §4.2):
+     * before the m_type filter landed, non-displayable PDUs (M-Notification.ind,
+     * delivery/read reports) were imported as empty "Unknown" bubbles. Finds those rows
+     * by querying content://mms (READ only — never deleted) and removes the
+     * corresponding Room rows only.
+     *
+     * Same one-shot pattern as [repairRostersOnce]: gated by a SharedPreferences flag
+     * set only on a clean pass, so a transient provider failure simply retries on the
+     * next catch-up. Never touches the telephony provider (CLAUDE.md CRITICAL).
+     */
+    private suspend fun cleanupNonDisplayableMmsOnce() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_MTYPE_CLEANUP_DONE, false)) return
+        try {
+            val badRawIds = mutableListOf<Long>()
+            context.contentResolver.query(
+                Telephony.Mms.CONTENT_URI,
+                arrayOf("_id"),
+                "m_type NOT IN (?, ?) AND m_type IS NOT NULL",
+                arrayOf(PDU_MTYPE_SEND_REQ.toString(), PDU_MTYPE_RETRIEVE_CONF.toString()),
+                null
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow("_id")
+                while (cursor.moveToNext()) badRawIds += cursor.getLong(idIdx)
+            }
+            if (badRawIds.isNotEmpty()) {
+                messageRepository.deleteByIds(badRawIds.map { MMS_ID_OFFSET + it })
+            }
+            syncLogger.log(TAG, "mtype cleanup v1: deleted ${badRawIds.size} non-displayable MMS row(s) from Room")
+            prefs.edit().putBoolean(KEY_MTYPE_CLEANUP_DONE, true).apply()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "mtype cleanup failed — will retry on next catch-up", e)
+        }
     }
     /*
      * Fetches every SMS row whose _id is greater than the highest id already
@@ -333,7 +427,7 @@ class SmsSyncHandler @Inject constructor(
         val maxRawId = (maxStoredId - MMS_ID_OFFSET).coerceAtLeast(0L)
         debugLog("syncLatestMms: maxStoredId=$maxStoredId  maxRawId=$maxRawId")
 
-        val mmsIncProjection = arrayOf("_id", "thread_id", "date", "msg_box")
+        val mmsIncProjection = arrayOf("_id", "thread_id", "date", "msg_box", "m_type")
         // NOT IN (3, 5): exclude drafts and failed sends. Every other msg_box value
         // (inbox=1, sent=2, outbox=4 for RCS) represents a real message worth importing.
         // A single aggregate query is sufficient — no supplement cursors needed.
@@ -466,6 +560,16 @@ class SmsSyncHandler @Inject constructor(
             threadRepository.updateLastMessageAt(threadId, latest.timestamp)
             // Use emoji label for media-only MMS in the thread preview.
             threadRepository.updateLastMessagePreview(threadId, latest.previewText)
+
+            // ── Notification for newly-arrived incoming MMS (GROUP_MESSAGING_SPEC §4.1) ──
+            // One notification per thread this pass (the newest received message), mirroring
+            // SmsReceiver's per-thread style. Dedup is structural, not a separate read-state
+            // check: newMessages only ever contains rows with _id > maxStoredId, the watermark
+            // captured at the top of this sync pass, so a given provider row can appear here
+            // at most once ever — and syncLatestMms() never runs until the historical import
+            // (first_sync_completed) is done, so the initial backlog import never reaches
+            // this code path. Sent messages (isSent) are filtered out below.
+            msgs.filter { !it.isSent }.maxByOrNull { it.timestamp }?.let { notifyIncomingMms(threadId, it) }
         }
 
         /* NOTE: optimistic MMS rows are deliberately NOT cleaned up for reaction-only
@@ -515,6 +619,9 @@ class SmsSyncHandler @Inject constructor(
         val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
         val dateIdx   = cursor.getColumnIndexOrThrow("date")
         val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+        // Not OrThrow: some OEMs omit the column even when requested in the projection;
+        // isDisplayableMmsType(null) treats that as displayable (GROUP_MESSAGING_SPEC §4.2).
+        val mTypeIdx  = cursor.getColumnIndex("m_type")
 
         while (cursor.moveToNext()) {
             val rawId    = cursor.getLong(idIdx)
@@ -522,6 +629,12 @@ class SmsSyncHandler @Inject constructor(
             val threadId = cursor.getLong(threadIdx)
             val dateSec  = cursor.getLong(dateIdx)
             val msgBox   = cursor.getInt(boxIdx)
+            val mType    = if (mTypeIdx >= 0 && !cursor.isNull(mTypeIdx)) cursor.getInt(mTypeIdx) else null
+            // Non-displayable PDU (M-Notification.ind, delivery/read reports): no text/media
+            // parts, previously imported as an empty "Unknown" bubble. Skip before the
+            // per-row sub-queries below — cheaper and it also means a stray notification-ind
+            // PDU can no longer force-create a phantom thread for a brand-new contact.
+            if (!isDisplayableMmsType(mType)) continue
             val id       = MMS_ID_OFFSET + rawId
             // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
             val isSent   = msgBox != android.provider.Telephony.Mms.MESSAGE_BOX_INBOX
@@ -531,7 +644,25 @@ class SmsSyncHandler @Inject constructor(
             debugLog("syncLatestMms: rawId=$rawId  attachments=${parts.attachments.size}  firstMime=${parts.attachments.firstOrNull()?.mimeType}")
 
             if (threadId !in ensuredThreadIds) {
-                ensureThread(threadId, address, timestamp) { getMmsParticipants(rawId) }
+                val existingThread = threadRepository.getById(threadId)
+                if (existingThread == null) {
+                    // Prefer the OS's canonical roster (self already excluded); fall back to the
+                    // per-PDU addr scan only when the canonical query can't answer (GROUP_MESSAGING_SPEC §1.3).
+                    ensureThread(threadId, address, timestamp) {
+                        context.queryCanonicalParticipants(threadId) ?: run {
+                            syncLogger.log(TAG, "canonical roster empty for threadId=$threadId — falling back to per-PDU addr rows")
+                            getMmsParticipants(rawId)
+                        }
+                    }
+                } else if (existingThread.participants.isEmpty() && !isSent) {
+                    // Roster staleness hardening (GROUP_MESSAGING_SPEC §4.3): ensureThread()
+                    // above only computes a roster once, at thread creation, so a thread born
+                    // from SMS (or an earlier 1:1 MMS) would otherwise keep an empty roster
+                    // forever even after it starts receiving group MMS. Only worth re-checking
+                    // for an incoming message — a sent message can't reveal a roster the OS
+                    // doesn't already know from receiving one.
+                    promoteRosterIfGroup(threadId)
+                }
                 ensuredThreadIds += threadId
             }
 
@@ -623,6 +754,60 @@ class SmsSyncHandler @Inject constructor(
                 backupPolicy = BackupPolicy.GLOBAL,
                 participants = if (roster.size > 1) roster else emptyList()
             )
+        )
+    }
+
+    /*
+     * Roster staleness hardening (GROUP_MESSAGING_SPEC §4.3). Re-derives the canonical
+     * roster for a thread whose stored [Thread.participants] is empty; promotes it to a
+     * group only if the OS now reports more than one participant. A targeted UPDATE
+     * (ThreadRepository.updateRoster) — never touches the telephony provider, and never
+     * overwrites a user-set nickname (that column isn't part of this UPDATE statement),
+     * matching the protection [repairRostersOnce] already relies on.
+     */
+    private suspend fun promoteRosterIfGroup(threadId: Long) {
+        val canonical = context.queryCanonicalParticipants(threadId) ?: return
+        if (canonical.size <= 1) return
+        val displayName = canonical.joinToString(", ") { context.lookupContactName(it) ?: it }
+        threadRepository.updateRoster(threadId, canonical, displayName)
+        syncLogger.log(TAG, "roster staleness: promoted threadId=$threadId to group of ${canonical.size} participant(s)")
+    }
+
+    /*
+     * Posts an incoming-message notification for a newly-synced MMS (GROUP_MESSAGING_SPEC
+     * §4.1). Before this, MmsReceiver routed straight to onMmsContentChanged() and no
+     * notification was ever posted for an incoming MMS — see the investigation note in
+     * docs/GROUP_MESSAGING_SPEC.md §4. Reuses [IncomingNotifier] so SMS and MMS share one
+     * builder/style/channel/grouping instead of a second copy drifting out of sync.
+     *
+     * Group threads omit the inline reply action, same reasoning as SmsReceiver's
+     * suppression (a single-address reply can't reach the whole group). 1:1 MMS keeps it:
+     * DirectReplyReceiver always sends a plain address-based text reply, which is exactly
+     * as valid for a 1:1 MMS sender as it is for an SMS sender — no new plumbing needed.
+     */
+    private suspend fun notifyIncomingMms(threadId: Long, message: Message) {
+        val thread = threadRepository.getById(threadId) ?: return
+        if (!thread.notificationsEnabled || thread.isMuted) return
+        val isGroup = thread.participants.size > 1
+        val senderName = context.lookupContactName(message.address)
+            ?: threadRepository.getDisplayNameByAddress(message.address)
+            ?: message.address.ifEmpty { "Unknown" }
+        val title = if (isGroup) {
+            "$senderName — ${thread.nickname ?: thread.displayName}"
+        } else {
+            thread.nickname ?: senderName
+        }
+        incomingNotifier.notify(
+            // 1:1: keyed on address so an SMS and an MMS from the same contact collapse
+            // into one notification, matching SmsReceiver. Group: a thread has no single
+            // stable address, so key on the thread id instead.
+            notifKey = if (isGroup) threadId.hashCode() else message.address.hashCode(),
+            threadId = threadId,
+            address = message.address,
+            title = title,
+            body = message.previewText,
+            privacyMode = privacyModeRepository.isEnabled(),
+            allowDirectReply = !isGroup
         )
     }
 

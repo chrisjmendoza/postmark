@@ -118,6 +118,10 @@ class MessageRepository @Inject constructor(
     /** Deletes a single message by id (used to remove reaction fallback messages after parsing). */
     suspend fun deleteById(messageId: Long) = messageDao.deleteById(messageId)
 
+    /** Deletes several messages by id in one statement (used by the one-shot non-displayable
+     *  MMS cleanup — Room-side only, never touches the telephony provider). */
+    suspend fun deleteByIds(ids: List<Long>) = messageDao.deleteByIds(ids)
+
     /** Returns the latest message in a thread (used to refresh thread preview after reaction cleanup). */
     suspend fun getLatestForThread(threadId: Long): Message? =
         messageDao.getLatestForThread(threadId)?.toDomain()

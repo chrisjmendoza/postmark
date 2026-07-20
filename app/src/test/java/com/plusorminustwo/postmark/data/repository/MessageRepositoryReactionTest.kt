@@ -189,6 +189,7 @@ private class StubMessageDao : MessageDao {
     override suspend fun hasAnyMessages(): Boolean = false
     override suspend fun getMaxRestoredId(): Long? = null
     override suspend fun deleteById(messageId: Long) = Unit
+    override suspend fun deleteByIds(ids: List<Long>) = Unit
     override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
     override suspend fun markAllRead(threadId: Long) = Unit
     override suspend fun markLatestUnread(threadId: Long) = Unit

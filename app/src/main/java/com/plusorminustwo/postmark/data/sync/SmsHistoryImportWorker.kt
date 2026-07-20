@@ -309,7 +309,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         debugMmsLog("Querying content://mms …")
         val threads = mutableMapOf<Long, Thread>()
         var totalMmsCount = 0
-        val mmsProjection = arrayOf("_id", "thread_id", "date", "msg_box")
+        val mmsProjection = arrayOf("_id", "thread_id", "date", "msg_box", "m_type")
         val filter = "msg_box NOT IN (3, 5)"
         val sortDesc = "_id DESC"
 
@@ -385,6 +385,12 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
         val dateIdx   = cursor.getColumnIndexOrThrow("date")
         val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+        // Not OrThrow: some OEMs omit the column even when requested in the projection;
+        // isDisplayableMmsType(null) treats that as displayable (GROUP_MESSAGING_SPEC §4.2).
+        // A single post-query check here covers the primary URI AND every Samsung mailbox
+        // fallback URI (content://mms/inbox etc.) that also calls this function, without
+        // needing to inject the filter into each fallback's own selection string.
+        val mTypeIdx  = cursor.getColumnIndex("m_type")
 
         val startTimeMs = System.currentTimeMillis()
         val pendingMessages = mutableListOf<Message>()
@@ -422,7 +428,14 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             }
 
             // Track the lowest rawId seen — used as the phase-2 boundary in syncAllMms.
+            // Tracked regardless of displayability so phase 2's boundary can't skip past
+            // a filtered row and accidentally re-include it.
             if (rawId < minRawId) minRawId = rawId
+
+            // Non-displayable PDU (M-Notification.ind, delivery/read reports): no text/media
+            // parts, previously imported as an empty "Unknown" bubble (GROUP_MESSAGING_SPEC §4.2).
+            val mType = if (mTypeIdx >= 0 && !cursor.isNull(mTypeIdx)) cursor.getInt(mTypeIdx) else null
+            if (!isDisplayableMmsType(mType)) continue
 
             // New row — run the slow sub-queries and queue for insert.
             val parts   = getMmsBody(rawId)
@@ -433,7 +446,12 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             if (existing == null || timestamp > existing.lastMessageAt) {
                 // Only queried on the (rare) message that actually creates/updates a thread's
                 // metadata, not on every row — same cost profile as before for the common case.
-                val roster = getMmsParticipants(rawId)
+                // Prefer the OS's canonical roster (self excluded); fall back to the per-PDU
+                // addr scan only when the canonical query can't answer (GROUP_MESSAGING_SPEC §1.3).
+                val roster = applicationContext.queryCanonicalParticipants(threadId) ?: run {
+                    syncLogger.log(TAG_MMS, "canonical roster empty for threadId=$threadId — falling back to per-PDU addr rows")
+                    getMmsParticipants(rawId)
+                }
                 // Group MMS: comma-join contact names so the thread list/top bar show
                 // everyone without any UI change (MMS_AUDIT §2.3).
                 val displayName = if (roster.size > 1) {
