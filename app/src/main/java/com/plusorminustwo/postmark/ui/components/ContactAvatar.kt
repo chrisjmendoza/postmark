@@ -1,8 +1,5 @@
 package com.plusorminustwo.postmark.ui.components
 
-import android.content.ContentUris
-import android.net.Uri
-import android.provider.ContactsContract
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -22,6 +19,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.SubcomposeAsyncImage
 import com.plusorminustwo.postmark.data.contacts.ContactCaches
+import com.plusorminustwo.postmark.data.contacts.lookupContactPhotoUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -55,49 +53,15 @@ fun ContactAvatar(
     var photoUri by remember(address) { mutableStateOf(ContactCaches.photoUris.get(address)) }
     val context = LocalContext.current
 
-    // Cache miss only: resolve the photo URI in the background, then cache it.
-    // Failures (SecurityException before READ_CONTACTS is granted, null cursor) are
-    // NOT cached — photoUri stays null and the next composition retries, so a photo
-    // denied during onboarding isn't pinned to a letter avatar for the process life.
+    // Cache miss only: resolve the photo URI in the background, then re-read the cache.
+    // Reading the cache rather than the return value preserves the tri-state: a failed
+    // lookup (SecurityException before READ_CONTACTS is granted, null cursor) caches
+    // nothing, so photoUri stays null and the next composition retries — a photo denied
+    // during onboarding isn't pinned to a letter avatar for the process life.
     LaunchedEffect(address) {
         if (address.isBlank() || photoUri != null) return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            val lookupUri = Uri.withAppendedPath(
-                ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-                Uri.encode(address)
-            )
-            val resolved: String? = try {
-                context.contentResolver.query(
-                    lookupUri,
-                    arrayOf(ContactsContract.PhoneLookup._ID),
-                    null, null, null
-                )?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val contactId = cursor.getLong(0)
-                        // Build the standard contact photo URI. Coil will call
-                        // openAssetFileDescriptor() which the Contacts provider
-                        // handles efficiently, reading from the photo store.
-                        ContentUris.withAppendedId(
-                            ContactsContract.Contacts.CONTENT_URI, contactId
-                        ).let { baseUri ->
-                            Uri.withAppendedPath(
-                                baseUri,
-                                ContactsContract.Contacts.Photo.CONTENT_DIRECTORY
-                            ).toString()
-                        }
-                    } else {
-                        "" // No matching contact — use LetterAvatar
-                    }
-                }
-            } catch (_: Exception) {
-                null
-            }
-            if (resolved != null) {
-                ContactCaches.photoUris.put(address, resolved)
-                ContactCaches.ensureInvalidationObserver(context)
-                photoUri = resolved
-            }
-        }
+        withContext(Dispatchers.IO) { context.lookupContactPhotoUri(address) }
+        photoUri = ContactCaches.photoUris.get(address)
     }
 
     when {

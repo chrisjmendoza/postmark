@@ -5,11 +5,21 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Shader
+import android.graphics.Typeface
+import android.media.ThumbnailUtils
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import com.plusorminustwo.postmark.PostmarkApplication
 import com.plusorminustwo.postmark.R
+import com.plusorminustwo.postmark.data.contacts.loadContactPhotoBitmap
 import com.plusorminustwo.postmark.ui.MainActivity
+import com.plusorminustwo.postmark.ui.components.avatarColor
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -121,12 +131,65 @@ class IncomingNotifier @Inject constructor(
             // Group threads omit the inline reply — it could only reach one participant.
             if (allowDirectReply) builder.addAction(replyAction)
             builder.addAction(markReadAction)
+            // Sender avatar. Omitted under privacy mode for the same reason the name and
+            // body are redacted — a face identifies the sender as plainly as their name.
+            builder.setLargeIcon(senderAvatar(address, title))
         }
 
         nm.notify(notifKey, builder.build())
 
         // ── Summary notification ──────────────────────────────────────────────────
         updateSummaryNotification(nm)
+    }
+
+    /**
+     * The circular avatar shown as the notification's large icon: the contact's photo when
+     * they have one, otherwise the same letter-on-color avatar the conversation list draws.
+     *
+     * Falling back to the letter avatar rather than to nothing is deliberate — a null large
+     * icon leaves the launcher icon in its place, so every notification from an unsaved
+     * number would look identical.
+     *
+     * Cropped to a circle here rather than relying on the system: notification large icons
+     * are only shape-masked on newer platforms, and [IconCompat.createWithAdaptiveBitmap]
+     * would zoom into the adaptive-icon safe zone and cut off the edges of a face.
+     *
+     * Blocking IO (photo decode) — [notify] is called from Dispatchers.IO on both paths.
+     */
+    private fun senderAvatar(address: String, displayName: String): Bitmap {
+        val size = context.resources.getDimensionPixelSize(
+            android.R.dimen.notification_large_icon_width
+        )
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val radius = size / 2f
+        val photo = context.loadContactPhotoBitmap(address)
+
+        if (photo != null) {
+            // extractThumbnail center-crops, so a non-square photo isn't squashed.
+            val square = ThumbnailUtils.extractThumbnail(photo, size, size)
+            canvas.drawCircle(radius, radius, radius, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = BitmapShader(square, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            })
+        } else {
+            // Seeded on address, matching ContactAvatar — the same contact gets the same
+            // color in the notification and in the app.
+            canvas.drawCircle(radius, radius, radius, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = avatarColor(address).toArgb()
+            })
+            val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+                textSize = size * 0.4f
+                textAlign = Paint.Align.CENTER
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+            }
+            val letter = displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+            // Center the glyph on its own metrics, not on the text origin (a baseline at
+            // the circle's midpoint would sit visibly low).
+            val baseline = radius - (textPaint.descent() + textPaint.ascent()) / 2f
+            canvas.drawText(letter, radius, baseline, textPaint)
+        }
+        return output
     }
 
     /**
