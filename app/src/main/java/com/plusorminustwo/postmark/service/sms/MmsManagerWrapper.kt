@@ -82,25 +82,37 @@ class MmsManagerWrapper @Inject constructor(
      * compression, PDU build error, file I/O, or telephony exception) so the caller
      * can immediately mark the optimistic message as FAILED.
      *
-     * @param toAddress   Recipient phone number (E.164 or local format).
-     * @param textBody    Optional caption / text body to include alongside the media.
-     * @param attachments Media parts to send (image, audio, or video), in display order.
+     * @param toAddresses Recipient phone numbers (E.164 or local format); one entry for a 1:1
+     *                    send, the full roster for a group MMS. Must be non-empty.
+     * @param textBody    Optional caption / text body to include alongside the media. When there
+     *                    are no [attachments] this is the whole message (text-only group MMS).
+     * @param attachments Media parts to send (image, audio, or video), in display order. May be
+     *                    empty when [textBody] is non-blank (text-only MMS).
      * @param messageId   Optimistic Room ID; used to name the temp PDU/cache files and in logs.
      * @param sentIntent  [android.app.PendingIntent] fired when the MMSC accepts/rejects the message.
      */
     suspend fun sendMms(
-        toAddress: String,
+        toAddresses: List<String>,
         textBody: String,
         attachments: List<MessageAttachment>,
         messageId: Long,
         sentIntent: android.app.PendingIntent?
     ): Boolean = withContext(Dispatchers.IO) {
-        if (attachments.isEmpty()) {
-            syncLogger.logError(TAG, "sendMms FAILED — no attachments for messageId=$messageId")
+        if (toAddresses.isEmpty()) {
+            syncLogger.logError(TAG, "sendMms FAILED — no recipients for messageId=$messageId")
             return@withContext false
         }
-        syncLogger.log(TAG, "sendMms start: to=${toAddress.redactPhone()} attachments=${attachments.size} messageId=$messageId")
+        // Text-only MMS is allowed (group text replies); only a completely empty message aborts.
+        if (attachments.isEmpty() && textBody.isBlank()) {
+            syncLogger.logError(TAG, "sendMms FAILED — no attachments and no text for messageId=$messageId")
+            return@withContext false
+        }
+        val redactedTo = toAddresses.joinToString { it.redactPhone() }
+        syncLogger.log(TAG, "sendMms start: to=[$redactedTo] attachments=${attachments.size} messageId=$messageId")
 
+        // Text-only sends skip all byte-read/budget/compression stages; finalParts stays empty.
+        val finalParts = ArrayList<MmsPduBuilder.MediaPart>(attachments.size)
+        if (attachments.isNotEmpty()) {
         // ── 1. Read attachment bytes (with filesDir cache for retry resilience) ─
         /* Photo-picker URIs (content://media/picker_get_content/…) are only valid
          * within the originating Activity's lifecycle; a process restart revokes
@@ -179,7 +191,6 @@ class MmsManagerWrapper @Inject constructor(
         }
 
         // ── 1d. Compress images/video that exceed their allocated share ──────
-        val finalParts = ArrayList<MmsPduBuilder.MediaPart>(attachments.size)
         for (index in attachments.indices) {
             val mime  = attachments[index].mimeType.lowercase()
             val bytes = mediaBytesList[index]
@@ -211,13 +222,14 @@ class MmsManagerWrapper @Inject constructor(
             // compressImage always re-encodes as JPEG regardless of input format
             finalParts += MmsPduBuilder.MediaPart(compressed, "image/jpeg")
         }
+        } // end attachments.isNotEmpty()
 
         // ── 2. Build the MMS PDU ──────────────────────────────────────────────
         val pdu = try {
             MmsPduBuilder.buildPdu(
-                toAddress  = toAddress,
-                mediaParts = finalParts,
-                textBody   = textBody
+                toAddresses = toAddresses,
+                mediaParts  = finalParts,
+                textBody    = textBody
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to build MMS PDU", e)
@@ -267,7 +279,7 @@ class MmsManagerWrapper @Inject constructor(
         try {
             smsManager.sendMultimediaMessage(context, pduUri, null, null, sentIntent)
             Log.i(TAG, "sendMms: sendMultimediaMessage dispatched for messageId=$messageId")
-            syncLogger.log(TAG, "sendMms dispatched to radio: to=${toAddress.redactPhone()} messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
+            syncLogger.log(TAG, "sendMms dispatched to radio: to=[$redactedTo] messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
         } catch (e: Exception) {
             Log.e(TAG, "sendMultimediaMessage failed", e)
             syncLogger.logError(TAG, "sendMms FAILED — sendMultimediaMessage threw for messageId=$messageId", e)
@@ -290,7 +302,7 @@ class MmsManagerWrapper @Inject constructor(
      *  Returns the new raw content://mms _id, or null on any failure (callers keep
      *  the optimistic Room row as the fallback record). */
     suspend fun persistSentMms(
-        toAddress: String,
+        toAddresses: List<String>,
         textBody: String,
         attachments: List<MessageAttachment>,
         messageId: Long,      // the optimistic tempId — keys the mms_attach_ cache files
@@ -328,9 +340,11 @@ class MmsManagerWrapper @Inject constructor(
                 return@withContext null
             }
 
-            // ── 2. Canonical thread id for the recipient ──────────────────────────────
+            // ── 2. Canonical thread id for the recipient(s) ───────────────────────────
+            // The Set overload derives the group thread id from the full roster (precedent
+            // at RestoreWorker.kt:325); for a single recipient it equals the 1:1 thread id.
             val threadId = try {
-                Telephony.Threads.getOrCreateThreadId(context, toAddress)
+                Telephony.Threads.getOrCreateThreadId(context, toAddresses.toSet())
             } catch (e: Exception) {
                 // An orphaned-thread row is worse than none; the Room copy stays correct.
                 syncLogger.logError(TAG, "persistSentMms: getOrCreateThreadId failed — not inserting an orphaned row (messageId=$messageId)", e)
@@ -402,7 +416,7 @@ class MmsManagerWrapper @Inject constructor(
                 }
             }
 
-            // ── 5. Addr rows: FROM (self placeholder) + TO ────────────────────────────
+            // ── 5. Addr rows: FROM (self placeholder) + one TO per recipient ──────────
             val addrUri = Uri.parse("content://mms/$rawId/addr")
             try {
                 context.contentResolver.insert(addrUri, ContentValues().apply {
@@ -410,11 +424,13 @@ class MmsManagerWrapper @Inject constructor(
                     put("type", 137)
                     put("charset", 106)
                 })
-                context.contentResolver.insert(addrUri, ContentValues().apply {
-                    put("address", toAddress)                // TO
-                    put("type", 151)
-                    put("charset", 106)
-                })
+                toAddresses.forEach { recipient ->
+                    context.contentResolver.insert(addrUri, ContentValues().apply {
+                        put("address", recipient)            // TO — one row per group participant
+                        put("type", 151)
+                        put("charset", 106)
+                    })
+                }
             } catch (e: Exception) {
                 syncLogger.logError(TAG, "persistSentMms: failed writing addr rows messageId=$messageId", e)
             }
@@ -1052,10 +1068,11 @@ internal object MmsPduBuilder {
     // ── Entry point ───────────────────────────────────────────────────────────
 
     fun buildPdu(
-        toAddress: String,
+        toAddresses: List<String>,
         mediaParts: List<MediaPart>,
         textBody: String
     ): ByteArray {
+        require(toAddresses.isNotEmpty()) { "buildPdu requires at least one recipient" }
         val out = ByteArrayOutputStream()
 
         // ── MMS headers ───────────────────────────────────────────────────────
@@ -1079,10 +1096,13 @@ internal object MmsPduBuilder {
         // From: insert-address-token (MMSC fills in the sender's number)
         out.write(FIELD_FROM); out.write(0x01); out.write(VALUE_INSERT_ADDR_TOKEN)
 
-        // To: address with /TYPE=PLMN routing suffix (null-terminated)
-        val addr = normalizeAddress(toAddress)
-        out.write(FIELD_TO)
-        out.write(addr.toByteArray(Charsets.US_ASCII)); out.write(0x00)
+        // To: one repeated To header per recipient (WSP encodes multiple recipients as
+        // repeated headers, not a comma-joined value). Each is the /TYPE=PLMN-suffixed
+        // address as a null-terminated encoded-string. Order preserved.
+        for (recipient in toAddresses) {
+            out.write(FIELD_TO)
+            out.write(normalizeAddress(recipient).toByteArray(Charsets.US_ASCII)); out.write(0x00)
+        }
 
         out.write(FIELD_MESSAGE_CLASS); out.write(VALUE_PERSONAL)
         out.write(FIELD_PRIORITY);      out.write(VALUE_NORMAL)
@@ -1157,6 +1177,12 @@ internal object MmsPduBuilder {
         }
 
         val body = buildString {
+            if (media.isEmpty()) {
+                // Text-only MMS (group text reply): a single slide carrying just the caption.
+                // No media means no visible region — only the Text region above is emitted.
+                if (hasText) append("""<par dur="5000ms"><text src="text.txt" region="Text"/></par>""")
+                return@buildString
+            }
             media.forEachIndexed { index, (filename, mime) ->
                 val dur = if (mime.startsWith("audio/") || mime.startsWith("video/")) "indefinite" else "5000ms"
                 append("""<par dur="$dur">""")

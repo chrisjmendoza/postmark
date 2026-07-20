@@ -8,6 +8,8 @@ import android.net.Uri
 import android.os.SystemClock
 import android.provider.BlockedNumberContract
 import android.provider.Telephony
+import android.telephony.SmsManager
+import android.telephony.SubscriptionManager
 import androidx.core.content.FileProvider
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -31,6 +33,7 @@ import com.plusorminustwo.postmark.domain.model.RESTORED_ID_OFFSET
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
+import com.plusorminustwo.postmark.domain.model.recipientsFor
 import com.plusorminustwo.postmark.domain.model.decodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
@@ -137,6 +140,26 @@ class ThreadViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
+
+    /**
+     * Whether this SIM's carrier permits group MMS — read once from SmsManager carrier
+     * config ([SmsManager.MMS_CONFIG_GROUP_MMS_ENABLED], default true). When false, the
+     * ReplyBar keeps the group banner (with carrier-specific copy) and group threads fall
+     * back to today's 1:1 send. This is a rare carrier state; we do NOT build a speculative
+     * per-recipient broadcast mode for it (GROUP_MESSAGING_SPEC §2.1).
+     */
+    val groupSendSupported: Boolean = try {
+        val subId = SmsManager.getDefaultSmsSubscriptionId()
+        val sm = if (subId != SubscriptionManager.INVALID_SUBSCRIPTION_ID)
+            context.getSystemService(SmsManager::class.java).createForSubscriptionId(subId)
+        else context.getSystemService(SmsManager::class.java)
+        sm.carrierConfigValues.getBoolean(SmsManager.MMS_CONFIG_GROUP_MMS_ENABLED, true)
+    } catch (_: Exception) { true }
+
+    /** Recipients for an outgoing send: the full roster for a group thread, unless the
+     *  carrier disables group MMS — then it collapses to the single 1:1 address. */
+    private fun sendRecipientsFor(thread: Thread): List<String> =
+        if (groupSendSupported) recipientsFor(thread) else listOf(thread.address)
 
     init {
         // Mark all messages in this thread as read as soon as the thread is opened.
@@ -1056,7 +1079,13 @@ class ThreadViewModel @Inject constructor(
             val now    = System.currentTimeMillis()
             val tempId = -now
 
-            if (attachments.isNotEmpty()) {
+            /* Recipients: the full roster for a group thread, else the single address.
+             * A group text-only reply must go as MMS (recipients.size > 1) so it reaches
+             * everyone in one group thread; 1:1 text-only stays on the cheap SMS path. */
+            val recipients = sendRecipientsFor(thread)
+            val useMms = attachments.isNotEmpty() || recipients.size > 1
+
+            if (useMms) {
                 // ── MMS path ──────────────────────────────────────────────────
                 // Optimistic message shown immediately with attachment previews.
                 val optimistic = Message(
@@ -1087,13 +1116,14 @@ class ThreadViewModel @Inject constructor(
                         action = MmsSentReceiver.ACTION_MMS_SENT
                         putExtra(MmsSentReceiver.EXTRA_MESSAGE_ID, tempId)
                         putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, now)
-                        // persistSentMms writes the canonical thread_id and TO addr row from this.
-                        putExtra(MmsSentReceiver.EXTRA_TO_ADDRESS, thread.address)
+                        // persistSentMms writes the canonical thread_id and one TO addr row
+                        // per recipient from this roster.
+                        putExtra(MmsSentReceiver.EXTRA_TO_ADDRESSES, recipients.toTypedArray())
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )
                 val dispatched = mmsManagerWrapper.sendMms(
-                    toAddress   = thread.address,
+                    toAddresses = recipients,
                     textBody    = text,
                     attachments = attachments,
                     messageId   = tempId,
@@ -1170,7 +1200,12 @@ class ThreadViewModel @Inject constructor(
         if (message.deliveryStatus != DELIVERY_STATUS_FAILED) return
         viewModelScope.launch {
             messageRepository.updateDeliveryStatus(messageId, DELIVERY_STATUS_PENDING)
-            if (message.isMms && message.attachments.isNotEmpty()) {
+            /* Resolve recipients from the thread, not message.address — a failed group send
+             * must retry to the full roster, never to a single participant. A group thread
+             * (recipients.size > 1) always retries via MMS, even a text-only reply. */
+            val recipients = uiState.value.thread?.let { sendRecipientsFor(it) } ?: listOf(message.address)
+            val useMms = message.isMms || recipients.size > 1
+            if (useMms) {
                 /* MMS retry: rebuild the sentIntent (the original was FLAG_ONE_SHOT and
                  * has already been consumed) then re-invoke MmsManagerWrapper with the
                  * same attachments. */
@@ -1185,13 +1220,13 @@ class ThreadViewModel @Inject constructor(
                          * imported row with this temp row even when the retry happens outside
                          * the match window — and the bubble keeps its original position. */
                         putExtra(MmsSentReceiver.EXTRA_SENT_AT_MS, message.timestamp)
-                        // persistSentMms writes the canonical thread_id and TO addr row from this.
-                        putExtra(MmsSentReceiver.EXTRA_TO_ADDRESS, message.address)
+                        // persistSentMms writes the canonical thread_id and one TO addr row per recipient.
+                        putExtra(MmsSentReceiver.EXTRA_TO_ADDRESSES, recipients.toTypedArray())
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
                 )
                 val dispatched = mmsManagerWrapper.sendMms(
-                    toAddress   = message.address,
+                    toAddresses = recipients,
                     textBody    = message.body,
                     attachments = message.attachments,
                     messageId   = messageId,
@@ -1201,7 +1236,7 @@ class ThreadViewModel @Inject constructor(
                     messageRepository.updateDeliveryStatus(messageId, DELIVERY_STATUS_FAILED)
                 }
             } else {
-                // SMS retry: re-send as plain text.
+                // SMS retry: re-send as plain text (1:1 thread only).
                 smsManagerWrapper.sendTextMessage(message.address, message.body, messageId)
             }
         }

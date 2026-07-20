@@ -382,6 +382,7 @@ fun ThreadScreen(
         chatBackgroundFile = chatBackgroundFile,
         appAccentArgb = appAccentArgb,
         participantNames = participantNames,
+        groupSendSupported = viewModel.groupSendSupported,
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
         scrollToBottomEvent = viewModel.scrollToBottomEvent,
@@ -487,6 +488,9 @@ private fun ThreadContent(
     appAccentArgb: Int? = null,
     // address → contact name for group threads; empty for 1:1 threads.
     participantNames: Map<String, String> = emptyMap(),
+    // Whether this SIM's carrier permits group MMS (read once from carrier config). When
+    // false, group threads fall back to 1:1 sending and the ReplyBar keeps the banner.
+    groupSendSupported: Boolean = true,
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
     scrollToBottomEvent: SharedFlow<Long> = MutableSharedFlow(),
@@ -1175,9 +1179,11 @@ private fun ThreadContent(
                             ?.let { uiState.renderState.items.getOrNull(it) as? ThreadListItem.Bubble }
                             ?.message
                     },
-                    // Sending is still 1:1-only (MMS_AUDIT #6) — thread.address, not the
-                    // full roster. Warn rather than silently reply to just one participant.
+                    // Group replies now send to the full roster as MMS (P1). The banner is
+                    // kept only when the carrier disables group MMS (rare) — then sending
+                    // falls back to 1:1 and we warn.
                     isGroupThread         = (uiState.thread?.participants?.size ?: 0) > 1,
+                    groupSendSupported    = groupSendSupported,
                     onTextChange          = { onReplyTextChanged(it) },
                     onAttachmentsSelected = onAttachmentsSelected,
                     onRemoveAttachment    = onRemoveAttachment,
@@ -2739,9 +2745,11 @@ private fun ReplyBar(
     pendingAttachments: List<MessageAttachment>,
     // Non-null when the user has swiped to quote a message; drives the quote strip.
     replyingTo: Message? = null,
-    // True when the thread has more than one MMS participant. Sending a group MMS
-    // isn't implemented yet (MMS_AUDIT #6) — see the warning row rendered below.
+    // True when the thread has more than one MMS participant.
     isGroupThread: Boolean = false,
+    // Whether the carrier permits group MMS. When false on a group thread, the send
+    // falls back to 1:1 and the warning row below is shown.
+    groupSendSupported: Boolean = true,
     onTextChange: (String) -> Unit,
     onAttachmentsSelected: (List<MessageAttachment>) -> Unit,
     onRemoveAttachment: (Int) -> Unit,
@@ -2827,10 +2835,10 @@ private fun ReplyBar(
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
                 // ── Group reply notice ───────────────────────────────────────────
-                // Group MMS sending isn't implemented — a reply here would silently
-                // go to only one participant, not the whole group. Warn instead.
+                // Group MMS sending works (P1); the notice remains only when the carrier
+                // disables group MMS, in which case a reply falls back to one participant.
                 AnimatedVisibility(
-                    visible = isGroupThread,
+                    visible = isGroupThread && !groupSendSupported,
                     enter   = expandVertically() + fadeIn(),
                     exit    = shrinkVertically() + fadeOut()
                 ) {
@@ -2851,7 +2859,7 @@ private fun ReplyBar(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "Group replies aren't supported yet — this will only reply to one participant.",
+                            text = "Your carrier doesn't support group MMS — this will only reply to one participant.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer
                         )

@@ -125,7 +125,7 @@ class ForwardPickerViewModel @Inject constructor(
         messageRepository.insert(optimistic)
         if (source.attachments.isNotEmpty()) {
             mmsManagerWrapper.sendMms(
-                toAddress = destAddress,
+                toAddresses = listOf(destAddress),
                 textBody = source.body,
                 attachments = source.attachments,
                 messageId = tempId,

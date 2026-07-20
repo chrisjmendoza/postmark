@@ -49,7 +49,11 @@ class MmsSentReceiver : BroadcastReceiver() {
         if (intent.action != ACTION_MMS_SENT) return
         val messageId = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
         val sentAtMs  = intent.getLongExtra(EXTRA_SENT_AT_MS, -1L)
-        val toAddress = intent.getStringExtra(EXTRA_TO_ADDRESS)
+        // EXTRA_TO_ADDRESSES is the group-aware roster; fall back to the old single-address
+        // extra for PendingIntents already in flight across this update (delete next release).
+        val toAddresses = intent.getStringArrayExtra(EXTRA_TO_ADDRESSES)?.toList()
+            ?: intent.getStringExtra(EXTRA_TO_ADDRESS)?.let { listOf(it) }
+            ?: emptyList()
         if (messageId == -1L) return
 
         val status = if (resultCode == Activity.RESULT_OK) DELIVERY_STATUS_SENT else DELIVERY_STATUS_FAILED
@@ -89,11 +93,11 @@ class MmsSentReceiver : BroadcastReceiver() {
                         optimistic == null ->
                             // Already replaced/deleted; nothing recoverable (do NOT reconstruct from extras).
                             syncLogger.logError(TAG, "MmsSentReceiver: optimistic row messageId=$messageId already gone — cannot persist sent MMS")
-                        toAddress.isNullOrEmpty() ->
-                            syncLogger.logError(TAG, "MmsSentReceiver: missing toAddress — cannot persist sent MMS for messageId=$messageId")
+                        toAddresses.isEmpty() ->
+                            syncLogger.logError(TAG, "MmsSentReceiver: missing toAddresses — cannot persist sent MMS for messageId=$messageId")
                         else -> {
                             val rawId = mmsManagerWrapper.persistSentMms(
-                                toAddress   = toAddress,
+                                toAddresses = toAddresses,
                                 textBody    = optimistic.body,
                                 attachments = optimistic.attachments,
                                 messageId   = messageId,
@@ -126,8 +130,11 @@ class MmsSentReceiver : BroadcastReceiver() {
         /** Epoch-millis at which the optimistic message was created. [MmsManagerWrapper.persistSentMms]
          *  writes it (in seconds) as the provider row's date so sync restores send-time ordering. */
         const val EXTRA_SENT_AT_MS = "extra_sent_at_ms"
-        /** Recipient address; [MmsManagerWrapper.persistSentMms] writes the canonical thread_id
-         *  and the TO addr row from it. */
+        /** Recipient roster (String array); [MmsManagerWrapper.persistSentMms] writes the
+         *  canonical thread_id and one TO addr row per recipient from it. */
+        const val EXTRA_TO_ADDRESSES = "extra_to_addresses"
+        /** Deprecated single-address extra — kept only so PendingIntents built before this
+         *  update still persist correctly. Remove next release. */
         const val EXTRA_TO_ADDRESS = "extra_to_address"
         private const val TAG      = "MmsSentReceiver"
     }
