@@ -15,7 +15,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontWeight
+import com.plusorminustwo.postmark.R
 import com.plusorminustwo.postmark.domain.customization.ColorMath
 import com.plusorminustwo.postmark.domain.customization.ContactPalette
 
@@ -202,12 +207,53 @@ fun applyAppAccent(scheme: ColorScheme, accentArgb: Int, isDark: Boolean): Color
 @Composable
 fun isAppInDarkTheme(): Boolean = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
+// ── Bundled typefaces ────────────────────────────────────────────────────────
+// All OFL; license texts live in docs/font-licenses/. Every family except Poppins ships
+// as a single VARIABLE font file, so one resource covers every weight: each registration
+// pins the same file to a different `wght` axis value. That needs API 26 for the platform
+// to honour the variation settings, which is exactly this app's minSdk — no fallback path.
+//
+// The four weights registered are the ones Material 3's Typography actually asks for
+// (W400 body/headline, W500 title/label) plus W600/W700 for emphasis; without them the
+// platform would synthesize a slanted-and-smeared bold instead of using the real design.
+// Poppins has no variable release, so it ships static Regular + Bold — Compose resolves
+// its W500/W600 requests to the nearest real weight rather than faking one.
+
+@OptIn(ExperimentalTextApi::class)
+private fun variableFont(resId: Int, weight: FontWeight) =
+    Font(resId, weight, variationSettings = FontVariation.Settings(FontVariation.weight(weight.weight)))
+
+private fun variableFamily(resId: Int) = FontFamily(
+    variableFont(resId, FontWeight.Normal),
+    variableFont(resId, FontWeight.Medium),
+    variableFont(resId, FontWeight.SemiBold),
+    variableFont(resId, FontWeight.Bold)
+)
+
+private val InterFamily by lazy { variableFamily(R.font.inter) }
+private val NunitoFamily by lazy { variableFamily(R.font.nunito) }
+private val LoraFamily by lazy { variableFamily(R.font.lora) }
+private val PlayfairDisplayFamily by lazy { variableFamily(R.font.playfair_display) }
+private val JetBrainsMonoFamily by lazy { variableFamily(R.font.jetbrains_mono) }
+private val PoppinsFamily by lazy {
+    FontFamily(
+        Font(R.font.poppins_regular, FontWeight.Normal),
+        Font(R.font.poppins_bold, FontWeight.Bold)
+    )
+}
+
 /** Maps [FontFamilyPreference] to the Compose [FontFamily] it applies; SYSTEM applies
  *  none (the platform default), so callers skip building a custom [Typography]. */
 fun FontFamilyPreference.toFontFamilyOrNull(): FontFamily? = when (this) {
-    FontFamilyPreference.SYSTEM    -> null
-    FontFamilyPreference.SERIF     -> FontFamily.Serif
-    FontFamilyPreference.MONOSPACE -> FontFamily.Monospace
+    FontFamilyPreference.SYSTEM           -> null
+    FontFamilyPreference.SERIF            -> FontFamily.Serif
+    FontFamilyPreference.MONOSPACE        -> FontFamily.Monospace
+    FontFamilyPreference.INTER            -> InterFamily
+    FontFamilyPreference.POPPINS          -> PoppinsFamily
+    FontFamilyPreference.NUNITO           -> NunitoFamily
+    FontFamilyPreference.LORA             -> LoraFamily
+    FontFamilyPreference.PLAYFAIR_DISPLAY -> PlayfairDisplayFamily
+    FontFamilyPreference.JETBRAINS_MONO   -> JetBrainsMonoFamily
 }
 
 /** Copies [typography]'s 15 M3 text styles with [fontFamily] applied to each. */

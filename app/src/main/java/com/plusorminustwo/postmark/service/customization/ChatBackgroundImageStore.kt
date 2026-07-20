@@ -12,6 +12,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import com.plusorminustwo.postmark.data.preferences.ChatBackgroundPreferenceRepository
+import com.plusorminustwo.postmark.data.preferences.HomeBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.customization.BackgroundPlacement
 import com.plusorminustwo.postmark.domain.customization.BackgroundPlacementMath
@@ -51,7 +52,8 @@ import javax.inject.Singleton
 class ChatBackgroundImageStore @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val threadRepository: ThreadRepository,
-    private val prefRepo: ChatBackgroundPreferenceRepository
+    private val prefRepo: ChatBackgroundPreferenceRepository,
+    private val homePrefRepo: HomeBackgroundPreferenceRepository
 ) {
     private val dir: File
         get() = File(context.filesDir, "chat_backgrounds")
@@ -180,24 +182,31 @@ class ChatBackgroundImageStore @Inject constructor(
     }
 
     /** Deletes the image behind [id] only when nothing references it any more — no thread
-     *  and not the global default (see [shouldDeleteImage]). */
-    suspend fun deleteIfUnreferenced(id: String, referencedByAnyThread: Boolean, isGlobalDefault: Boolean) {
-        if (shouldDeleteImage(referencedByAnyThread, isGlobalDefault)) delete(id)
+     *  and no app-level preference (see [shouldDeleteImage]). */
+    suspend fun deleteIfUnreferenced(id: String, referencedByAnyThread: Boolean, referencedByAnyPreference: Boolean) {
+        if (shouldDeleteImage(referencedByAnyThread, referencedByAnyPreference)) delete(id)
     }
 
     /**
      * Garbage-collects the PREVIOUS background image after a change from [oldId] to
      * [newId]: deletes [oldId]'s trio only when it was a custom image, actually changed,
-     * and is now referenced by nothing (no thread override and not the global default).
-     * A no-op for built-in/null ids or when the id is unchanged. Centralizes the orphan
-     * ownership both ViewModels previously duplicated — the store owns the file lifecycle.
+     * and is now referenced by nothing. A no-op for built-in/null ids or when the id is
+     * unchanged. Centralizes the orphan ownership both ViewModels previously duplicated —
+     * the store owns the file lifecycle.
+     *
+     * "Referenced" spans EVERY surface an image id can be stored on: a per-thread override,
+     * the global chat default, and the home-screen background. The home check matters even
+     * though this store is named for chat — the two preferences share one id vocabulary and
+     * one file directory, so the same photo can back both, and skipping the home check would
+     * let "change my chat background" silently blank the conversation list.
      */
     suspend fun cleanupAfterChange(oldId: String?, newId: String?) {
         if (!ChatBackgrounds.isImageId(oldId) || oldId == newId) return
         deleteIfUnreferenced(
             id = oldId!!,
             referencedByAnyThread = threadRepository.countByChatBackground(oldId) > 0,
-            isGlobalDefault = prefRepo.backgroundId.value == oldId
+            referencedByAnyPreference = prefRepo.backgroundId.value == oldId ||
+                homePrefRepo.backgroundId.value == oldId
         )
     }
 
@@ -277,10 +286,11 @@ class ChatBackgroundImageStore @Inject constructor(
         private const val MAX_DIMENSION = 1440
         private const val JPEG_QUALITY = 85
 
-        /** An orphaned image (no thread override references it, and it isn't the global
-         *  default) can be deleted. Pure so it's unit-testable. */
-        fun shouldDeleteImage(referencedByAnyThread: Boolean, isGlobalDefault: Boolean): Boolean =
-            !referencedByAnyThread && !isGlobalDefault
+        /** An orphaned image — no thread override references it, and no app-level preference
+         *  (global chat default or home-screen background) does either — can be deleted.
+         *  Pure so it's unit-testable. */
+        fun shouldDeleteImage(referencedByAnyThread: Boolean, referencedByAnyPreference: Boolean): Boolean =
+            !referencedByAnyThread && !referencedByAnyPreference
 
         /** Largest power-of-two subsample that keeps both dimensions >= [maxDim] (the
          *  standard BitmapFactory pattern; a final exact scale in [decodeOriented] finishes the job). */

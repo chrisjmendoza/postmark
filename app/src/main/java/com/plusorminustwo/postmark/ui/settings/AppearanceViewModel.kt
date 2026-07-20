@@ -4,11 +4,13 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.preferences.AppAccentPreferenceRepository
+import com.plusorminustwo.postmark.data.preferences.BackgroundIdPreference
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
 import com.plusorminustwo.postmark.data.preferences.BubbleStylePreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.ChatBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.DynamicColorPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.FontFamilyPreferenceRepository
+import com.plusorminustwo.postmark.data.preferences.HomeBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.ThemePreferenceRepository
 import com.plusorminustwo.postmark.domain.customization.BackgroundPlacement
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
@@ -39,6 +41,7 @@ class AppearanceViewModel @Inject constructor(
     private val fontScaleRepo: BubbleFontScaleRepository,
     private val bubbleStyleRepo: BubbleStylePreferenceRepository,
     private val chatBackgroundRepo: ChatBackgroundPreferenceRepository,
+    private val homeBackgroundRepo: HomeBackgroundPreferenceRepository,
     private val dynamicColorRepo: DynamicColorPreferenceRepository,
     private val appAccentRepo: AppAccentPreferenceRepository,
     private val imageStore: ChatBackgroundImageStore
@@ -54,6 +57,9 @@ class AppearanceViewModel @Inject constructor(
 
     /** Global default chat-background id; null = none. Shared with ThreadViewModel. */
     val globalChatBackgroundId: StateFlow<String?> = chatBackgroundRepo.backgroundId
+
+    /** Conversation-list background id; null = none. Shared with ConversationsViewModel. */
+    val homeBackgroundId: StateFlow<String?> = homeBackgroundRepo.backgroundId
 
     /** Whether Material You (wallpaper-derived dynamic color) is enabled. Only applied
      *  on API 31+; the Appearance screen hides this row below that. */
@@ -85,11 +91,14 @@ class AppearanceViewModel @Inject constructor(
     /** Updates the global app accent; pass null to reset to the default brand blue. */
     fun setAppAccent(argb: Int?) = appAccentRepo.set(argb)
 
-    /** Sets the global default chat background. This picker has no "Default" option, so
-     *  [ChatBackgrounds.None]'s id is normalized to null — the repository's own "unset"
+    /** Sets the background for [target]. Neither picker has a "Default" option, so
+     *  [ChatBackgrounds.None]'s id is normalized to null — the repositories' own "unset"
      *  value — keeping only one representation of "no background". */
-    fun setChatBackground(id: String?) =
-        applyGlobalBackground(ChatBackgrounds.toGlobalPreferenceId(id))
+    fun setBackground(target: BackgroundTarget, id: String?) =
+        applyBackground(target, ChatBackgrounds.toGlobalPreferenceId(id))
+
+    /** The currently-set id for [target]; null = unset. */
+    private fun currentId(target: BackgroundTarget): String? = repoFor(target).backgroundId.value
 
     // ── Placement editor ──────────────────────────────────────────────────────
 
@@ -98,10 +107,19 @@ class AppearanceViewModel @Inject constructor(
     val placementRequest: StateFlow<PlacementRequest?> = _placementRequest
 
     /**
+     * Which surface the open placement editor will apply to. Held here rather than on
+     * [PlacementRequest] because that type is shared with the per-thread editor in
+     * ContactDetailScreen, which has no such choice to make. Only meaningful while
+     * [_placementRequest] is non-null; the editor is modal, so exactly one is ever in flight.
+     */
+    private var placementTarget: BackgroundTarget = BackgroundTarget.CHAT
+
+    /**
      * Opens the placement editor for a freshly-picked gallery [uri]. Reads its oriented size
      * (silent no-op if unreadable — the store logs it) and opens on [BackgroundPlacement.FILL].
      */
-    fun beginPlacementForPick(uri: Uri) {
+    fun beginPlacementForPick(target: BackgroundTarget, uri: Uri) {
+        placementTarget = target
         viewModelScope.launch {
             val (w, h) = imageStore.orientedSize(uri) ?: return@launch
             _placementRequest.value = PlacementRequest(
@@ -112,12 +130,13 @@ class AppearanceViewModel @Inject constructor(
     }
 
     /**
-     * Re-opens the editor for the CURRENT global image background to adjust its placement. A
-     * no-op unless the global default is an image id; opens on the stored placement, or
+     * Re-opens the editor for [target]'s CURRENT image background to adjust its placement. A
+     * no-op unless that background is an image id; opens on the stored placement, or
      * [BackgroundPlacement.FILL] for a legacy image with no sidecar.
      */
-    fun beginPlacementForAdjust() {
-        val id = chatBackgroundRepo.backgroundId.value ?: return
+    fun beginPlacementForAdjust(target: BackgroundTarget) {
+        placementTarget = target
+        val id = currentId(target) ?: return
         if (!ChatBackgrounds.isImageId(id)) return
         viewModelScope.launch {
             val srcFile = imageStore.srcFileFor(id) ?: return@launch
@@ -134,19 +153,20 @@ class AppearanceViewModel @Inject constructor(
     fun cancelPlacement() { _placementRequest.value = null }
 
     /**
-     * Bakes [p] over the editor viewport and applies the result as the global default: a fresh
-     * save for a pick, or a re-bake for an adjust. The existing [applyGlobalBackground]
-     * garbage-collects the previous image. A save failure just closes the editor.
+     * Bakes [p] over the editor viewport and applies the result to whichever surface opened
+     * the editor: a fresh save for a pick, or a re-bake for an adjust. The existing
+     * [applyBackground] garbage-collects the previous image. A save failure just closes it.
      */
     fun confirmPlacement(p: BackgroundPlacement, vw: Int, vh: Int) {
         val request = _placementRequest.value ?: return
+        val target = placementTarget
         viewModelScope.launch {
             val newId = when {
                 request.sourceUri != null -> imageStore.saveWithPlacement(request.sourceUri, p, vw, vh)
                 request.adjustId != null -> imageStore.rebakeWithPlacement(request.adjustId, p, vw, vh)
                 else -> null
             }
-            if (newId != null) applyGlobalBackground(newId)
+            if (newId != null) applyBackground(target, newId)
             _placementRequest.value = null
         }
     }
@@ -154,11 +174,25 @@ class AppearanceViewModel @Inject constructor(
     /** Resolved file for a custom-image [id] (for the dialog thumbnail); null if missing. */
     fun chatBackgroundImageFile(id: String): File? = imageStore.fileFor(id)
 
-    /** Overwrites the global default, then lets the store garbage-collect the PREVIOUS
-     *  image if it was a custom one now referenced by nothing. */
-    private fun applyGlobalBackground(newId: String?) {
-        val old = chatBackgroundRepo.backgroundId.value
-        chatBackgroundRepo.set(newId)
+    private fun repoFor(target: BackgroundTarget): BackgroundIdPreference = when (target) {
+        BackgroundTarget.CHAT -> chatBackgroundRepo
+        BackgroundTarget.HOME -> homeBackgroundRepo
+    }
+
+    /** Overwrites [target]'s background, then lets the store garbage-collect the PREVIOUS
+     *  image if it was a custom one now referenced by nothing — including by the OTHER
+     *  target, which the store checks (see ChatBackgroundImageStore.cleanupAfterChange). */
+    private fun applyBackground(target: BackgroundTarget, newId: String?) {
+        val repo = repoFor(target)
+        val old = repo.backgroundId.value
+        repo.set(newId)
         viewModelScope.launch { imageStore.cleanupAfterChange(old, newId) }
     }
 }
+
+/**
+ * Which surface a background choice applies to. Both draw from the same id vocabulary
+ * ([ChatBackgrounds] catalog ids and `image:` ids) and share the picker, the placement
+ * editor, and the image store — only the backing preference differs.
+ */
+enum class BackgroundTarget { CHAT, HOME }

@@ -36,11 +36,12 @@ import com.plusorminustwo.postmark.ui.components.BackgroundPlacementEditor
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundDialog
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundPreview
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundThumbnail
+import com.plusorminustwo.postmark.ui.components.FontFamilyDialog
 import com.plusorminustwo.postmark.ui.components.accentSubtitle
 import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
-import com.plusorminustwo.postmark.ui.theme.FontFamilyPreference
 import com.plusorminustwo.postmark.ui.theme.ThemePreference
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
+import java.io.File
 
 /** Postmark's default sent-bubble/primary accent (matches ContactPalette's "Blue"
  *  preset and Theme.kt's brand `AccentBlue`) — shown as the leading swatch for the
@@ -62,74 +63,101 @@ fun AppearanceScreen(
     val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
     val bubbleStyle by viewModel.bubbleStyle.collectAsState()
     val globalChatBackgroundId by viewModel.globalChatBackgroundId.collectAsState()
+    val homeBackgroundId by viewModel.homeBackgroundId.collectAsState()
     val useDynamicColor by viewModel.useDynamicColor.collectAsState()
     val appAccentArgb by viewModel.appAccentArgb.collectAsState()
 
     val isDarkTheme = isAppInDarkTheme()
-    var showChatBackgroundDialog by remember { mutableStateOf(false) }
-    var showImageOptions by remember { mutableStateOf(false) }
     var showAppAccentDialog by remember { mutableStateOf(false) }
+    var showFontDialog by remember { mutableStateOf(false) }
     val placementRequest by viewModel.placementRequest.collectAsState()
 
-    // Android Photo Picker for a custom global chat-background image (Jetpack-backed,
-    // works down to minSdk 26). On a result the placement editor opens before saving.
+    // The chat and home backgrounds share one picker, one options dialog, and one photo
+    // picker — only the target differs. Holding the target (null = closed) instead of a
+    // per-surface boolean keeps that sharing honest: adding a third surface would need no
+    // new dialog state at all.
+    var backgroundDialogTarget by remember { mutableStateOf<BackgroundTarget?>(null) }
+    var imageOptionsTarget by remember { mutableStateOf<BackgroundTarget?>(null) }
+    // Which surface the in-flight photo pick belongs to. Set immediately before launching;
+    // the result callback fires later and reads the value current at that point.
+    var pendingPickTarget by remember { mutableStateOf(BackgroundTarget.CHAT) }
+
+    // Android Photo Picker for a custom background image (Jetpack-backed, works down to
+    // minSdk 26). On a result the placement editor opens before saving.
     val backgroundImagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null) viewModel.beginPlacementForPick(uri)
+        if (uri != null) viewModel.beginPlacementForPick(pendingPickTarget, uri)
     }
 
-    if (showChatBackgroundDialog) {
-        val currentImageFile = remember(globalChatBackgroundId) {
-            ChatBackgrounds.resolveImageFile(globalChatBackgroundId, viewModel::chatBackgroundImageFile)
+    // Launches the photo picker for [target], recording it for the result callback.
+    val launchImagePicker = { target: BackgroundTarget ->
+        pendingPickTarget = target
+        backgroundImagePicker.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
+    }
+
+    if (showFontDialog) {
+        FontFamilyDialog(
+            current = fontFamilyPreference,
+            onSelect = { pref ->
+                viewModel.setFontFamily(pref)
+                showFontDialog = false
+            },
+            onDismiss = { showFontDialog = false }
+        )
+    }
+
+    backgroundDialogTarget?.let { target ->
+        val currentId = if (target == BackgroundTarget.CHAT) globalChatBackgroundId else homeBackgroundId
+        val currentImageFile = remember(currentId) {
+            ChatBackgrounds.resolveImageFile(currentId, viewModel::chatBackgroundImageFile)
         }
         ChatBackgroundDialog(
+            title = if (target == BackgroundTarget.CHAT) "Chat background" else "Home screen background",
             // No "Default" cell here (showFollowGlobal=false), so normalize the
             // repository's null ("unset") to ChatBackgrounds.None's id so the None
             // tile shows as selected rather than nothing.
-            currentId = ChatBackgrounds.fromGlobalPreferenceId(globalChatBackgroundId),
+            currentId = ChatBackgrounds.fromGlobalPreferenceId(currentId),
             showFollowGlobal = false,
             isDarkTheme = isDarkTheme,
             currentImageFile = currentImageFile,
             onSelect = { id ->
-                viewModel.setChatBackground(id)
-                showChatBackgroundDialog = false
+                viewModel.setBackground(target, id)
+                backgroundDialogTarget = null
             },
             onPickImage = {
-                showChatBackgroundDialog = false
-                backgroundImagePicker.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
+                backgroundDialogTarget = null
+                launchImagePicker(target)
             },
             onCurrentImageOptions = {
-                showChatBackgroundDialog = false
-                showImageOptions = true
+                backgroundDialogTarget = null
+                imageOptionsTarget = target
             },
-            onDismiss = { showChatBackgroundDialog = false }
+            onDismiss = { backgroundDialogTarget = null }
         )
     }
 
     // ── Background photo options (adjust placement / choose a different photo) ──
-    if (showImageOptions) {
+    imageOptionsTarget?.let { target ->
         AlertDialog(
-            onDismissRequest = { showImageOptions = false },
+            onDismissRequest = { imageOptionsTarget = null },
             title = { Text("Background photo") },
             text = {
                 Column {
                     TextButton(onClick = {
-                        showImageOptions = false
-                        viewModel.beginPlacementForAdjust()
+                        imageOptionsTarget = null
+                        viewModel.beginPlacementForAdjust(target)
                     }) { Text("Adjust placement") }
                     TextButton(onClick = {
-                        showImageOptions = false
-                        backgroundImagePicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
+                        imageOptionsTarget = null
+                        launchImagePicker(target)
                     }) { Text("Choose a different photo") }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showImageOptions = false }) { Text("Cancel") }
+                TextButton(onClick = { imageOptionsTarget = null }) { Text("Cancel") }
             }
         )
     }
@@ -220,16 +248,11 @@ fun AppearanceScreen(
             )
             HorizontalDivider()
 
-            RadioSettingRow(
+            SettingsRow(
                 icon = { Icon(Icons.Default.TextFields, null) },
-                title = "Font family",
-                options = listOf(
-                    Triple(FontFamilyPreference.SYSTEM,    "System default", "Uses your device's default font"),
-                    Triple(FontFamilyPreference.SERIF,     "Serif",          "A traditional serif typeface"),
-                    Triple(FontFamilyPreference.MONOSPACE, "Monospace",      "Fixed-width, code-style font")
-                ),
-                current = fontFamilyPreference,
-                onSelect = viewModel::setFontFamily
+                title = "Font",
+                subtitle = fontFamilyPreference.displayName,
+                onClick = { showFontDialog = true }
             )
             HorizontalDivider()
 
@@ -253,32 +276,67 @@ fun AppearanceScreen(
             )
             HorizontalDivider()
 
-            val isImageBackground = ChatBackgrounds.isImageId(globalChatBackgroundId)
-            val globalChatBackground = ChatBackgrounds.resolve(globalChatBackgroundId)
-            val backgroundImageFile = remember(globalChatBackgroundId) {
-                ChatBackgrounds.resolveImageFile(globalChatBackgroundId, viewModel::chatBackgroundImageFile)
-            }
-            SettingsRow(
-                icon = {
-                    if (isImageBackground) {
-                        ChatBackgroundThumbnail(
-                            file = backgroundImageFile,
-                            modifier = Modifier.size(width = 28.dp, height = 22.dp)
-                        )
-                    } else {
-                        ChatBackgroundPreview(
-                            background = globalChatBackground,
-                            isDarkTheme = isDarkTheme,
-                            modifier = Modifier.size(width = 28.dp, height = 22.dp)
-                        )
-                    }
-                },
+            BackgroundSettingRow(
                 title = "Chat background",
-                subtitle = if (isImageBackground) ChatBackgrounds.CUSTOM_IMAGE_LABEL else globalChatBackground.displayName,
-                onClick = { showChatBackgroundDialog = true }
+                backgroundId = globalChatBackgroundId,
+                isDarkTheme = isDarkTheme,
+                imageFile = viewModel::chatBackgroundImageFile,
+                onClick = { backgroundDialogTarget = BackgroundTarget.CHAT }
+            )
+            HorizontalDivider()
+
+            BackgroundSettingRow(
+                title = "Home screen background",
+                backgroundId = homeBackgroundId,
+                isDarkTheme = isDarkTheme,
+                imageFile = viewModel::chatBackgroundImageFile,
+                onClick = { backgroundDialogTarget = BackgroundTarget.HOME }
             )
         }
     }
+}
+
+/**
+ * Settings row for one background surface: a preview swatch (gradient tile, or a thumbnail
+ * when the id is a custom image) plus the background's name as the subtitle.
+ *
+ * Shared by the chat and home-screen rows — they differ only in title and which id they
+ * read, and the swatch/subtitle derivation is exactly the kind of thing that drifts when
+ * copied.
+ *
+ * @param backgroundId Current id for the surface; null or an unknown id renders as "None".
+ * @param imageFile    Resolves a custom-image id to its file for the thumbnail.
+ */
+@Composable
+private fun BackgroundSettingRow(
+    title: String,
+    backgroundId: String?,
+    isDarkTheme: Boolean,
+    imageFile: (String) -> File?,
+    onClick: () -> Unit
+) {
+    val isImageBackground = ChatBackgrounds.isImageId(backgroundId)
+    val background = ChatBackgrounds.resolve(backgroundId)
+    val file = remember(backgroundId) { ChatBackgrounds.resolveImageFile(backgroundId, imageFile) }
+    SettingsRow(
+        icon = {
+            if (isImageBackground) {
+                ChatBackgroundThumbnail(
+                    file = file,
+                    modifier = Modifier.size(width = 28.dp, height = 22.dp)
+                )
+            } else {
+                ChatBackgroundPreview(
+                    background = background,
+                    isDarkTheme = isDarkTheme,
+                    modifier = Modifier.size(width = 28.dp, height = 22.dp)
+                )
+            }
+        },
+        title = title,
+        subtitle = if (isImageBackground) ChatBackgrounds.CUSTOM_IMAGE_LABEL else background.displayName,
+        onClick = onClick
+    )
 }
 
 // ── FontScaleSettingRow ───────────────────────────────────────────────────────

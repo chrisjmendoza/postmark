@@ -19,15 +19,15 @@ import javax.inject.Singleton
 @Singleton
 class ChatBackgroundPreferenceRepository @Inject constructor(
     @ApplicationContext context: Context
-) {
+) : BackgroundIdPreference {
     private val prefs = context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
 
     private val _backgroundId = MutableStateFlow(read())
-    val backgroundId: StateFlow<String?> = _backgroundId.asStateFlow()
+    override val backgroundId: StateFlow<String?> = _backgroundId.asStateFlow()
 
     /** Updates the stored global default background id and emits the new value
      *  on [backgroundId]; pass null to clear it. */
-    fun set(id: String?) {
+    override fun set(id: String?) {
         if (id == null) {
             prefs.edit().remove(KEY).apply()
         } else {

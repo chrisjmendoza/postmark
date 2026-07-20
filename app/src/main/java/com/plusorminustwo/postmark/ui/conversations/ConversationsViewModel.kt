@@ -13,6 +13,8 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.plusorminustwo.postmark.data.preferences.GestureHintsRepository
+import com.plusorminustwo.postmark.data.preferences.HomeBackgroundPreferenceRepository
+import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -38,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -56,8 +59,18 @@ class ConversationsViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val smsSyncHandler: SmsSyncHandler,
     private val gestureHintsRepo: GestureHintsRepository,
+    private val homeBackgroundRepo: HomeBackgroundPreferenceRepository,
+    private val backgroundImageStore: ChatBackgroundImageStore,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
+
+    /** Conversation-list background id; null = none (the plain theme background). Set from
+     *  the Appearance screen; the same id vocabulary as the chat background. */
+    val homeBackgroundId: StateFlow<String?> = homeBackgroundRepo.backgroundId
+
+    /** Resolved file for a custom-image background id; null when the id isn't an image id
+     *  or its file is gone (e.g. a backup restored onto a new device carries ids, not bytes). */
+    fun homeBackgroundImageFile(id: String): File? = backgroundImageStore.fileFor(id)
 
     private val workManager = WorkManager.getInstance(context)
     private val prefs get() = context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)

@@ -67,6 +67,8 @@ fun ChatBackgroundPreview(background: ChatBackground, isDarkTheme: Boolean, modi
  *                          or a custom `image:<fileName>` id.
  * @param showFollowGlobal Whether to show the leading "Default" (follow global) tile.
  * @param isDarkTheme       Selects which theme variant of each background to preview.
+ * @param title             Dialog heading — the same picker also chooses the conversation-list
+ *                          background, which needs to say so.
  * @param currentImageFile When [currentId] is a custom-image id, its resolved file (for the
  *                          "Custom image" tile's thumbnail); null otherwise. The host
  *                          resolves it via its ViewModel so this composable stays store-free.
@@ -84,6 +86,7 @@ fun ChatBackgroundDialog(
     currentId: String?,
     showFollowGlobal: Boolean,
     isDarkTheme: Boolean,
+    title: String = "Chat background",
     currentImageFile: File? = null,
     onSelect: (String?) -> Unit,
     onPickImage: () -> Unit = {},
@@ -92,7 +95,7 @@ fun ChatBackgroundDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Chat background") },
+        title = { Text(title) },
         text = {
             val tiles: List<ChatBgTile> = buildList {
                 if (showFollowGlobal) add(ChatBgTile.Preset("Default", null))

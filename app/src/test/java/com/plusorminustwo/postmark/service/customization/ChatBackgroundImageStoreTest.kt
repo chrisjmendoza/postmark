@@ -18,12 +18,15 @@ import org.junit.Test
 class ChatBackgroundImageStoreTest {
 
     @Test
-    fun `delete only when neither a thread nor the global default references the image`() {
-        // Truth table: delete iff !referencedByAnyThread && !isGlobalDefault.
-        assertTrue(ChatBackgroundImageStore.shouldDeleteImage(referencedByAnyThread = false, isGlobalDefault = false))
-        assertFalse(ChatBackgroundImageStore.shouldDeleteImage(referencedByAnyThread = true, isGlobalDefault = false))
-        assertFalse(ChatBackgroundImageStore.shouldDeleteImage(referencedByAnyThread = false, isGlobalDefault = true))
-        assertFalse(ChatBackgroundImageStore.shouldDeleteImage(referencedByAnyThread = true, isGlobalDefault = true))
+    fun `delete only when neither a thread nor a preference references the image`() {
+        // Truth table: delete iff !referencedByAnyThread && !referencedByAnyPreference.
+        // referencedByAnyPreference covers BOTH the global chat default and the home-screen
+        // background — an image backing only the home screen must survive a chat-background
+        // change, which is the case the second assertion below pins down.
+        assertTrue(ChatBackgroundImageStore.shouldDeleteImage(referencedByAnyThread = false, referencedByAnyPreference = false))
+        assertFalse(ChatBackgroundImageStore.shouldDeleteImage(referencedByAnyThread = false, referencedByAnyPreference = true))
+        assertFalse(ChatBackgroundImageStore.shouldDeleteImage(referencedByAnyThread = true, referencedByAnyPreference = false))
+        assertFalse(ChatBackgroundImageStore.shouldDeleteImage(referencedByAnyThread = true, referencedByAnyPreference = true))
     }
 
     @Test
