@@ -159,7 +159,6 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
@@ -1834,18 +1833,18 @@ private fun MessageBubble(
             }
             // Bubble content — translated right during swipe, springs back on release.
             // A Column rather than a Box overlay so the reaction pills take part in
-            // layout: they report only their bottom half (see straddle modifier below),
-            // so the space they hang into below the bubble is reserved and the
-            // timestamp row / next message are pushed down instead of collided with.
-            // End-aligned because the pills anchor to the bubble's bottom-end corner
-            // for both sent and received; a pill row wider than a short bubble grows
-            // leftward past its edge instead of pushing the bubble around.
+            // layout as a full-height row below the bubble: their height is reserved,
+            // so the timestamp row / next message are pushed down instead of collided
+            // with. Aligned to the outer edge (End for sent, Start for received) so the
+            // bubble hugs the screen edge; the pills override this with their own
+            // inner-edge alignment. A pill row wider than a short bubble grows inward
+            // past the bubble's edge (toward center) instead of pushing the bubble around.
             Column(
                 modifier = Modifier
                     .widthIn(max = 280.dp)
                     .align(if (message.isSent) Alignment.CenterEnd else Alignment.CenterStart)
                     .graphicsLayer { translationX = swipeOffset.value },
-                horizontalAlignment = Alignment.End
+                horizontalAlignment = alignment
             ) {
             Box(
                 modifier = Modifier
@@ -1962,19 +1961,16 @@ private fun MessageBubble(
                 }
             }
             if (message.reactions.isNotEmpty()) {
-                // Google Messages-style badge straddling the bubble's bottom-end corner,
-                // half in / half out — same treatment as the date pill on the top bar.
-                // The top half draws over the bubble; how much space the bottom half
-                // reserves below (all derived from the measured pill height) depends on
-                // what follows:
-                //  - Sent: the timestamp/status row shares the pill's corner, so reserve
-                //    the overhang minus the row's own top whitespace (2dp padding +
-                //    label line-height leading) — the row tucks that whitespace under
-                //    the pill and the visible gap stays tight.
-                //  - Received with a timestamp row: the row sits on the opposite corner
-                //    and already clears the overhang — reserve nothing.
-                //  - Received without a row (mid-cluster, timestamps hidden): reserve
-                //    the full overhang to keep the pill off the next message.
+                // Google Messages-style reaction pills, but sitting in their own row just
+                // below the bubble (not overlapping its corner). They hug the bubble's
+                // inner / center-facing bottom corner: Start for a sent (right-aligned)
+                // bubble, End for a received (left-aligned) one. Aligned per-pill via
+                // ColumnScope.align — overriding the Column's outer-edge alignment — so
+                // the bubble keeps hugging the screen edge even when a wide pill row is
+                // the widest child. FlowRow inside still wraps at the 280.dp max width so
+                // the row never leaves the screen, and taking part in normal Column
+                // layout reserves its full height so it can't collide with the next
+                // message. A small top gap keeps it clear of the bubble.
                 ReactionPills(
                     reactions = message.reactions,
                     onReactionClick = { emoji ->
@@ -1982,21 +1978,8 @@ private fun MessageBubble(
                         onReactionClick(emoji)
                     },
                     modifier = Modifier
-                        .layout { measurable, constraints ->
-                            val placeable = measurable.measure(constraints)
-                            val overhang = placeable.height / 2
-                            val reserved = when {
-                                message.isSent ->
-                                    (placeable.height - overhang - 6.dp.roundToPx())
-                                        .coerceAtLeast(0)
-                                showTimestamp -> 0
-                                else -> placeable.height - overhang
-                            }
-                            layout(placeable.width, reserved) {
-                                placeable.place(0, -overhang)
-                            }
-                        }
-                        .offset(x = 6.dp)  // nudge past the corner horizontally
+                        .align(if (message.isSent) Alignment.Start else Alignment.End)
+                        .padding(top = 2.dp)
                 )
             }
         }  // end Column(widthIn+align)
