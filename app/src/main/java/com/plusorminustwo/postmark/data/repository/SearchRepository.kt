@@ -2,8 +2,10 @@ package com.plusorminustwo.postmark.data.repository
 
 import com.plusorminustwo.postmark.data.db.dao.ReactionDao
 import com.plusorminustwo.postmark.data.db.dao.SearchDao
+import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.db.entity.toDomain
 import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.model.attachReactions
 import com.plusorminustwo.postmark.search.parser.FtsQueryBuilder
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
@@ -42,16 +44,21 @@ class SearchRepository @Inject constructor(
         // When there's no text query but an isMms filter is set, use the plain
         // browse query instead of FTS (FTS requires a non-empty match term).
         val ftsQuery = FtsQueryBuilder.build(rawQuery)
-        if (ftsQuery.isBlank()) {
+        val entities: List<MessageEntity> = if (ftsQuery.isBlank()) {
             if (isMms == null) return emptyList()
-            return searchDao.browseFiltered(tid, isSentInt, sMs, isMmsInt, limit, offset)
-                .map { it.toDomain() }
-        }
-
-        return if (reactionEmoji != null) {
+            searchDao.browseFiltered(tid, isSentInt, sMs, isMmsInt, limit, offset)
+        } else if (reactionEmoji != null) {
             searchDao.searchMessagesFilteredWithReaction(ftsQuery, tid, isSentInt, sMs, isMmsInt, reactionEmoji, limit, offset)
         } else {
             searchDao.searchMessagesFiltered(ftsQuery, tid, isSentInt, sMs, isMmsInt, limit, offset)
-        }.map { it.toDomain() }
+        }
+
+        val messages = entities.map { it.toDomain() }
+        if (messages.isEmpty()) return messages
+
+        // One batched reactions lookup for the whole result set (not per row), then
+        // the same in-memory join the thread view uses — so search rows can show pills.
+        val reactions = reactionDao.getByMessageIds(messages.map { it.id }).map { it.toDomain() }
+        return attachReactions(messages, reactions)
     }
 }

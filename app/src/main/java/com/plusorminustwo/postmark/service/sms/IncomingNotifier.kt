@@ -14,7 +14,11 @@ import android.graphics.Typeface
 import android.media.ThumbnailUtils
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import androidx.core.app.RemoteInput
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.plusorminustwo.postmark.PostmarkApplication
 import com.plusorminustwo.postmark.R
 import com.plusorminustwo.postmark.data.contacts.loadContactPhotoBitmap
@@ -121,19 +125,92 @@ class IncomingNotifier @Inject constructor(
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(displayTitle)
             .setContentText(displayBody)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openIntent)
             .setAutoCancel(true)
             .setGroup(PostmarkApplication.GROUP_KEY_SMS)
 
-        if (!privacyMode) {
+        if (privacyMode) {
+            // Privacy mode keeps the plain BigTextStyle: no Person, no avatar, and no
+            // long-lived conversation shortcut. A shortcut carrying the sender's name and
+            // photo would persist the very identity privacy mode is redacting.
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(displayBody))
+        } else {
             // Group threads omit the inline reply — it could only reach one participant.
             if (allowDirectReply) builder.addAction(replyAction)
             builder.addAction(markReadAction)
-            // Sender avatar. Omitted under privacy mode for the same reason the name and
-            // body are redacted — a face identifies the sender as plainly as their name.
-            builder.setLargeIcon(senderAvatar(address, title))
+
+            // ── Conversation (MessagingStyle) rendering ───────────────────────────
+            // A MessagingStyle notification tied to a long-lived conversation shortcut is
+            // what the OS (and OneUI) promotes to the Conversations section and renders with
+            // the sender's photo LARGE on the left plus the app icon as a small badge — the
+            // Google Messages look. The old BigTextStyle + setLargeIcon rendered the avatar
+            // on the right with the app icon filling the left slot.
+            val icon = IconCompat.createWithBitmap(senderAvatar(address, title))
+
+            // Group titles arrive composed as "Sender — Group name" (the caller owns that
+            // format). Split so the sender becomes the Person and the group name becomes the
+            // conversation title; a 1:1 title is the sender name verbatim. The split couples
+            // to the caller's separator — an acceptable, contained cost versus reworking both
+            // call-site contracts to pass sender and group name as separate fields.
+            val senderName: String
+            val conversationTitle: String?
+            if (!allowDirectReply) {
+                val parts = displayTitle.split(GROUP_TITLE_SEPARATOR, limit = 2)
+                senderName = parts.first()
+                conversationTitle = parts.getOrNull(1)
+            } else {
+                senderName = displayTitle
+                conversationTitle = null
+            }
+
+            val person = Person.Builder()
+                .setName(senderName)
+                .setIcon(icon)
+                // Per-sender identity: the sender's address distinguishes participants in a
+                // group and stays stable for a 1:1; falls back to the conversation key.
+                .setKey(address.ifEmpty { notifKey.toString() })
+                .build()
+
+            val style = NotificationCompat.MessagingStyle(person)
+            // Carry the messages already showing under this key forward so successive
+            // messages stack in one conversation with a count (Google Messages' "2") instead
+            // of each replacing the last. Capped so a long-lived thread can't grow unbounded.
+            nm.activeNotifications
+                .firstOrNull { it.id == notifKey }
+                ?.notification
+                ?.let { NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it) }
+                ?.messages
+                ?.takeLast(MAX_CARRIED_MESSAGES - 1)
+                ?.forEach { style.addMessage(it.text, it.timestamp, it.person) }
+            style.addMessage(displayBody, System.currentTimeMillis(), person)
+            if (!allowDirectReply) {
+                style.isGroupConversation = true
+                style.conversationTitle = conversationTitle
+            }
+            builder.setStyle(style)
+
+            // ── Long-lived conversation shortcut ──────────────────────────────────
+            // Required for the avatar-left conversation treatment on many OEMs. Stable per
+            // conversation so repeat messages refresh one shortcut. Uses an ACTION_VIEW deep
+            // link to the same thread the content intent opens (shortcut intents require an
+            // action).
+            val shortcutId = if (threadId > 0L) "thread_$threadId" else "notif_$notifKey"
+            val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
+                .setLongLived(true)
+                .setPerson(person)
+                .setIcon(icon)
+                .setShortLabel(senderName)
+                .setIntent(
+                    Intent(context, MainActivity::class.java).apply {
+                        action = Intent.ACTION_VIEW
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        if (threadId > 0L) putExtra(MainActivity.EXTRA_OPEN_THREAD_ID, threadId)
+                    }
+                )
+                .build()
+            ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
+            builder.setShortcutId(shortcutId)
         }
 
         nm.notify(notifKey, builder.build())
@@ -220,8 +297,25 @@ class IncomingNotifier @Inject constructor(
         val inboxStyle = NotificationCompat.InboxStyle()
             .setSummaryText(context.getString(R.string.app_name))
         groupNotifs.forEach { sbn ->
-            val title = sbn.notification.extras.getString(Notification.EXTRA_TITLE) ?: ""
-            val text  = sbn.notification.extras.getCharSequence(Notification.EXTRA_TEXT) ?: ""
+            val n = sbn.notification
+            // MessagingStyle notifications store their content in EXTRA_MESSAGES /
+            // EXTRA_CONVERSATION_TITLE, not EXTRA_TITLE/EXTRA_TEXT (which can be null), so
+            // read the conversation/sender name and latest message text back out of the
+            // MessagingStyle. Privacy-mode notifications are still plain BigTextStyle, so
+            // fall back to the legacy extras when no MessagingStyle is present.
+            val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)
+            val title: CharSequence
+            val text: CharSequence
+            if (style != null) {
+                val last = style.messages.lastOrNull()
+                title = style.conversationTitle
+                    ?: last?.person?.name
+                    ?: n.extras.getString(Notification.EXTRA_TITLE) ?: ""
+                text = last?.text ?: n.extras.getCharSequence(Notification.EXTRA_TEXT) ?: ""
+            } else {
+                title = n.extras.getString(Notification.EXTRA_TITLE) ?: ""
+                text  = n.extras.getCharSequence(Notification.EXTRA_TEXT) ?: ""
+            }
             inboxStyle.addLine(if (title.isNotEmpty()) "$title  $text" else "$text")
         }
 
@@ -246,5 +340,17 @@ class IncomingNotifier @Inject constructor(
             .build()
 
         nm.notify(PostmarkApplication.NOTIF_ID_SMS_SUMMARY, summary)
+    }
+
+    private companion object {
+        /** Ceiling on how many messages one accumulated conversation notification retains. */
+        const val MAX_CARRIED_MESSAGES = 8
+
+        /**
+         * The separator the callers use to compose a group title as "Sender — Group name"
+         * (see SmsSyncHandler.notifyIncomingMms). Kept in sync by hand — the callers live in
+         * data/ and own the format; IncomingNotifier only reverses it for display.
+         */
+        const val GROUP_TITLE_SEPARATOR = " — "
     }
 }

@@ -67,7 +67,7 @@ import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.selection.bulkToggleTarget
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
-import java.util.Locale
+import com.plusorminustwo.postmark.domain.formatter.friendlyTimestamp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,7 +94,7 @@ fun ConversationsScreen(
     val showUnreadOnly by viewModel.showUnreadOnly.collectAsState()
     // Total unread thread count — shown inside the filter chip so the user can see at a glance
     // how many conversations are waiting even before activating the filter.
-    val unreadThreadCount = remember(unreadCounts) { unreadCounts.count { (_, v) -> v > 0 } }
+    val unreadThreadCount = remember(unreadCounts) { unreadThreadCount(unreadCounts) }
     val threadList = threads  // local val so Kotlin can smart-cast the nullable
 
     // ── Multi-select ───────────────────────────────────────────────────────────
@@ -650,8 +650,21 @@ private fun ThreadRow(
                 )
             }
         }
+        // Recency-appropriate label ("just now", "5m", "9:41 AM", "Mon", "Apr 25").
+        // `now` is captured when the row (re)composes for this timestamp; the list
+        // recomposes on data changes, so labels stay as fresh as the screen without a
+        // ticking clock — a briefly-stale "5m" is fine. remember-keyed on the timestamp
+        // and the 12/24h preference so the formatters are built once per row, not per frame.
+        val context = LocalContext.current
+        val label = remember(thread.lastMessageAt) {
+            friendlyTimestamp(
+                timestampMs = thread.lastMessageAt,
+                nowMs = System.currentTimeMillis(),
+                is24Hour = android.text.format.DateFormat.is24HourFormat(context)
+            )
+        }
         Text(
-            text = formatDate(thread.lastMessageAt),
+            text = label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -736,50 +749,4 @@ private fun ConversationSelectionTopBar(
             }
         }
     )
-}
-
-/**
- * Converts a message timestamp to a human-friendly label for conversation rows.
- *
- * Rules (matching iMessage / Google Messages conventions):
- *  - < 1 minute ago  → "just now"
- *  - < 60 minutes ago → "Xm" (e.g. "5m")
- *  - Same calendar day → "9:41 AM"
- *  - Within the last 6 days → short weekday name (e.g. "Mon")
- *  - Same calendar year → "Apr 25"
- *  - Older → "4/25/23"
- */
-// Hoisted, immutable formatters: the old implementation constructed a SimpleDateFormat
-// (a locale-data-heavy constructor) per visible row on every list recomposition.
-private val rowTimeFormatter      = java.time.format.DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
-private val rowWeekdayFormatter   = java.time.format.DateTimeFormatter.ofPattern("EEE", Locale.getDefault())
-private val rowMonthDayFormatter  = java.time.format.DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
-private val rowShortDateFormatter = java.time.format.DateTimeFormatter.ofPattern("M/d/yy", Locale.getDefault())
-
-private fun formatDate(timestamp: Long): String {
-    val now  = System.currentTimeMillis()
-    val diff = now - timestamp
-
-    // ── Very recent ───────────────────────────────────────────────────────────
-    if (diff < 60_000L) return "just now"
-    if (diff < 60 * 60_000L) return "${diff / 60_000}m"
-
-    // ── Calendar comparisons ──────────────────────────────────────────────────
-    val zone    = java.time.ZoneId.systemDefault()
-    val msgTime = java.time.Instant.ofEpochMilli(timestamp).atZone(zone)
-    val msgDate = msgTime.toLocalDate()
-    val nowDate = java.time.LocalDate.now(zone)
-
-    val daysAgo = diff / (24 * 60 * 60_000L)
-
-    return when {
-        // Today — show wall-clock time
-        msgDate == nowDate              -> msgTime.format(rowTimeFormatter)
-        // Within 6 days — short weekday (Mon, Tue …)
-        daysAgo < 7                     -> msgTime.format(rowWeekdayFormatter)
-        // Same year — "Apr 25"
-        msgDate.year == nowDate.year    -> msgTime.format(rowMonthDayFormatter)
-        // Older — "4/25/23"
-        else                            -> msgTime.format(rowShortDateFormatter)
-    }
 }

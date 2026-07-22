@@ -154,7 +154,8 @@ private fun Thread.toRecord() = ThreadRecord(
     lastMessagePreview = lastMessagePreview,
     accentColorArgb = accentColorArgb,
     chatBackgroundId = chatBackgroundId,
-    sentColorArgb = sentColorArgb
+    sentColorArgb = sentColorArgb,
+    isSpam = isSpam
 )
 
 private fun Message.toRecord(
@@ -170,6 +171,7 @@ private fun Message.toRecord(
     isMms = isMms,
     isRead = isRead,
     isStarred = isStarred,
+    isPinned = isPinned,
     // An attachment whose bytes couldn't be read is dropped from the record rather
     // than pointing at a blob that isn't in the archive.
     attachments = attachments.mapNotNull { att ->

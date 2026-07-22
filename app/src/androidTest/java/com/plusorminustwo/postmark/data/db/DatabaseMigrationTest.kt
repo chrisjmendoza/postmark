@@ -2,6 +2,7 @@ package com.plusorminustwo.postmark.data.db
 
 import androidx.room.testing.MigrationTestHelper
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
 import org.junit.Assert.*
@@ -21,6 +22,7 @@ import org.junit.runner.RunWith
  * strict schema validation flags that mismatch even though it is harmless at runtime.
  */
 @RunWith(AndroidJUnit4::class)
+@LargeTest
 class DatabaseMigrationTest {
 
     @get:Rule
@@ -469,10 +471,38 @@ class DatabaseMigrationTest {
         db13.close()
     }
 
-    // ── Full chain 1 → 17 ─────────────────────────────────────────────────
+    // ── MIGRATION 19 → 20 ─────────────────────────────────────────────────
 
     @Test
-    fun fullMigrationChain_v1DataSurvivesToV18() {
+    fun migration19To20_addsIsSpamWithDefaultFalse() {
+        val db19 = helper.createDatabase("test_m1920", 19)
+        db19.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
+        )
+
+        PostmarkDatabase.MIGRATION_19_20.migrate(db19)
+
+        // New thread-level spam column defaults to 0 (false) for existing rows.
+        db19.query("SELECT isSpam FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+        }
+        // Spam (new) is independent of the thread-level pin (v6) and mute (v5).
+        db19.execSQL("UPDATE threads SET isSpam = 1 WHERE id = 1")
+        db19.query("SELECT isSpam, isPinned, isMuted FROM threads WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1, c.getInt(0))  // spam
+            assertEquals(0, c.getInt(1))  // still unpinned
+            assertEquals(0, c.getInt(2))  // still unmuted
+        }
+        db19.close()
+    }
+
+    // ── Full chain 1 → 20 ─────────────────────────────────────────────────
+
+    @Test
+    fun fullMigrationChain_v1DataSurvivesToV20() {
         val db = helper.createDatabase("test_chain", 1)
         db.execSQL(
             "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
@@ -492,12 +522,14 @@ class DatabaseMigrationTest {
             PostmarkDatabase.MIGRATION_11_12, PostmarkDatabase.MIGRATION_12_13,
             PostmarkDatabase.MIGRATION_13_14, PostmarkDatabase.MIGRATION_14_15,
             PostmarkDatabase.MIGRATION_15_16, PostmarkDatabase.MIGRATION_16_17,
-            PostmarkDatabase.MIGRATION_17_18
+            PostmarkDatabase.MIGRATION_17_18, PostmarkDatabase.MIGRATION_18_19,
+            PostmarkDatabase.MIGRATION_19_20
         ).forEach { it.migrate(db) }
 
         db.query(
-            "SELECT m.body, m.deliveryStatus, m.isMms, m.isRead, m.isStarred, t.isPinned, t.notificationsEnabled," +
-            " t.accentColorArgb, t.chatBackgroundId, t.sentColorArgb" +
+            "SELECT m.body, m.deliveryStatus, m.isMms, m.isRead, m.isStarred, m.isPinned," +
+            " t.isPinned, t.notificationsEnabled," +
+            " t.accentColorArgb, t.chatBackgroundId, t.sentColorArgb, t.isSpam" +
             " FROM messages m JOIN threads t ON t.id = m.threadId WHERE m.id = 42"
         ).use { c ->
             assertTrue(c.moveToFirst())
@@ -506,11 +538,13 @@ class DatabaseMigrationTest {
             assertEquals(0, c.getInt(2))  // not MMS
             assertEquals(1, c.getInt(3))  // read
             assertEquals(0, c.getInt(4))  // not starred
-            assertEquals(0, c.getInt(5))  // not pinned
-            assertEquals(1, c.getInt(6))  // notifications on
-            assertTrue(c.isNull(7))       // no accent color
-            assertTrue(c.isNull(8))       // no chat background
-            assertTrue(c.isNull(9))       // no sent color
+            assertEquals(0, c.getInt(5))  // message not pinned
+            assertEquals(0, c.getInt(6))  // thread not pinned
+            assertEquals(1, c.getInt(7))  // notifications on
+            assertTrue(c.isNull(8))       // no accent color
+            assertTrue(c.isNull(9))       // no chat background
+            assertTrue(c.isNull(10))      // no sent color
+            assertEquals(0, c.getInt(11)) // not spam
         }
         db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_stats','global_stats')").use { c ->
             assertFalse(c.moveToFirst())
@@ -639,5 +673,36 @@ class DatabaseMigrationTest {
             assertEquals(-16711936, c.getInt(1))
         }
         db17.close()
+    }
+
+    // ── MIGRATION 18 → 19 ─────────────────────────────────────────────────
+
+    @Test
+    fun migration18To19_addsIsPinnedWithDefaultFalse() {
+        val db18 = helper.createDatabase("test_m1819", 18)
+        db18.execSQL(
+            "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+            " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
+        )
+        db18.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead, isStarred)" +
+            " VALUES (5, 1, '+1', 'sms', 1000000, 0, 1, 0, 0, 1, 0)"
+        )
+
+        PostmarkDatabase.MIGRATION_18_19.migrate(db18)
+
+        // New per-message pin column defaults to 0 (false) for existing rows.
+        db18.query("SELECT isPinned FROM messages WHERE id = 5").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+        }
+        // Message pin (new) is independent of the thread-level pin added in v6.
+        db18.execSQL("UPDATE messages SET isPinned = 1 WHERE id = 5")
+        db18.query("SELECT m.isPinned, t.isPinned FROM messages m JOIN threads t ON t.id = m.threadId WHERE m.id = 5").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1, c.getInt(0))  // message pinned
+            assertEquals(0, c.getInt(1))  // thread still unpinned
+        }
+        db18.close()
     }
 }

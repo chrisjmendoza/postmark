@@ -36,7 +36,10 @@ data class ThreadEntity(
     val chatBackgroundId: String? = null,
     // Postmark-only sent-bubble fill (ARGB), independent of accentColorArgb. Null means
     // use the default primaryContainer.
-    val sentColorArgb: Int? = null
+    val sentColorArgb: Int? = null,
+    // When true the thread is hidden from the main conversation list (and every other
+    // list surface) into the Spam folder, and posts no incoming notifications.
+    val isSpam: Boolean = false
 )
 
 /**
@@ -57,7 +60,8 @@ fun ThreadEntity.toDomain() = Thread(
     participants = decodeParticipantsJson(participantsJson),
     accentColorArgb = accentColorArgb,
     chatBackgroundId = chatBackgroundId,
-    sentColorArgb = sentColorArgb
+    sentColorArgb = sentColorArgb,
+    isSpam = isSpam
 )
 
 /**
@@ -78,5 +82,6 @@ fun Thread.toEntity() = ThreadEntity(
     participantsJson = encodeParticipantsJson(participants),
     accentColorArgb = accentColorArgb,
     chatBackgroundId = chatBackgroundId,
-    sentColorArgb = sentColorArgb
+    sentColorArgb = sentColorArgb,
+    isSpam = isSpam
 )

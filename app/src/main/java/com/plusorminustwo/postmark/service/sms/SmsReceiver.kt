@@ -38,6 +38,7 @@ class SmsReceiver : BroadcastReceiver() {
     @Inject lateinit var privacyModeRepository: PrivacyModeRepository
     @Inject lateinit var syncLogger: SyncLogger
     @Inject lateinit var incomingNotifier: IncomingNotifier
+    @Inject lateinit var activeThreadTracker: ActiveThreadTracker
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -81,10 +82,25 @@ class SmsReceiver : BroadcastReceiver() {
                          * even if the observer notification is delayed or lost. */
                         syncHandler.onSmsContentChanged(Telephony.Sms.CONTENT_URI)
 
-                        // Check mute/notifications before posting the notification banner.
+                        /* Resolve the canonical thread id once, reused for the active-thread
+                         * suppression check, the deep-link, and the group check below. This
+                         * is the same id space as ThreadScreen's threadId (Room Thread.id ==
+                         * Telephony THREAD_ID). */
+                        val threadId: Long = try {
+                            Telephony.Threads.getOrCreateThreadId(context, rawSender)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "getOrCreateThreadId failed for notification", e)
+                            -1L
+                        }
+                        // Check suppression/mute/notifications before posting the banner.
+                        // Suppress when the user is already viewing this exact thread — the
+                        // message still synced above; only the notification is skipped.
                         val notificationsEnabled =
                             threadRepository.isNotificationsEnabledByAddress(rawSender)
-                        if (notificationsEnabled && !threadRepository.isMutedByAddress(rawSender)) {
+                        if (activeThreadTracker.activeThreadId != threadId &&
+                            notificationsEnabled &&
+                            !threadRepository.isMutedByAddress(rawSender) &&
+                            !threadRepository.isSpamByAddress(rawSender)) {
                             /* Look up the display name from ContactsContract first — it is
                              * always current even for contacts added after the initial sync
                              * (which can leave a stale phone number in Room's displayName).
@@ -93,14 +109,6 @@ class SmsReceiver : BroadcastReceiver() {
                                 ?: threadRepository.getDisplayNameByAddress(rawSender)
                                 ?: sender
                             syncLogger.log("SmsReceiver", "notification: address=${rawSender.redactPhone()} nameResolved=${displayName != sender}")
-                            /* Resolve the canonical thread id once, reused for the deep-link
-                             * and the group check below. */
-                            val threadId: Long = try {
-                                Telephony.Threads.getOrCreateThreadId(context, rawSender)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "getOrCreateThreadId failed for notification", e)
-                                -1L
-                            }
                             /* Suppress the inline reply action on group threads: a single-
                              * address SMS reply can't reach the whole group. Keyed on the
                              * resolved thread's roster, not the address — a group thread's

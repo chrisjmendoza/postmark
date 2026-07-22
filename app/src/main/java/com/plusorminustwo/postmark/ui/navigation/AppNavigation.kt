@@ -33,9 +33,12 @@ import com.plusorminustwo.postmark.ui.onboarding.OnboardingScreen
 import com.plusorminustwo.postmark.ui.search.SearchScreen
 import com.plusorminustwo.postmark.ui.settings.AppearanceScreen
 import com.plusorminustwo.postmark.ui.settings.BackupSettingsScreen
+import com.plusorminustwo.postmark.ui.settings.BlockedNumbersScreen
 import com.plusorminustwo.postmark.ui.settings.DevOptionsScreen
+import com.plusorminustwo.postmark.ui.settings.NotificationSettingsScreen
 import com.plusorminustwo.postmark.ui.settings.export.ExportScreen
 import com.plusorminustwo.postmark.ui.settings.SettingsScreen
+import com.plusorminustwo.postmark.ui.settings.SpamScreen
 import com.plusorminustwo.postmark.ui.settings.SyncLogScreen
 import com.plusorminustwo.postmark.ui.starred.StarredImagesScreen
 import com.plusorminustwo.postmark.ui.stats.StatsScreen
@@ -82,6 +85,12 @@ sealed class Screen(val route: String) {
     data object BackupSettings : Screen("settings/backup")
     /** Selective export — pick conversations/date range, save an archive anywhere. */
     data object ExportConversations : Screen("settings/backup/export")
+    /** Blocked-numbers list + unblock — reached from Settings › Privacy. */
+    data object BlockedNumbers : Screen("settings/blocked")
+    /** Spam folder — threads reported as spam; restore from here. Reached from Settings › Privacy. */
+    data object Spam : Screen("settings/spam")
+    /** Notification settings — privacy mode + system channel deep links. Reached from Settings › Notifications. */
+    data object NotificationSettings : Screen("settings/notifications")
     /** Developer options screen (hidden). */
     data object DevOptions : Screen("settings/dev")
     /** Full-screen sync log viewer. */
@@ -215,6 +224,9 @@ fun AppNavigation(
                 onMessageClick = { threadId, messageId ->
                     navController.navigate(Screen.Thread.route(threadId, messageId))
                 },
+                onThreadClick = { threadId ->
+                    navController.navigate(Screen.Thread.route(threadId))
+                },
                 onBack = { navController.popBackStack() }
             )
         }
@@ -240,6 +252,28 @@ fun AppNavigation(
                 onBackupSettingsClick = { navController.navigate(Screen.BackupSettings.route) },
                 onDevOptionsClick = { navController.navigate(Screen.DevOptions.route) },
                 onStarredImagesClick = { navController.navigate(Screen.StarredImages.route) },
+                onBlockedNumbersClick = { navController.navigate(Screen.BlockedNumbers.route) },
+                onSpamClick = { navController.navigate(Screen.Spam.route) },
+                onNotificationsClick = { navController.navigate(Screen.NotificationSettings.route) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.NotificationSettings.route) {
+            NotificationSettingsScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.BlockedNumbers.route) {
+            BlockedNumbersScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.Spam.route) {
+            SpamScreen(
+                onThreadClick = { threadId -> navController.navigate(Screen.Thread.route(threadId)) },
                 onBack = { navController.popBackStack() }
             )
         }

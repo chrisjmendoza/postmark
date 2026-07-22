@@ -51,6 +51,7 @@ import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.service.audio.VoiceMemoRecorder
 import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
+import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
@@ -136,10 +137,22 @@ class ThreadViewModel @Inject constructor(
     private val appAccentPrefRepo: AppAccentPreferenceRepository,
     private val draftRepository: DraftRepository,
     private val gestureHintsRepo: GestureHintsRepository,
-    private val voiceMemoRecorder: VoiceMemoRecorder
+    private val voiceMemoRecorder: VoiceMemoRecorder,
+    private val activeThreadTracker: ActiveThreadTracker
 ) : ViewModel() {
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
+
+    /**
+     * Registers this thread as the on-screen conversation so incoming SMS/MMS for it skip
+     * the notification banner. Driven by ThreadScreen's ON_RESUME/ON_PAUSE so the tracker
+     * follows what the user is actually looking at, not merely which ViewModel exists.
+     */
+    fun onScreenResumed() = activeThreadTracker.setActive(threadId)
+
+    /** Clears this thread's active-registration on ON_PAUSE (no-op if a newer screen already
+     *  took over — [ActiveThreadTracker.clearActive] only clears on a matching id). */
+    fun onScreenPaused() = activeThreadTracker.clearActive(threadId)
 
     /**
      * Whether this SIM's carrier permits group MMS — read once from SmsManager carrier
@@ -293,6 +306,13 @@ class ThreadViewModel @Inject constructor(
         .observeTopUserEmojis()
         .map { topEmojis -> buildQuickEmojiList(topEmojis) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DEFAULT_QUICK_EMOJIS)
+
+    /** This thread's pinned messages, oldest first (Discord-style) — backs the Pinned
+     *  messages panel opened from the ⋮ overflow menu. Collected independently of the big
+     *  uiState combine (which is at its argument limit); the panel is a self-contained sheet. */
+    val pinnedMessages: StateFlow<List<Message>> = messageRepository
+        .observePinnedMessages(threadId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
      * address → contact display name for this thread's roster, resolved once per
@@ -473,6 +493,14 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             val message = messageRepository.getById(messageId) ?: return@launch
             messageRepository.updateStarred(messageId, !message.isStarred)
+        }
+    }
+
+    /** Pin/unpin a single message (Discord-style). Mirrors [toggleStarred]. */
+    fun togglePinnedMessage(messageId: Long) {
+        viewModelScope.launch {
+            val message = messageRepository.getById(messageId) ?: return@launch
+            messageRepository.updatePinned(messageId, !message.isPinned)
         }
     }
 
@@ -1264,6 +1292,16 @@ class ThreadViewModel @Inject constructor(
         val current = uiState.value.thread?.isPinned ?: return
         viewModelScope.launch {
             threadRepository.updatePinned(threadId, !current)
+        }
+    }
+
+    /** Reports this thread as spam (hides it into the Spam folder + silences its
+     *  notifications) or restores it. Called from the thread ⋮ menu; marking spam is
+     *  confirmed in the UI first, restoring ("Not spam") is immediate. */
+    fun toggleSpam() {
+        val current = uiState.value.thread?.isSpam ?: return
+        viewModelScope.launch {
+            threadRepository.updateSpam(threadId, !current)
         }
     }
 

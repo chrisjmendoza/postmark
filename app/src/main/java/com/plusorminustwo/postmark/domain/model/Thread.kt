@@ -34,6 +34,9 @@ import androidx.compose.runtime.Immutable
  * @param sentColorArgb            Postmark-only sent-bubble color (ARGB), independent of
  *                                 [accentColorArgb]. Null means use the app default
  *                                 (primaryContainer).
+ * @param isSpam                   When true the thread is hidden from every list surface
+ *                                 into the Spam folder, and posts no incoming notifications.
+ *                                 Postmark-only; never written to the telephony provider.
  */
 // @Immutable: the participants List makes Thread inferred-unstable, which made every
 // visible ThreadRow unskippable — all rows recomposed on each threads/unreadCounts
@@ -57,5 +60,8 @@ data class Thread(
     // Postmark-only chat background id. Null falls back to the global default.
     val chatBackgroundId: String? = null,
     // Postmark-only sent-bubble color (ARGB), independent of accentColorArgb. Null = default.
-    val sentColorArgb: Int? = null
+    val sentColorArgb: Int? = null,
+    // When true the thread lives in the Spam folder: hidden from every list surface and
+    // silenced. Postmark-only; never written to the telephony provider.
+    val isSpam: Boolean = false
 )

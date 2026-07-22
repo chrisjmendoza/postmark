@@ -106,6 +106,8 @@ class MuteThreadTest {
         override fun observeAll(): Flow<List<ThreadEntity>> = flowOf(emptyList())
         override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(null)
         override suspend fun getById(threadId: Long): ThreadEntity? = null
+        override suspend fun getAll(): List<ThreadEntity> = emptyList()
+        override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
         override suspend fun insert(t: ThreadEntity) {}
         override suspend fun insertAll(ts: List<ThreadEntity>) {}
         override suspend fun insertIgnore(t: ThreadEntity) {}
@@ -124,6 +126,10 @@ class MuteThreadTest {
         override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
         override suspend fun getDisplayNameByAddress(address: String): String? = null
         override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) {}
+        override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override suspend fun updateSpam(threadId: Long, isSpam: Boolean) {}
+        override suspend fun isSpamByAddress(address: String): Boolean? = null
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}

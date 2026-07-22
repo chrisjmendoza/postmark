@@ -125,6 +125,7 @@ private class FixedTopEmojiFakeReactionDao(
     override suspend fun delete(reaction: ReactionEntity) = Unit
     override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) = Unit
     override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+    override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
     override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
     override suspend fun deleteAll() = Unit
     override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0
@@ -150,6 +151,7 @@ private class LiveTopEmojiFakeReactionDao(
     override suspend fun delete(reaction: ReactionEntity) = Unit
     override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) = Unit
     override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+    override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
     override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
     override suspend fun deleteAll() = Unit
     override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0
@@ -198,4 +200,6 @@ private class StubMessageDao : MessageDao {
     override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
     override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
     override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun updatePinned(messageId: Long, isPinned: Boolean) = Unit
+    override fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
 }

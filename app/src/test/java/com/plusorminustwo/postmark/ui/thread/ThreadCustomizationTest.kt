@@ -96,6 +96,8 @@ class ThreadCustomizationTest {
 
         override fun observeAll(): Flow<List<ThreadEntity>> = _threads
         override suspend fun getById(threadId: Long): ThreadEntity? = null
+        override suspend fun getAll(): List<ThreadEntity> = emptyList()
+        override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
         override fun observeById(threadId: Long): Flow<ThreadEntity?> = MutableStateFlow(null)
 
         override suspend fun insert(thread: ThreadEntity) {}
@@ -117,6 +119,10 @@ class ThreadCustomizationTest {
         override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
         override suspend fun getDisplayNameByAddress(address: String): String? = null
         override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) {}
+        override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override suspend fun updateSpam(threadId: Long, isSpam: Boolean) {}
+        override suspend fun isSpamByAddress(address: String): Boolean? = null
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}

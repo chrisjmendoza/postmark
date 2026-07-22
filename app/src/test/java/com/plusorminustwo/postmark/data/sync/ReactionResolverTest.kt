@@ -247,6 +247,8 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
     override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
     override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun updatePinned(messageId: Long, isPinned: Boolean) = Unit
+    override fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 /** ReactionDao backed by an in-memory list with real insert / count / delete semantics. */
@@ -275,6 +277,7 @@ private class InMemoryReactionDao : ReactionDao {
     override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
     override suspend fun delete(reaction: ReactionEntity) { rows.removeAll { it.id == reaction.id } }
     override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+    override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
     override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
     override suspend fun deleteAll() { rows.clear() }
 }
@@ -293,6 +296,8 @@ private class RecordingThreadDao : ThreadDao {
 
     override fun observeAll(): Flow<List<ThreadEntity>> = flowOf(emptyList())
     override suspend fun getById(threadId: Long): ThreadEntity? = null
+    override suspend fun getAll(): List<ThreadEntity> = emptyList()
+    override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
     override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(null)
     override suspend fun insert(thread: ThreadEntity) = Unit
     override suspend fun insertAll(threads: List<ThreadEntity>) = Unit
@@ -304,6 +309,10 @@ private class RecordingThreadDao : ThreadDao {
     override suspend fun updateMuted(threadId: Long, isMuted: Boolean) = Unit
     override suspend fun updatePinned(threadId: Long, isPinned: Boolean) = Unit
     override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) = Unit
+    override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+    override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+    override suspend fun updateSpam(threadId: Long, isSpam: Boolean) = Unit
+    override suspend fun isSpamByAddress(address: String): Boolean? = null
     override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
     override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()

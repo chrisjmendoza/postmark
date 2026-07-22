@@ -17,6 +17,7 @@ import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
+import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker
 import com.plusorminustwo.postmark.service.sms.IncomingNotifier
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.domain.model.previewText
@@ -59,6 +60,7 @@ class SmsSyncHandler @Inject constructor(
     private val reactionParser: ReactionFallbackParser,
     private val privacyModeRepository: PrivacyModeRepository,
     private val incomingNotifier: IncomingNotifier,
+    private val activeThreadTracker: ActiveThreadTracker,
     private val syncLogger: SyncLogger
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -150,6 +152,48 @@ class SmsSyncHandler @Inject constructor(
         cleanupNonDisplayableMmsOnce()
         smsMutex.withLock { syncLatestSms() }
         mmsMutex.withLock { syncLatestMms() }
+        refreshOneToOneDisplayNames()
+    }
+
+    /*
+     * Contact-name refresh (docs/TODO.md Tier 2 "Contact integration": "if contact name
+     * changes in system Contacts, update Thread.displayName on next sync"). displayName is
+     * resolved ONCE, at thread-creation time (ensureThread / the worker's cursor passes),
+     * so a contact renamed afterwards leaves the conversation list and thread header showing
+     * the old name — SmsReceiver already works around this by live-resolving names for
+     * notifications; this fixes the staleness at the source in Room.
+     *
+     * Re-resolves each 1:1 thread's contact name on every catch-up pass and issues a
+     * targeted displayName UPDATE only when it actually changed. Group threads are skipped
+     * inside [resolveDisplayNameRefresh] (their comma-joined roster name is owned by the
+     * roster-staleness mechanism, GROUP_MESSAGING_SPEC §4.3); nicknames are never read or
+     * written (they override displayName at render time). The UPDATE column is displayName
+     * alone — user settings (pin/mute/notifications/colors) are untouched.
+     *
+     * Cost: [lookupContactName] is served from ContactCaches (process-wide LRU). In steady
+     * state — no contact edits since the last pass — every lookup is an O(1) cache hit with
+     * no ContentResolver I/O, and since nothing changed there are zero DB writes; the pass
+     * is a cheap in-memory scan. The one costly pass is the first after any contact edit:
+     * the caches' ContentObserver evicts on edit, so that pass re-queries PhoneLookup per
+     * thread and re-warms the cache. That I/O is unavoidable (a rename can't be detected
+     * without a lookup), bounded to once per edit burst, and runs on Dispatchers.IO.
+     */
+    private suspend fun refreshOneToOneDisplayNames() {
+        try {
+            var updated = 0
+            for (thread in threadRepository.getAll()) {
+                val isGroup = thread.participants.size > 1
+                val resolved = context.lookupContactName(thread.address)
+                val newName = resolveDisplayNameRefresh(thread.displayName, resolved, isGroup) ?: continue
+                threadRepository.updateDisplayName(thread.id, newName)
+                updated++
+            }
+            if (updated > 0) syncLogger.log(TAG, "contact-name refresh: updated $updated 1:1 thread display name(s)")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "contact-name refresh failed — will retry on next catch-up", e)
+        }
     }
 
     /*
@@ -787,7 +831,11 @@ class SmsSyncHandler @Inject constructor(
      */
     private suspend fun notifyIncomingMms(threadId: Long, message: Message) {
         val thread = threadRepository.getById(threadId) ?: return
-        if (!thread.notificationsEnabled || thread.isMuted) return
+        // Suppress when the user is already viewing this exact thread (same id space as
+        // ThreadScreen's threadId), or notifications are off / muted. The MMS still synced
+        // above; only the banner is skipped.
+        if (activeThreadTracker.activeThreadId == threadId) return
+        if (!thread.notificationsEnabled || thread.isMuted || thread.isSpam) return
         val isGroup = thread.participants.size > 1
         val senderName = context.lookupContactName(message.address)
             ?: threadRepository.getDisplayNameByAddress(message.address)

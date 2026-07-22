@@ -532,12 +532,16 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
     override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
     override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun updatePinned(messageId: Long, isPinned: Boolean) = Unit
+    override fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 private class ActionsThreadDao : ThreadDao {
     override fun observeAll(): Flow<List<ThreadEntity>> = flowOf(emptyList())
     override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(null)
     override suspend fun getById(threadId: Long): ThreadEntity? = null
+    override suspend fun getAll(): List<ThreadEntity> = emptyList()
+    override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
     override suspend fun insert(thread: ThreadEntity) = Unit
     override suspend fun insertAll(threads: List<ThreadEntity>) = Unit
     override suspend fun insertIgnore(thread: ThreadEntity) = Unit
@@ -557,6 +561,10 @@ private class ActionsThreadDao : ThreadDao {
     override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
     override suspend fun getDisplayNameByAddress(address: String): String? = null
     override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) = Unit
+    override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+    override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+    override suspend fun updateSpam(threadId: Long, isSpam: Boolean) = Unit
+    override suspend fun isSpamByAddress(address: String): Boolean? = null
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
@@ -575,6 +583,7 @@ private class ActionsReactionDao : ReactionDao {
     override suspend fun delete(reaction: ReactionEntity) = Unit
     override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) = Unit
     override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+    override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
     override suspend fun getTopEmojis(limit: Int): List<com.plusorminustwo.postmark.data.db.dao.EmojiCount> = emptyList()
     override fun observeTopEmojisBySender(senderAddress: String): Flow<List<com.plusorminustwo.postmark.data.db.dao.EmojiCount>> = flowOf(emptyList())
     override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())

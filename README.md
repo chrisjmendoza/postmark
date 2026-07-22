@@ -100,7 +100,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, 
 | Media | Media3 (ExoPlayer, Transformer) — shared per-thread audio player, video compression |
 | Dependency injection | Hilt 2.56 |
 | Background work | WorkManager 2.10.0 |
-| Build | AGP 9.2.1, Kotlin 2.2.10, KSP |
+| Build | AGP 9.3.0, Kotlin 2.2.10, KSP |
 
 **Min SDK:** 26 (Android 8.0 Oreo) · **Target SDK:** 35
 
@@ -203,11 +203,15 @@ On first launch Postmark requests the **default SMS role** via `RoleManager`. On
 
 - **No RCS.** Postmark speaks SMS/MMS only. Setting it as your default SMS app means
   conversations that were using RCS (Google Messages "chat features") silently fall
-  back to SMS/MMS. RCS requires carrier/Google agreements unavailable to third-party apps.
+  back to SMS/MMS. RCS chat features route through Google's Jibe/carrier
+  infrastructure, and Google does not expose a public API for third-party apps to
+  send or receive over it — RCS is restricted to Google Messages and carrier-provided
+  apps. If that ever changes, supporting RCS becomes a roadmap candidate.
 - **Samsung devices** require Postmark to be set as the default SMS app before any messages can be read. This is a Samsung-specific restriction, not an Android platform limitation.
-- **Group MMS sending** is not yet supported — received group threads display correctly
-  (full roster, per-sender bubble labels), but replies reach only the first participant
-  and new group threads can't be started. A warning banner is shown in group threads.
+- **Group MMS sending** is implemented (multi-recipient PDU, replies reach the whole
+  roster, "Start group conversation" multi-select compose) but not yet verified on a
+  physical device against a real carrier. Carrier-disabled group MMS falls back to a
+  1:1 send with a warning banner instead of a broadcast-style N-separate-sends mode.
 - **Emoji reactions are local annotations.** Incoming Apple-style reaction texts are
   parsed and rendered, but reactions you add are stored only in Postmark's database —
   nothing is transmitted to the other person.
@@ -229,7 +233,6 @@ On first launch Postmark requests the **default SMS role** via `RoleManager`. On
 - [`docs/performance-analysis.md`](docs/performance-analysis.md) — tiered performance audit and the fixes it drove
 - [`docs/MMS_AUDIT.md`](docs/MMS_AUDIT.md) — point-in-time MMS system audit (June 2026); largely superseded by the multi-attachment/video work since
 - [`docs/OWNER-ACTIONS.md`](docs/OWNER-ACTIONS.md) — open items that need an owner decision, not just code
-- `ROADMAP.md` — the original build-order plan; historical and partially stale (trust `docs/TODO.md` and the code over it)
 
 ---
 
@@ -238,8 +241,11 @@ On first launch Postmark requests the **default SMS role** via `RoleManager`. On
 The live, tiered backlog lives in `docs/TODO.md` — see [Documentation](#documentation) above.
 
 **Currently in progress / next up:**
-- Blocking & spam completion — blocked-numbers screen, spam folder (Play Store requirement)
-- Group MMS sending (multi-recipient PDU + recipient picker)
+- On-device verification pass — several July 2026 features (spam folder, blocked-numbers
+  screen, pinned messages, conversation-style notifications, notification settings screen)
+  are implemented and unit-tested but not yet confirmed on a physical device
+- Spam auto-flag heuristics + an inline "Report spam" notification action (manual
+  report/hide/restore is done; Play Store requirement)
 - On-device verification of the voice memo hardening rounds (screen-off/backgrounding,
   TalkBack, audio focus, process death — see `docs/fable-voice-memo.md`)
 - Image export (Canvas to Bitmap rendering)

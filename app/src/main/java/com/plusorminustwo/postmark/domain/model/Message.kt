@@ -22,6 +22,8 @@ import androidx.compose.runtime.Immutable
  *                        audio). Empty for SMS and text-only MMS.
  * @param isStarred       User-marked favorite — surfaces this message's images in the
  *                        global Starred Images gallery. Postmark-only, not synced anywhere.
+ * @param isPinned        User-pinned message (Discord-style) — surfaces in the per-thread
+ *                        Pinned messages panel. Postmark-only, not synced anywhere.
  */
 @Immutable
 data class Message(
@@ -39,7 +41,8 @@ data class Message(
     val attachments: List<MessageAttachment> = emptyList(),
     // False for incoming messages not yet viewed; drives the unread badge.
     val isRead: Boolean = true,
-    val isStarred: Boolean = false
+    val isStarred: Boolean = false,
+    val isPinned: Boolean = false
 ) {
     /** Content URI of the first attachment — convenience accessor for single-media
      *  call sites (previews, shared-media grid). Null when there are no attachments. */

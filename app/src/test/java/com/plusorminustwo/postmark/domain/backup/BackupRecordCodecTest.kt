@@ -17,7 +17,8 @@ class BackupRecordCodecTest {
         backupPolicy = "ALWAYS_INCLUDE",
         participants = listOf("+12065551234", "+12065555678"),
         lastMessageAt = 1_752_000_000_000L,
-        lastMessagePreview = "see you\nthere"
+        lastMessagePreview = "see you\nthere",
+        isSpam = true
     )
 
     private val fullMessage = MessageRecord(
@@ -30,6 +31,7 @@ class BackupRecordCodecTest {
         isMms = true,
         isRead = false,
         isStarred = true,
+        isPinned = true,
         attachments = listOf(AttachmentRef("ab12cd", "image/jpeg")),
         reactions = listOf(
             ReactionRecord("self", "❤️", 1_752_000_100_000L, ""),
@@ -91,6 +93,7 @@ class BackupRecordCodecTest {
         assertEquals(false, msg.isMms)
         assertEquals(true, msg.isRead)
         assertEquals(false, msg.isStarred)
+        assertEquals(false, msg.isPinned)
         assertTrue(msg.attachments.isEmpty())
         assertTrue(msg.reactions.isEmpty())
     }
@@ -102,6 +105,7 @@ class BackupRecordCodecTest {
         val t = decoded.thread
         assertEquals("GLOBAL", t.backupPolicy)
         assertEquals(true, t.notificationsEnabled)
+        assertEquals(false, t.isSpam)
         assertNull(t.nickname)
         assertTrue(t.participants.isEmpty())
         try {

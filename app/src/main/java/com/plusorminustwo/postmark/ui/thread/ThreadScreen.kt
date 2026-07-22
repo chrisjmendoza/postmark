@@ -104,6 +104,7 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
+import com.plusorminustwo.postmark.domain.model.previewText
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.Devices
 import com.plusorminustwo.postmark.domain.model.Thread
@@ -271,6 +272,8 @@ fun ThreadScreen(
     val voiceMemo by viewModel.voiceMemoState.collectAsState()
     // One-time gesture-tips card visibility (un-dismissed); UI also gates on message count.
     val threadTipsDismissed by viewModel.threadTipsDismissed.collectAsState()
+    // This thread's pinned messages (oldest first) for the Pinned messages panel.
+    val pinnedMessages by viewModel.pinnedMessages.collectAsState()
 
     // ── Stable lambdas ────────────────────────────────────────────────────────
     // Wrapped in remember(viewModel) so the same function reference is reused
@@ -302,10 +305,25 @@ fun ThreadScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) viewModel.onHostStopped()
+            when (event) {
+                Lifecycle.Event.ON_STOP -> viewModel.onHostStopped()
+                // Register/clear this thread as the on-screen conversation so an incoming
+                // SMS/MMS for it skips the notification banner while the user is looking at
+                // it. ON_PAUSE (not ON_STOP) so a partially-obscured thread still counts as
+                // "viewing"; the tracker's clear-on-match guard tolerates the pause-old/
+                // resume-new overlap during navigation between threads.
+                Lifecycle.Event.ON_RESUME -> viewModel.onScreenResumed()
+                Lifecycle.Event.ON_PAUSE -> viewModel.onScreenPaused()
+                else -> Unit
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            // Guarantee we don't leave this thread registered if the screen leaves the
+            // composition without an ON_PAUSE reaching the observer first.
+            viewModel.onScreenPaused()
+        }
     }
 
     // Back during an in-flight memo must park it (onBackDuringMemo), never let
@@ -323,6 +341,7 @@ fun ThreadScreen(
     val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
     val onDeleteMessage           = remember(viewModel) { { id: Long -> viewModel.deleteMessage(id) } }
     val onToggleStarred           = remember(viewModel) { { id: Long -> viewModel.toggleStarred(id) } }
+    val onTogglePinnedMessage     = remember(viewModel) { { id: Long -> viewModel.togglePinnedMessage(id) } }
     val onDismissDefaultSmsDialog = remember(viewModel) { { viewModel.dismissDefaultSmsDialog() } }
     val onUpdateBackupPolicy      = remember(viewModel) { { policy: BackupPolicy -> viewModel.updateBackupPolicy(policy) } }
     val onDismissReactionPicker   = remember(viewModel) { { viewModel.dismissReactionPicker() } }
@@ -335,6 +354,7 @@ fun ThreadScreen(
     val onToggleMute              = remember(viewModel) { { viewModel.toggleMute() } }
     val onBlockNumber             = remember(viewModel) { { viewModel.blockNumber() } }
     val onTogglePin               = remember(viewModel) { { viewModel.togglePin() } }
+    val onToggleSpam              = remember(viewModel) { { viewModel.toggleSpam() } }
     val onToggleNotifications     = remember(viewModel) { { viewModel.toggleNotificationsEnabled() } }
     val onEnterSelectionMode      = remember(viewModel) { { viewModel.enterSelectionMode() } }
     val onReplyTextChanged        = remember(viewModel) { { text: String -> viewModel.onReplyTextChanged(text) } }
@@ -397,6 +417,8 @@ fun ThreadScreen(
         onHighlightMessage = onHighlightMessage,
         onDeleteMessage = onDeleteMessage,
         onToggleStarred = onToggleStarred,
+        pinnedMessages = pinnedMessages,
+        onTogglePinnedMessage = onTogglePinnedMessage,
         onDismissDefaultSmsDialog = onDismissDefaultSmsDialog,
         onUpdateBackupPolicy = onUpdateBackupPolicy,
         onDismissReactionPicker = onDismissReactionPicker,
@@ -407,6 +429,7 @@ fun ThreadScreen(
         onToggleMute = onToggleMute,
         onBlockNumber = onBlockNumber,
         onTogglePin = onTogglePin,
+        onToggleSpam = onToggleSpam,
         onToggleNotifications = onToggleNotifications,
         onEnterSelectionMode = onEnterSelectionMode,
         onReplyTextChanged = onReplyTextChanged,
@@ -508,6 +531,10 @@ private fun ThreadContent(
     onHighlightMessage: (Long) -> Unit,
     onDeleteMessage: (Long) -> Unit = {},
     onToggleStarred: (Long) -> Unit = {},
+    // This thread's pinned messages (oldest first) + the per-message pin toggle — back
+    // the Pinned messages panel (⋮ overflow) and the long-press Pin/Unpin action.
+    pinnedMessages: List<Message> = emptyList(),
+    onTogglePinnedMessage: (Long) -> Unit = {},
     onDismissDefaultSmsDialog: () -> Unit,
     onUpdateBackupPolicy: (BackupPolicy) -> Unit,
     onDismissReactionPicker: () -> Unit,
@@ -518,6 +545,7 @@ private fun ThreadContent(
     onToggleMute: () -> Unit,
     onBlockNumber: () -> Unit = {},
     onTogglePin: () -> Unit,
+    onToggleSpam: () -> Unit = {},
     onToggleNotifications: () -> Unit,
     onEnterSelectionMode: () -> Unit,
     onReplyTextChanged: (String) -> Unit,
@@ -584,6 +612,12 @@ private fun ThreadContent(
     var showDateRangePicker by remember { mutableStateOf(false) }
     // Blocking is a system-wide, hard-to-discover-how-to-undo action, so it confirms first.
     var showBlockConfirmDialog by remember { mutableStateOf(false) }
+    // Reporting spam hides the conversation and silences it; confirm before hiding it away.
+    // Restoring ("Not spam") is immediate — nothing is hidden, so no confirmation needed.
+    var showSpamConfirmDialog by remember { mutableStateOf(false) }
+    // Pinned messages panel (⋮ → "Pinned messages"); a ModalBottomSheet listing this
+    // thread's pinned messages, tapping one jumps to it in the conversation.
+    var showPinnedSheet by remember { mutableStateOf(false) }
 
     // Non-null shows a "Delete message?" confirm dialog for this message id. Shared by the
     // action-bar Delete button and the image viewer's trash icon — deletion is real (removes
@@ -889,7 +923,7 @@ private fun ThreadContent(
             text = {
                 Text(
                     "Calls and texts from this number will be rejected by your phone. " +
-                        "You can unblock it later from your phone's blocked-numbers settings."
+                        "You can unblock it later from Settings › Privacy › Blocked numbers."
                 )
             },
             confirmButton = {
@@ -904,6 +938,29 @@ private fun ThreadContent(
         )
     }
 
+    if (showSpamConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showSpamConfirmDialog = false },
+            title = { Text("Report as spam?") },
+            text = {
+                Text(
+                    "This conversation will be moved to the Spam folder — hidden from your " +
+                        "list and silenced (no notifications). You can restore it anytime from " +
+                        "Settings › Privacy › Spam."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSpamConfirmDialog = false
+                    onToggleSpam()
+                }) { Text("Report") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSpamConfirmDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     if (showBackupPolicyDialog) {
         BackupPolicyDialog(
             currentPolicy = uiState.thread?.backupPolicy ?: BackupPolicy.GLOBAL,
@@ -912,6 +969,20 @@ private fun ThreadContent(
                 showBackupPolicyDialog = false
             },
             onDismiss = { showBackupPolicyDialog = false }
+        )
+    }
+
+    if (showPinnedSheet) {
+        PinnedMessagesSheet(
+            pinnedMessages = pinnedMessages,
+            contactName = contactDisplayName,
+            participantNames = participantNames,
+            onJumpTo = { id ->
+                showPinnedSheet = false
+                scope.launch { scrollToMessageCentered(id) }
+            },
+            onUnpin = { id -> onTogglePinnedMessage(id) },
+            onDismiss = { showPinnedSheet = false }
         )
     }
 
@@ -1009,6 +1080,8 @@ private fun ThreadContent(
             ) { mode ->
             when (mode) {
                 TopBarMode.ACTION -> MessageActionTopBar(
+                    isPinned = uiState.messages
+                        .find { it.id == uiState.reactionPickerMessageId }?.isPinned == true,
                     onCancel  = { onDismissReactionPicker() },
                     onCopy    = {
                         val msg = uiState.messages.find { it.id == uiState.reactionPickerMessageId }
@@ -1021,6 +1094,10 @@ private fun ThreadContent(
                     },
                     onSelect  = { onEnterSelectionModeFromActionMode() },
                     onForward = { uiState.reactionPickerMessageId?.let { onForwardMessage(it) } },
+                    onTogglePin = {
+                        uiState.reactionPickerMessageId?.let { onTogglePinnedMessage(it) }
+                        onDismissReactionPicker()
+                    },
                     onDelete  = {
                         pendingDeleteMessageId = uiState.reactionPickerMessageId
                         onDismissReactionPicker()
@@ -1081,6 +1158,9 @@ private fun ThreadContent(
                     },
                     actions = {
                         var menuExpanded by remember { mutableStateOf(false) }
+                        IconButton(onClick = onSearchInThread) {
+                            Icon(Icons.Default.Search, "Search in thread")
+                        }
                         Box {
                             IconButton(onClick = { menuExpanded = true }) {
                                 Icon(Icons.Default.MoreVert, "More options")
@@ -1105,8 +1185,8 @@ private fun ThreadContent(
                                     onClick = { menuExpanded = false; onEnterSelectionMode() }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Search in thread") },
-                                    onClick = { menuExpanded = false; onSearchInThread() }
+                                    text = { Text("Pinned messages") },
+                                    onClick = { menuExpanded = false; showPinnedSheet = true }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },
@@ -1127,6 +1207,15 @@ private fun ThreadContent(
                                 DropdownMenuItem(
                                     text = { Text("Reset text size") },
                                     onClick = { menuExpanded = false; onResetFontScale() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (uiState.thread?.isSpam == true) "Not spam" else "Report as spam") },
+                                    // Marking spam hides the thread away, so confirm first; restoring is immediate.
+                                    onClick = {
+                                        menuExpanded = false
+                                        if (uiState.thread?.isSpam == true) onToggleSpam()
+                                        else showSpamConfirmDialog = true
+                                    }
                                 )
                                 // Hidden for group threads — "the number" is ambiguous when
                                 // the thread has multiple participants.
@@ -1603,6 +1692,7 @@ private fun MessageBubble(
     // it's a thread-wide render input, not per-message state.
     val accentColors = LocalBubbleAccentColors.current
     val bubbleStyle = LocalBubbleStyle.current
+    val haptics = LocalHapticFeedback.current
     val baseBubbleColor = if (message.isSent)
         accentColors.sentContainer ?: MaterialTheme.colorScheme.primaryContainer
     else
@@ -1887,7 +1977,10 @@ private fun MessageBubble(
                 //    the full overhang to keep the pill off the next message.
                 ReactionPills(
                     reactions = message.reactions,
-                    onReactionClick = onReactionClick,
+                    onReactionClick = { emoji ->
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onReactionClick(emoji)
+                    },
                     modifier = Modifier
                         .layout { measurable, constraints ->
                             val placeable = measurable.measure(constraints)
@@ -1908,7 +2001,7 @@ private fun MessageBubble(
             }
         }  // end Column(widthIn+align)
         }  // end Box(fillMaxWidth) swipe wrapper
-        if (showTimestamp || message.isSent) {
+        if (showTimestamp || message.isSent || message.isPinned) {
             Row(
                 modifier = Modifier
                     .padding(
@@ -1920,6 +2013,16 @@ private fun MessageBubble(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
+                // Subtle inline pin indicator — stays visible while scrolling so pinned
+                // messages are identifiable in-place, not only in the Pinned panel.
+                if (message.isPinned) {
+                    Icon(
+                        imageVector = Icons.Default.PushPin,
+                        contentDescription = "Pinned",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
                 if (showTimestamp) {
                     // SMS / MMS type label — helps when scrolling back into pre-RCS history.
                     Text(
@@ -4072,6 +4175,7 @@ private fun FullScreenImageViewer(
     ) { images.size }
     val currentImage = images.getOrNull(pagerState.currentPage)
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     // Allow the device to rotate while viewing full-screen photos (e.g. landscape shots);
     // reverts to the app-wide portrait lock on close.
     AllowScreenRotationWhileVisible()
@@ -4303,7 +4407,10 @@ private fun FullScreenImageViewer(
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(CircleShape)
-                                        .clickable { onToggleReaction(image.messageId, emoji) },
+                                        .clickable {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onToggleReaction(image.messageId, emoji)
+                                        },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(text = emoji, fontSize = 28.sp)
@@ -4935,9 +5042,11 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
  * @param onReactionClick  Called with the emoji string when a chip is tapped (toggles the reaction).
  * @param modifier       Receives the corner-straddle placement from [MessageBubble].
  */
+// `internal` (not `private`) so the search result rows can reuse the exact same
+// pills — passing an inert onReactionClick for display-only rendering.
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReactionPills(
+internal fun ReactionPills(
     reactions: List<Reaction>,
     onReactionClick: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -4983,6 +5092,7 @@ private fun EmojiReactionPopup(
     onDismiss: () -> Unit
 ) {
     val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
     val myReactionEmojis = remember(message.reactions) {
         message.reactions.filter { it.senderAddress == SELF_ADDRESS }.map { it.emoji }.toSet()
     }
@@ -5047,7 +5157,10 @@ private fun EmojiReactionPopup(
                                 if (isSelected) MaterialTheme.colorScheme.primaryContainer
                                 else Color.Transparent
                             )
-                            .clickable { onReact(emoji) },
+                            .clickable {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onReact(emoji)
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(emoji, fontSize = 24.sp)
@@ -5137,6 +5250,107 @@ private fun ThreadScreenPreview() {
     }
 }
 
+// ── PinnedMessagesSheet ───────────────────────────────────────────────────────
+
+/**
+ * Per-thread Pinned messages panel — a [ModalBottomSheet] listing every pinned message
+ * oldest-first (Discord-style). Each row shows a sender label ("You" / contact name),
+ * the body or an attachment placeholder ([previewText]), and a friendly timestamp;
+ * tapping a row jumps to that message via the shared scroll/highlight mechanism. A pin
+ * button on each row unpins in place.
+ *
+ * navigationBarsPadding on the content keeps the list (and the trailing row) clear of the
+ * Android gesture/nav bar — same treatment as [EmojiPickerBottomSheet].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PinnedMessagesSheet(
+    pinnedMessages: List<Message>,
+    contactName: String,
+    participantNames: Map<String, String>,
+    onJumpTo: (Long) -> Unit,
+    onUnpin: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp)
+        ) {
+            Text(
+                text = "Pinned messages",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+            if (pinnedMessages.isEmpty()) {
+                Text(
+                    text = "No pinned messages yet. Long-press a message and choose Pin.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    items(pinnedMessages, key = { it.id }) { msg ->
+                        val sender = when {
+                            msg.isSent -> "You"
+                            participantNames.isNotEmpty() ->
+                                participantNames[msg.address] ?: formatPhoneNumber(msg.address)
+                            else -> contactName
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onJumpTo(msg.id) }
+                                .padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = sender,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = formatEpochMillis(msg.timestamp, FRIENDLY_TIMESTAMP_FORMATTER),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = msg.previewText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(onClick = { onUnpin(msg.id) }) {
+                                Icon(
+                                    imageVector = Icons.Default.PushPin,
+                                    contentDescription = "Unpin",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── EmojiPickerBottomSheet ────────────────────────────────────────────────────
 
 /**
@@ -5175,10 +5389,12 @@ private fun EmojiPickerBottomSheet(
 
 @Composable
 private fun MessageActionTopBar(
+    isPinned: Boolean,
     onCancel: () -> Unit,
     onCopy: () -> Unit,
     onSelect: () -> Unit,
     onForward: () -> Unit,
+    onTogglePin: () -> Unit,
     onDelete: () -> Unit
 ) {
     Surface(
@@ -5197,6 +5413,7 @@ private fun MessageActionTopBar(
             ActionItem(Icons.Default.ContentCopy,      "Copy",    onCopy)
             ActionItem(Icons.Default.CheckBox,         "Select",  onSelect)
             ActionItem(Icons.AutoMirrored.Filled.Send, "Forward", onForward)
+            ActionItem(Icons.Default.PushPin, if (isPinned) "Unpin" else "Pin", onTogglePin)
             ActionItem(Icons.Default.Delete,           "Delete",  onDelete,  MaterialTheme.colorScheme.error)
         }
     }

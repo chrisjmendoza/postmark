@@ -155,10 +155,10 @@ class ConversationsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     // Derived: full list or unread-only list depending on the filter toggle.
+    // The filter itself is a pure function (see [filterThreadsByUnread]) so it can be
+    // unit-tested — including that pinned-first ordering survives the filter.
     val threads: StateFlow<List<Thread>?> = combine(allThreads, unreadCounts, _showUnreadOnly) { list, counts, unreadOnly ->
-        if (list == null) null
-        else if (!unreadOnly) list
-        else list.filter { (counts[it.id] ?: 0) > 0 }
+        list?.let { filterThreadsByUnread(it, counts, unreadOnly) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** Flips the "show unread only" filter on or off. */
@@ -371,6 +371,29 @@ internal fun shouldShowMultiSelectHint(
     threadCount: Int,
     selectionActive: Boolean
 ): Boolean = !dismissed && threadCount > 0 && !selectionActive
+
+/**
+ * Number of threads that have at least one unread message. Derived from the same
+ * threadId→unread-count map that drives the per-row badges, so the top-bar filter chip
+ * count can never disagree with the badges (no parallel unread pipeline). A thread only
+ * counts once no matter how many unread messages it holds.
+ */
+internal fun unreadThreadCount(unreadCounts: Map<Long, Int>): Int =
+    unreadCounts.count { (_, count) -> count > 0 }
+
+/**
+ * Applies the "unread only" filter to the ordered thread list. When [showUnreadOnly] is
+ * false the list is returned unchanged; when true, only threads whose [unreadCounts] entry
+ * is > 0 survive. Relative order is preserved, so the caller's pinned-first ordering carries
+ * through the filtered view untouched. Extracted as a pure function for testability.
+ */
+internal fun filterThreadsByUnread(
+    threads: List<Thread>,
+    unreadCounts: Map<Long, Int>,
+    showUnreadOnly: Boolean
+): List<Thread> =
+    if (!showUnreadOnly) threads
+    else threads.filter { (unreadCounts[it.id] ?: 0) > 0 }
 
 /** Human-readable Snackbar text for a bulk-delete result. */
 internal fun deleteResultMessage(deleted: Int, failed: Int): String = when {

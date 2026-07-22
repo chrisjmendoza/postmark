@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  *
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity].
  *
- * Current schema version: 18.
+ * Current schema version: 20.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
         ReactionEntity::class,
         MessageFtsEntity::class
     ],
-    version = 18,
+    version = 20,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -222,6 +222,28 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // accentColorArgb (v17) is now the CONTACT's color — avatar + received
                 // bubbles; this column is the independent sent-bubble override.
                 db.execSQL("ALTER TABLE threads ADD COLUMN sentColorArgb INTEGER")
+            }
+        }
+
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Postmark-only per-message pin flag (Discord-style Pinned messages panel).
+                // Defaults 0 (false) so all existing rows start unpinned. Distinct from the
+                // image-only isStarred (v14) and the thread-level threads.isPinned (v6).
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Postmark-only thread-level spam flag. Defaults 0 (false) so all existing
+                // threads start out-of-spam; a spam thread is hidden from every list surface
+                // into the Spam folder and posts no incoming notifications.
+                db.execSQL(
+                    "ALTER TABLE threads ADD COLUMN isSpam INTEGER NOT NULL DEFAULT 0"
+                )
             }
         }
 

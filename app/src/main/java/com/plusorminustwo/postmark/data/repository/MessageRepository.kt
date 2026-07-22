@@ -7,6 +7,7 @@ import com.plusorminustwo.postmark.data.db.entity.toEntity
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
+import com.plusorminustwo.postmark.domain.model.attachReactions
 import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.data.db.dao.UnreadCount
@@ -32,12 +33,7 @@ class MessageRepository @Inject constructor(
         messageDao.observeByThread(threadId).combine(
             reactionDao.observeByThread(threadId)
         ) { messages, reactions ->
-            val reactionsByMessage = reactions.groupBy { it.messageId }
-            messages.map { entity ->
-                entity.toDomain().copy(
-                    reactions = reactionsByMessage[entity.id]?.map { it.toDomain() } ?: emptyList()
-                )
-            }
+            attachReactions(messages.map { it.toDomain() }, reactions.map { it.toDomain() })
         }
 
     suspend fun getByThread(threadId: Long): List<Message> =
@@ -172,6 +168,14 @@ class MessageRepository @Inject constructor(
 
     suspend fun updateStarred(messageId: Long, isStarred: Boolean) =
         messageDao.updateStarred(messageId, isStarred)
+
+    suspend fun updatePinned(messageId: Long, isPinned: Boolean) =
+        messageDao.updatePinned(messageId, isPinned)
+
+    /** Live list of this thread's pinned messages, oldest first (Discord-style) —
+     *  backs the per-thread Pinned messages panel. */
+    fun observePinnedMessages(threadId: Long): Flow<List<Message>> =
+        messageDao.observePinnedByThread(threadId).map { list -> list.map { it.toDomain() } }
 
     /** Live list of starred messages that carry at least one image attachment, newest
      *  first — backs the global Starred Images gallery. Filters to images specifically

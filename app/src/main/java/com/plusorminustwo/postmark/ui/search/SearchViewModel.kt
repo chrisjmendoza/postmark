@@ -9,12 +9,22 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.SearchDateRange
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.model.toBoundsMs
+import com.plusorminustwo.postmark.domain.search.SearchResultGroup
+import com.plusorminustwo.postmark.domain.search.groupResultsByContact
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+/** Ordering applied to search results. Session-only — not persisted. */
+enum class SortOrder {
+    /** ORDER BY timestamp DESC — the default flat, most-recent-first list. */
+    MOST_RECENT,
+    /** Group by thread, section headers A–Z; newest-first within each group. */
+    BY_CONTACT
+}
 
 /** Immutable snapshot of all active search filter values. */
 data class SearchFilters(
@@ -33,7 +43,10 @@ data class SearchUiState(
     val isLoading: Boolean = false,
     val threads: List<Thread> = emptyList(),
     val selectedThread: Thread? = null,
-    val reactionEmojis: List<String> = emptyList()
+    val reactionEmojis: List<String> = emptyList(),
+    val sortOrder: SortOrder = SortOrder.MOST_RECENT,
+    // Populated only in BY_CONTACT mode — a pure regrouping of [results] by thread.
+    val groupedResults: List<SearchResultGroup> = emptyList()
 )
 
 /**
@@ -62,23 +75,36 @@ class SearchViewModel @Inject constructor(
     private val _results = MutableStateFlow<List<Message>>(emptyList())
     private val _isLoading = MutableStateFlow(false)
     private val _selectedThread = MutableStateFlow<Thread?>(null)
+    private val _sortOrder = MutableStateFlow(SortOrder.MOST_RECENT)
+
+    // Groups the four "auxiliary" inputs so the outer combine stays within its 5-flow arity.
+    private data class Aux(
+        val threads: List<Thread>,
+        val selectedThread: Thread?,
+        val emojis: List<String>,
+        val sortOrder: SortOrder
+    )
 
     val uiState: StateFlow<SearchUiState> = combine(
         _query, _filters, _results, _isLoading,
         combine(
             threadRepository.observeAll(),
             _selectedThread,
-            searchRepository.observeDistinctEmojis()
-        ) { threads, selected, emojis -> Triple(threads, selected, emojis) }
-    ) { query, filters, results, loading, triple ->
+            searchRepository.observeDistinctEmojis(),
+            _sortOrder
+        ) { threads, selected, emojis, sortOrder -> Aux(threads, selected, emojis, sortOrder) }
+    ) { query, filters, results, loading, aux ->
         SearchUiState(
             query = query,
             filters = filters,
             results = results,
             isLoading = loading,
-            threads = triple.first,
-            selectedThread = triple.second,
-            reactionEmojis = triple.third
+            threads = aux.threads,
+            selectedThread = aux.selectedThread,
+            reactionEmojis = aux.emojis,
+            sortOrder = aux.sortOrder,
+            groupedResults = if (aux.sortOrder == SortOrder.BY_CONTACT)
+                groupResultsByContact(results, aux.threads) else emptyList()
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SearchUiState())
 
@@ -119,6 +145,8 @@ class SearchViewModel @Inject constructor(
     fun setProtocolFilter(isMms: Boolean?) {
         _filters.update { it.copy(isMms = isMms) }
     }
+
+    fun setSortOrder(order: SortOrder) { _sortOrder.value = order }
 
     private fun search(query: String, filters: SearchFilters) {
         // Allow browse (blank query) when a protocol filter is active.

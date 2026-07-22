@@ -4,6 +4,392 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-22 (feat/theme-presets) — suppress notifications for the open thread
+
+885 tests passing (up from 829). **Not yet verified on device.**
+
+**No more notification banner for the conversation you're already looking at:**
+both notification paths — `SmsReceiver` for SMS, `SmsSyncHandler.notifyIncomingMms`
+for MMS — fired regardless of whether `ThreadScreen` had that exact thread open.
+New `ActiveThreadTracker`, a `@Singleton` holding a single `@Volatile activeThreadId`,
+is set/cleared by two new `ThreadViewModel` methods, `onScreenResumed()` /
+`onScreenPaused()`, wired into ThreadScreen's existing lifecycle
+`DisposableEffect` on `ON_RESUME`/`ON_PAUSE` (plus an `onDispose` safety clear).
+`clearActive` only nulls the field when the id passed in matches what's stored,
+so out-of-order lifecycle callbacks between two overlapping `ThreadScreen`
+instances (back-navigation, split-screen) can't clear a thread the *new* screen
+just activated. The comparison key is the thread id in both paths, which
+required confirming Room's `Thread.id` and the telephony provider's thread id
+share the same id space (sync populates `ThreadEntity.id` from `THREAD_ID`;
+the receiver resolves via `getOrCreateThreadId`) — no new lookup needed. Checked
+alongside the existing `notificationsEnabled`/mute guards, not in place of them.
+Process death simply resets the singleton to `null`, the safe default (notify);
+a `getOrCreateThreadId` failure (`-1`) falls through the same way. 8 new
+plain-JUnit tests in `ActiveThreadTrackerTest` cover set/clear-on-match/
+stale-clear/overlapping-navigation semantics.
+
+**Overnight TODO sweep — "Unread filter button" was already shipped:**
+the conversation list's `FilterChip` unread toggle (`showUnreadOnly` in
+`ConversationsViewModel`, "Unread (N)" label, pinned-first-preserving filter,
+empty state) was already fully implemented; the TODO checkbox was just stale,
+same as the "Unread count badge" item found the same way on July 18. Extracted
+the inline count/filter logic to pure functions `unreadThreadCount(...)` and
+`filterThreadsByUnread(...)`, covered by 8 new plain-JUnit tests in
+`UnreadFilterTest`.
+
+**Overnight TODO sweep — "Friendly timestamps" ticked, `toFriendlyLabel()` was
+never real:** the TODO pointed at reusing "`toFriendlyLabel()` logic already in
+the codebase" — no such function existed anywhere; the actual band logic
+(`<1 min` "just now", `<60 min` "Xm", same-day wall-clock time, last-6-days
+weekday, same-year "Apr 25", older "4/25/22") lived as a private, impure
+`formatDate(timestamp)` in `ConversationsScreen.kt` that read the system clock
+directly and hardcoded 12-hour time. Extracted to a pure
+`friendlyTimestamp(timestampMs, nowMs, is24Hour, zone, locale)` in the new
+`domain/formatter/FriendlyTime.kt` — now, zone, and locale are all parameters,
+so nothing under test touches the wall clock — and picked up 24-hour support
+via `DateFormat.is24HourFormat` along the way (previously always "9:41 AM",
+never "09:41"). `ThreadRow` now builds the label through
+`remember(thread.lastMessageAt)` instead of a ticking clock; the old
+`formatDate` and its four hoisted formatter instances are deleted. 14 new
+tests in `FriendlyTimeTest` cover every band boundary, both clock formats, and
+previous-year formatting. `ThreadScreen`'s bubble timestamps use a separate,
+untouched formatter.
+
+**Overnight TODO sweep — Search "Sort order toggle" implemented:** results
+were always a flat, most-recent-first list with no way to see everything
+from one contact together. A "By contact" `FilterChip` (`SortByAlpha` icon,
+first chip in the existing `FilterChips` row) switches a new `SortOrder`
+enum (`MOST_RECENT` default, `BY_CONTACT`) on `SearchViewModel`; `MOST_RECENT`
+leaves the current flat list untouched, `BY_CONTACT` renders `stickyHeader`
+groups — a reused 28dp `ContactAvatar` (thread accent color) plus contact
+name — per thread. The grouping itself is a pure `groupResultsByContact(results,
+threads)` transform in new `domain/search/SearchGrouping.kt`, producing
+`SearchResultGroup(threadId, thread, displayName, messages)`: it joins
+display names from `uiState.threads` since search results only carry
+`threadId`/address (falling back to the raw address when a thread has no
+name), sorts groups A–Z case-insensitively with threadId as a tie-break,
+sorts messages newest-first within a group, and never merges two threads
+that happen to share a display name because the group key is `threadId`,
+not the name. Toggle state is session-only. 6 new plain-JUnit tests in
+`SearchGroupingTest` cover the empty case, A–Z ordering, case-insensitivity,
+newest-first-within-group, same-name/different-thread separation, and the
+address fallback.
+
+**Overnight TODO sweep — Search "Reactions shown on search result rows"
+implemented:** the TODO's suspicion was right — `SearchDao` → `toDomain` left
+`Message.reactions` empty on every search result, so `SearchResultRow` had
+nothing to render even though the composable underneath was ready for it. New
+pure `attachReactions(messages, reactions)` in
+`domain/model/MessageReactions.kt` is now the one join mechanism both read
+paths go through: `SearchRepository` (its three result paths — browse, FTS,
+FTS+reaction filter — all resolve through one batched
+`ReactionDao.getByMessageIds` WHERE-IN query over the whole result set rather
+than one query per message) and `MessageRepository.observeByThread`, whose
+inline copy of the same join was replaced so the two paths can't drift apart
+again. `ReactionPills` (private in `ThreadScreen.kt`) is now internal and
+reused as-is, display-only, inside `SearchResultRow`, with an inert
+`onReactionClick`; wrapping it in `FlowRow` keeps row height sane when a
+message carries several reactions, and a 4dp spacer separates the pills from
+the body snippet above them. Pills now show up in both the flat
+`MOST_RECENT` list and the `BY_CONTACT` grouped view, since both render
+through `SearchResultRow`. 8 test-fake `ReactionDao`s picked up the new
+override; 4 new plain-JUnit tests in `MessageReactionsTest` cover
+match-by-id, multi-reaction grouping, unmatched-reactions-ignored, and
+identity on an empty reaction list.
+
+**Overnight TODO sweep — Search "Search within thread" ticked, ~95% already
+shipped:** the feature was already committed in b7e3685 — `search?threadId=
+{threadId}` optional nav arg with a `navRoute(threadId)` helper in
+`AppNavigation.kt`, `ThreadScreen`'s `onSearchInThread` callback, and
+`SearchViewModel.init` resolving the threadId from `SavedStateHandle` and
+calling the same `setThreadFilter(thread)` a manual tap uses, so the
+pre-applied filter arrives as an ordinary, clearable chip; jump-to-message and
+back-stack behavior were already correct. The checkbox was just stale. Only
+real gap vs. spec: the entry point was a "Search in thread" item buried in the
+⋮ overflow, not a toolbar icon. Fixed in `ThreadScreen.kt` (net ~0 lines): a
+dedicated Search `IconButton` added to the normal-mode `TopAppBar` actions
+before the ⋮, redundant overflow item removed — one discoverable entry point.
+No new tests (no new logic).
+
+**Overnight TODO sweep — Search "Contact/thread search" implemented:** global
+search only ever matched message bodies, so finding a contact meant scrolling
+the conversation list by hand. New pure `matchThreads(query, threads, limit =
+5)` in `domain/search/ThreadMatching.kt` filters the existing `uiState.threads`
+in memory — no new DAO query — matching name (`nickname ?: displayName`)
+case-insensitively and address either verbatim or digit-normalized, so
+`(555) 123` finds `+1 555-1234`. Results rank name matches above address-only
+matches, then alphabetically by shown name, then by threadId; a blank query
+yields nothing. Deliberately did not reuse `normalizeAddressForDedupe` — its
+leading-1 stripping is correct for dedupe but wrong for substring matching,
+noted in the KDoc. A labelled "Conversations" section now appears above the
+results list in both the flat `MOST_RECENT` and grouped `BY_CONTACT` views,
+suppressed once a thread filter narrows the search, and shown even when there
+are zero message results since finding the contact is the point of the
+section. Rows reuse the `ForwardPickerScreen` look (`ListItem` +
+`ContactAvatar`, nickname-aware name, `formatPhoneNumber(address)`, accent
+color) and tap through to the thread via a new `onThreadClick` wired in
+`AppNavigation.kt`; the "No results" empty state now requires both sections to
+be empty. 8 new plain-JUnit tests in `ThreadMatchingTest` cover blank query,
+case-insensitivity, digit matching, ranking, alphabetical ordering within a
+rank, nickname vs. display-name matching, the no-match case, and the cap.
+
+**Overnight sweep — "Blocked numbers screen" implemented:** blocking a number
+wrote to `BlockedNumberContract` already (July 11), but there was no way to see
+or undo it short of the phone's own blocked-numbers settings. New Settings →
+Privacy → "Blocked numbers" row opens `BlockedNumbersScreen`, backed by a new
+`BlockedNumbersRepository`: `canBlock()` via
+`BlockedNumberContract.canCurrentUserBlockNumbers`, `getBlockedNumbers()`
+querying `BlockedNumbers.CONTENT_URI` newest-first, `unblock(id)` deleting the
+row via `ContentUris.withAppendedId` against the blocked-numbers provider only
+— `content://sms` is never touched here or anywhere in this feature. All three
+repository methods degrade to empty/no-op when Postmark isn't the default SMS
+app, matching how the rest of the app treats that state. `BlockedNumbersViewModel`
+loads on init off the IO dispatcher and resolves contact names through the
+existing `Context.lookupContactName()`; each row gets a confirm-gated Unblock
+action, with empty and non-default-SMS-app states alongside the normal list.
+`ThreadViewModel.blockNumber()` was left as-is rather than folded into the new
+repository — deliberate, kept the diff minimal. `ThreadScreen`'s block dialog
+now reads "unblock it later from Settings › Privacy › Blocked numbers" instead
+of pointing at the phone's own settings. No new tests: this is ContentResolver
+CRUD wiring, not new pure logic; test count holds at 877. **Not yet verified on
+device** — `BlockedNumberContract` behavior is device-dependent, same caveat
+already on the "Block number" entry it completes.
+
+**Overnight TODO sweep — "Contact name refresh" implemented:** `Thread.
+displayName` was only ever resolved from system Contacts once, at
+thread-creation time (`SmsSyncHandler.ensureThread`, `SmsHistoryImportWorker`),
+and never re-checked afterward — rename a contact and the conversation list
+and thread header kept showing the old name indefinitely. New pure
+`resolveDisplayNameRefresh(storedDisplayName, resolvedName, isGroup)` in
+`data/sync/ContactNameRefresh.kt` decides the outcome (group thread → skip,
+null/blank resolved name → keep what's stored, unchanged → no-op, otherwise →
+update); `SmsSyncHandler.refreshOneToOneDisplayNames()` walks every 1:1 thread
+with it as the last step of `triggerCatchUp()`, so it runs on app foreground,
+the existing 60s `ConversationsViewModel` poll, and right after historical
+import, writing through a targeted single-column `ThreadDao.updateDisplayName`
+only when the name actually changed. Steady state costs nothing extra — O(1)
+`ContactCaches` hits, zero writes — and a contact edit costs one re-query pass
+per thread via the cache's existing ContentObserver `evictAll()`, on the IO
+dispatcher. **Deliberate decision:** a deleted contact KEEPS the stored name
+rather than reverting to the raw number the way Google Messages does —
+`lookupContactName` returns null for both a genuinely deleted contact and a
+transient permission/provider hiccup and can't tell them apart, so reverting
+on null would churn good names into numbers on every hiccup. Groups are
+untouched (group `displayName` is owned by the roster-staleness mechanism,
+`GROUP_MESSAGING_SPEC` §4.3) and nicknames are neither read nor written (they
+already override at render time). 6 new plain-JUnit tests in
+`ContactNameRefreshTest`; suite now 883 tests, 0 failures.
+
+**Docs — RCS documented as an explicit non-goal:** the README's "No RCS" line
+under Known Limitations now says why: RCS chat features route through
+Google's Jibe/carrier infrastructure, and Google doesn't expose a public API
+for third-party apps to send or receive over it — it's restricted to Google
+Messages and carrier apps. Framed as a roadmap candidate if that ever
+changes. Docs-only; no code changed.
+
+**Overnight TODO sweep — "Haptic feedback on reaction toggle" implemented:**
+`HapticFeedbackType.LongPress` via `LocalHapticFeedback` now fires at all
+three real reaction-toggle tap sites in `ThreadScreen.kt` — the reaction
+pill tap (wrapped around the real `onReactionClick` in `MessageBubble`,
+this item's original target), the emoji reaction popup's quick-emoji tap,
+and the image viewer's quick-reaction row. Deliberately not wired inside
+`ReactionPills` itself: `SearchScreen` renders the same component
+display-only with an inert callback, so search result pills stay silent
+rather than buzzing on every scroll-past. `ThreadScreen.kt` only, no new
+tests — a UI side-effect with no pure logic to cover; suite holds at 883
+tests, 0 failures.
+
+**Overnight sweep — Tier 4 CI and test hygiene batch:** four items closed.
+`runBlocking` → `runTest`: all 28 test bodies in `PostmarkDatabaseTest.kt`
+converted (`kotlinx-coroutines-test` was already an `androidTestImplementation`
+dep, so no build-file change); `DatabaseMigrationTest` had no `runBlocking` to
+begin with. Test size annotations: `@MediumTest` on `PostmarkDatabaseTest`
+(in-memory Room), `@LargeTest` on `DatabaseMigrationTest` (on-disk DBs, full
+v1→v18 chain); JVM unit tests under `src/test` deliberately left un-annotated
+since `androidx.test.filters` has no effect off-device. `@VisibleForTesting`
+on `PostmarkDatabase.FTS_CALLBACK`/`DATABASE_NAME` closed as invalid instead of
+applied: both are genuine production API consumed by `DatabaseModule`'s Hilt
+DI, not test-only surface, and the annotation would lint-flag those real call
+sites. `.gitattributes` closed as already-done: it already carried
+`* text=auto eol=lf` plus CRLF/binary overrides for `.bat` files and the
+wrapper jar, a stronger config than the plain `* text=auto` the item asked
+for. No production code touched; both build gates green —
+`./gradlew test` 883 tests, 0 failures, and `compileDebugAndroidTestKotlin`
+BUILD SUCCESSFUL (no device attached to run the instrumented tests).
+
+**Overnight sweep — Tier 3 "Starred & pinned messages" suite: pin any message,
+per-thread panel, bubble indicator:** the three items sitting unchecked below
+"Star an image" (which only ever covered images, via `isStarred`) are done.
+New `messages.isPinned INTEGER NOT NULL DEFAULT 0` column, schema v18→v19
+(`MIGRATION_18_19`, registered in `DatabaseModule`) — a deliberately separate
+column from the image-only `isStarred` (v14) and the thread-level `Thread.
+isPinned` (v6), since all three cover different scopes (any message vs.
+images only vs. whole conversations). No new index: the per-thread pinned
+query rides the existing `(threadId, timestamp)` index, so a dedicated one
+would have been pure overhead. Long-press → Pin/Unpin is a new `PushPin`
+`ActionItem` in `MessageActionTopBar` beside Copy/Select/Forward/Delete
+(label flips with state), wired through `togglePinnedMessage` →
+`MessageRepository.updatePinned` → `MessageDao.updatePinned` — the same
+shape as the existing `toggleStarred` chain, no new pattern introduced. A new
+"Pinned messages" item in the thread ⋮ overflow opens `PinnedMessagesSheet`,
+a `ModalBottomSheet` listing the thread's pinned messages oldest-first
+(Discord's convention, via `observePinnedByThread ORDER BY timestamp ASC`);
+each row shows a sender label, preview text (media placeholders for photo/
+video/audio, reusing the existing `previewText` extension), and a friendly
+timestamp, with a per-row unpin action and `navigationBarsPadding()` applied
+the same way `EmojiPickerBottomSheet` already does. Tapping a row jumps to
+the message via the existing `scrollToMessageCentered` highlight rather than
+a new jump mechanism. On the bubble itself, a 12dp `PushPin` icon
+(`onSurfaceVariant` at 0.7 alpha) sits in the bottom timestamp/status row;
+that row's render guard widened from `showTimestamp || isSent` to
+`showTimestamp || isSent || isPinned` so a pinned bubble that would
+otherwise show neither still surfaces the pin. **Backup decision:** `isPinned`
+is carried through the same way `isStarred` already is — `MessageRecord`,
+encode/decode, the exporter, and `RestoreWorker` all pick it up, with v1
+archives (predating the column) defaulting to false on restore, matching how
+every other message flag added after v1 has been handled. New
+`migration18To19_addsIsPinnedWithDefaultFalse` test, the full-chain migration
+test extended to v19 (`19.json` generated), `BackupRecordCodecTest`
+round-trip/defaults extended, and `RestoreMergeTest` gains "restore preserves
+the per-message pin flag." **Not done:** "Pinned messages exempt from
+auto-cleanup" stays unchecked — auto-cleanup itself doesn't exist yet — but
+the TODO now notes the exemption is just a `WHERE isPinned = 0` filter on
+whatever cleanup query eventually gets built. `./gradlew test`: 884 tests,
+0 failures (up from 883); `compileDebugAndroidTestKotlin` BUILD SUCCESSFUL.
+**Not yet verified on device** — migration against real on-device data and
+the sheet's UX both still need a real phone.
+
+**Overnight sweep — "Spam detection + Spam folder" (manual scope):** a
+"Report as spam" / "Not spam" pair now lives in the thread ⋮ menu (label
+flips with state), marking spam confirm-gated through an `AlertDialog` that
+explains what happens — the same pattern as "Block number" — while
+restoring is immediate; works for group threads as well as 1:1. New
+`threads.isSpam INTEGER NOT NULL DEFAULT 0` column, schema v19→v20
+(`MIGRATION_19_20`); `toggleSpam()` → `updateSpam` is the same shape as the
+existing `isPinned`/`isMuted` chains, no new pattern introduced. The
+interesting part is how spam gets hidden everywhere except its own folder
+with essentially zero call-site churn: `ThreadRepository.observeAll()` now
+delegates to a new `ThreadDao.observeNonSpam()` (`WHERE isSpam = 0`), and
+since every list surface — conversation list, search's contact-matching,
+the forward picker, the export picker — already read through
+`observeAll()`, all of them stop seeing spam threads without being touched
+individually. Global Stats is the deliberate exception: it reads
+`ThreadDao.observeAll()` directly rather than through the repository,
+because spam threads should still count toward aggregate analytics. A new
+`SpamScreen`/`SpamViewModel` (`ui/settings/`) lists spam threads (avatar +
+name + preview row, tap to open the thread, per-row "Not spam", empty
+state), reachable from Settings → Privacy → "Spam", positioned right after
+"Blocked numbers". Notifications for spam threads are suppressed the same
+way muted ones are: a `!isSpamByAddress` guard in `SmsReceiver` and
+`|| thread.isSpam` in `SmsSyncHandler.notifyIncomingMms`, both sitting
+beside the pre-existing mute/notificationsEnabled checks rather than
+replacing them. Backup carries `ThreadRecord.isSpam` through the exporter,
+codec, `RestoreMerge`, and `RestoreWorker`; merge only ever raises spam when
+the local row is still default-false, so a restore can never silently
+overturn a local "not spam" decision. New
+`migration19To20_addsIsSpamWithDefaultFalse` test, the full-chain migration
+test extended to v20 (`20.json` generated), `BackupRecordCodecTest` and
+`RestoreMergeTest` extended, and new `PostmarkDatabaseTest` cases covering
+the DAO's spam/non-spam partition and the update path. **Deliberately
+deferred, left unchecked on the TODO as a new item:** auto-flag heuristics
+(unknown sender, contains URL + short body) with a dismissable banner, and
+an inline "Report spam" action on notifications — this entry only covers
+the manual report/hide/restore loop. `./gradlew test`: 885 tests, 0
+failures (up from 884). **Not yet verified on device.**
+
+**Overnight TODO sweep — "Notification settings screen" scoped and shipped:**
+notification controls were scattered — privacy mode buried inline in
+Settings, no in-app path to per-channel sound/vibration at all. New
+`ui/settings/NotificationSettingsScreen.kt`, reachable from a
+"Notifications" nav row that replaces the old inline section, hosts the
+privacy-mode toggle (moved, not duplicated — same `SettingsViewModel`/
+`PrivacyModeRepository` `StateFlow`), a "Manage notification channels" row
+deep-linking to `Settings.ACTION_APP_NOTIFICATION_SETTINGS`, and an
+"Incoming message sound & vibration" row deep-linking to
+`Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS` for the `incoming_sms`
+channel (the low-importance `sync_service` channel deliberately stays
+unsurfaced), plus a footer pointing at each conversation's ⋮ for
+per-conversation mute. All intents are API 26+ with minSdk 26, so no
+version guards were needed. New `Screen.NotificationSettings` route in
+`AppNavigation`; insets follow the `BlockedNumbersScreen` pattern, Scaffold
+padding on the scrolling `Column` on all four edges. **Deliberately scoped,
+left unchecked on the TODO as a new item:** true per-conversation sound/
+vibration needs one notification channel per thread, not just the single
+shared `incoming_sms` channel — a standalone design effort (orphan-channel
+lifecycle, threadId→channelId mapping, migration, group-summary
+interaction) sketched out in the TODO entry. No new tests — this is UI/
+intent wiring, not new pure logic; `./gradlew test` holds at 885 tests, 0
+failures.
+
+**Morning fix — conversation notifications, not a bigger avatar:** the July 19
+fix (`9fc3da2`, "show the sender contact photo, not the app icon") only ever
+added `setLargeIcon` to a `BigTextStyle` notification. On OneUI (and other
+launchers) a `setLargeIcon` bitmap is demoted to a small badge on the right
+while the app's small icon fills the large slot on the left — the opposite of
+what "show the contact photo" was going for, and not what Google Messages
+does. `IncomingNotifier` now builds a real conversation notification:
+`NotificationCompat.MessagingStyle` wrapping a `Person` (name + `IconCompat`
+avatar built from the same `senderAvatar()` bitmap as before), attached to a
+long-lived conversation shortcut (`ShortcutManagerCompat.pushDynamicShortcut`
++ `builder.setShortcutId`, id `thread_<threadId>` so repeat messages refresh
+one shortcut instead of minting new ones) — the combination the platform
+actually promotes to the Conversations section with the sender's photo large
+on the left. Successive messages from the same conversation accumulate
+instead of replacing each other: `extractMessagingStyleFromNotification` reads
+the currently-posted notification's own style back out and carries its
+messages forward (capped at 8 via `MAX_CARRIED_MESSAGES`), so a burst of texts
+shows as one growing thread, not N single-message notifications. Group titles
+arrive pre-composed as `"Sender — Group name"` (`SmsSyncHandler.
+notifyIncomingMms`'s existing format); `IncomingNotifier` splits on `" — "` so
+the sender becomes the `Person` and the group name becomes `MessagingStyle.
+conversationTitle`, with `isGroupConversation = true`. Privacy mode is
+untouched by design — it stays on the plain `BigTextStyle`, no `Person`, no
+shortcut, because a long-lived shortcut would carry the sender's name and
+photo forward exactly as durably as the redacted title is trying not to. The
+`InboxStyle` summary notification's per-line extraction was updated to read
+`MessagingStyle`'s `EXTRA_MESSAGES`/`EXTRA_CONVERSATION_TITLE` (not
+`EXTRA_TITLE`/`EXTRA_TEXT`, which `MessagingStyle` doesn't populate) with a
+fallback to the legacy extras for privacy mode's still-`BigTextStyle`
+notifications. Only `IncomingNotifier.kt` changed — no new tests (no new pure
+logic, same reasoning as the July 19 entry). 885 tests, 0 failures
+(unchanged). **Needs on-device verification**, specifically: the very first
+notification to a shortcut may post before the shortcut registration is fully
+honored by the launcher and render un-promoted (plain heads-up) — the second
+message onward should land in the Conversations section once the launcher has
+indexed the shortcut.
+
+**Doc audit — "Pinch to zoom text" ticked, already fully shipped:** the TODO
+item was still unchecked despite `BubbleFontScaleRepository` (persisted
+0.8–1.6 multiplier, clamped, debounced 400 ms writes), a hand-rolled
+two-finger-pinch gesture in `ThreadScreen.kt` that gates on pointer count so
+it claims the gesture ahead of the `LazyColumn`'s own scroll, `LocalBubbleFontScale`
+threading the multiplier through bubble text, and a "Text size" slider +
+"Reset" row in `AppearanceScreen.kt` (enabled only when the scale differs from
+1.0). Ticked with evidence; no code changed.
+
+**Doc audit — "Copy individual message" and "Selection mode — Copy format"
+verified, ticked:** both were open "verify" items. Single-message copy
+(`ThreadScreen.kt`'s `MessageActionTopBar.onCopy`) puts only `msg.body` on the
+clipboard — no timestamp, no sender label. The Copy-selection export
+(`ExportFormatter.formatForCopy`) matches the designed transcript format
+(`Conversation with [Name]`, day-separator rule, `Name (time)` / body /
+reactions), including the July 16 media-placeholder work. No code changed.
+
+**Doc audit — two items left open on inspection, annotated instead of
+ticked:** "Multipart message handling" — `SmsReceiver` already reassembles a
+multi-part SMS body before posting/inserting, but no per-part delivery-status
+tracking or out-of-order-arrival handling exists, so the item stays open for
+that half. "Charts style" — the Charts display style already renders
+hand-rolled bar charts for messages-by-month and most-active-day (no `Vico`
+dependency), but the sent/received doughnut is missing entirely and the
+"emoji bar chart" is actually a plain count row, not a chart — left open, now
+scoped to just the missing pieces. "Real app icon" was checked too but left
+open as a design judgment call, not a code question: a real adaptive icon
+already exists in the repo, so whether it still counts as a "placeholder
+envelope" is for the owner to decide.
+
+---
+
 ## 2026-07-19 (feat/theme-presets) — notification avatars, home-screen background, bundled fonts
 
 Three user-facing customization/polish items. Builds green, 829 tests passing. **None of

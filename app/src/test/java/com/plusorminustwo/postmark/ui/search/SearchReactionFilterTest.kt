@@ -182,6 +182,8 @@ class SearchReactionFilterTest {
         override fun observeAll(): Flow<List<ThreadEntity>> = flowOf(emptyList())
         override fun observeById(id: Long): Flow<ThreadEntity?> = flowOf(null)
         override suspend fun getById(id: Long): ThreadEntity? = null
+        override suspend fun getAll(): List<ThreadEntity> = emptyList()
+        override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
         override suspend fun insert(t: ThreadEntity) {}
         override suspend fun insertAll(ts: List<ThreadEntity>) {}
         override suspend fun insertIgnore(t: ThreadEntity) {}
@@ -199,6 +201,10 @@ class SearchReactionFilterTest {
         override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
         override suspend fun getDisplayNameByAddress(address: String): String? = null
         override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) {}
+        override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override suspend fun updateSpam(threadId: Long, isSpam: Boolean) {}
+        override suspend fun isSpamByAddress(address: String): Boolean? = null
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateMuted(threadId: Long, isMuted: Boolean) {}
@@ -223,6 +229,7 @@ class SearchReactionFilterTest {
         override suspend fun delete(reaction: ReactionEntity) {}
         override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) {}
         override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+        override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
         override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
         override suspend fun deleteAll() {}
         override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0

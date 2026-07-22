@@ -15,14 +15,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Report
 import androidx.compose.material.icons.filled.Star
 import com.plusorminustwo.postmark.BuildConfig
 import com.plusorminustwo.postmark.util.isDefaultSmsApp
@@ -55,12 +56,14 @@ fun SettingsScreen(
     onBackupSettingsClick: () -> Unit,
     onDevOptionsClick: () -> Unit,
     onStarredImagesClick: () -> Unit = {},
+    onBlockedNumbersClick: () -> Unit = {},
+    onSpamClick: () -> Unit = {},
+    onNotificationsClick: () -> Unit = {},
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val themePreference by viewModel.themePreference.collectAsState()
     val timestampPreference by viewModel.timestampPreference.collectAsState()
-    val privacyModeEnabled by viewModel.privacyModeEnabled.collectAsState()
 
     val context = LocalContext.current
 
@@ -181,12 +184,28 @@ fun SettingsScreen(
             HorizontalDivider()
 
             SettingsSectionHeader(title = "Notifications")
-            ToggleSettingRow(
-                icon = { Icon(Icons.Default.Lock, null) },
-                title = "Privacy mode",
-                subtitle = "Show \"New message\" without sender or preview",
-                checked = privacyModeEnabled,
-                onCheckedChange = viewModel::setPrivacyMode
+            SettingsRow(
+                icon = { Icon(Icons.Default.Notifications, null) },
+                title = "Notifications",
+                subtitle = "Privacy mode, sound & vibration",
+                onClick = onNotificationsClick
+            )
+            HorizontalDivider()
+
+            SettingsSectionHeader(title = "Privacy")
+            SettingsRow(
+                icon = { Icon(Icons.Default.Block, null) },
+                title = "Blocked numbers",
+                subtitle = "View and unblock numbers you've blocked",
+                onClick = onBlockedNumbersClick
+            )
+            HorizontalDivider()
+
+            SettingsRow(
+                icon = { Icon(Icons.Default.Report, null) },
+                title = "Spam",
+                subtitle = "View and restore conversations you've reported",
+                onClick = onSpamClick
             )
             HorizontalDivider()
 

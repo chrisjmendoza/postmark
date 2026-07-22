@@ -132,6 +132,8 @@ class SearchJumpTest {
     private class FakeThreadDao(private val threads: List<ThreadEntity> = emptyList()) : ThreadDao {
         override fun observeAll(): Flow<List<ThreadEntity>> = flowOf(threads)
         override suspend fun getById(threadId: Long): ThreadEntity? = threads.find { it.id == threadId }
+        override suspend fun getAll(): List<ThreadEntity> = threads
+        override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
         override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(threads.find { it.id == threadId })
         override suspend fun insert(thread: ThreadEntity) {}
         override suspend fun insertAll(threads: List<ThreadEntity>) {}
@@ -152,6 +154,10 @@ class SearchJumpTest {
         override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
         override suspend fun getDisplayNameByAddress(address: String): String? = null
         override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) {}
+        override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override suspend fun updateSpam(threadId: Long, isSpam: Boolean) {}
+        override suspend fun isSpamByAddress(address: String): Boolean? = null
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}
@@ -174,6 +180,7 @@ class SearchJumpTest {
         override suspend fun delete(reaction: ReactionEntity) {}
         override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) {}
         override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+        override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
         override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
         override suspend fun deleteAll() {}
         override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0

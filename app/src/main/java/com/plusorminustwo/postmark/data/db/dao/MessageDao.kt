@@ -215,6 +215,15 @@ interface MessageDao {
     @Query("UPDATE messages SET isStarred = :isStarred WHERE id = :messageId")
     suspend fun updateStarred(messageId: Long, isStarred: Boolean)
 
+    @Query("UPDATE messages SET isPinned = :isPinned WHERE id = :messageId")
+    suspend fun updatePinned(messageId: Long, isPinned: Boolean)
+
+    /** This thread's pinned messages, oldest first (Discord-style) — backs the per-thread
+     *  Pinned messages panel. threadId is index-covered; the small pinned subset is filtered
+     *  in-row, so no dedicated isPinned index is needed. */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND isPinned = 1 ORDER BY timestamp ASC")
+    fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>>
+
     /** Every starred message with a media attachment, newest first — backs the global
      *  Starred Images gallery (Settings → Starred images). Image-vs-video/audio filtering
      *  happens in the repository layer after decoding attachmentsJson, since a single
