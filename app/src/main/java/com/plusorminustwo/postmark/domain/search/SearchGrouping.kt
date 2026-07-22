@@ -12,7 +12,8 @@ import com.plusorminustwo.postmark.domain.model.Thread
  *                    (drives the section header's avatar accent color / address).
  * @param displayName Section-header label; the thread's display name, falling back to the
  *                    first message's raw address when no thread matched.
- * @param messages    This thread's matching messages, newest-first.
+ * @param messages    This thread's matching messages, ordered per the requested direction
+ *                    (newest-first by default, oldest-first when requested).
  */
 data class SearchResultGroup(
     val threadId: Long,
@@ -26,12 +27,13 @@ data class SearchResultGroup(
  * transform — no Android or DB dependencies, no new DAO query.
  *
  * Groups are keyed by `threadId` (so two threads that happen to share a display name do
- * not merge), ordered case-insensitively A–Z by display name, and the messages within
- * each group are sorted newest-first.
+ * not merge) and ordered case-insensitively A–Z by display name. The [oldestFirst] flag
+ * controls only the within-group message order — group A–Z order is unaffected by it.
  */
 fun groupResultsByContact(
     results: List<Message>,
-    threads: List<Thread>
+    threads: List<Thread>,
+    oldestFirst: Boolean = false
 ): List<SearchResultGroup> {
     val threadsById = threads.associateBy { it.id }
     return results
@@ -42,7 +44,8 @@ fun groupResultsByContact(
                 threadId = threadId,
                 thread = thread,
                 displayName = thread?.displayName ?: msgs.first().address,
-                messages = msgs.sortedByDescending { it.timestamp }
+                messages = if (oldestFirst) msgs.sortedBy { it.timestamp }
+                           else msgs.sortedByDescending { it.timestamp }
             )
         }
         .sortedWith(

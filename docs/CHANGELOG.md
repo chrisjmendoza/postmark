@@ -6,7 +6,37 @@ Newest entries on top. Each day is a journal of work completed.
 
 ## 2026-07-22 (feat/theme-presets) — suppress notifications for the open thread
 
-885 tests passing (up from 829). **Not yet verified on device.**
+887 tests passing (up from 829). **Not yet verified on device.**
+
+**Owner request, same day — search result timestamps + oldest-first
+direction:** search results carried no sense of recency at a glance and no
+way to look at the oldest messages first. Every `SearchResultRow` (flat and
+by-contact) now shows a right-aligned recency timestamp, reusing the pure
+`friendlyTimestamp` from `domain/formatter/FriendlyTime.kt` and styled to
+match `ThreadRow` (`labelSmall`, onSurfaceVariant), remembered on
+`message.timestamp`. A new "Oldest first" `FilterChip` sits right after "By
+contact" (Check leading icon when selected) and flips a session-only
+`oldestFirst` boolean; direction composes orthogonally with grouping — flat
++ newest is unchanged, flat + oldest is ascending, and by-contact groups
+stay sorted A–Z with only the within-group direction flipping. The one real
+wrinkle: all three DAO queries (`searchMessagesFiltered`/`WithReaction`
+LIMIT 50, `browseFiltered` LIMIT 200) hardcode `ORDER BY timestamp DESC`, so
+reversing the fetched list in memory would only ever have reversed the
+newest 50/200 rows already pulled — never surfaced the genuinely oldest
+messages. Direction now lives in SQL instead: `ORDER BY CASE WHEN
+:oldestFirst = 1 THEN m.timestamp ELSE -m.timestamp END` (safe because epoch
+timestamps are always positive), so toggling re-runs the query and fetches
+the correct oldest-N page fresh rather than re-sorting a stale newest-N
+page. The by-contact within-group reversal stays a pure in-memory transform
+in `groupResultsByContact`, since grouping only reorders the page that was
+already fetched. Sticky group headers in by-contact view also picked up a
+muted match count — "Name · 12" (labelMedium, onSurfaceVariant 60%).
+Changed `SearchDao.kt`, `SearchRepository.kt`, `SearchGrouping.kt`,
+`SearchViewModel.kt`, `SearchScreen.kt`, plus three search test fakes
+updated to the new DAO signature. 2 new plain-JUnit tests in
+`SearchGroupingTest` (`oldest first orders messages ascending within a
+group`, `group A to Z order is unaffected by sort direction`). 887 tests, 0
+failures (up from 885).
 
 **No more notification banner for the conversation you're already looking at:**
 both notification paths — `SmsReceiver` for SMS, `SmsSyncHandler.notifyIncomingMms`

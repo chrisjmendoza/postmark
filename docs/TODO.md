@@ -487,6 +487,21 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       threadId), newest-first within each group, same display name never
       merges groups (keyed by threadId). `MOST_RECENT` keeps the existing
       flat list untouched. 6 new plain-JUnit tests in `SearchGroupingTest`.
+- [x] **Search result timestamps + oldest-first direction** (July 22 2026,
+      same day, owner request) — every `SearchResultRow` (flat and
+      by-contact) now shows a right-aligned recency timestamp, reusing the
+      pure `friendlyTimestamp` (`domain/formatter/FriendlyTime.kt`) styled
+      like `ThreadRow`; a new "Oldest first" `FilterChip` next to
+      "By contact" adds a session-only `oldestFirst` toggle that composes
+      orthogonally with grouping (flat list reverses, by-contact groups stay
+      A–Z with only the within-group direction flipping). Because all three
+      DAO queries hardcode `ORDER BY timestamp DESC` under a `LIMIT`
+      (50/200), direction had to move into SQL (`ORDER BY CASE WHEN
+      :oldestFirst = 1 THEN m.timestamp ELSE -m.timestamp END`) rather than
+      reversing in memory — an in-memory flip would only ever re-show the
+      same newest page, never the genuinely oldest rows. Sticky by-contact
+      headers also picked up a muted match count ("Name · 12"). 2 new
+      plain-JUnit tests in `SearchGroupingTest`.
 - [x] **Reactions shown on search result rows** (July 22 2026) — the TODO's
       suspicion was right: `SearchDao` → `toDomain` never populated
       `Message.reactions`. New pure `attachReactions(messages, reactions)` in

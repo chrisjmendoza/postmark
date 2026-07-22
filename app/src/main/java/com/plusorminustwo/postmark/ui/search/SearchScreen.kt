@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.SortByAlpha
 import androidx.compose.material3.*
@@ -17,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
+import com.plusorminustwo.postmark.domain.formatter.friendlyTimestamp
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.SearchDateRange
 import com.plusorminustwo.postmark.domain.model.Thread
@@ -147,6 +150,8 @@ fun SearchScreen(
                 selectedThread     = uiState.selectedThread,
                 sortOrder          = uiState.sortOrder,
                 onSortChange       = viewModel::setSortOrder,
+                oldestFirst        = uiState.oldestFirst,
+                onOldestFirstChange = viewModel::setOldestFirst,
                 onFiltersChange    = viewModel::onFiltersChange,
                 onDateRangeChange  = viewModel::setDateRangeFilter,
                 onThreadChipClick  = { showThreadSheet = true },
@@ -221,6 +226,8 @@ private fun FilterChips(
     selectedThread: com.plusorminustwo.postmark.domain.model.Thread?,
     sortOrder: SortOrder,
     onSortChange: (SortOrder) -> Unit,
+    oldestFirst: Boolean,
+    onOldestFirstChange: (Boolean) -> Unit,
     onFiltersChange: (SearchFilters) -> Unit,
     onDateRangeChange: (SearchDateRange) -> Unit,
     onThreadChipClick: () -> Unit,
@@ -246,6 +253,24 @@ private fun FilterChips(
                         modifier = Modifier.size(FilterChipDefaults.IconSize)
                     )
                 }
+            )
+        }
+        item {
+            // Orthogonal sort direction. Unselected = newest first (default). A leading
+            // check makes the active state unmistakable, per the owner's preference.
+            FilterChip(
+                selected = oldestFirst,
+                onClick  = { onOldestFirstChange(!oldestFirst) },
+                label    = { Text("Oldest first") },
+                leadingIcon = if (oldestFirst) {
+                    {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(FilterChipDefaults.IconSize)
+                        )
+                    }
+                } else null
             )
         }
         item {
@@ -398,39 +423,70 @@ private fun SearchGroupHeader(group: SearchResultGroup) {
             overrideColor = group.thread?.accentColorArgb?.let { Color(it) },
             size = 28.dp
         )
-        Text(
-            text = group.displayName,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = group.displayName,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // Count of this thread's results under the current filters — muted, so it
+            // reads as a subtle tally rather than a second title.
+            Text(
+                text = "· ${group.messages.size}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+        }
     }
 }
 
 @Composable
 private fun SearchResultRow(message: Message, query: String, onClick: () -> Unit) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            // Remembered: highlightQuery compiles a Regex and rebuilds an
-            // AnnotatedString — per visible row per keystroke without the cache.
-            text = remember(message.body, query) { highlightQuery(message.body, query) },
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 3
-        )
-        // Display-only pills below the snippet; inert callback since search rows
-        // aren't interactive. FlowRow inside ReactionPills keeps row height in check.
-        if (message.reactions.isNotEmpty()) {
-            Spacer(Modifier.height(4.dp))
-            ReactionPills(
-                reactions = message.reactions,
-                onReactionClick = {}
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                // Remembered: highlightQuery compiles a Regex and rebuilds an
+                // AnnotatedString — per visible row per keystroke without the cache.
+                text = remember(message.body, query) { highlightQuery(message.body, query) },
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 3
+            )
+            // Display-only pills below the snippet; inert callback since search rows
+            // aren't interactive. FlowRow inside ReactionPills keeps row height in check.
+            if (message.reactions.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                ReactionPills(
+                    reactions = message.reactions,
+                    onReactionClick = {}
+                )
+            }
+        }
+        // Recency-aware timestamp, same visual language as the conversation list's
+        // ThreadRow (labelSmall / onSurfaceVariant). `now` is captured at composition;
+        // the list recomposes on data changes, so a briefly-stale "5m" is fine.
+        val context = LocalContext.current
+        val label = remember(message.timestamp) {
+            friendlyTimestamp(
+                timestampMs = message.timestamp,
+                nowMs = System.currentTimeMillis(),
+                is24Hour = android.text.format.DateFormat.is24HourFormat(context)
             )
         }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

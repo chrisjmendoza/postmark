@@ -61,6 +61,30 @@ class SearchGroupingTest {
     }
 
     @Test
+    fun `oldest first orders messages ascending within a group`() {
+        val threads = listOf(thread(1, "Alice"))
+        val results = listOf(msg(10, 1, 100), msg(11, 1, 300), msg(12, 1, 200))
+
+        val groups = groupResultsByContact(results, threads, oldestFirst = true)
+
+        assertEquals(1, groups.size)
+        assertEquals(listOf(10L, 12L, 11L), groups.first().messages.map { it.id })
+    }
+
+    @Test
+    fun `group A to Z order is unaffected by sort direction`() {
+        val threads = listOf(thread(1, "Charlie"), thread(2, "Alice"), thread(3, "Bob"))
+        val results = listOf(msg(10, 1, 100), msg(11, 2, 100), msg(12, 3, 100))
+
+        val newest = groupResultsByContact(results, threads, oldestFirst = false)
+        val oldest = groupResultsByContact(results, threads, oldestFirst = true)
+
+        val expected = listOf("Alice", "Bob", "Charlie")
+        assertEquals(expected, newest.map { it.displayName })
+        assertEquals(expected, oldest.map { it.displayName })
+    }
+
+    @Test
     fun `two threads with the same display name stay separate groups`() {
         val threads = listOf(thread(1, "Mom", "+111"), thread(2, "Mom", "+222"))
         val results = listOf(msg(10, 1, 100), msg(11, 2, 100))

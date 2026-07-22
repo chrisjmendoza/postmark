@@ -10,6 +10,12 @@ import com.plusorminustwo.postmark.data.db.entity.MessageEntity
  *  isSentInt = -1  → sent and received
  *  startMs = -1L   → no lower timestamp bound
  *  isMmsInt = -1   → SMS and MMS
+ *
+ * Sort direction is parameterized via [oldestFirst]. Because every query is LIMITed,
+ * the direction must be applied in SQL — reversing the capped page in memory would only
+ * reorder the newest N rows, not surface the genuinely oldest ones. The CASE flips the
+ * sign of the (always-positive) epoch timestamp: ascending of -timestamp is descending
+ * of timestamp, so one ORDER BY expression covers both directions.
  */
 @Dao
 interface SearchDao {
@@ -25,7 +31,7 @@ interface SearchDao {
           AND (:isSentInt = -1 OR m.isSent = :isSentInt)
           AND (:startMs = -1 OR m.timestamp >= :startMs)
           AND (:isMmsInt = -1 OR m.isMms = :isMmsInt)
-        ORDER BY m.timestamp DESC
+        ORDER BY CASE WHEN :oldestFirst = 1 THEN m.timestamp ELSE -m.timestamp END
         LIMIT :limit OFFSET :offset
     """)
     suspend fun searchMessagesFiltered(
@@ -34,6 +40,7 @@ interface SearchDao {
         isSentInt: Int = -1,
         startMs: Long = -1L,
         isMmsInt: Int = -1,
+        oldestFirst: Boolean = false,
         limit: Int = 50,
         offset: Int = 0
     ): List<MessageEntity>
@@ -51,7 +58,7 @@ interface SearchDao {
           AND (:startMs = -1 OR m.timestamp >= :startMs)
           AND (:isMmsInt = -1 OR m.isMms = :isMmsInt)
           AND m.id IN (SELECT DISTINCT messageId FROM reactions WHERE emoji = :reactionEmoji)
-        ORDER BY m.timestamp DESC
+        ORDER BY CASE WHEN :oldestFirst = 1 THEN m.timestamp ELSE -m.timestamp END
         LIMIT :limit OFFSET :offset
     """)
     suspend fun searchMessagesFilteredWithReaction(
@@ -61,6 +68,7 @@ interface SearchDao {
         startMs: Long = -1L,
         isMmsInt: Int = -1,
         reactionEmoji: String,
+        oldestFirst: Boolean = false,
         limit: Int = 50,
         offset: Int = 0
     ): List<MessageEntity>
@@ -76,7 +84,7 @@ interface SearchDao {
           AND (:isSentInt = -1 OR isSent = :isSentInt)
           AND (:startMs = -1 OR timestamp >= :startMs)
           AND (:isMmsInt = -1 OR isMms = :isMmsInt)
-        ORDER BY timestamp DESC
+        ORDER BY CASE WHEN :oldestFirst = 1 THEN timestamp ELSE -timestamp END
         LIMIT :limit OFFSET :offset
     """)
     suspend fun browseFiltered(
@@ -84,6 +92,7 @@ interface SearchDao {
         isSentInt: Int = -1,
         startMs: Long = -1L,
         isMmsInt: Int = -1,
+        oldestFirst: Boolean = false,
         limit: Int = 200,
         offset: Int = 0
     ): List<MessageEntity>

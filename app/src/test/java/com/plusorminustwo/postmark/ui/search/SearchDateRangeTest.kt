@@ -183,23 +183,25 @@ class SearchDateRangeTest {
         var capturedThreadId: Long? = null
 
         override suspend fun searchMessagesFiltered(
-            query: String, threadId: Long, isSentInt: Int, startMs: Long, isMmsInt: Int, limit: Int, offset: Int
+            query: String, threadId: Long, isSentInt: Int, startMs: Long, isMmsInt: Int,
+            oldestFirst: Boolean, limit: Int, offset: Int
         ): List<MessageEntity> {
             capturedStartMs = startMs
             capturedThreadId = threadId
             return results.filter {
                 (threadId == -1L || it.threadId == threadId) &&
                 (startMs == -1L || it.timestamp >= startMs)
-            }
+            }.let { if (oldestFirst) it.sortedBy { m -> m.timestamp } else it.sortedByDescending { m -> m.timestamp } }
         }
 
         override suspend fun searchMessagesFilteredWithReaction(
             query: String, threadId: Long, isSentInt: Int, startMs: Long, isMmsInt: Int,
-            reactionEmoji: String, limit: Int, offset: Int
+            reactionEmoji: String, oldestFirst: Boolean, limit: Int, offset: Int
         ) = emptyList<MessageEntity>()
 
         override suspend fun browseFiltered(
-            threadId: Long, isSentInt: Int, startMs: Long, isMmsInt: Int, limit: Int, offset: Int
+            threadId: Long, isSentInt: Int, startMs: Long, isMmsInt: Int,
+            oldestFirst: Boolean, limit: Int, offset: Int
         ) = emptyList<MessageEntity>()
     }
 

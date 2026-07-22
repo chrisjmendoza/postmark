@@ -33,6 +33,7 @@ class SearchRepository @Inject constructor(
         startMs: Long? = null,
         isMms: Boolean? = null,
         reactionEmoji: String? = null,
+        oldestFirst: Boolean = false,
         limit: Int = 50,
         offset: Int = 0
     ): List<Message> {
@@ -46,11 +47,11 @@ class SearchRepository @Inject constructor(
         val ftsQuery = FtsQueryBuilder.build(rawQuery)
         val entities: List<MessageEntity> = if (ftsQuery.isBlank()) {
             if (isMms == null) return emptyList()
-            searchDao.browseFiltered(tid, isSentInt, sMs, isMmsInt, limit, offset)
+            searchDao.browseFiltered(tid, isSentInt, sMs, isMmsInt, oldestFirst, limit, offset)
         } else if (reactionEmoji != null) {
-            searchDao.searchMessagesFilteredWithReaction(ftsQuery, tid, isSentInt, sMs, isMmsInt, reactionEmoji, limit, offset)
+            searchDao.searchMessagesFilteredWithReaction(ftsQuery, tid, isSentInt, sMs, isMmsInt, reactionEmoji, oldestFirst, limit, offset)
         } else {
-            searchDao.searchMessagesFiltered(ftsQuery, tid, isSentInt, sMs, isMmsInt, limit, offset)
+            searchDao.searchMessagesFiltered(ftsQuery, tid, isSentInt, sMs, isMmsInt, oldestFirst, limit, offset)
         }
 
         val messages = entities.map { it.toDomain() }
