@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.MediumTest
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
@@ -12,7 +13,7 @@ import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -20,6 +21,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@MediumTest
 class PostmarkDatabaseTest {
 
     private lateinit var db: PostmarkDatabase
@@ -39,7 +41,7 @@ class PostmarkDatabaseTest {
     // ── Thread DAO ─────────────────────────────────────────────────────────
 
     @Test
-    fun insertAndRetrieveThread() = runBlocking {
+    fun insertAndRetrieveThread() = runTest {
         val thread = thread(1)
         db.threadDao().insert(thread)
         val retrieved = db.threadDao().getById(1L)
@@ -47,7 +49,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun updateBackupPolicy() = runBlocking {
+    fun updateBackupPolicy() = runTest {
         db.threadDao().insert(thread(1))
         db.threadDao().updateBackupPolicy(1L, BackupPolicy.NEVER_INCLUDE)
         val retrieved = db.threadDao().getById(1L)
@@ -55,7 +57,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun getThreadsForBackupExcludesNeverInclude() = runBlocking {
+    fun getThreadsForBackupExcludesNeverInclude() = runTest {
         db.threadDao().insertAll(listOf(
             thread(1, BackupPolicy.GLOBAL),
             thread(2, BackupPolicy.ALWAYS_INCLUDE),
@@ -69,7 +71,7 @@ class PostmarkDatabaseTest {
     // ── Message DAO ────────────────────────────────────────────────────────
 
     @Test
-    fun insertAndRetrieveMessages() = runBlocking {
+    fun insertAndRetrieveMessages() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insertAll(listOf(msg(10, 1), msg(11, 1)))
         val msgs = db.messageDao().getByThread(1L)
@@ -77,7 +79,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun cascadeDeleteRemovesMessages() = runBlocking {
+    fun cascadeDeleteRemovesMessages() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1))
         db.threadDao().delete(thread(1))
@@ -88,7 +90,7 @@ class PostmarkDatabaseTest {
     // ── Reaction DAO ───────────────────────────────────────────────────────
 
     @Test
-    fun insertAndRetrieveReaction() = runBlocking {
+    fun insertAndRetrieveReaction() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1))
         db.reactionDao().insert(reaction(messageId = 10))
@@ -98,7 +100,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun deleteMessageCascadesToReactions() = runBlocking {
+    fun deleteMessageCascadesToReactions() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1))
         db.reactionDao().insert(reaction(messageId = 10))
@@ -107,7 +109,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun deleteReactionByEmojiAndSender() = runBlocking {
+    fun deleteReactionByEmojiAndSender() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1))
         db.reactionDao().insert(reaction(messageId = 10, emoji = "❤️", sender = "+1555"))
@@ -118,10 +120,40 @@ class PostmarkDatabaseTest {
         assertEquals("😂", remaining[0].emoji)
     }
 
+    @Test
+    fun updateSpamFlagAndAddressLookup() = runTest {
+        db.threadDao().insert(thread(1))
+        assertEquals(false, db.threadDao().getById(1L)?.isSpam)
+
+        db.threadDao().updateSpam(1L, true)
+        assertEquals(true, db.threadDao().getById(1L)?.isSpam)
+        // Address lookup mirrors isMutedByAddress — used by the notification suppression path.
+        assertEquals(true, db.threadDao().isSpamByAddress("+15550001"))
+
+        db.threadDao().updateSpam(1L, false)
+        assertEquals(false, db.threadDao().isSpamByAddress("+15550001"))
+    }
+
+    @Test
+    fun observeNonSpamAndObserveSpamPartitionThreads() = runTest {
+        db.threadDao().insert(thread(1))  // stays in the main list
+        db.threadDao().insert(thread(2))  // reported as spam
+        db.threadDao().updateSpam(2L, true)
+
+        val nonSpam = db.threadDao().observeNonSpam().first()
+        assertEquals(listOf(1L), nonSpam.map { it.id })
+
+        val spam = db.threadDao().observeSpam().first()
+        assertEquals(listOf(2L), spam.map { it.id })
+
+        // observeAll still returns everything (Stats path).
+        assertEquals(setOf(1L, 2L), db.threadDao().observeAll().first().map { it.id }.toSet())
+    }
+
     // ── FTS search via SearchDao ───────────────────────────────────────────
 
     @Test
-    fun ftsInsertTriggerMakesBodySearchable() = runBlocking {
+    fun ftsInsertTriggerMakesBodySearchable() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1, body = "Hello world"))
         db.messageDao().insert(msg(11, 1, body = "Goodbye world"))
@@ -133,7 +165,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun ftsSearchIsWordStartOnly() = runBlocking {
+    fun ftsSearchIsWordStartOnly() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1, body = "the cat sat"))
         // "he" should NOT match "the" (word-start only)
@@ -142,7 +174,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun ftsDeleteTriggerRemovesBodyFromIndex() = runBlocking {
+    fun ftsDeleteTriggerRemovesBodyFromIndex() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1, body = "unique phrase"))
         // Confirm it's searchable
@@ -154,7 +186,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun ftsUpdateTriggerReplacesOldBody() = runBlocking {
+    fun ftsUpdateTriggerReplacesOldBody() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(10, 1, body = "original text"))
         // Update the message
@@ -166,7 +198,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun ftsSearchWithinThread() = runBlocking {
+    fun ftsSearchWithinThread() = runTest {
         db.threadDao().insertAll(listOf(thread(1), thread(2)))
         db.messageDao().insert(msg(10, 1, body = "apple pie"))
         db.messageDao().insert(msg(11, 2, body = "apple cider"))
@@ -181,7 +213,7 @@ class PostmarkDatabaseTest {
     // #27, which left this androidTest source set uncompilable.)
 
     @Test
-    fun updateDeliveryStatus_persistsNewStatus() = runBlocking {
+    fun updateDeliveryStatus_persistsNewStatus() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(1, 1))
         assertEquals(DELIVERY_STATUS_NONE, db.messageDao().getById(1L)!!.deliveryStatus)
@@ -194,7 +226,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun deleteOptimisticMessages_removesNegativeIdRows_leavesPositiveIntact() = runBlocking {
+    fun deleteOptimisticMessages_removesNegativeIdRows_leavesPositiveIntact() = runTest {
         db.threadDao().insert(thread(1))
         // positive-ID real messages
         db.messageDao().insertAll(listOf(msg(1, 1, ts = 1000L), msg(2, 1, ts = 2000L)))
@@ -210,7 +242,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun deleteOptimisticMessages_onlyAffectsSpecifiedThread() = runBlocking {
+    fun deleteOptimisticMessages_onlyAffectsSpecifiedThread() = runTest {
         db.threadDao().insertAll(listOf(thread(1), thread(2)))
         db.messageDao().insert(msg(-1, 1, ts = 1000L))
         db.messageDao().insert(msg(-2, 2, ts = 1000L))
@@ -231,7 +263,7 @@ class PostmarkDatabaseTest {
      * The queries are now scoped by isMms, mirroring getMaxId()/getMaxMmsId(). */
 
     @Test
-    fun deleteOptimisticMessages_smsScope_preservesPendingOptimisticMms() = runBlocking {
+    fun deleteOptimisticMessages_smsScope_preservesPendingOptimisticMms() = runTest {
         db.threadDao().insert(thread(1))
         // Optimistic MMS (image) sent first, optimistic SMS sent moments later.
         db.messageDao().insert(msg(-2000, 1, ts = 1000L, isSent = true, isMms = true,
@@ -246,7 +278,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun deleteOptimisticMessages_mmsScope_preservesPendingOptimisticSms() = runBlocking {
+    fun deleteOptimisticMessages_mmsScope_preservesPendingOptimisticSms() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(-2000, 1, ts = 1000L, isSent = true, isMms = true))
         db.messageDao().insert(msg(-1000, 1, ts = 2000L, isSent = true))
@@ -258,7 +290,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun getOptimisticSent_mmsScope_returnsMmsRowDespiteNewerOptimisticSms() = runBlocking {
+    fun getOptimisticSent_mmsScope_returnsMmsRowDespiteNewerOptimisticSms() = runTest {
         db.threadDao().insert(thread(1))
         // MMS created first → more-negative id. SMS created after → larger id, so an
         // unscoped ORDER BY id DESC LIMIT 1 would wrongly return the SMS row.
@@ -276,7 +308,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun getOptimisticSent_mmsScope_noOptimisticMms_returnsNull() = runBlocking {
+    fun getOptimisticSent_mmsScope_noOptimisticMms_returnsNull() = runTest {
         db.threadDao().insert(thread(1))
         // Only an optimistic SMS exists — MMS-scoped reads must not pick it up.
         db.messageDao().insert(msg(-1000, 1, ts = 1000L, isSent = true))
@@ -288,14 +320,14 @@ class PostmarkDatabaseTest {
     // ── MessageDao range queries (month-scoped heatmap) ────────────────────
 
     @Test
-    fun observeMessagesInRange_noMessages_returnsEmpty() = runBlocking {
+    fun observeMessagesInRange_noMessages_returnsEmpty() = runTest {
         db.threadDao().insert(thread(1))
         val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
         assertTrue(result.isEmpty())
     }
 
     @Test
-    fun observeMessagesInRange_messageAtStartIncluded() = runBlocking {
+    fun observeMessagesInRange_messageAtStartIncluded() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(1, 1, ts = 1000L))
         val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
@@ -303,7 +335,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun observeMessagesInRange_messageAtEndExcluded() = runBlocking {
+    fun observeMessagesInRange_messageAtEndExcluded() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(1, 1, ts = 2000L))
         val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
@@ -311,7 +343,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun observeMessagesInRange_beforeRangeExcluded() = runBlocking {
+    fun observeMessagesInRange_beforeRangeExcluded() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insert(msg(1, 1, ts = 999L))
         val result = db.messageDao().observeMessagesInRange(1000L, 2000L).first()
@@ -319,7 +351,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun observeMessagesInRange_onlyIncludesMessagesWithinBounds() = runBlocking {
+    fun observeMessagesInRange_onlyIncludesMessagesWithinBounds() = runTest {
         db.threadDao().insertAll(listOf(thread(1), thread(2)))
         db.messageDao().insertAll(listOf(
             msg(1, 1, ts = 500L),   // before range
@@ -335,7 +367,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun observeMessagesInRangeForThread_onlyReturnsMatchingThread() = runBlocking {
+    fun observeMessagesInRangeForThread_onlyReturnsMatchingThread() = runTest {
         db.threadDao().insertAll(listOf(thread(1), thread(2)))
         db.messageDao().insertAll(listOf(
             msg(1, 1, ts = 1000L),
@@ -349,7 +381,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun observeMessagesInRangeForThread_respectsTimestampBounds() = runBlocking {
+    fun observeMessagesInRangeForThread_respectsTimestampBounds() = runTest {
         db.threadDao().insert(thread(1))
         db.messageDao().insertAll(listOf(
             msg(1, 1, ts = 500L),
@@ -364,7 +396,7 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun observeMessagesInRangeForThread_noMatchForWrongThread() = runBlocking {
+    fun observeMessagesInRangeForThread_noMatchForWrongThread() = runTest {
         db.threadDao().insertAll(listOf(thread(1), thread(2)))
         db.messageDao().insertAll(listOf(
             msg(1, 2, ts = 1000L),

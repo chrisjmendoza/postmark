@@ -12,6 +12,9 @@
     <!-- Contact lookup for display names -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- Voice memo recording in the reply bar (runtime-requested on first mic press) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Required on API 33+ to post SMS notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -45,6 +48,7 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:windowSoftInputMode="adjustResize">

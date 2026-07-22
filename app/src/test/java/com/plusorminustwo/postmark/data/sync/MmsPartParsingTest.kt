@@ -2,6 +2,7 @@ package com.plusorminustwo.postmark.data.sync
 
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -200,5 +201,24 @@ class MmsPartParsingTest {
 
     @Test fun `empty row list returns empty participant list`() {
         assertTrue(parseMmsParticipants(emptyList()).isEmpty())
+    }
+
+    // ── isDisplayableMmsType ────────────────────────────────────────────────
+
+    @Test fun `send req and retrieve conf are displayable`() {
+        assertTrue(isDisplayableMmsType(PDU_MTYPE_SEND_REQ))
+        assertTrue(isDisplayableMmsType(PDU_MTYPE_RETRIEVE_CONF))
+    }
+
+    @Test fun `null m_type is treated as displayable`() {
+        // Some OEMs omit the column — never drop a real message on missing data.
+        assertTrue(isDisplayableMmsType(null))
+    }
+
+    @Test fun `notification and report PDUs are not displayable`() {
+        // 130 = M-Notification.ind, 134 = delivery-report, 136 = read-report.
+        assertFalse(isDisplayableMmsType(130))
+        assertFalse(isDisplayableMmsType(134))
+        assertFalse(isDisplayableMmsType(136))
     }
 }

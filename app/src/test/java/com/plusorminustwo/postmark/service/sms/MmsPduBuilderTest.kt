@@ -169,7 +169,7 @@ class MmsPduBuilderTest {
 
     @Test fun `pdu contains one uniquely numbered content-id per media part`() {
         val pdu = MmsPduBuilder.buildPdu(
-            toAddress  = "+15551234567",
+            toAddresses = listOf("+15551234567"),
             mediaParts = listOf(
                 mediaPart("image/jpeg", 0x11),
                 mediaPart("image/png",  0x22),
@@ -185,7 +185,7 @@ class MmsPduBuilderTest {
 
     @Test fun `pdu contains each media payload and its unique filename`() {
         val pdu = MmsPduBuilder.buildPdu(
-            toAddress  = "+15551234567",
+            toAddresses = listOf("+15551234567"),
             mediaParts = listOf(mediaPart("image/jpeg", 0x5A), mediaPart("image/jpeg", 0x6B)),
             textBody   = ""
         )
@@ -199,19 +199,19 @@ class MmsPduBuilderTest {
 
     @Test fun `pdu includes text part only when caption present`() {
         val withText = MmsPduBuilder.buildPdu(
-            "+15551234567", listOf(mediaPart("image/jpeg", 0x01)), "hello"
+            listOf("+15551234567"), listOf(mediaPart("image/jpeg", 0x01)), "hello"
         )
         assertEquals(1, withText.countOf("<txt>"))
         assertEquals(1, withText.countOf("hello"))
         val noText = MmsPduBuilder.buildPdu(
-            "+15551234567", listOf(mediaPart("image/jpeg", 0x01)), ""
+            listOf("+15551234567"), listOf(mediaPart("image/jpeg", 0x01)), ""
         )
         assertEquals(0, noText.countOf("<txt>"))
     }
 
     @Test fun `pdu smil start part is present exactly once`() {
         val pdu = MmsPduBuilder.buildPdu(
-            "+15551234567",
+            listOf("+15551234567"),
             listOf(mediaPart("image/jpeg", 0x01), mediaPart("video/mp4", 0x02)),
             "caption"
         )
@@ -219,5 +219,87 @@ class MmsPduBuilderTest {
         // parameter and the SMIL part's own Content-Type (Extension-media string).
         assertEquals(2, pdu.countOf("application/smil"))
         assertEquals(1, pdu.countOf("smil.xml"))
+    }
+
+    // ── buildPdu — group (multiple To headers) ──────────────────────────────
+
+    /** First index of [needle] (ASCII) in this byte array, or -1. */
+    private fun ByteArray.indexOf(needle: String): Int {
+        val n = needle.toByteArray(Charsets.US_ASCII)
+        var i = 0
+        outer@ while (i <= size - n.size) {
+            for (j in n.indices) if (this[i + j] != n[j]) { i++; continue@outer }
+            return i
+        }
+        return -1
+    }
+
+    @Test fun `pdu writes one To header per recipient in recipient order`() {
+        val recipients = listOf("+15551110001", "+15551110002", "+15551110003")
+        val pdu = MmsPduBuilder.buildPdu(recipients, listOf(mediaPart("image/jpeg", 0x01)), "")
+        // One /TYPE=PLMN-suffixed To value per recipient.
+        assertEquals(3, pdu.countOf("/TYPE=PLMN"))
+        // Each address appears in order, immediately preceded by the FIELD_TO byte (0x97).
+        var prev = -1
+        for (r in recipients) {
+            val idx = pdu.indexOf("$r/TYPE=PLMN")
+            assertTrue("recipient $r missing from PDU", idx >= 0)
+            assertTrue("recipients out of order at $r", idx > prev)
+            assertEquals("To header byte (0x97) missing before $r", 0x97.toByte(), pdu[idx - 1])
+            prev = idx
+        }
+    }
+
+    @Test fun `single-recipient pdu writes exactly one To header`() {
+        val pdu = MmsPduBuilder.buildPdu(listOf("+15551234567"), listOf(mediaPart("image/jpeg", 0x01)), "")
+        assertEquals(1, pdu.countOf("/TYPE=PLMN"))
+        val idx = pdu.indexOf("+15551234567/TYPE=PLMN")
+        assertTrue(idx >= 0)
+        assertEquals(0x97.toByte(), pdu[idx - 1])
+    }
+
+    @Test fun `buildPdu rejects an empty recipient list`() {
+        try {
+            MmsPduBuilder.buildPdu(emptyList(), listOf(mediaPart("image/jpeg", 0x01)), "")
+            org.junit.Assert.fail("expected IllegalArgumentException for empty recipients")
+        } catch (_: IllegalArgumentException) { /* expected */ }
+    }
+
+    // ── buildPdu — text-only (no media parts) ───────────────────────────────
+
+    @Test fun `text-only pdu has valid smil and text part but no media`() {
+        val pdu = MmsPduBuilder.buildPdu(listOf("+15551234567"), emptyList(), "just text")
+        // SMIL start part still present (top-level type param + the SMIL part's own CT).
+        assertEquals(2, pdu.countOf("application/smil"))
+        assertEquals(1, pdu.countOf("smil.xml"))
+        // The text/plain part and its body are present; no media part/filename exists.
+        assertEquals(1, pdu.countOf("<txt>"))
+        assertEquals(1, pdu.countOf("just text"))
+        assertEquals(0, pdu.countOf("<media0>"))
+        assertEquals(0, pdu.countOf("image0"))
+        // text/plain Content-General-Form with charset=UTF-8 (0x03,0x83,0x81,0xEA) — a
+        // well-formed Content-Type so accented/emoji captions don't arrive as mojibake.
+        assertTrue(
+            "text/plain UTF-8 Content-Type header missing",
+            pdu.indexOfBytes(byteArrayOf(0x03, 0x83.toByte(), 0x81.toByte(), 0xEA.toByte())) >= 0
+        )
+    }
+
+    /** First index of the exact byte sequence [needle] in this array, or -1. */
+    private fun ByteArray.indexOfBytes(needle: ByteArray): Int {
+        var i = 0
+        outer@ while (i <= size - needle.size) {
+            for (j in needle.indices) if (this[i + j] != needle[j]) { i++; continue@outer }
+            return i
+        }
+        return -1
+    }
+
+    @Test fun `buildSmil for text-only has a Text region and text slide but no Media region`() {
+        val smil = MmsPduBuilder.buildSmil(emptyList(), hasText = true)
+        assertFalse(smil.contains("""<region id="Media""""))
+        assertTrue(smil.contains("""<region id="Text""""))
+        assertEquals(1, Regex("<par ").findAll(smil).count())
+        assertTrue(smil.contains("""<text src="text.txt" region="Text"/>"""))
     }
 }

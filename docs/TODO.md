@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: July 16, 2026
+Last updated: July 22, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -71,6 +71,36 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Incoming SMS notification** — SmsReceiver posts heads-up with
       sender + body; multi-part bodies reassembled; POST_NOTIFICATIONS
       declared and requested on API 33+.
+- [x] **Conversation-style notifications, not a bigger avatar** (July 22 2026,
+      morning fix — supersedes the July 19 "show the sender contact photo,
+      not the app icon" fix, `9fc3da2`) — that fix only added
+      `setLargeIcon` to a `BigTextStyle` notification; on OneUI (and other
+      launchers) a large icon is demoted to a small badge on the right
+      while the app's small icon fills the large slot on the left, so the
+      sender's photo never actually appeared where "show the contact
+      photo" intended. `IncomingNotifier` now builds a real
+      `NotificationCompat.MessagingStyle` wrapping a `Person` (name +
+      `IconCompat` avatar from the existing `senderAvatar()` bitmap),
+      attached to a long-lived conversation shortcut
+      (`ShortcutManagerCompat.pushDynamicShortcut` + `builder.setShortcutId`,
+      id `thread_<threadId>`) — the combination the platform promotes to
+      the Conversations section with the photo large-left. Successive
+      messages accumulate instead of replacing each other
+      (`extractMessagingStyleFromNotification` reads the posted
+      notification's own style back out, capped at 8 via
+      `MAX_CARRIED_MESSAGES`). Group titles ("Sender — Group name") split
+      on " — " into the `Person` name and `MessagingStyle.conversationTitle`.
+      Privacy mode deliberately untouched — still plain `BigTextStyle`, no
+      `Person`, no shortcut, since a long-lived shortcut would carry the
+      sender's name/photo forward as durably as the redacted title is
+      trying not to. The `InboxStyle` summary's per-line extraction now
+      reads `MessagingStyle`'s extras with a legacy fallback for privacy
+      mode's still-`BigTextStyle` notifications. Only `IncomingNotifier.kt`
+      changed; no new tests (no new pure logic). 885 tests, 0 failures
+      (unchanged). **Needs on-device verification** — the very first
+      notification to a new shortcut may post un-promoted before the
+      launcher has indexed the shortcut; second message onward should land
+      in the Conversations section.
 - [x] **Enforce mute in SmsReceiver** — `isMuted` flag is stored in DB
       but `SmsReceiver` doesn't check it yet; muted threads still
       trigger notifications. Check `ThreadRepository.isMuted(address)`
@@ -87,28 +117,38 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       (schema v6); threads sort pinned-first; 📌 badge on row; long-press
       any conversation row → context menu with Pin/Unpin and Mute/Unmute;
       also accessible from the ⋮ menu inside the thread view.
-- [ ] **Per-number notification filtering** — let user exclude specific
-      numbers/threads from triggering notifications entirely (distinct
-      from mute, which suppresses sound but still posts). UI entry point:
-      thread ⋮ menu or Notification settings screen. Store as a flag on
-      `ThreadEntity` (e.g. `notificationsEnabled BOOLEAN DEFAULT true`);
-      check in `SmsReceiver` before posting.
-- [ ] **Suppress notification for the thread currently open on screen** —
-      `SmsReceiver.postIncomingNotification()` fires for every incoming
-      message regardless of whether the user is actively viewing that exact
-      conversation in `ThreadScreen`. Standard messaging-app expectation:
-      no notification banner while you're already looking at the thread.
-      Needs some notion of "currently visible thread id" the receiver can
-      check — e.g. a singleton/repository field set by `ThreadViewModel`
-      on `onResume`/composition and cleared on leave (careful with
-      process death / multi-window / lifecycle edge cases), checked
-      alongside the existing mute check before calling
-      `postIncomingNotification()`.
+- [x] **Per-number notification filtering** — *(was already shipped; stale
+      checkbox ticked July 22 2026 during the overnight TODO sweep.)*
+      `notificationsEnabled` landed with migration 7→8; both notification
+      entry points check it (`SmsReceiver.isNotificationsEnabledByAddress`,
+      `SmsSyncHandler` catch-up path) alongside mute; toggles exist in the
+      thread ⋮ menu ("Disable notifications") and `ContactDetailScreen`;
+      flag survives backup/restore (`BackupRecord.notificationsEnabled`).
+- [x] **Suppress notification for the thread currently open on screen**
+      (July 22 2026) — new `@Singleton` `ActiveThreadTracker`
+      (`@Volatile activeThreadId`), set/cleared by
+      `ThreadViewModel.onScreenResumed()`/`onScreenPaused()` from
+      ThreadScreen's existing lifecycle DisposableEffect (+ onDispose safety
+      clear); `clearActive` only nulls on a matching id so two overlapping
+      ThreadScreen instances can't stomp each other during navigation.
+      Checked alongside the existing notificationsEnabled/mute guards in
+      both notification paths (`SmsReceiver` for SMS,
+      `SmsSyncHandler.notifyIncomingMms` for MMS); process death resets the
+      singleton to the safe default (notify). 8 new tests
+      (`ActiveThreadTrackerTest`); full suite 837 tests, 0 failures.
+      Needs on-device verification.
 - [x] **SMS send** — basic send wired up with optimistic insert.
 - [x] **Failed send state** — bubble shows a red ✕ or "!" indicator
       with a tap-to-retry affordance when FAILED status received.
 - [ ] **Multipart message handling** — verify all parts arrive before
-      marking delivered; handle out-of-order part delivery.
+      marking delivered; handle out-of-order part delivery. *(Partially
+      done, checked July 22 2026 during the stale-checkbox audit:
+      `SmsReceiver` already reassembles a multi-part SMS body before
+      posting the notification/insert (`BRIEFING.md` "SmsReceiver posts
+      heads-up" entry) and triggers sync once, not once-per-part. Not
+      found anywhere: any per-part delivery-status tracking or explicit
+      out-of-order-arrival handling — `deliveryStatus` is set once per
+      whole message, not per PDU part. Remains open for that half.)*
 - [ ] **Send queue** — if no signal, queue outgoing messages and
       send when connectivity restored. Show "Queued" status on bubble.
 
@@ -208,7 +248,15 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       thread-creation time, so `ConversationsScreen`/`ThreadScreen` needed no changes.
       `ReplyBar` shows a warning when `participants.size > 1` since sending is still
       1:1-only (see next item).
-- [ ] **Group MMS — sending** — `MmsPduBuilder.buildPdu()` still writes a single
+- [x] **Group MMS — 1:1 threads misclassified as groups (P0 bug, found on-device
+      July 19 2026; FIXED same day)** — a new contact's 1:1 MMS-born thread showed
+      as a group with the user's own name in the title + the "group replies" banner.
+      Root cause: `parseMmsParticipants` keeps the own-number TO row of an incoming
+      MMS, and the roster drives `isGroupThread`. Fixed per spec §1: rosters now come
+      from the canonical telephony tables (`CanonicalRoster.kt`), per-PDU scan is a
+      logged fallback, one-shot repair (`roster_repair_v1_done`) heals persisted rows.
+      On-device confirmation of the demoted thread still pending.
+- [x] **Group MMS — sending** (July 19 2026) — `MmsPduBuilder.buildPdu()` wrote a single
       `FIELD_TO` header; there's no way to originate a new outgoing group MMS or
       have a reply inside an existing group thread reach everyone (it reaches only
       `thread.address`, one participant). Needs multi-recipient PDU construction
@@ -216,23 +264,54 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       multi-select recipient picker in `NewConversationScreen`. Check
       `KEY_MMS_CONFIG_GROUP_MMS_ENABLED_BOOL` — some carriers disable group MMS
       and expect N separate 1:1 sends instead ("MMS broadcast" mode).
-- [ ] **Voice memos — record + send** (added July 16 2026) — there is currently
-      no way to record a voice message; audio can only be attached from existing
-      files. Mic button in the reply bar with two capture gestures (WhatsApp /
-      Google Messages pattern):
-      1. **Hold to record** — recording runs while the button is held; releasing
-         stops it (design call at implementation time: send immediately vs. show
-         a preview chip with play/delete before send).
-      2. **Press and slide up to lock** — sliding up while holding latches
-         hands-free recording (button stays "live" without a finger on it) with
-         a visible recording state (timer, stop/cancel controls). Haptic on latch.
-      Also needs: slide-away/cancel affordance while holding, RECORD_AUDIO runtime
-      permission, MediaRecorder capture in an MMS-friendly codec/container (AAC in
-      .m4a or AMR in .3gp) with a duration/size cap derived from the carrier MMS
-      limit (reuse the existing video-size budget logic in MmsManagerWrapper),
-      then hand off to the existing audio-attachment MMS send path. Playback
-      reuses the audio chip — coordinate with performance-analysis.md Tier 4 #30
-      (one ViewModel-owned player) rather than adding another raw MediaPlayer.
+      **IMPLEMENTED July 19 2026 — all phases of `docs/GROUP_MESSAGING_SPEC.md`**
+      (Fable spec/review, Opus P0/P1, Sonnet P2/P3): multi-recipient PDU +
+      text-only group MMS + roster-wide persist/retry (P1), "Start group
+      conversation" multi-select compose (P2), MMS notifications (none existed
+      at all before) + m_type artifact filter/cleanup + roster staleness (P3).
+      Carrier-disabled group MMS keeps a reworded banner + 1:1 send; no broadcast
+      mode. Remaining: on-device verification matrix (spec §5) and the flagged
+      `MarkAsReadReceiver` MMS read-state gap.
+- [x] **Voice memos — record + send** (July 16 2026) — mic button in the reply bar
+      (replaces send while the composer is empty, WhatsApp/Google Messages pattern)
+      with both capture gestures. **Hold to record** → release drops the memo into
+      the pending-attachment strip for review (play/duration/×) — NOT auto-sent.
+      **Slide up to lock** latches hands-free recording (CONTEXT_CLICK haptic;
+      timer + Cancel + Stop controls); **slide left while holding cancels**. The
+      design call in (1) went to preview-before-send. Implementation notes:
+      - State machine is `IDLE/HELD/LOCKED` with pure transitions + gesture
+        threshold math in `domain/voicememo/VoiceMemoLogic.kt` (18 tests); no
+        PREVIEW state — a finished memo lives in the existing `pendingAttachments`
+        queue. `ThreadViewModel.onVoiceMemoEvent()` applies transitions and drives
+        `VoiceMemoRecorder` (MediaRecorder, AAC mono 64 kbps in .m4a, `audio/mp4`).
+      - Duration cap derived from the MMS budget, not hand-picked:
+        `maxVoiceMemoDurationMs()` next to `allocateAttachmentBudgets` → ~1:42
+        against the conservative 860 KB default (deliberately NOT live carrier
+        config, so a memo can't become unsendable after a SIM/carrier switch).
+        Enforced by `MediaRecorder.setMaxDuration` (auto-stops into preview).
+      - Recordings live in `filesDir/voice_memo_<ts>.m4a`; the mms_attach_ orphan
+        sweep + message-delete cleanup now cover that prefix (24 h sweep grace vs
+        1 h, since a pending unsent memo survives process death). × on the preview
+        tile and post-send pinning delete the file eagerly.
+      - RECORD_AUDIO requested on first mic press; denial → toast, never a crash.
+      - Playback: performance-analysis Tier 4 **#30 done as part of this** — one
+        ViewModel-owned Media3 player (`ThreadAudioPlayer`) replaced the per-chip
+        raw MediaPlayers; two chips can't play at once, playback survives the chip
+        scrolling off-screen, audio focus handled by ExoPlayer. Bubbles and the
+        pending review row share it.
+      - July 17 feedback round: pending memo review is a full-width play/seek/
+        duration chip + × (`PendingAudioAttachment`), not an 80 dp tile; and a
+        keyboard-space filler panel keeps the reply bar from jumping (and the
+        drag math from mis-latching) when recording starts with the IME open.
+      - July 17 round 2: the filler panel is now the recording workspace (state
+        machine gained PREVIEW). Locked mode: big timer + Cancel/Stop/Restart in
+        the panel; stopping parks the take there (play/scrub chip + Discard/
+        Restart/Attach) instead of attaching immediately. Quick hold→release
+        still attaches straight to the strip. Restart re-records hands-free.
+      Needs on-device verification: record→preview→send over real MMS, lock mode
+      (panel controls, restart, attach), cancel paths, permission denial, cap
+      auto-stop, received-memo playback, no bar jump when recording with
+      keyboard open.
 - [x] **Group MMS — per-bubble sender attribution** (July 11 2026) — group threads
       now show a small sender-name label above the first received bubble of each
       sender's cluster (`ThreadViewModel.participantNames` resolves the roster via
@@ -254,8 +333,25 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       sync and display.
 - [ ] **Save number prompt** — when receiving from unknown number,
       show "Add to contacts" banner above conversation.
-- [ ] **Contact name refresh** — if contact name changes in system
-      Contacts, update `Thread.displayName` on next sync.
+- [x] **Contact name refresh** (July 22 2026) — `Thread.displayName` was only
+      ever resolved from Contacts at thread-creation time (`SmsSyncHandler.
+      ensureThread`, `SmsHistoryImportWorker`) and never re-checked, so a
+      rename in system Contacts never reached the conversation list or thread
+      header. New pure `resolveDisplayNameRefresh(storedDisplayName,
+      resolvedName, isGroup)` in `data/sync/ContactNameRefresh.kt` (group →
+      skip; null/blank resolved → keep; unchanged → no-op; differs → update);
+      `SmsSyncHandler.refreshOneToOneDisplayNames()` walks every 1:1 thread as
+      the last step of `triggerCatchUp()` (app foreground, the 60s
+      `ConversationsViewModel` poll, and after historical import), writing
+      via a targeted single-column `ThreadDao.updateDisplayName`. Steady state
+      is O(1) `ContactCaches` hits with zero writes. **Deliberate decision:**
+      a deleted contact KEEPS the stored name rather than reverting to the
+      raw number (Google Messages' behavior) — `lookupContactName` can't tell
+      a deleted contact apart from a transient permission/provider failure,
+      and reverting on null would churn names on every hiccup. Groups
+      untouched (roster-staleness mechanism owns group names); nickname
+      never read or written. 6 new plain-JUnit tests in
+      `ContactNameRefreshTest`.
 - [x] **avatarColor seed fix** — `colorSeed = thread.address` passed
       to `LetterAvatar`; colors stable across contact name changes.
 - [x] **Contact detail screen** — tapping the contact name/avatar in the
@@ -266,29 +362,52 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       full-screen image viewer.
 
 ### Conversation list polish
-- [ ] **Unread filter button** — a toggle button (e.g. envelope icon or
-      "Unread" chip) in the conversation list top bar that, when active,
-      filters the list to only threads that have at least one unread message.
-      Tap again to clear the filter. Requires `isRead` flag already tracked
-      per message; derive `hasUnread` on `ThreadEntity` (or compute from
-      `MessageDao`) and expose a `showUnreadOnly: Boolean` toggle in
-      `ConversationsViewModel`. Badge the button with the current unread
-      thread count so the user knows at a glance how many are waiting.
-- [ ] **Unread count badge** — unread message count pill on each
-      thread row. Requires `isRead` flag on `MessageEntity`.
+- [x] **Unread filter button** — `FilterChip` below the conversation list top
+      bar (`AnimatedVisibility`, shown when unread threads exist or the filter
+      is on) toggles `showUnreadOnly` in `ConversationsViewModel`, filtering
+      `threads` while preserving pinned-first ordering; label reads
+      "Unread (N)" from the same `observeUnreadCounts()` map that drives the
+      per-row Badge; selected-tint + Close-icon when active; "No unread
+      messages" empty state. *(Was already shipped — found already in place
+      July 22 2026 during the overnight TODO sweep, same stale-checkbox
+      situation as the "Unread count badge" item above. The sweep extracted
+      the inline logic to pure functions `unreadThreadCount(...)` and
+      `filterThreadsByUnread(...)` in `ConversationsViewModel`, covered by a
+      new `UnreadFilterTest` — 8 plain-JUnit tests for count derivation,
+      zero-entry handling, filter on/off, pinned-first ordering, and empty
+      results.)*
+- [x] **Unread count badge** — unread message count pill on each
+      thread row. Requires `isRead` flag on `MessageEntity`. *(Was already shipped —
+      `isRead` landed with the 9→10 migration and `ConversationsScreen` renders the
+      Badge; ticked July 18 2026 when the fable end-user review caught the stale
+      checkbox.)*
 - [ ] **Swipe actions on conversation list** — swipe left: delete/archive with undo
       snackbar. Swipe right: mark as read. Standard Android expectation.
 - [x] **Swipe actions on message bubbles** — swipe right to reply (quote the
       message inline in the reply bar); quote strip shows sender label, 2-line
       preview, × to dismiss; springs back via Animatable; disabled in selection
       mode; quote visual-only (carrier SMS unmodified).
-- [ ] **Long-press multi-select** — select multiple threads for
-      bulk delete/archive/mute.
+- [x] **Long-press multi-select** (July 18 2026) — long-press enters selection mode
+      (check-circle avatars, selection top bar with count); bulk mark read /
+      mark unread / pin / mute / delete. Delete is confirm-gated and default-SMS-only,
+      removing the conversations from the telephony provider + Room. Mark-unread flips
+      `isRead` on the thread's latest message only — no schema change, the existing
+      badge pipeline does the rest. One-time "long-press to select" hint row. (No
+      archive — the app has no archive concept.)
 - [x] **Pinned conversations** — `isPinned` on `ThreadEntity`; pins float
       to top; Pin/Unpin in thread ⋮ menu; `PushPin` icon in conversation row.
-- [ ] **Friendly timestamps** — "just now", "2m", "9:41 AM", "Mon",
-      "Apr 25" based on recency. Reuse `toFriendlyLabel()` logic
-      already in the codebase.
+- [x] **Friendly timestamps** (July 22 2026) — "just now" / "Xm" / same-day
+      wall-clock time / weekday / "Apr 25" / "4/25/22" bands, now with 24-hour
+      support. `toFriendlyLabel()` turned out to be aspirational — no such
+      function existed; the real logic was a private, untested `formatDate`
+      in `ConversationsScreen.kt` that read the wall clock internally and
+      hardcoded 12-hour time. Extracted to a pure
+      `domain/formatter/FriendlyTime.kt` (`friendlyTimestamp(timestampMs,
+      nowMs, is24Hour, zone, locale)` — now/zone/locale all injected,
+      nothing reads the wall clock); `ThreadRow` builds the label via
+      `remember(thread.lastMessageAt)`, no ticking clock needed. 14 new
+      tests in `FriendlyTimeTest` cover band boundaries, 12/24-hour, and
+      previous-year formatting.
 
 ### Blocking and spam (required for Play Store messaging category)
 - [x] **Block number** (July 11 2026) — ⋮ menu item now confirms via dialog and
@@ -297,19 +416,52 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       also means no notifications and no "Blocked folder" needed: blocked messages
       never arrive. Hidden for group threads (ambiguous target). Result reported
       via Snackbar. Needs on-device verification.
-- [ ] **Blocked numbers screen** — accessible from Settings. Query
-      `BlockedNumberContract.BlockedNumbers.CONTENT_URI` to list blocked numbers
-      with an unblock action (delete the row). Until then, the block dialog points
-      users at the phone's own blocked-numbers settings.
-- [ ] **Spam detection + Spam folder** — "Report as spam" option in
-      thread ⋮ menu (and inline on notifications from unknown numbers).
-      Moves thread to a separate Spam folder visible in the nav drawer
-      or Settings. Add a `isSpam BOOLEAN DEFAULT 0` flag to
-      `ThreadEntity` (Room migration required); filter spam threads
-      out of the main conversation list. Consider basic heuristics
-      (unknown sender, contains URL + short body) to auto-flag obvious
-      spam with a dismissable banner. Required for Play Store messaging
-      category approval.
+- [x] **Blocked numbers screen** (July 22 2026) — new Settings → Privacy →
+      "Blocked numbers" row opens `BlockedNumbersScreen`: a `LazyColumn` of
+      blocked entries (contact name via the existing `Context.lookupContactName()`,
+      number via `formatPhoneNumber`), each with a confirm-gated Unblock action,
+      plus empty and non-default-SMS-app states. `BlockedNumbersRepository`
+      (new, `@Singleton`) wraps `BlockedNumberContract`: `canBlock()` checks
+      `canCurrentUserBlockNumbers`, `getBlockedNumbers()` queries
+      `BlockedNumbers.CONTENT_URI` newest-first, `unblock(id)` deletes the row
+      via `ContentUris.withAppendedId` — the blocked-numbers provider only, never
+      `content://sms`. All three methods degrade to empty/no-op when Postmark
+      isn't the default SMS app. `ThreadScreen`'s block-confirmation dialog now
+      points at "Settings › Privacy › Blocked numbers" instead of the phone's own
+      settings. No new tests — this is ContentResolver CRUD wiring, not new pure
+      logic. Needs on-device verification: `BlockedNumberContract` behavior is
+      device-dependent, same caveat as the "Block number" entry above.
+- [x] **Spam detection + Spam folder** (manual scope, July 22 2026) —
+      "Report as spam" / "Not spam" now lives in the thread ⋮ menu (flipping
+      label), marking spam confirm-gated via AlertDialog (Block-number
+      pattern, explains hide + silence), restore immediate; works for group
+      threads too. New `threads.isSpam INTEGER NOT NULL DEFAULT 0` column,
+      schema v19→v20 (`MIGRATION_19_20`); `toggleSpam()` → `updateSpam`
+      mirrors the existing `isPinned`/`isMuted` chains. Hidden everywhere
+      except the new Spam folder with zero call-site churn:
+      `ThreadRepository.observeAll()` now delegates to the new
+      `ThreadDao.observeNonSpam()` (`WHERE isSpam = 0`), so conversation
+      list, search contact-matching, forward picker, and export picker all
+      stop seeing spam automatically — global Stats deliberately still
+      reads `ThreadDao.observeAll()` directly, since spam should still
+      count in aggregate analytics. New `SpamScreen`/`SpamViewModel`
+      (`ui/settings/`) — avatar + name + preview rows, tap opens thread,
+      per-row "Not spam", empty state — reachable from Settings › Privacy ›
+      "Spam", right after "Blocked numbers". Notifications suppressed for
+      spam threads: `!isSpamByAddress` guard in `SmsReceiver` (mirrors the
+      mute guard) and `|| thread.isSpam` in `SmsSyncHandler.
+      notifyIncomingMms`. Carried through backup/restore (`ThreadRecord.
+      isSpam`; merge only ever raises spam when the local row is still
+      default-false, never clears a local "not spam" choice). New
+      `migration19To20_addsIsSpamWithDefaultFalse` test, full-chain
+      migration test extended to v20, codec/merge tests extended, new
+      `PostmarkDatabaseTest` cases for the DAO partition/update. 885 tests,
+      0 failures. Needs on-device verification.
+- [ ] **Spam auto-flag heuristics + notification action** — deferred out of
+      the item above: basic heuristics (unknown sender, contains URL + short
+      body) to auto-flag obvious spam with a dismissable banner, plus an
+      inline "Report spam" action on notifications from unknown numbers.
+      Required for Play Store messaging category approval.
 
 ### Search — remaining items
 - [x] **Thread filter chip** — done.
@@ -324,29 +476,42 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **SMS/MMS protocol filter chips** — "SMS" and "MMS" chips in `SearchScreen`;
       browse mode (protocol filter + blank query) supported via new `browseFiltered()`
       DAO query. Empty state updated to prompt usage.
-- [ ] **Sort order toggle** — default is most-recent first; add a toggle
-      (sort icon button in top bar or a chip) to switch between:
-      - **Most recent** — `ORDER BY timestamp DESC` (default, already natural for FTS)
-      - **By contact** — group results by thread (display name), sorted
-        A–Z, with a sticky section header per thread showing the contact
-        name + avatar. Within each group messages sort newest-first.
-      `SearchViewModel` adds a `SortOrder` enum (`MOST_RECENT`, `BY_CONTACT`);
-      the grouped path can be a pure in-memory transform on `results` (no
-      new DAO query needed — just `groupBy { it.threadId }` + sort by
-      `displayName`). `SearchUiState` needs `sortOrder` and a derived
-      `groupedResults: Map<Thread, List<Message>>` for the `BY_CONTACT` view.
-- [ ] **Reactions shown on search result rows** — when a message has
-      reactions (already stored as `Message.reactions`), render the
-      reaction pills below the body text inside `SearchResultRow` — the
-      same `ReactionPills` composable used in the thread view. Currently
-      `SearchResultRow` only shows the body text; it ignores `message.reactions`
-      entirely. The search query already joins reactions (via
-      `MessageRepository.observeByThread`) but the DAO query used by
-      `SearchRepository.search()` should also populate `reactions` on each
-      result. Check whether `searchRepository.search()` populates
-      `Message.reactions` or returns empty lists; if the latter, update
-      `SearchRepository` to join with `ReactionDao` (same pattern as
-      `MessageRepository.observeByThread`).
+- [x] **Sort order toggle** (July 22 2026) — "By contact" `FilterChip`
+      (`SortByAlpha` icon, first in the `FilterChips` row) toggles a new
+      `SortOrder` enum (`MOST_RECENT` default, `BY_CONTACT`) on
+      `SearchViewModel`/`SearchUiState`; session-only. `BY_CONTACT` renders
+      `stickyHeader` groups (a reused 28dp `ContactAvatar` + display name)
+      via a pure `groupResultsByContact(results, threads)` transform in new
+      `domain/search/SearchGrouping.kt` — joins thread display names (falls
+      back to raw address), groups A–Z case-insensitive (tie-break by
+      threadId), newest-first within each group, same display name never
+      merges groups (keyed by threadId). `MOST_RECENT` keeps the existing
+      flat list untouched. 6 new plain-JUnit tests in `SearchGroupingTest`.
+- [x] **Search result timestamps + oldest-first direction** (July 22 2026,
+      same day, owner request) — every `SearchResultRow` (flat and
+      by-contact) now shows a right-aligned recency timestamp, reusing the
+      pure `friendlyTimestamp` (`domain/formatter/FriendlyTime.kt`) styled
+      like `ThreadRow`; a new "Oldest first" `FilterChip` next to
+      "By contact" adds a session-only `oldestFirst` toggle that composes
+      orthogonally with grouping (flat list reverses, by-contact groups stay
+      A–Z with only the within-group direction flipping). Because all three
+      DAO queries hardcode `ORDER BY timestamp DESC` under a `LIMIT`
+      (50/200), direction had to move into SQL (`ORDER BY CASE WHEN
+      :oldestFirst = 1 THEN m.timestamp ELSE -m.timestamp END`) rather than
+      reversing in memory — an in-memory flip would only ever re-show the
+      same newest page, never the genuinely oldest rows. Sticky by-contact
+      headers also picked up a muted match count ("Name · 12"). 2 new
+      plain-JUnit tests in `SearchGroupingTest`.
+- [x] **Reactions shown on search result rows** (July 22 2026) — the TODO's
+      suspicion was right: `SearchDao` → `toDomain` never populated
+      `Message.reactions`. New pure `attachReactions(messages, reactions)` in
+      `domain/model/MessageReactions.kt` is now the single join used by both
+      `SearchRepository` (all three result paths — browse / FTS / FTS+reaction
+      — via one batched `ReactionDao.getByMessageIds` query) and
+      `MessageRepository.observeByThread` (its inline copy replaced so the two
+      paths can't drift). `ReactionPills` widened private→internal and reused
+      display-only in `SearchResultRow`, wrapped in a `FlowRow`. 4 new
+      plain-JUnit tests in `MessageReactionsTest`.
 - [ ] **"Reacted to" filter-message exclusion in results** — Apple reaction
       fallback phrases ("Liked \"...\""  etc.) are stored as both a
       `ReactionEntity` *and* left as a raw message in the `messages` table.
@@ -357,12 +522,31 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       reaction-phrase pattern with a `isReactionMessage BOOLEAN DEFAULT 0`
       flag set during sync, then add `AND isReactionMessage = 0` to the
       default search query. Opt-in toggle could expose them if needed.
-- [ ] **Search within thread** — entry point: search icon in thread
-      toolbar. Scopes results to current `threadId`.
-- [ ] **Contact/thread search** — global search currently only searches
-      message bodies; add a second result section (or a tab) that matches
-      `Thread.displayName` / `Thread.address` so users can find a contact
-      by name without scrolling through the full conversations list.
+- [x] **Search within thread** (July 22 2026) — ~95% already built (committed
+      in b7e3685, checkbox never ticked): `search?threadId={threadId}` optional
+      nav arg with a `navRoute(threadId)` helper in `AppNavigation.kt`,
+      `ThreadScreen`'s `onSearchInThread` callback, and `SearchViewModel.init`
+      resolving the threadId from `SavedStateHandle` and calling the same
+      `setThreadFilter(thread)` a manual tap uses — the pre-applied filter
+      arrives as a normal, clearable chip. Jump-to-message and back-stack
+      behavior were already correct. Only real gap vs. spec: the entry point
+      was a "Search in thread" item buried in the ⋮ overflow, not a toolbar
+      icon. Fixed in `ThreadScreen.kt` (net ~0 lines): a dedicated Search
+      `IconButton` added to the normal-mode `TopAppBar` actions before the ⋮,
+      redundant overflow item removed. No new tests (no new logic).
+- [x] **Contact/thread search** (July 22 2026) — new pure `matchThreads(query,
+      threads, limit = 5)` in `domain/search/ThreadMatching.kt`, an in-memory
+      filter over the existing `uiState.threads` (no new DAO query):
+      case-insensitive name match on `nickname ?: displayName`, address match
+      verbatim or digit-normalized (`(555) 123` finds `+1 555-1234`); name
+      matches rank above address-only matches, then alphabetical, then
+      threadId tie-break; blank query → empty. Deliberately skips
+      `normalizeAddressForDedupe` — its leading-1 stripping breaks substring
+      matching. A labelled "Conversations" section now sits atop the results
+      list in both `MOST_RECENT` and `BY_CONTACT` views (suppressed once a
+      thread filter is active; shown even with zero message results), rows
+      mirroring `ForwardPickerScreen` and tapping through to the thread via a
+      new `onThreadClick`. 8 new plain-JUnit tests in `ThreadMatchingTest`.
 
 ### Performance & optimization
 > **See `docs/performance-analysis.md` (July 15 2026)** — the authoritative, tiered
@@ -424,6 +608,21 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 
 ## 🟢 TIER 3 — Polish and Depth
 
+### Window insets — audit follow-ups (July 19 2026)
+Context: placement-editor buttons shipped behind the nav bar (inset modifiers
+resolve to zero inside a Dialog's own window — fixed, see CLAUDE.md rule +
+docs/fable-bg-placement-spec.md §8). A full-app audit found no other live
+instance, but flagged:
+- [ ] **Device-check the three bottom sheets without explicit nav-bar
+      padding** — `DateRangeSheet`'s Cancel/Select row and both SearchScreen
+      filter sheets rely on M3 `ModalBottomSheet` default `contentWindowInsets`
+      alone, while `EmojiPickerBottomSheet` explicitly adds
+      `navigationBarsPadding()` — inconsistent; if any clips on-device,
+      it's a one-line fix.
+- [ ] **OnboardingScreen bottom clipping on short screens** — content is
+      vertically centered with no `safeDrawingPadding()`; "Skip for now"
+      could clip under the nav bar if content overflows. Low priority.
+
 ### Delivery timestamps + read receipts
 - [ ] **Store sentAt + deliveredAt** — add `sentAt: Long?` and
       `readAt: Long?` to `MessageEntity`. Room migration required.
@@ -432,15 +631,25 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Message info panel** — tapping Info in action bar slides up
       bottom sheet: sent at / delivered at / read at / character
       count / message parts count.
-- [ ] **Document RCS** — add note to README that RCS is not supported
-      (requires carrier agreements). Position as future roadmap item.
+- [x] **Document RCS** (July 22 2026) — expanded the README's existing
+      "No RCS" limitation with why (Google restricts RCS/Jibe chat features
+      to Google Messages and carrier apps; no public third-party API) and
+      framed an eventual public API as a roadmap candidate.
 
 ### Stats — remaining
 - [x] **Numbers style** — done.
 - [x] **Heatmap style** — done.
 - [ ] **Charts style** — monthly bar chart, sent/received doughnut,
       emoji bar chart. Use `Vico` charting library (Compose-native,
-      actively maintained). Add to `build.gradle`.
+      actively maintained). Add to `build.gradle`. *(Partially done,
+      checked July 22 2026 during the stale-checkbox audit: `StatsScreen`
+      already has a working "Charts" display style —
+      `ChartsView`/`BarChart` render "Messages by Month" and "Most Active
+      Day" as hand-rolled Compose bar charts (no Vico dependency added).
+      Still missing: the sent/received doughnut, and "emoji bar chart" is
+      actually a plain emoji+count row (`EmojiCard`), not a chart. Left
+      unchecked — the doughnut and the real emoji chart are the
+      remaining gap.)*
 - [x] **Persist topReactionEmojis** — `topReactionEmojisJson` now
       persisted in both `ThreadStatsEntity` and `GlobalStatsEntity`
       via `StatsUpdater` (Room migration 4→5).
@@ -461,10 +670,14 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       End-anchored in the bubble Column: a row wider than a short bubble
       grows leftward past the bubble edge, and FlowRow wraps at the
       280 dp bubble max width instead of overflowing right.
-- [ ] **Haptic feedback on reaction toggle** — fire
-      `HapticFeedbackType.LongPress` when a reaction pill is tapped
-      to add tactile confirmation and make the interaction feel
-      premium.
+- [x] **Haptic feedback on reaction toggle** (July 22 2026) — `HapticFeedbackType.
+      LongPress` via `LocalHapticFeedback` now fires at all three real
+      reaction-toggle tap sites in `ThreadScreen.kt`: the reaction pill tap
+      (wrapped around the real `onReactionClick` in `MessageBubble`, this
+      item's target), the emoji reaction popup's quick-emoji tap, and the
+      image viewer's quick-reaction row. Deliberately not inside
+      `ReactionPills` itself — `SearchScreen` renders it display-only with an
+      inert callback, so search result pills stay silent.
 - [x] **Full emoji picker for reactions** (July 6 2026) — the "＋" button (bubble
       long-press popup and the image viewer's quick-reaction row) opens
       `androidx.emoji2.emojipicker.EmojiPickerView` — the real system-style picker,
@@ -484,8 +697,11 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `combinedClickable`, breaking message selection and the emoji reaction popup
       (fixed same day — see CHANGELOG 2026-07-12 third batch). Rule: link handling in
       a bubble must stay scoped to link ranges (`LinkAnnotation`), never wrap the body.
-- [ ] **Copy individual message** — already in action bar. Verify
-      it copies plain text without timestamps.
+- [x] **Copy individual message** — *(verified July 22 2026 during the
+      stale-checkbox audit)* `MessageActionTopBar.onCopy` in
+      `ThreadScreen.kt` puts only `msg.body` on the clipboard via
+      `ClipData.newPlainText` — no timestamp, no sender label, exactly
+      the ask.
 - [x] **Forward message** (July 6 2026) — full in-app forward, not just a share
       sheet: new `ForwardPickerScreen`/`ForwardPickerViewModel` (`ui/forward/`) shows
       recent conversations by default, live contact search once you type (same source
@@ -501,7 +717,7 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [ ] **Message info** — wire up Info in action bar once delivery
       timestamps are stored. (The image viewer's "View details" is a separate,
       already-shipped lightweight version — sender/timestamp/starred only, see below.)
-- [ ] **Selection mode — Copy format** — verify friendly plain text
+- [x] **Selection mode — Copy format** — verify friendly plain text
       output matches the designed format. **July 16 2026:** media-only
       messages now emit a placeholder line — "[Photo]", "[2 photos]",
       "[Video]", "[Audio message]" — instead of a bare sender/timestamp
@@ -512,15 +728,22 @@ Ordered by priority tier. Work top-to-bottom within each tier.
         Name (10:03 AM)
         Message text
         ❤️ reacted by Name
-- [ ] **Pinch to zoom text** (ThreadScreen)
-      Pinch gesture in thread view scales message
-      bubble text size up or down. Persisted to
-      SharedPreferences as a float multiplier
-      (range 0.8–1.6, default 1.0). Applied via
-      LocalTextStyle or a custom CompositionLocal
-      so all bubble text scales together. Reset
-      option in Settings → Appearance. Respects
-      system font size as baseline.
+      *(Verified July 22 2026 during the stale-checkbox audit:
+      `ExportFormatter.formatForCopy` produces exactly this shape —
+      header, day separator, sender+time line, body, media placeholder,
+      then a reactions line grouped by emoji. The reactions line reads
+      "  ↩ ❤️ Name" rather than the illustrative "❤️ reacted by Name"
+      above, but the substance — reactions shown, grouped, attributed —
+      matches the intent.)*
+- [x] **Pinch to zoom text** (ThreadScreen) — *(was already shipped; stale
+      checkbox ticked July 22 2026 during the stale-checkbox audit)*
+      `BubbleFontScaleRepository` persists a 0.8–1.6 multiplier (default
+      1.0, debounced 400 ms writes) read through `LocalBubbleFontScale`;
+      `ThreadScreen.kt` hand-rolls a two-finger-pinch detector gated on
+      pointer count so it claims the gesture before the `LazyColumn`'s own
+      scroll does. `AppearanceScreen`'s "Text size" row has a slider plus
+      a "Reset" button (enabled only when the scale differs from 1.0),
+      matching every design point in this item.
 - [ ] **Flag message for later** — long-press → "Remind me to reply";
       user picks a time; schedules a notification with a jump-to-message
       deep-link action. Flagged bubble gets a small 🔖 indicator.
@@ -542,18 +765,45 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       would be a separate column from `isStarred`, not a rename of it, since they
       cover different scopes (any message vs. images only) and different browsing
       surfaces (per-thread panel vs. global gallery).
-- [ ] **Pin any message (text or media)** — long-press → "Pin" (Discord-style).
-      `isPinned` boolean on `MessageEntity`. Room migration required. Distinct from
-      the image-only `isStarred` above — covers text messages too, and the panel
-      below is per-thread, not a global gallery.
-- [ ] **Pinned messages panel** — accessible from thread toolbar icon
-      or ⋮ menu. Scrollable list of pinned messages in this thread;
-      tap jumps to that message in context.
-- [ ] **Pinned indicator on bubble** — small inline 📌 label or icon
-      on pinned bubbles so they are identifiable while scrolling.
+- [x] **Pin any message (text or media)** (July 22 2026) — long-press → Pin/Unpin
+      via a new `PushPin` `ActionItem` in `MessageActionTopBar` (alongside
+      Copy/Select/Forward/Delete; label flips Pin/Unpin); `togglePinnedMessage`
+      → `MessageRepository.updatePinned` → `MessageDao.updatePinned`, mirroring
+      the existing `toggleStarred` chain. New `messages.isPinned INTEGER NOT
+      NULL DEFAULT 0` column, schema v18→v19 (`MIGRATION_18_19`, registered in
+      `DatabaseModule`; no new index needed — the per-thread pinned query rides
+      the existing `(threadId, timestamp)` index). Distinct column from the
+      image-only `isStarred` (v14) and the thread-level `Thread.isPinned` (v6) —
+      neither touched. Carried through backup/restore (`MessageRecord`/encode/
+      decode/exporter/`RestoreWorker`, mirroring `isStarred`; v1 archives default
+      false). New `migration18To19_addsIsPinnedWithDefaultFalse` test + the
+      full-chain migration test extended to v19 (`19.json` generated);
+      `BackupRecordCodecTest` round-trip/defaults extended; `RestoreMergeTest`
+      gains "restore preserves the per-message pin flag". Suite now 884 tests
+      (was 883), 0 failures. Needs on-device verification (migration against
+      real data).
+- [x] **Pinned messages panel** (July 22 2026) — a new "Pinned messages" item
+      in the thread ⋮ overflow opens `PinnedMessagesSheet`, a `ModalBottomSheet`
+      listing this thread's pinned messages oldest-first (Discord-style, via
+      `observePinnedByThread ORDER BY timestamp ASC`); each row shows sender
+      label, preview text (media placeholders for photo/video/audio), and a
+      friendly timestamp, plus a per-row unpin action. Tap jumps to the message
+      in context via the existing `scrollToMessageCentered` highlight — no new
+      jump mechanism needed. `navigationBarsPadding()` applied the same way as
+      `EmojiPickerBottomSheet`. Backed by a dedicated `pinnedMessages`
+      StateFlow. Needs on-device verification (sheet UX).
+- [x] **Pinned indicator on bubble** (July 22 2026) — a 12dp `PushPin` icon
+      (`onSurfaceVariant` at 0.7 alpha) renders in the bubble's bottom
+      timestamp/status row when the message is pinned; the row's render guard
+      widened from `showTimestamp || isSent` to `showTimestamp || isSent ||
+      isPinned` so a pinned bubble with no other reason to show that row still
+      gets one.
 - [ ] **Pinned messages exempt from auto-cleanup** — coordinate with
       message retention settings below; pinned messages are never
-      swept by automatic or bulk delete operations.
+      swept by automatic or bulk delete operations. *(Pin infrastructure —
+      `isPinned` column, toggle, panel, bubble indicator — landed July 22 2026;
+      this item just needs the cleanup query's `WHERE isPinned = 0` filter once
+      auto-cleanup itself is built.)*
 
 ### Message retention & auto-cleanup
 - [ ] **Auto-cleanup setting** — new section in Settings alongside
@@ -585,9 +835,30 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       Settings.
 
 ### Settings — completeness
-- [ ] **Notification settings screen** — per-conversation sound,
-      vibration, and privacy mode toggles. Link to system
-      notification settings for channel management.
+- [x] **Notification settings screen** (July 22 2026, scoped) — new
+      `NotificationSettingsScreen` reachable from a "Notifications" nav
+      row in Settings (replaced the old inline section); privacy-mode
+      toggle moved in (same `SettingsViewModel`/`PrivacyModeRepository`
+      state, not duplicated), "Manage notification channels" deep-links
+      to `ACTION_APP_NOTIFICATION_SETTINGS`, "Incoming message sound &
+      vibration" deep-links to `ACTION_CHANNEL_NOTIFICATION_SETTINGS` for
+      the `incoming_sms` channel, footer points at each conversation's ⋮
+      for per-conversation mute. True per-conversation sound/vibration
+      deferred below.
+- [ ] **Per-conversation notification channels** — deferred out of the
+      item above: real per-conversation sound/vibration needs one
+      notification channel per thread (channels own sound/vibration on
+      8+), not just the single shared `incoming_sms` channel. Sketch:
+      lazily create `sms_thread_<threadId>` channels cloned from the
+      `incoming_sms` template and titled with the contact name, route
+      each thread's notification builder to its channel, expose
+      "Notification sound & vibration" in the thread ⋮ via
+      `ACTION_CHANNEL_NOTIFICATION_SETTINGS`. Costs: orphaned channels
+      persist in system settings after thread deletion and can't be
+      silently recreated with new settings, needs a threadId→channelId
+      mapping, a migration for existing threads, and care around how a
+      per-thread channel interacts with the group-summary channel.
+      Standalone design effort.
 - [ ] **Storage usage screen** — show database size, attachment
       cache size, backup folder size. Button to clear attachment
       cache.
@@ -599,12 +870,36 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       cross-checking against the Firebase console. Still open: licenses list,
       link to GitHub (this was a one-row addition, not a full About screen).
 - [ ] **Real app icon** — replace the placeholder envelope with
-      proper branded artwork.
-- [ ] **Custom font selection** — Settings → Appearance; let user
-      choose a font family for message bubbles (e.g. Default / Serif /
-      Monospace / a curated set of Google Fonts). Persisted to
-      SharedPreferences and applied via a custom `FontFamily`
-      CompositionLocal so all bubble text updates without restart.
+      proper branded artwork. *(Checked July 22 2026 during the
+      stale-checkbox audit — flagged ambiguous, not ticked: a real
+      adaptive icon already exists — `mipmap-anydpi-v26/ic_launcher.xml`
+      + `res/drawable/ic_launcher_foreground.png` sourced from
+      `assets/"postmark icon no background.png"`, per `BRIEFING.md`'s APP
+      ICON section — so the "placeholder envelope" this item describes
+      may no longer be accurate. Left open because whether the current
+      artwork counts as "proper branded artwork" is a design judgment call
+      for the owner, not something code inspection can settle.)*
+- [x] **Custom font selection** (July 19 2026) — Settings → Appearance → "Font"
+      opens `FontFamilyDialog`, which renders each option's name in its own
+      typeface. Nine options: the three system generics plus six bundled OFL
+      families (Inter, Poppins, Nunito, Lora, Playfair Display, JetBrains Mono).
+      Applies app-wide via `PostmarkTheme`'s existing `Typography` rebuild, not a
+      bubble-only CompositionLocal as originally sketched. Five families ship as
+      single variable font files with weights pinned to the `wght` axis (1.06 MB
+      in-APK total); licenses in `docs/font-licenses/`. Adding a family = one file
+      in `res/font` + one enum entry + one `when` branch in `toFontFamilyOrNull`.
+      Enum entries are persisted BY NAME — never rename or remove one.
+- [x] **Home-screen background** (July 19 2026, on-device request) — the
+      conversation list takes a built-in gradient or a gallery photo, set from
+      Settings → Appearance → "Home screen background". Reuses the chat-background
+      catalog, picker, placement editor, and `ChatBackgroundImageStore` wholesale;
+      the only new pieces are `HomeBackgroundPreferenceRepository` and a
+      `BackgroundTarget` (CHAT/HOME) threaded through `AppearanceViewModel`. Both
+      preferences implement `BackgroundIdPreference`. Painted behind the Scaffold
+      (edge-to-edge under the top bar), with the same 40% scrim over photos that
+      ThreadScreen uses. NOTE for anything that adds a THIRD surface holding a
+      background id: `ChatBackgroundImageStore.cleanupAfterChange` must learn about
+      it, or its image gets garbage-collected out from under you.
 - [ ] **Per-thread appearance override** — font family, text size, and
       bubble styling (color/theme accent) configurable per conversation
       thread, not just the global Settings → Appearance default. Entry
@@ -615,6 +910,17 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       thread's override (if set) ahead of the global preference.
       Depends on / extends the global **Custom font selection** and
       **Pinch to zoom text** items above.
+- [ ] **Per-contact row styling in the conversation list** (idea noted
+      July 22 2026) — a thread can carry a background color or an image
+      banner on its home-view row, so the list isn't uniformly dark;
+      opt-in, off by default, set per conversation. Natural entry point:
+      the same thread ⋮ "Customize appearance" surface as the per-thread
+      appearance override above — build both in one `ThreadEntity`
+      nullable-override-columns schema pass. Groundwork for broader theme
+      customization later. Companion setting added at the same time:
+      home-screen list rows follow the selected app font + theme color by
+      default, with a toggle in Settings → Appearance to opt the list out
+      of theming.
 
 ---
 
@@ -625,14 +931,46 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `./gradlew test` before `assembleDebug`, so broken code can't reach testers.
 - [ ] **GitHub Actions CI — remaining** — instrumented tests on merge to
       main. Badge in README.
-- [ ] **Replace `runBlocking` in instrumented tests** with `runTest`
-      from `kotlinx-coroutines-test`.
-- [ ] **Add test size annotations** — `@SmallTest` / `@MediumTest` /
-      `@LargeTest` on all test classes.
-- [ ] **`@VisibleForTesting`** on `PostmarkDatabase.FTS_CALLBACK`
-      and `DATABASE_NAME`.
-- [ ] **`.gitattributes`** — add `* text=auto` to suppress CRLF
-      line-ending warnings.
+- [x] **Replace `runBlocking` in instrumented tests** with `runTest`
+      (July 22 2026) — all 28 test bodies in `PostmarkDatabaseTest.kt`
+      converted (import swapped); `kotlinx-coroutines-test` was already an
+      `androidTestImplementation` dep, no build change needed.
+      `DatabaseMigrationTest` had no `runBlocking` to begin with (its tests
+      are synchronous). Verified via `compileDebugAndroidTestKotlin` BUILD
+      SUCCESSFUL (no device available to actually run them).
+- [x] **Add test size annotations** (July 22 2026) — `@MediumTest` on
+      `PostmarkDatabaseTest` (in-memory Room) and `@LargeTest` on
+      `DatabaseMigrationTest` (on-disk DBs, full v1→v18 migration chain).
+      Scoping decision: JVM unit-test classes under `src/test` deliberately
+      left un-annotated — `androidx.test.filters` annotations are meaningless
+      off-device and would just be noise there.
+- [x] ~~**`@VisibleForTesting`** on `PostmarkDatabase.FTS_CALLBACK`
+      and `DATABASE_NAME`.~~ — closed as invalid (July 22 2026): both are
+      legitimate production API, not test-only surface. `DatabaseModule`
+      (Hilt DI) consumes both directly — `DATABASE_NAME` names the database,
+      `FTS_CALLBACK` is installed via `.addCallback` — so the annotation
+      would lint-flag real production call sites. Their visibility was never
+      widened for tests in the first place; nothing to annotate.
+- [x] **`.gitattributes`** — already existed with a superior config
+      (July 22 2026) — `* text=auto eol=lf`, plus explicit CRLF for `.bat`
+      files and binary handling for the wrapper jar. Left untouched; item
+      closed as already-done.
+- [ ] **AGP 10 deprecation cleanup** (noted July 18 2026, Android Studio build
+      output; still present July 19 on AGP 9.3.0 — Android Studio bumped
+      9.2.1 → 9.3.0 and added `org.gradle.tooling.parallel`, wrapper already
+      Gradle 9.6.1) — six legacy-behavior flags in `gradle.properties`
+      are deprecated and will be REMOVED in AGP 10 (they were almost
+      certainly written by the AGP Upgrade Assistant to freeze old behavior). Each needs its real migration, not just deletion:
+      `android.newDsl=false` and `android.builtInKotlin=false` are the meaty
+      ones (new AGP DSL + AGP built-in Kotlin replacing the standalone
+      kotlin-android plugin); the rest are small (`resvalues=true` → declare
+      `buildFeatures { resValues = true }` where used; explicit `targetSdk`;
+      compile-time R class; drop any `<uses-sdk>` manifest tag). Also one
+      obsolete-API warning: `applicationVariants` → `androidComponents` —
+      NOT in our build scripts (grep clean), so it comes from a third-party
+      plugin; identify it (likely google-services/Firebase) and update.
+      Do this as its own branch/PR with a full `./gradlew test` +
+      staging-build verification; behavior flips can be subtle.
 
 ### Accessibility
 - [ ] **Content descriptions** on all icon buttons for screen readers.

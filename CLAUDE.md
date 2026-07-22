@@ -36,6 +36,12 @@ false because the calendar already guaranteed the date exists.
 - Maintain parallel data structures when one will do
 - Hardcode pixel values — always derive from layout
 - Use fallbackToDestructiveMigration on Room database
+- Ship or change a screen without checking all four edges
+  against system bars (app is edge-to-edge; bottom buttons
+  behind the nav bar is a recurring regression). Inset
+  modifiers inside a Dialog's own window can resolve to
+  zero — capture WindowInsets outside the Dialog block
+  (see BackgroundPlacementEditor)
 
 ## Code style
 - Kotlin idiomatic — use ?.let, when expressions, 

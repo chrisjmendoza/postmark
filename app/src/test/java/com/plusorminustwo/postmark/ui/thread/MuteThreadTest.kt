@@ -106,6 +106,8 @@ class MuteThreadTest {
         override fun observeAll(): Flow<List<ThreadEntity>> = flowOf(emptyList())
         override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(null)
         override suspend fun getById(threadId: Long): ThreadEntity? = null
+        override suspend fun getAll(): List<ThreadEntity> = emptyList()
+        override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
         override suspend fun insert(t: ThreadEntity) {}
         override suspend fun insertAll(ts: List<ThreadEntity>) {}
         override suspend fun insertIgnore(t: ThreadEntity) {}
@@ -115,6 +117,8 @@ class MuteThreadTest {
         override suspend fun updateBackupPolicy(threadId: Long, policy: BackupPolicy) {}
         override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
         override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
+        override suspend fun getThreadsWithParticipants(): List<ThreadEntity> = emptyList()
+        override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
         override suspend fun updatePinned(threadId: Long, isPinned: Boolean) {}
@@ -122,8 +126,16 @@ class MuteThreadTest {
         override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
         override suspend fun getDisplayNameByAddress(address: String): String? = null
         override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) {}
+        override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+        override suspend fun updateSpam(threadId: Long, isSpam: Boolean) {}
+        override suspend fun isSpamByAddress(address: String): Boolean? = null
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}
+        override suspend fun updateAccentColor(threadId: Long, argb: Int?) {}
+        override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) {}
+        override suspend fun countByChatBackground(id: String): Int = 0
+        override suspend fun updateSentColor(threadId: Long, argb: Int?) {}
     }
 }

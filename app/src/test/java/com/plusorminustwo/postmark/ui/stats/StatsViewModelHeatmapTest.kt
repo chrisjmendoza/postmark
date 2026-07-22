@@ -260,6 +260,7 @@ private class FakeMessageDao : MessageDao {
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
     override suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? = null
     override suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? = null
+    override suspend fun getOptimisticSentMms(threadId: Long): List<MessageEntity> = emptyList()
     override suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun getAllThreadIds(): List<Long> = emptyList()
@@ -270,19 +271,25 @@ private class FakeMessageDao : MessageDao {
     override suspend fun hasAnyMessages(): Boolean = false
     override suspend fun getMaxRestoredId(): Long? = null
     override suspend fun deleteById(messageId: Long) = Unit
+    override suspend fun deleteByIds(ids: List<Long>) = Unit
     override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
     override suspend fun markAllRead(threadId: Long) = Unit
+    override suspend fun markLatestUnread(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
     override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
     override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
     override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun updatePinned(messageId: Long, isPinned: Boolean) = Unit
+    override fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 private class FakeThreadDao : ThreadDao {
     override fun observeAll(): Flow<List<ThreadEntity>> = flowOf(emptyList())
     override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(null)
     override suspend fun getById(threadId: Long): ThreadEntity? = null
+    override suspend fun getAll(): List<ThreadEntity> = emptyList()
+    override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
     override suspend fun insert(thread: ThreadEntity) = Unit
     override suspend fun insertAll(threads: List<ThreadEntity>) = Unit
     override suspend fun insertIgnore(thread: ThreadEntity) = Unit
@@ -294,15 +301,25 @@ private class FakeThreadDao : ThreadDao {
     override suspend fun updatePinned(threadId: Long, isPinned: Boolean) = Unit
     override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
+    override suspend fun getThreadsWithParticipants(): List<ThreadEntity> = emptyList()
+    override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
     override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) = Unit
     override suspend fun updateLastMessagePreview(threadId: Long, preview: String) = Unit
     override suspend fun isMutedByAddress(address: String): Boolean? = null
     override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
     override suspend fun getDisplayNameByAddress(address: String): String? = null
     override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) = Unit
+    override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+    override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+    override suspend fun updateSpam(threadId: Long, isSpam: Boolean) = Unit
+    override suspend fun isSpamByAddress(address: String): Boolean? = null
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
+    override suspend fun updateAccentColor(threadId: Long, argb: Int?) = Unit
+    override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) = Unit
+    override suspend fun countByChatBackground(id: String): Int = 0
+    override suspend fun updateSentColor(threadId: Long, argb: Int?) = Unit
 }
 
 private class FakeReactionDao : ReactionDao {
@@ -314,6 +331,7 @@ private class FakeReactionDao : ReactionDao {
     override suspend fun delete(reaction: ReactionEntity) = Unit
     override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) = Unit
     override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+    override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
     override suspend fun getTopEmojis(limit: Int): List<com.plusorminustwo.postmark.data.db.dao.EmojiCount> = emptyList()
     override fun observeTopEmojisBySender(senderAddress: String): Flow<List<com.plusorminustwo.postmark.data.db.dao.EmojiCount>> = flowOf(emptyList())
     override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())

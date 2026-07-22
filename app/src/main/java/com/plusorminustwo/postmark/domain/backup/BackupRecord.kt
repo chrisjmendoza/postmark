@@ -51,7 +51,16 @@ data class ThreadRecord(
     val backupPolicy: String,
     val participants: List<String>,
     val lastMessageAt: Long,
-    val lastMessagePreview: String
+    val lastMessagePreview: String,
+    // Additive fields (Phase A of user customization) — default null so older callers
+    // and the v1 reader keep compiling without naming them.
+    val accentColorArgb: Int? = null,
+    val chatBackgroundId: String? = null,
+    // Additive field (Phase FB2 of user customization) — same rationale as above.
+    val sentColorArgb: Int? = null,
+    // Additive field (spam folder) — default false so older callers and the v1 reader keep
+    // compiling without naming it, and archives written before this field tolerate its absence.
+    val isSpam: Boolean = false
 )
 
 /** One message as backed up — full fidelity minus device-local ids. */
@@ -66,7 +75,11 @@ data class MessageRecord(
     val isRead: Boolean,
     val isStarred: Boolean,
     val attachments: List<AttachmentRef>,
-    val reactions: List<ReactionRecord>
+    val reactions: List<ReactionRecord>,
+    // Additive field (per-message pin) — default false so older callers and the v1 reader
+    // keep compiling without naming it, and archives written before this field tolerate
+    // its absence on decode.
+    val isPinned: Boolean = false
 )
 
 /** A decoded data.jsonl line. */
@@ -102,7 +115,11 @@ fun encodeThreadLine(thread: ThreadRecord): String = encodeJson(
         "backupPolicy" to thread.backupPolicy,
         "participants" to thread.participants,
         "lastMessageAt" to thread.lastMessageAt,
-        "lastMessagePreview" to thread.lastMessagePreview
+        "lastMessagePreview" to thread.lastMessagePreview,
+        "accentColorArgb" to thread.accentColorArgb,
+        "chatBackgroundId" to thread.chatBackgroundId,
+        "sentColorArgb" to thread.sentColorArgb,
+        "isSpam" to thread.isSpam
     )
 )
 
@@ -118,6 +135,7 @@ fun encodeMessageLine(message: MessageRecord): String = encodeJson(
         "isMms" to message.isMms,
         "isRead" to message.isRead,
         "isStarred" to message.isStarred,
+        "isPinned" to message.isPinned,
         "attachments" to message.attachments.map {
             linkedMapOf("sha256" to it.sha256, "mimeType" to it.mimeType)
         },
@@ -178,7 +196,12 @@ private fun decodeThreadRecord(map: Map<*, *>): ThreadRecord = ThreadRecord(
     participants = (map["participants"] as? List<*>)?.filterIsInstance<String>()
         ?: emptyList(),
     lastMessageAt = map.long("lastMessageAt") ?: 0L,
-    lastMessagePreview = map.str("lastMessagePreview") ?: ""
+    lastMessagePreview = map.str("lastMessagePreview") ?: "",
+    // Absent in archives written before this field existed — tolerate missing keys.
+    accentColorArgb = map.int("accentColorArgb"),
+    chatBackgroundId = map.str("chatBackgroundId"),
+    sentColorArgb = map.int("sentColorArgb"),
+    isSpam = map.bool("isSpam") ?: false
 )
 
 private fun decodeMessageRecord(map: Map<*, *>): MessageRecord = MessageRecord(
@@ -192,6 +215,8 @@ private fun decodeMessageRecord(map: Map<*, *>): MessageRecord = MessageRecord(
     isMms = map.bool("isMms") ?: false,
     isRead = map.bool("isRead") ?: true,
     isStarred = map.bool("isStarred") ?: false,
+    // Absent in archives written before this field existed — tolerate the missing key.
+    isPinned = map.bool("isPinned") ?: false,
     attachments = (map["attachments"] as? List<*>).orEmpty().mapNotNull { att ->
         (att as? Map<*, *>)?.let { a ->
             val sha = a.str("sha256") ?: return@let null

@@ -101,6 +101,7 @@ class FailedSendRetryTest {
         override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
         override suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? = null
         override suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? = null
+        override suspend fun getOptimisticSentMms(threadId: Long): List<MessageEntity> = emptyList()
         override suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?) = Unit
         override suspend fun deleteAll() = Unit
         override suspend fun getAllThreadIds(): List<Long> = emptyList()
@@ -111,13 +112,17 @@ class FailedSendRetryTest {
         override suspend fun hasAnyMessages(): Boolean = false
         override suspend fun getMaxRestoredId(): Long? = null
         override suspend fun deleteById(messageId: Long) = Unit
+        override suspend fun deleteByIds(ids: List<Long>) = Unit
         override suspend fun getLatestForThread(threadId: Long): MessageEntity? = null
         override suspend fun markAllRead(threadId: Long) = Unit
+        override suspend fun markLatestUnread(threadId: Long) = Unit
         override fun observeUnreadCounts(): Flow<List<com.plusorminustwo.postmark.data.db.dao.UnreadCount>> = flowOf(emptyList())
         override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
         override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
         override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
         override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
+        override suspend fun updatePinned(messageId: Long, isPinned: Boolean) = Unit
+        override fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
     }
 
     private class StubReactionDao : ReactionDao {
@@ -131,6 +136,7 @@ class FailedSendRetryTest {
         override suspend fun delete(reaction: ReactionEntity) = Unit
         override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) = Unit
         override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+        override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
         override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
         override fun observeTopEmojisBySender(senderAddress: String): Flow<List<EmojiCount>> = flowOf(emptyList())
         override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())

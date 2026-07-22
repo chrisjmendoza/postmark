@@ -10,12 +10,15 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_NONE
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
+import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
+import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker
+import com.plusorminustwo.postmark.service.sms.IncomingNotifier
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
@@ -55,6 +58,9 @@ class SmsSyncHandler @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val reactionParser: ReactionFallbackParser,
+    private val privacyModeRepository: PrivacyModeRepository,
+    private val incomingNotifier: IncomingNotifier,
+    private val activeThreadTracker: ActiveThreadTracker,
     private val syncLogger: SyncLogger
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -114,6 +120,10 @@ class SmsSyncHandler @Inject constructor(
         // Must match the key used by SmsHistoryImportWorker.
         private const val PREFS_NAME = "postmark_prefs"
         private const val KEY_FIRST_SYNC_DONE = "first_sync_completed"
+        // One-shot flag for the roster repair pass (GROUP_MESSAGING_SPEC §1.4).
+        private const val KEY_ROSTER_REPAIR_DONE = "roster_repair_v1_done"
+        // One-shot flag for the non-displayable-PDU Room cleanup (GROUP_MESSAGING_SPEC §4.2).
+        private const val KEY_MTYPE_CLEANUP_DONE = "mtype_cleanup_v1_done"
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -138,8 +148,136 @@ class SmsSyncHandler @Inject constructor(
      * Main.immediate, stalling frames on every idle pass.
      */
     suspend fun triggerCatchUp() = withContext(Dispatchers.IO) {
+        repairRostersOnce()
+        cleanupNonDisplayableMmsOnce()
         smsMutex.withLock { syncLatestSms() }
         mmsMutex.withLock { syncLatestMms() }
+        refreshOneToOneDisplayNames()
+    }
+
+    /*
+     * Contact-name refresh (docs/TODO.md Tier 2 "Contact integration": "if contact name
+     * changes in system Contacts, update Thread.displayName on next sync"). displayName is
+     * resolved ONCE, at thread-creation time (ensureThread / the worker's cursor passes),
+     * so a contact renamed afterwards leaves the conversation list and thread header showing
+     * the old name — SmsReceiver already works around this by live-resolving names for
+     * notifications; this fixes the staleness at the source in Room.
+     *
+     * Re-resolves each 1:1 thread's contact name on every catch-up pass and issues a
+     * targeted displayName UPDATE only when it actually changed. Group threads are skipped
+     * inside [resolveDisplayNameRefresh] (their comma-joined roster name is owned by the
+     * roster-staleness mechanism, GROUP_MESSAGING_SPEC §4.3); nicknames are never read or
+     * written (they override displayName at render time). The UPDATE column is displayName
+     * alone — user settings (pin/mute/notifications/colors) are untouched.
+     *
+     * Cost: [lookupContactName] is served from ContactCaches (process-wide LRU). In steady
+     * state — no contact edits since the last pass — every lookup is an O(1) cache hit with
+     * no ContentResolver I/O, and since nothing changed there are zero DB writes; the pass
+     * is a cheap in-memory scan. The one costly pass is the first after any contact edit:
+     * the caches' ContentObserver evicts on edit, so that pass re-queries PhoneLookup per
+     * thread and re-warms the cache. That I/O is unavoidable (a rename can't be detected
+     * without a lookup), bounded to once per edit burst, and runs on Dispatchers.IO.
+     */
+    private suspend fun refreshOneToOneDisplayNames() {
+        try {
+            var updated = 0
+            for (thread in threadRepository.getAll()) {
+                val isGroup = thread.participants.size > 1
+                val resolved = context.lookupContactName(thread.address)
+                val newName = resolveDisplayNameRefresh(thread.displayName, resolved, isGroup) ?: continue
+                threadRepository.updateDisplayName(thread.id, newName)
+                updated++
+            }
+            if (updated > 0) syncLogger.log(TAG, "contact-name refresh: updated $updated 1:1 thread display name(s)")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "contact-name refresh failed — will retry on next catch-up", e)
+        }
+    }
+
+    /*
+     * One-shot repair for Room threads whose roster was captured before the canonical
+     * fix (GROUP_MESSAGING_SPEC §1.4): the old per-PDU scan included the device's own
+     * number, so genuine 1:1 MMS threads were persisted as 2-person "groups" (self in
+     * the title, group-reply banner). Re-derives the canonical roster for every stored
+     * group thread and either demotes it back to 1:1 or replaces its roster.
+     *
+     * Room writes ONLY — never touches the telephony provider (CLAUDE.md CRITICAL).
+     * Gated by a SharedPreferences flag; the flag is set only on a clean pass, so a
+     * transient provider failure simply retries on the next catch-up.
+     */
+    private suspend fun repairRostersOnce() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_ROSTER_REPAIR_DONE, false)) return
+        try {
+            val threads = threadRepository.getThreadsWithParticipants()
+            var demoted = 0; var replaced = 0; var kept = 0; var skipped = 0
+            for (thread in threads) {
+                val current = thread.participants
+                if (current.size <= 1) continue
+                // null → canonical query failed; skip rather than corrupt a real group.
+                val canonical = context.queryCanonicalParticipants(thread.id)
+                if (canonical == null) { skipped++; continue }
+                when (repairAction(canonical, current)) {
+                    RepairAction.KEEP -> kept++
+                    RepairAction.DEMOTE -> {
+                        val name = context.lookupContactName(thread.address) ?: thread.address.ifEmpty { "Unknown" }
+                        threadRepository.updateRoster(thread.id, emptyList(), name)
+                        demoted++
+                    }
+                    RepairAction.REPLACE -> {
+                        val name = canonical.joinToString(", ") { context.lookupContactName(it) ?: it }
+                        threadRepository.updateRoster(thread.id, canonical, name)
+                        replaced++
+                    }
+                }
+            }
+            syncLogger.log(TAG, "roster repair v1: demoted=$demoted replaced=$replaced kept=$kept skipped=$skipped of ${threads.size} group thread(s)")
+            prefs.edit().putBoolean(KEY_ROSTER_REPAIR_DONE, true).apply()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "roster repair failed — will retry on next catch-up", e)
+        }
+    }
+
+    /*
+     * One-shot cleanup of already-imported artifact rows (GROUP_MESSAGING_SPEC §4.2):
+     * before the m_type filter landed, non-displayable PDUs (M-Notification.ind,
+     * delivery/read reports) were imported as empty "Unknown" bubbles. Finds those rows
+     * by querying content://mms (READ only — never deleted) and removes the
+     * corresponding Room rows only.
+     *
+     * Same one-shot pattern as [repairRostersOnce]: gated by a SharedPreferences flag
+     * set only on a clean pass, so a transient provider failure simply retries on the
+     * next catch-up. Never touches the telephony provider (CLAUDE.md CRITICAL).
+     */
+    private suspend fun cleanupNonDisplayableMmsOnce() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_MTYPE_CLEANUP_DONE, false)) return
+        try {
+            val badRawIds = mutableListOf<Long>()
+            context.contentResolver.query(
+                Telephony.Mms.CONTENT_URI,
+                arrayOf("_id"),
+                "m_type NOT IN (?, ?) AND m_type IS NOT NULL",
+                arrayOf(PDU_MTYPE_SEND_REQ.toString(), PDU_MTYPE_RETRIEVE_CONF.toString()),
+                null
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow("_id")
+                while (cursor.moveToNext()) badRawIds += cursor.getLong(idIdx)
+            }
+            if (badRawIds.isNotEmpty()) {
+                messageRepository.deleteByIds(badRawIds.map { MMS_ID_OFFSET + it })
+            }
+            syncLogger.log(TAG, "mtype cleanup v1: deleted ${badRawIds.size} non-displayable MMS row(s) from Room")
+            prefs.edit().putBoolean(KEY_MTYPE_CLEANUP_DONE, true).apply()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "mtype cleanup failed — will retry on next catch-up", e)
+        }
     }
     /*
      * Fetches every SMS row whose _id is greater than the highest id already
@@ -333,7 +471,7 @@ class SmsSyncHandler @Inject constructor(
         val maxRawId = (maxStoredId - MMS_ID_OFFSET).coerceAtLeast(0L)
         debugLog("syncLatestMms: maxStoredId=$maxStoredId  maxRawId=$maxRawId")
 
-        val mmsIncProjection = arrayOf("_id", "thread_id", "date", "msg_box")
+        val mmsIncProjection = arrayOf("_id", "thread_id", "date", "msg_box", "m_type")
         // NOT IN (3, 5): exclude drafts and failed sends. Every other msg_box value
         // (inbox=1, sent=2, outbox=4 for RCS) represents a real message worth importing.
         // A single aggregate query is sufficient — no supplement cursors needed.
@@ -382,87 +520,108 @@ class SmsSyncHandler @Inject constructor(
             val latest = msgs.last()
 
             /*
-             * Transfer delivery status from the optimistic row to the just-inserted real row.
-             * We transfer PENDING too (not just SENT/FAILED) so the real row keeps showing
-             * a delivery indicator during the window between sync replacing the optimistic row
-             * and MmsSentReceiver updating the real row with the final MMSC result.
-             * Race scenario A: MmsSentReceiver fired and marked the temp row FAILED/SENT
-             * before this sync ran → transfer that terminal status immediately.
-             * Race scenario B: MmsSentReceiver hasn't fired yet → transfer PENDING so the
-             * UI keeps showing the clock indicator instead of a blank.
+             * Match each just-imported real SENT row to at most one optimistic temp row, then
+             * hand off status + attachments to it and delete that temp row. persistSentMms
+             * (MmsSentReceiver) wrote the provider row with the optimistic row's own send time
+             * and body, so the match is exact; pickOptimisticMatch's window only tolerates
+             * second-truncation and provider clock oddities. Rows that don't plausibly
+             * correspond are left untouched — the old code grafted the newest optimistic row's
+             * media onto the newest real row unconditionally and then blanket-deleted EVERY
+             * optimistic MMS row in the thread, which let an unrelated RCS-archival text absorb
+             * a memo's attachments and destroyed the correctly-timed optimistic bubble.
              */
-            // isMms = true: a newer optimistic SMS row in the same thread must not shadow
-            // the MMS temp row this status/attachment transfer is meant to read.
-            val optStatus = messageRepository.getOptimisticSentDeliveryStatus(threadId, isMms = true)
-            if (optStatus != null && optStatus != DELIVERY_STATUS_NONE) {
-                val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
-                if (sentMsg != null) {
-                    messageRepository.updateDeliveryStatus(sentMsg.id, optStatus)
-                    val statusName = when (optStatus) {
-                        DELIVERY_STATUS_SENT    -> "SENT"
-                        DELIVERY_STATUS_FAILED  -> "FAILED"
-                        DELIVERY_STATUS_PENDING -> "PENDING"
-                        else                    -> "status=$optStatus"
-                    }
-                    syncLogger.log("IncrementalMms", "transferred $statusName status to real row id=${sentMsg.id} threadId=$threadId")
-                }
-            }
+            val realSent = msgs.filter { it.isSent }.sortedBy { it.timestamp }
+            if (realSent.isNotEmpty()) {
+                val candidates = messageRepository.getOptimisticSentMms(threadId)
+                val consumed = mutableSetOf<Long>()
+                for (real in realSent) {
+                    val matchId = pickOptimisticMatch(
+                        real.body, real.timestamp,
+                        candidates.filter { it.id !in consumed }
+                            .map { OptimisticCandidate(it.id, it.body, it.timestamp) }
+                    ) ?: continue
+                    consumed += matchId
+                    val opt = candidates.first { it.id == matchId }
 
-            /*
-             * Transfer the attachments from the locally-cached compressed media to the
-             * real row. Samsung's content://mms/part/ data for SENT rows is typically empty,
-             * so we use our own filesDir cache to keep the media visible after the real row
-             * replaces the optimistic one.
-             *
-             * Strategy: read the optimistic row (id = tempId), then for each attachment
-             * index look for the cache file (mms_attach_<tempId>*.bin — written by
-             * MmsManagerWrapper BEFORE sendMultimediaMessage(), so guaranteed to exist by
-             * the time the observer fires) and build a stable FileProvider URI. Falls back
-             * per-attachment to the URI already stored on the optimistic row. Reading the
-             * row's own attachment list is immune to the race where ThreadViewModel hasn't
-             * yet re-pinned the stored URIs (it does so after sendMms() returns, but the
-             * ContentObserver may fire before that DB update completes).
-             */
-            val sentMsg = msgs.filter { it.isSent }.maxByOrNull { it.timestamp }
-            if (sentMsg != null) {
-                val optId = messageRepository.getOptimisticSentId(threadId, isMms = true)
-                val optAttachments = optId?.let { messageRepository.getById(it)?.attachments }.orEmpty()
-                if (optAttachments.isNotEmpty() && optId != null) {
-                    val transferred = optAttachments.mapIndexed { index, att ->
-                        val cacheFile = MmsManagerWrapper.attachmentCacheFile(context, optId, index)
-                        if (cacheFile.exists()) {
-                            try {
-                                // Build a FileProvider URI so Coil can load it within the app process.
-                                val uri = FileProvider.getUriForFile(
-                                    context, "${context.packageName}.fileprovider", cacheFile
-                                ).toString()
-                                MessageAttachment(uri, att.mimeType)
-                            } catch (_: Exception) {
-                                att // FileProvider lookup failed — keep the DB-stored URI.
-                            }
-                        } else {
-                            att // Cache file not found — keep whatever URI is stored on the row.
+                    /*
+                     * Transfer delivery status. We transfer PENDING too (not just SENT/FAILED)
+                     * so the real row keeps a delivery indicator during the window between sync
+                     * replacing the optimistic row and MmsSentReceiver posting the final result.
+                     * Race A: MmsSentReceiver already marked the temp row FAILED/SENT → transfer
+                     * that terminal status. Race B: it hasn't fired yet → transfer PENDING so the
+                     * UI keeps the clock indicator instead of a blank.
+                     */
+                    if (opt.deliveryStatus != DELIVERY_STATUS_NONE) {
+                        messageRepository.updateDeliveryStatus(real.id, opt.deliveryStatus)
+                        val statusName = when (opt.deliveryStatus) {
+                            DELIVERY_STATUS_SENT    -> "SENT"
+                            DELIVERY_STATUS_FAILED  -> "FAILED"
+                            DELIVERY_STATUS_PENDING -> "PENDING"
+                            else                    -> "status=${opt.deliveryStatus}"
                         }
+                        syncLogger.log("IncrementalMms", "transferred $statusName status to real row id=${real.id} threadId=$threadId")
                     }
-                    messageRepository.updateAttachments(sentMsg.id, transferred)
-                    syncLogger.log("IncrementalMms", "transferred ${transferred.size} attachment(s) to real row id=${sentMsg.id}")
+
+                    /*
+                     * Transfer the attachments from the locally-cached compressed media to the
+                     * real row. Samsung's content://mms/part/ data for SENT rows is typically
+                     * empty, so we use our own filesDir cache (mms_attach_<tempId>*.bin, written
+                     * by MmsManagerWrapper BEFORE dispatch) to keep the media visible after the
+                     * real row replaces the optimistic one. Falls back per-attachment to the URI
+                     * already stored on the optimistic row.
+                     */
+                    val optId = opt.id
+                    val optAttachments = opt.attachments
+                    if (optAttachments.isNotEmpty()) {
+                        val transferred = optAttachments.mapIndexed { index, att ->
+                            val cacheFile = MmsManagerWrapper.attachmentCacheFile(context, optId, index)
+                            if (cacheFile.exists()) {
+                                try {
+                                    // Build a FileProvider URI so Coil can load it within the app process.
+                                    val uri = FileProvider.getUriForFile(
+                                        context, "${context.packageName}.fileprovider", cacheFile
+                                    ).toString()
+                                    MessageAttachment(uri, att.mimeType)
+                                } catch (_: Exception) {
+                                    att // FileProvider lookup failed — keep the DB-stored URI.
+                                }
+                            } else {
+                                att // Cache file not found — keep whatever URI is stored on the row.
+                            }
+                        }
+                        messageRepository.updateAttachments(real.id, transferred)
+                        syncLogger.log("IncrementalMms", "transferred ${transferred.size} attachment(s) to real row id=${real.id}")
+                    }
+
+                    // Targeted delete of the matched temp row — replaces the old blanket
+                    // deleteOptimisticMessages(threadId, isMms = true). Unmatched optimistic
+                    // rows (e.g. a send whose provider persist failed) survive by design: a
+                    // correctly-timed bubble with SENT/FAILED status beats a vanished one.
+                    messageRepository.deleteById(opt.id)
                 }
             }
 
-            // isMms = true: only clear optimistic MMS rows — a pending optimistic SMS
-            // row belongs to syncLatestSms() and must survive this cleanup.
-            messageRepository.deleteOptimisticMessages(threadId, isMms = true)
             threadRepository.updateLastMessageAt(threadId, latest.timestamp)
             // Use emoji label for media-only MMS in the thread preview.
-            val preview = latest.previewText
-            threadRepository.updateLastMessagePreview(threadId, preview)
+            threadRepository.updateLastMessagePreview(threadId, latest.previewText)
+
+            // ── Notification for newly-arrived incoming MMS (GROUP_MESSAGING_SPEC §4.1) ──
+            // One notification per thread this pass (the newest received message), mirroring
+            // SmsReceiver's per-thread style. Dedup is structural, not a separate read-state
+            // check: newMessages only ever contains rows with _id > maxStoredId, the watermark
+            // captured at the top of this sync pass, so a given provider row can appear here
+            // at most once ever — and syncLatestMms() never runs until the historical import
+            // (first_sync_completed) is done, so the initial backlog import never reaches
+            // this code path. Sent messages (isSent) are filtered out below.
+            msgs.filter { !it.isSent }.maxByOrNull { it.timestamp }?.let { notifyIncomingMms(threadId, it) }
         }
 
-        // Clean up optimistic MMS rows for threads that only received MMS reaction fallbacks.
-        val normalThreadIds = normalMessages.map { it.threadId }.toSet()
-        reactionMsgs.map { it.threadId }.distinct()
-            .filter { it !in normalThreadIds }
-            .forEach { messageRepository.deleteOptimisticMessages(it, isMms = true) }
+        /* NOTE: optimistic MMS rows are deliberately NOT cleaned up for reaction-only
+         * threads. A reaction fallback is never the real counterpart of a Postmark send
+         * (our own reactions are local annotations, never transmitted), so deleting here
+         * could only ever destroy a still-in-flight send's temp row — racing
+         * MmsSentReceiver into skipping the provider persist and losing the message.
+         * Temp rows are removed solely by the matched hand-off above. */
 
         /* Resolve MMS reaction fallback messages into Reaction entities (deduped).
          * Mirrors the same logic used in syncLatestSms(). If the original message
@@ -504,6 +663,9 @@ class SmsSyncHandler @Inject constructor(
         val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
         val dateIdx   = cursor.getColumnIndexOrThrow("date")
         val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+        // Not OrThrow: some OEMs omit the column even when requested in the projection;
+        // isDisplayableMmsType(null) treats that as displayable (GROUP_MESSAGING_SPEC §4.2).
+        val mTypeIdx  = cursor.getColumnIndex("m_type")
 
         while (cursor.moveToNext()) {
             val rawId    = cursor.getLong(idIdx)
@@ -511,6 +673,12 @@ class SmsSyncHandler @Inject constructor(
             val threadId = cursor.getLong(threadIdx)
             val dateSec  = cursor.getLong(dateIdx)
             val msgBox   = cursor.getInt(boxIdx)
+            val mType    = if (mTypeIdx >= 0 && !cursor.isNull(mTypeIdx)) cursor.getInt(mTypeIdx) else null
+            // Non-displayable PDU (M-Notification.ind, delivery/read reports): no text/media
+            // parts, previously imported as an empty "Unknown" bubble. Skip before the
+            // per-row sub-queries below — cheaper and it also means a stray notification-ind
+            // PDU can no longer force-create a phantom thread for a brand-new contact.
+            if (!isDisplayableMmsType(mType)) continue
             val id       = MMS_ID_OFFSET + rawId
             // Drafts (3) and outbox (4) are outgoing; only inbox (1) is received.
             val isSent   = msgBox != android.provider.Telephony.Mms.MESSAGE_BOX_INBOX
@@ -520,7 +688,25 @@ class SmsSyncHandler @Inject constructor(
             debugLog("syncLatestMms: rawId=$rawId  attachments=${parts.attachments.size}  firstMime=${parts.attachments.firstOrNull()?.mimeType}")
 
             if (threadId !in ensuredThreadIds) {
-                ensureThread(threadId, address, timestamp) { getMmsParticipants(rawId) }
+                val existingThread = threadRepository.getById(threadId)
+                if (existingThread == null) {
+                    // Prefer the OS's canonical roster (self already excluded); fall back to the
+                    // per-PDU addr scan only when the canonical query can't answer (GROUP_MESSAGING_SPEC §1.3).
+                    ensureThread(threadId, address, timestamp) {
+                        context.queryCanonicalParticipants(threadId) ?: run {
+                            syncLogger.log(TAG, "canonical roster empty for threadId=$threadId — falling back to per-PDU addr rows")
+                            getMmsParticipants(rawId)
+                        }
+                    }
+                } else if (existingThread.participants.isEmpty() && !isSent) {
+                    // Roster staleness hardening (GROUP_MESSAGING_SPEC §4.3): ensureThread()
+                    // above only computes a roster once, at thread creation, so a thread born
+                    // from SMS (or an earlier 1:1 MMS) would otherwise keep an empty roster
+                    // forever even after it starts receiving group MMS. Only worth re-checking
+                    // for an incoming message — a sent message can't reveal a roster the OS
+                    // doesn't already know from receiving one.
+                    promoteRosterIfGroup(threadId)
+                }
                 ensuredThreadIds += threadId
             }
 
@@ -612,6 +798,64 @@ class SmsSyncHandler @Inject constructor(
                 backupPolicy = BackupPolicy.GLOBAL,
                 participants = if (roster.size > 1) roster else emptyList()
             )
+        )
+    }
+
+    /*
+     * Roster staleness hardening (GROUP_MESSAGING_SPEC §4.3). Re-derives the canonical
+     * roster for a thread whose stored [Thread.participants] is empty; promotes it to a
+     * group only if the OS now reports more than one participant. A targeted UPDATE
+     * (ThreadRepository.updateRoster) — never touches the telephony provider, and never
+     * overwrites a user-set nickname (that column isn't part of this UPDATE statement),
+     * matching the protection [repairRostersOnce] already relies on.
+     */
+    private suspend fun promoteRosterIfGroup(threadId: Long) {
+        val canonical = context.queryCanonicalParticipants(threadId) ?: return
+        if (canonical.size <= 1) return
+        val displayName = canonical.joinToString(", ") { context.lookupContactName(it) ?: it }
+        threadRepository.updateRoster(threadId, canonical, displayName)
+        syncLogger.log(TAG, "roster staleness: promoted threadId=$threadId to group of ${canonical.size} participant(s)")
+    }
+
+    /*
+     * Posts an incoming-message notification for a newly-synced MMS (GROUP_MESSAGING_SPEC
+     * §4.1). Before this, MmsReceiver routed straight to onMmsContentChanged() and no
+     * notification was ever posted for an incoming MMS — see the investigation note in
+     * docs/GROUP_MESSAGING_SPEC.md §4. Reuses [IncomingNotifier] so SMS and MMS share one
+     * builder/style/channel/grouping instead of a second copy drifting out of sync.
+     *
+     * Group threads omit the inline reply action, same reasoning as SmsReceiver's
+     * suppression (a single-address reply can't reach the whole group). 1:1 MMS keeps it:
+     * DirectReplyReceiver always sends a plain address-based text reply, which is exactly
+     * as valid for a 1:1 MMS sender as it is for an SMS sender — no new plumbing needed.
+     */
+    private suspend fun notifyIncomingMms(threadId: Long, message: Message) {
+        val thread = threadRepository.getById(threadId) ?: return
+        // Suppress when the user is already viewing this exact thread (same id space as
+        // ThreadScreen's threadId), or notifications are off / muted. The MMS still synced
+        // above; only the banner is skipped.
+        if (activeThreadTracker.activeThreadId == threadId) return
+        if (!thread.notificationsEnabled || thread.isMuted || thread.isSpam) return
+        val isGroup = thread.participants.size > 1
+        val senderName = context.lookupContactName(message.address)
+            ?: threadRepository.getDisplayNameByAddress(message.address)
+            ?: message.address.ifEmpty { "Unknown" }
+        val title = if (isGroup) {
+            "$senderName — ${thread.nickname ?: thread.displayName}"
+        } else {
+            thread.nickname ?: senderName
+        }
+        incomingNotifier.notify(
+            // 1:1: keyed on address so an SMS and an MMS from the same contact collapse
+            // into one notification, matching SmsReceiver. Group: a thread has no single
+            // stable address, so key on the thread id instead.
+            notifKey = if (isGroup) threadId.hashCode() else message.address.hashCode(),
+            threadId = threadId,
+            address = message.address,
+            title = title,
+            body = message.previewText,
+            privacyMode = privacyModeRepository.isEnabled(),
+            allowDirectReply = !isGroup
         )
     }
 

@@ -101,7 +101,7 @@ All compiled clean; `./gradlew test` green. Items marked ⚠ want a quick on-dev
 - [ ] **27. `material-icons-extended` diet** — ~11 MB of classes riding into the (currently un-shrunk) builds users install; largely moot once item 1's R8 lands, else swap to icons-core + inline the used set.
 - [ ] **28. Gradle heap** — `org.gradle.jvmargs=-Xmx2048m` is low for AGP 9 + KSP + Hilt; `-Xmx4g` + `kotlin.daemon.jvmargs=-Xmx2g` (build-time QoL only).
 - [x] **29. FTS4 `optimize`** after the historical import (`INSERT INTO messages_fts(messages_fts) VALUES('optimize')` at the end of `SmsHistoryImportWorker.doWork`) — the index is left fragmented after 160k trigger-driven inserts.
-- [ ] **30. Audio playback unification** — each audio chip owns a raw `MediaPlayer`; two can play simultaneously, and scrolling the playing chip off-screen kills playback (item disposal). One ViewModel-owned player (Media3 handles audio) fixes both and deletes the `MediaPlayer` path.
+- [x] **30. Audio playback unification** — each audio chip owned a raw `MediaPlayer`; two could play simultaneously, and scrolling the playing chip off-screen killed playback (item disposal). **Done July 16, 2026** with the voice memo feature (audio became a primary flow): one ViewModel-owned ExoPlayer (`ThreadAudioPlayer`, lazy — built on first play-tap) exposes a `StateFlow<AudioPlaybackState>` that chips collect individually, so position ticks recompose only audio chips; the `MediaPlayer` path and its per-chip AudioFocusRequest plumbing are deleted (ExoPlayer `handleAudioFocus = true`).
 
 ### 🐞 Correctness bug found along the way (not perf — file separately)
 

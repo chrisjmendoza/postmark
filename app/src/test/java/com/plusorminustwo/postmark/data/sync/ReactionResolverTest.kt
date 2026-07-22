@@ -210,6 +210,7 @@ private class InMemoryMessageDao : MessageDao {
         rows.values.filter { it.threadId == threadId }.sortedBy { it.timestamp }
     override suspend fun getAllThreadIds(): List<Long> = rows.values.map { it.threadId }.distinct()
     override suspend fun deleteById(messageId: Long) { rows.remove(messageId) }
+    override suspend fun deleteByIds(ids: List<Long>) { ids.forEach { rows.remove(it) } }
     override suspend fun getLatestForThread(threadId: Long): MessageEntity? =
         rows.values.filter { it.threadId == threadId }.maxByOrNull { it.timestamp }
     override suspend fun insert(message: MessageEntity): Long { rows[message.id] = message; return message.id }
@@ -231,6 +232,7 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
     override suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? = null
     override suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? = null
+    override suspend fun getOptimisticSentMms(threadId: Long): List<MessageEntity> = emptyList()
     override suspend fun deleteAll() = Unit
     override suspend fun getAll(): List<MessageEntity> = rows.values.toList()
     override suspend fun getMaxId(): Long? = null
@@ -239,11 +241,14 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun hasAnyMessages(): Boolean = rows.isNotEmpty()
     override suspend fun getMaxRestoredId(): Long? = null
     override suspend fun markAllRead(threadId: Long) = Unit
+    override suspend fun markLatestUnread(threadId: Long) = Unit
     override fun observeUnreadCounts(): Flow<List<UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
     override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
     override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
     override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
+    override suspend fun updatePinned(messageId: Long, isPinned: Boolean) = Unit
+    override fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
 }
 
 /** ReactionDao backed by an in-memory list with real insert / count / delete semantics. */
@@ -272,6 +277,7 @@ private class InMemoryReactionDao : ReactionDao {
     override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
     override suspend fun delete(reaction: ReactionEntity) { rows.removeAll { it.id == reaction.id } }
     override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
+    override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
     override suspend fun getTopEmojis(limit: Int): List<EmojiCount> = emptyList()
     override suspend fun deleteAll() { rows.clear() }
 }
@@ -290,6 +296,8 @@ private class RecordingThreadDao : ThreadDao {
 
     override fun observeAll(): Flow<List<ThreadEntity>> = flowOf(emptyList())
     override suspend fun getById(threadId: Long): ThreadEntity? = null
+    override suspend fun getAll(): List<ThreadEntity> = emptyList()
+    override suspend fun updateDisplayName(threadId: Long, displayName: String) {}
     override fun observeById(threadId: Long): Flow<ThreadEntity?> = flowOf(null)
     override suspend fun insert(thread: ThreadEntity) = Unit
     override suspend fun insertAll(threads: List<ThreadEntity>) = Unit
@@ -301,12 +309,22 @@ private class RecordingThreadDao : ThreadDao {
     override suspend fun updateMuted(threadId: Long, isMuted: Boolean) = Unit
     override suspend fun updatePinned(threadId: Long, isPinned: Boolean) = Unit
     override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) = Unit
+    override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
+    override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
+    override suspend fun updateSpam(threadId: Long, isSpam: Boolean) = Unit
+    override suspend fun isSpamByAddress(address: String): Boolean? = null
     override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
     override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
+    override suspend fun getThreadsWithParticipants(): List<ThreadEntity> = emptyList()
+    override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
     override suspend fun isMutedByAddress(address: String): Boolean? = null
     override suspend fun getDisplayNameByAddress(address: String): String? = null
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
+    override suspend fun updateAccentColor(threadId: Long, argb: Int?) = Unit
+    override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) = Unit
+    override suspend fun updateSentColor(threadId: Long, argb: Int?) = Unit
+    override suspend fun countByChatBackground(id: String): Int = 0
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
 }

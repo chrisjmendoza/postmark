@@ -7,6 +7,7 @@ import com.plusorminustwo.postmark.data.db.entity.toEntity
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
+import com.plusorminustwo.postmark.domain.model.attachReactions
 import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.data.db.dao.UnreadCount
@@ -32,12 +33,7 @@ class MessageRepository @Inject constructor(
         messageDao.observeByThread(threadId).combine(
             reactionDao.observeByThread(threadId)
         ) { messages, reactions ->
-            val reactionsByMessage = reactions.groupBy { it.messageId }
-            messages.map { entity ->
-                entity.toDomain().copy(
-                    reactions = reactionsByMessage[entity.id]?.map { it.toDomain() } ?: emptyList()
-                )
-            }
+            attachReactions(messages.map { it.toDomain() }, reactions.map { it.toDomain() })
         }
 
     suspend fun getByThread(threadId: Long): List<Message> =
@@ -75,6 +71,11 @@ class MessageRepository @Inject constructor(
     // Marks all messages in a thread as read; called when the user opens the thread.
     suspend fun markAllRead(threadId: Long) = messageDao.markAllRead(threadId)
 
+    /** Marks a thread unread by clearing isRead on only its latest message — enough to
+     *  light the unread badge via the existing pipeline. Backs the conversations-list
+     *  "Mark unread" bulk action. */
+    suspend fun markLatestUnread(threadId: Long) = messageDao.markLatestUnread(threadId)
+
     // Emits a live Map<threadId, unreadCount> for driving unread badges.
     fun observeUnreadCounts(): Flow<Map<Long, Int>> =
         messageDao.observeUnreadCounts().map { list -> list.associate { it.threadId to it.count } }
@@ -95,6 +96,11 @@ class MessageRepository @Inject constructor(
     suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? =
         messageDao.getOptimisticSentId(threadId, isMms)
 
+    /** All optimistic sent-MMS temp rows in a thread (newest first) as domain [Message]s,
+     *  for per-row body/time matching in [SmsSyncHandler.syncLatestMms]. */
+    suspend fun getOptimisticSentMms(threadId: Long): List<Message> =
+        messageDao.getOptimisticSentMms(threadId).map { it.toDomain() }
+
     /** Replaces a message's attachment list, keeping the singular first-attachment
      *  columns in sync (they back observeMediaMessages and pre-v12 fallback). */
     suspend fun updateAttachments(messageId: Long, attachments: List<MessageAttachment>) =
@@ -107,6 +113,10 @@ class MessageRepository @Inject constructor(
 
     /** Deletes a single message by id (used to remove reaction fallback messages after parsing). */
     suspend fun deleteById(messageId: Long) = messageDao.deleteById(messageId)
+
+    /** Deletes several messages by id in one statement (used by the one-shot non-displayable
+     *  MMS cleanup — Room-side only, never touches the telephony provider). */
+    suspend fun deleteByIds(ids: List<Long>) = messageDao.deleteByIds(ids)
 
     /** Returns the latest message in a thread (used to refresh thread preview after reaction cleanup). */
     suspend fun getLatestForThread(threadId: Long): Message? =
@@ -158,6 +168,14 @@ class MessageRepository @Inject constructor(
 
     suspend fun updateStarred(messageId: Long, isStarred: Boolean) =
         messageDao.updateStarred(messageId, isStarred)
+
+    suspend fun updatePinned(messageId: Long, isPinned: Boolean) =
+        messageDao.updatePinned(messageId, isPinned)
+
+    /** Live list of this thread's pinned messages, oldest first (Discord-style) —
+     *  backs the per-thread Pinned messages panel. */
+    fun observePinnedMessages(threadId: Long): Flow<List<Message>> =
+        messageDao.observePinnedByThread(threadId).map { list -> list.map { it.toDomain() } }
 
     /** Live list of starred messages that carry at least one image attachment, newest
      *  first — backs the global Starred Images gallery. Filters to images specifically

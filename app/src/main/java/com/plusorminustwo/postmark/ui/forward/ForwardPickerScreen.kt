@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -171,7 +172,8 @@ fun ForwardPickerScreen(
                             ContactAvatar(
                                 address = thread.address,
                                 name = thread.nickname ?: thread.displayName,
-                                colorSeed = thread.address
+                                colorSeed = thread.address,
+                                overrideColor = thread.accentColorArgb?.let { Color(it) }
                             )
                         },
                         modifier = Modifier.clickable {

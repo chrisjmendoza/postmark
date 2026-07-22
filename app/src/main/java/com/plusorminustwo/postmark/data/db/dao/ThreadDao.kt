@@ -17,11 +17,27 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ThreadDao {
 
+    /* Every thread, spam included. Used by Stats (aggregate analytics count spam too) and
+     * the one-shot repair/refresh passes. The user-facing list surfaces use [observeNonSpam]. */
     @Query("SELECT * FROM threads ORDER BY isPinned DESC, lastMessageAt DESC")
     fun observeAll(): Flow<List<ThreadEntity>>
 
+    /* Non-spam threads only — the conversation list and every other list surface (search,
+     * forward picker, export picker) observe through this so spam is hidden everywhere. */
+    @Query("SELECT * FROM threads WHERE isSpam = 0 ORDER BY isPinned DESC, lastMessageAt DESC")
+    fun observeNonSpam(): Flow<List<ThreadEntity>>
+
+    /* Spam threads only — backs the Spam folder screen. */
+    @Query("SELECT * FROM threads WHERE isSpam = 1 ORDER BY lastMessageAt DESC")
+    fun observeSpam(): Flow<List<ThreadEntity>>
+
     @Query("SELECT * FROM threads WHERE id = :threadId")
     suspend fun getById(threadId: Long): ThreadEntity?
+
+    /* One-shot snapshot of every thread. Feeds the contact-name refresh pass, which
+     * re-resolves each 1:1 thread's contact name and updates a stale displayName. */
+    @Query("SELECT * FROM threads")
+    suspend fun getAll(): List<ThreadEntity>
 
     @Query("SELECT * FROM threads WHERE id = :threadId")
     fun observeById(threadId: Long): Flow<ThreadEntity?>
@@ -59,6 +75,12 @@ interface ThreadDao {
     @Query("UPDATE threads SET notificationsEnabled = :enabled WHERE id = :threadId")
     suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean)
 
+    @Query("UPDATE threads SET isSpam = :isSpam WHERE id = :threadId")
+    suspend fun updateSpam(threadId: Long, isSpam: Boolean)
+
+    @Query("SELECT isSpam FROM threads WHERE address = :address LIMIT 1")
+    suspend fun isSpamByAddress(address: String): Boolean?
+
     @Query("SELECT notificationsEnabled FROM threads WHERE address = :address LIMIT 1")
     suspend fun isNotificationsEnabledByAddress(address: String): Boolean?
 
@@ -67,6 +89,22 @@ interface ThreadDao {
 
     @Query("SELECT * FROM threads WHERE backupPolicy = :policy")
     suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity>
+
+    /* Group threads only: participantsJson is non-null exactly when a >1 roster was
+     * stored. Feeds the one-shot roster repair pass (GROUP_MESSAGING_SPEC §1.4). */
+    @Query("SELECT * FROM threads WHERE participantsJson IS NOT NULL")
+    suspend fun getThreadsWithParticipants(): List<ThreadEntity>
+
+    /* Roster repair write: replaces the stored roster and its comma-joined display name
+     * in one statement, leaving user-set fields (pin/mute/colors) untouched. */
+    @Query("UPDATE threads SET participantsJson = :participantsJson, displayName = :displayName WHERE id = :threadId")
+    suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String)
+
+    /* Contact-name refresh write: updates ONLY displayName (docs/TODO.md Tier 2). Never
+     * touches user-set fields (isPinned/isMuted/notificationsEnabled/nickname/colors) or
+     * the group roster (participantsJson), so it's safe to run over synced threads. */
+    @Query("UPDATE threads SET displayName = :displayName WHERE id = :threadId")
+    suspend fun updateDisplayName(threadId: Long, displayName: String)
 
     @Query("UPDATE threads SET lastMessageAt = :timestamp WHERE id = :threadId")
     suspend fun updateLastMessageAt(threadId: Long, timestamp: Long)
@@ -83,6 +121,23 @@ interface ThreadDao {
     /** Saves a Postmark-only nickname for the thread; pass null to clear it. */
     @Query("UPDATE threads SET nickname = :nickname WHERE id = :threadId")
     suspend fun updateNickname(threadId: Long, nickname: String?)
+
+    /** Saves a Postmark-only accent color (ARGB) for the thread; pass null to clear it. */
+    @Query("UPDATE threads SET accentColorArgb = :argb WHERE id = :threadId")
+    suspend fun updateAccentColor(threadId: Long, argb: Int?)
+
+    /** Saves a Postmark-only chat background id for the thread; pass null to clear it. */
+    @Query("UPDATE threads SET chatBackgroundId = :backgroundId WHERE id = :threadId")
+    suspend fun updateChatBackground(threadId: Long, backgroundId: String?)
+
+    /** Saves a Postmark-only sent-bubble color (ARGB) for the thread; pass null to clear it. */
+    @Query("UPDATE threads SET sentColorArgb = :argb WHERE id = :threadId")
+    suspend fun updateSentColor(threadId: Long, argb: Int?)
+
+    /** Number of threads whose per-thread chat-background override equals [id]. Feeds the
+     *  orphan-cleanup decision for custom image backgrounds (Phase J). */
+    @Query("SELECT COUNT(*) FROM threads WHERE chatBackgroundId = :id")
+    suspend fun countByChatBackground(id: String): Int
 
     @Query("DELETE FROM threads")
     suspend fun deleteAll()

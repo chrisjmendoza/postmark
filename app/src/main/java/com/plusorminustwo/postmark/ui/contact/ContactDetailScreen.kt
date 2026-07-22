@@ -5,12 +5,17 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.ContactsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -36,14 +41,26 @@ import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.ui.components.AccentColorDialog
+import com.plusorminustwo.postmark.ui.components.BackgroundPlacementEditor
+import com.plusorminustwo.postmark.ui.components.ChatBackgroundDialog
+import com.plusorminustwo.postmark.ui.components.ChatBackgroundPreview
+import com.plusorminustwo.postmark.ui.components.ChatBackgroundThumbnail
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
+import com.plusorminustwo.postmark.ui.components.ThemePresetDialog
+import com.plusorminustwo.postmark.ui.components.accentSubtitle
+import com.plusorminustwo.postmark.ui.components.avatarColor
+import com.plusorminustwo.postmark.ui.settings.SettingsRow
+import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 // ── ContactDetailScreen ───────────────────────────────────────────────────────
 
@@ -76,6 +93,28 @@ fun ContactDetailScreen(
     var showNicknameDialog by remember { mutableStateOf(false) }
     var nicknameInput      by remember { mutableStateOf("") }
 
+    // ── Accent color dialog state (Their color / Your bubble color) ────────────
+    var showAccentColorDialog by remember { mutableStateOf(false) }
+    var showSentColorDialog by remember { mutableStateOf(false) }
+
+    // ── Chat background dialog state ──────────────────────────────────────────
+    var showChatBackgroundDialog by remember { mutableStateOf(false) }
+    var showImageOptions by remember { mutableStateOf(false) }
+    val placementRequest by viewModel.placementRequest.collectAsState()
+    val isDarkTheme = isAppInDarkTheme()
+
+    // ── Theme preset dialog state ─────────────────────────────────────────────
+    var showThemePresetDialog by remember { mutableStateOf(false) }
+
+    // Android Photo Picker for a custom chat-background image — mirrors the ReplyBar
+    // attachment launcher (Jetpack-backed, so it works down to minSdk 26). On a result the
+    // placement editor opens before anything is saved (see beginPlacementForPick).
+    val backgroundImagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) viewModel.beginPlacementForPick(uri)
+    }
+
     // ── Full-screen viewer state ───────────────────────────────────────────────
     var fullScreenUri by remember { mutableStateOf<String?>(null) }
 
@@ -88,6 +127,122 @@ fun ContactDetailScreen(
                 showNicknameDialog = false
             },
             onDismiss = { showNicknameDialog = false }
+        )
+    }
+
+    // ── Accent color dialog (their color: avatar + received bubbles) ───────────
+    if (showAccentColorDialog) {
+        thread?.let { t ->
+            AccentColorDialog(
+                title = "Their color",
+                defaultHint = "Default matches their avatar's usual color.",
+                currentArgb = t.accentColorArgb,
+                onSelect = { argb ->
+                    viewModel.setAccentColor(argb)
+                    showAccentColorDialog = false
+                },
+                onDismiss = { showAccentColorDialog = false }
+            )
+        }
+    }
+
+    // ── Sent color dialog (your bubble color) ───────────────────────────────────
+    if (showSentColorDialog) {
+        thread?.let { t ->
+            AccentColorDialog(
+                title = "Your bubble color",
+                defaultHint = "Default uses the app's sent-bubble color.",
+                currentArgb = t.sentColorArgb,
+                onSelect = { argb ->
+                    viewModel.setSentColor(argb)
+                    showSentColorDialog = false
+                },
+                onDismiss = { showSentColorDialog = false }
+            )
+        }
+    }
+
+    // ── Chat background dialog ────────────────────────────────────────────────
+    if (showChatBackgroundDialog) {
+        thread?.let { t ->
+            val currentImageFile = remember(t.chatBackgroundId) {
+                ChatBackgrounds.resolveImageFile(t.chatBackgroundId, viewModel::chatBackgroundImageFile)
+            }
+            ChatBackgroundDialog(
+                currentId = t.chatBackgroundId,
+                showFollowGlobal = true,
+                isDarkTheme = isDarkTheme,
+                currentImageFile = currentImageFile,
+                onSelect = { id ->
+                    viewModel.setChatBackground(id)
+                    showChatBackgroundDialog = false
+                },
+                onPickImage = {
+                    showChatBackgroundDialog = false
+                    backgroundImagePicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onCurrentImageOptions = {
+                    showChatBackgroundDialog = false
+                    showImageOptions = true
+                },
+                onDismiss = { showChatBackgroundDialog = false }
+            )
+        }
+    }
+
+    // ── Background photo options (adjust placement / choose a different photo) ──
+    if (showImageOptions) {
+        AlertDialog(
+            onDismissRequest = { showImageOptions = false },
+            title = { Text("Background photo") },
+            text = {
+                Column {
+                    TextButton(onClick = {
+                        showImageOptions = false
+                        viewModel.beginPlacementForAdjust()
+                    }) { Text("Adjust placement") }
+                    TextButton(onClick = {
+                        showImageOptions = false
+                        backgroundImagePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }) { Text("Choose a different photo") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showImageOptions = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // ── Placement editor ──────────────────────────────────────────────────────
+    placementRequest?.let { req ->
+        BackgroundPlacementEditor(
+            model = req.model,
+            imageWidth = req.imageWidth,
+            imageHeight = req.imageHeight,
+            initial = req.initial,
+            onAccept = { p, vw, vh -> viewModel.confirmPlacement(p, vw, vh) },
+            onCancel = { viewModel.cancelPlacement() }
+        )
+    }
+
+    // ── Theme preset dialog ───────────────────────────────────────────────────
+    // Applies a ready-made combo by COPYING all three look fields onto this thread via
+    // the same per-thread setters the individual rows use. A null preset background maps
+    // to ChatBackgrounds.None.id — the exact path the background dialog's "None" tile uses.
+    if (showThemePresetDialog) {
+        ThemePresetDialog(
+            isDarkTheme = isDarkTheme,
+            onPresetSelected = { preset ->
+                viewModel.setAccentColor(preset.contactArgb)
+                viewModel.setSentColor(preset.sentArgb)
+                viewModel.setChatBackground(preset.backgroundId ?: ChatBackgrounds.None.id)
+                showThemePresetDialog = false
+            },
+            onDismiss = { showThemePresetDialog = false }
         )
     }
 
@@ -125,7 +280,8 @@ fun ContactDetailScreen(
                     ContactAvatar(
                         address   = t.address,
                         name      = resolvedName,
-                        size      = 80.dp
+                        size      = 80.dp,
+                        overrideColor = t.accentColorArgb?.let { Color(it) }
                     )
 
                     Spacer(Modifier.height(12.dp))
@@ -205,11 +361,20 @@ fun ContactDetailScreen(
             item {
                 HorizontalDivider()
                 thread?.let { t ->
+                    val backgroundImageFile = remember(t.chatBackgroundId) {
+                        ChatBackgrounds.resolveImageFile(t.chatBackgroundId, viewModel::chatBackgroundImageFile)
+                    }
                     ContactActionsSection(
                         thread              = t,
+                        isDarkTheme         = isDarkTheme,
+                        backgroundImageFile = backgroundImageFile,
                         onToggleMute        = viewModel::toggleMute,
                         onTogglePin         = viewModel::togglePin,
-                        onToggleNotifications = viewModel::toggleNotifications
+                        onToggleNotifications = viewModel::toggleNotifications,
+                        onOpenThemePresetPicker = { showThemePresetDialog = true },
+                        onOpenColorPicker   = { showAccentColorDialog = true },
+                        onOpenSentColorPicker = { showSentColorDialog = true },
+                        onOpenChatBackgroundPicker = { showChatBackgroundDialog = true }
                     )
                 }
                 HorizontalDivider()
@@ -323,16 +488,23 @@ private fun NicknameDialog(
 
 /**
  * Three toggle rows that mirror the ⋮ menu actions from [ThreadScreen]:
- * Mute, Pin, and Notifications.
+ * Mute, Pin, and Notifications — plus the "Their color" / "Your bubble color" /
+ * "Chat background" picker rows.
  *
- * Each row uses a leading icon, a label, and a trailing Switch for clarity.
+ * Each toggle row uses a leading icon, a label, and a trailing Switch for clarity.
  */
 @Composable
 private fun ContactActionsSection(
     thread: Thread,
+    isDarkTheme: Boolean,
+    backgroundImageFile: File?,
     onToggleMute: () -> Unit,
     onTogglePin: () -> Unit,
-    onToggleNotifications: () -> Unit
+    onToggleNotifications: () -> Unit,
+    onOpenThemePresetPicker: () -> Unit,
+    onOpenColorPicker: () -> Unit,
+    onOpenSentColorPicker: () -> Unit,
+    onOpenChatBackgroundPicker: () -> Unit
 ) {
     // Mute toggle row.
     ContactActionRow(
@@ -356,6 +528,86 @@ private fun ContactActionsSection(
         label   = "Notifications",
         checked = thread.notificationsEnabled,
         onToggle = onToggleNotifications
+    )
+
+    // Theme preset row — applies a ready-made sent/contact/background combo in one tap,
+    // copying the values onto this thread. The individual override rows below fine-tune it.
+    SettingsRow(
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Palette,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp)
+            )
+        },
+        title = "Theme preset",
+        subtitle = "Ready-made color combos",
+        onClick = onOpenThemePresetPicker
+    )
+
+    // Their color row — opens the swatch-grid picker. Effective color is the custom
+    // accent if set, else the default hash-derived avatarColor. Applies to the
+    // contact's avatar (everywhere) and their received bubbles in this thread.
+    val accentArgb = thread.accentColorArgb
+    SettingsRow(
+        icon = {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .background(accentArgb?.let { Color(it) } ?: avatarColor(thread.address), CircleShape)
+            )
+        },
+        title = "Their color",
+        subtitle = accentSubtitle(accentArgb, "Applies to their avatar and message bubbles"),
+        onClick = onOpenColorPicker
+    )
+
+    // Your bubble color row — opens the same swatch-grid picker for the independent
+    // sent-bubble override. Effective color is the custom sentColorArgb if set, else
+    // the default primaryContainer sent-bubble fill.
+    val sentArgb = thread.sentColorArgb
+    SettingsRow(
+        icon = {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .background(sentArgb?.let { Color(it) } ?: MaterialTheme.colorScheme.primaryContainer, CircleShape)
+            )
+        },
+        title = "Your bubble color",
+        subtitle = accentSubtitle(sentArgb, "Applies to your sent messages"),
+        onClick = onOpenSentColorPicker
+    )
+
+    // Chat background row — opens the preview-tile picker. thread.chatBackgroundId null
+    // means "no override" (follow global); an "image:" id is a custom photo; else a
+    // built-in catalog entry. The subtitle names whichever applies.
+    val backgroundId = thread.chatBackgroundId
+    val isImageBackground = ChatBackgrounds.isImageId(backgroundId)
+    val resolvedBackground = ChatBackgrounds.resolve(backgroundId)
+    SettingsRow(
+        icon = {
+            if (isImageBackground) {
+                ChatBackgroundThumbnail(
+                    file = backgroundImageFile,
+                    modifier = Modifier.size(width = 28.dp, height = 22.dp)
+                )
+            } else {
+                ChatBackgroundPreview(
+                    background = resolvedBackground,
+                    isDarkTheme = isDarkTheme,
+                    modifier = Modifier.size(width = 28.dp, height = 22.dp)
+                )
+            }
+        },
+        title = "Chat background",
+        subtitle = when {
+            backgroundId == null -> "Default"
+            isImageBackground    -> ChatBackgrounds.CUSTOM_IMAGE_LABEL
+            else                 -> resolvedBackground.displayName
+        },
+        onClick = onOpenChatBackgroundPicker
     )
 }
 

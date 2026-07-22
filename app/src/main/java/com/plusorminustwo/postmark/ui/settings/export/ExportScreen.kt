@@ -43,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
@@ -234,7 +235,8 @@ fun ExportScreen(
                                 ContactAvatar(
                                     address = thread.address,
                                     name = name,
-                                    colorSeed = thread.address
+                                    colorSeed = thread.address,
+                                    overrideColor = thread.accentColorArgb?.let { Color(it) }
                                 )
                             },
                             trailingContent = {

@@ -28,7 +28,18 @@ data class ThreadEntity(
     // Postmark-only display alias — null means use displayName everywhere in the UI.
     val nickname: String? = null,
     // JSON array of group MMS participant addresses. Null for ordinary 1:1 threads.
-    val participantsJson: String? = null
+    val participantsJson: String? = null,
+    // Postmark-only contact color (ARGB) — avatar + received-bubble fill. Null means
+    // use the default (LetterAvatar hash color / neutral surfaceVariant bubble).
+    val accentColorArgb: Int? = null,
+    // Postmark-only per-thread chat background id. Null falls back to the global default.
+    val chatBackgroundId: String? = null,
+    // Postmark-only sent-bubble fill (ARGB), independent of accentColorArgb. Null means
+    // use the default primaryContainer.
+    val sentColorArgb: Int? = null,
+    // When true the thread is hidden from the main conversation list (and every other
+    // list surface) into the Spam folder, and posts no incoming notifications.
+    val isSpam: Boolean = false
 )
 
 /**
@@ -46,7 +57,11 @@ fun ThreadEntity.toDomain() = Thread(
     isPinned = isPinned,
     notificationsEnabled = notificationsEnabled,
     nickname = nickname,
-    participants = decodeParticipantsJson(participantsJson)
+    participants = decodeParticipantsJson(participantsJson),
+    accentColorArgb = accentColorArgb,
+    chatBackgroundId = chatBackgroundId,
+    sentColorArgb = sentColorArgb,
+    isSpam = isSpam
 )
 
 /**
@@ -64,5 +79,9 @@ fun Thread.toEntity() = ThreadEntity(
     isPinned = isPinned,
     notificationsEnabled = notificationsEnabled,
     nickname = nickname,
-    participantsJson = encodeParticipantsJson(participants)
+    participantsJson = encodeParticipantsJson(participants),
+    accentColorArgb = accentColorArgb,
+    chatBackgroundId = chatBackgroundId,
+    sentColorArgb = sentColorArgb,
+    isSpam = isSpam
 )

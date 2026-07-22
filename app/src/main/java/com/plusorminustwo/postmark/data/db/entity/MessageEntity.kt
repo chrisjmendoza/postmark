@@ -76,7 +76,11 @@ data class MessageEntity(
     val isRead: Boolean = true,
     // Postmark-only favorite flag — surfaces this message's images in the global
     // Starred Images gallery. Never written back to the system SMS/MMS provider.
-    val isStarred: Boolean = false
+    val isStarred: Boolean = false,
+    // Postmark-only pin flag (Discord-style) — surfaces this message in the per-thread
+    // Pinned messages panel. Distinct from the image-only isStarred and from the
+    // thread-level ThreadEntity.isPinned. Never written back to the SMS/MMS provider.
+    val isPinned: Boolean = false
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -96,7 +100,8 @@ fun MessageEntity.toDomain() = Message(
             ?: emptyList()
     },
     isRead = isRead,
-    isStarred = isStarred
+    isStarred = isStarred,
+    isPinned = isPinned
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -113,5 +118,6 @@ fun Message.toEntity() = MessageEntity(
     mimeType = mimeType,
     attachmentsJson = encodeAttachmentsJson(attachments),
     isRead = isRead,
-    isStarred = isStarred
+    isStarred = isStarred,
+    isPinned = isPinned
 )

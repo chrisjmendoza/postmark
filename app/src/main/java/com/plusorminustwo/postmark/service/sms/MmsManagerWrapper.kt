@@ -1,5 +1,6 @@
 package com.plusorminustwo.postmark.service.sms
 
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -10,6 +11,7 @@ import android.os.HandlerThread
 import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayInputStream
 import android.net.Uri
+import android.provider.Telephony
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import android.util.Log
@@ -29,6 +31,7 @@ import androidx.media3.transformer.VideoEncoderSettings
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.logging.redactPhone
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
+import com.plusorminustwo.postmark.util.scaleToMaxDimension
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -79,25 +82,37 @@ class MmsManagerWrapper @Inject constructor(
      * compression, PDU build error, file I/O, or telephony exception) so the caller
      * can immediately mark the optimistic message as FAILED.
      *
-     * @param toAddress   Recipient phone number (E.164 or local format).
-     * @param textBody    Optional caption / text body to include alongside the media.
-     * @param attachments Media parts to send (image, audio, or video), in display order.
+     * @param toAddresses Recipient phone numbers (E.164 or local format); one entry for a 1:1
+     *                    send, the full roster for a group MMS. Must be non-empty.
+     * @param textBody    Optional caption / text body to include alongside the media. When there
+     *                    are no [attachments] this is the whole message (text-only group MMS).
+     * @param attachments Media parts to send (image, audio, or video), in display order. May be
+     *                    empty when [textBody] is non-blank (text-only MMS).
      * @param messageId   Optimistic Room ID; used to name the temp PDU/cache files and in logs.
      * @param sentIntent  [android.app.PendingIntent] fired when the MMSC accepts/rejects the message.
      */
     suspend fun sendMms(
-        toAddress: String,
+        toAddresses: List<String>,
         textBody: String,
         attachments: List<MessageAttachment>,
         messageId: Long,
         sentIntent: android.app.PendingIntent?
     ): Boolean = withContext(Dispatchers.IO) {
-        if (attachments.isEmpty()) {
-            syncLogger.logError(TAG, "sendMms FAILED — no attachments for messageId=$messageId")
+        if (toAddresses.isEmpty()) {
+            syncLogger.logError(TAG, "sendMms FAILED — no recipients for messageId=$messageId")
             return@withContext false
         }
-        syncLogger.log(TAG, "sendMms start: to=${toAddress.redactPhone()} attachments=${attachments.size} messageId=$messageId")
+        // Text-only MMS is allowed (group text replies); only a completely empty message aborts.
+        if (attachments.isEmpty() && textBody.isBlank()) {
+            syncLogger.logError(TAG, "sendMms FAILED — no attachments and no text for messageId=$messageId")
+            return@withContext false
+        }
+        val redactedTo = toAddresses.joinToString { it.redactPhone() }
+        syncLogger.log(TAG, "sendMms start: to=[$redactedTo] attachments=${attachments.size} messageId=$messageId")
 
+        // Text-only sends skip all byte-read/budget/compression stages; finalParts stays empty.
+        val finalParts = ArrayList<MmsPduBuilder.MediaPart>(attachments.size)
+        if (attachments.isNotEmpty()) {
         // ── 1. Read attachment bytes (with filesDir cache for retry resilience) ─
         /* Photo-picker URIs (content://media/picker_get_content/…) are only valid
          * within the originating Activity's lifecycle; a process restart revokes
@@ -176,7 +191,6 @@ class MmsManagerWrapper @Inject constructor(
         }
 
         // ── 1d. Compress images/video that exceed their allocated share ──────
-        val finalParts = ArrayList<MmsPduBuilder.MediaPart>(attachments.size)
         for (index in attachments.indices) {
             val mime  = attachments[index].mimeType.lowercase()
             val bytes = mediaBytesList[index]
@@ -208,13 +222,14 @@ class MmsManagerWrapper @Inject constructor(
             // compressImage always re-encodes as JPEG regardless of input format
             finalParts += MmsPduBuilder.MediaPart(compressed, "image/jpeg")
         }
+        } // end attachments.isNotEmpty()
 
         // ── 2. Build the MMS PDU ──────────────────────────────────────────────
         val pdu = try {
             MmsPduBuilder.buildPdu(
-                toAddress  = toAddress,
-                mediaParts = finalParts,
-                textBody   = textBody
+                toAddresses = toAddresses,
+                mediaParts  = finalParts,
+                textBody    = textBody
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to build MMS PDU", e)
@@ -264,7 +279,7 @@ class MmsManagerWrapper @Inject constructor(
         try {
             smsManager.sendMultimediaMessage(context, pduUri, null, null, sentIntent)
             Log.i(TAG, "sendMms: sendMultimediaMessage dispatched for messageId=$messageId")
-            syncLogger.log(TAG, "sendMms dispatched to radio: to=${toAddress.redactPhone()} messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
+            syncLogger.log(TAG, "sendMms dispatched to radio: to=[$redactedTo] messageId=$messageId pduBytes=${pdu.size} parts=${finalParts.size}")
         } catch (e: Exception) {
             Log.e(TAG, "sendMultimediaMessage failed", e)
             syncLogger.logError(TAG, "sendMms FAILED — sendMultimediaMessage threw for messageId=$messageId", e)
@@ -278,6 +293,154 @@ class MmsManagerWrapper @Inject constructor(
          * read the file, even when MMS-APN bring-up or carrier retries take > 60 s. */
 
         return@withContext true
+    }
+
+    /** Writes a successfully-sent MMS into content://mms so other default-SMS-app
+     *  readers (Google Messages, Phone Link) see it and so syncLatestMms imports a
+     *  real row whose date matches the actual send time. Android only auto-persists
+     *  sent MMS for NON-default apps; as the default app this is our job.
+     *  Returns the new raw content://mms _id, or null on any failure (callers keep
+     *  the optimistic Room row as the fallback record). */
+    suspend fun persistSentMms(
+        toAddresses: List<String>,
+        textBody: String,
+        attachments: List<MessageAttachment>,
+        messageId: Long,      // the optimistic tempId — keys the mms_attach_ cache files
+        sentAtMs: Long        // optimistic row creation time (EXTRA_SENT_AT_MS)
+    ): Long? = withContext(Dispatchers.IO) {
+        try {
+            /* ── 1. Read part bytes FIRST ─────────────────────────────────────────────
+             * Done before any provider write so a read failure needs no cleanup-delete
+             * (we never delete from content://mms — CLAUDE.md CRITICAL). Prefer the
+             * filesDir cache (mms_attach_<tempId>*.bin) written before dispatch; fall
+             * back to the attachment's own URI. An unreadable part is skipped with a
+             * logError, not fatal. */
+            val readableParts = ArrayList<Pair<ByteArray, String>>(attachments.size)
+            attachments.forEachIndexed { index, attachment ->
+                try {
+                    val cacheFile = attachmentCacheFile(context, messageId, index)
+                    val bytes = if (cacheFile.exists()) {
+                        cacheFile.readBytes()
+                    } else {
+                        context.contentResolver.openInputStream(Uri.parse(attachment.uri))?.use { it.readBytes() }
+                    }
+                    if (bytes != null) {
+                        readableParts += bytes to attachment.mimeType
+                    } else {
+                        syncLogger.logError(TAG, "persistSentMms: null bytes for attachment [$index] messageId=$messageId")
+                    }
+                } catch (e: Exception) {
+                    syncLogger.logError(TAG, "persistSentMms: could not read attachment [$index] messageId=$messageId", e)
+                }
+            }
+            val textLen = textBody.toByteArray(Charsets.UTF_8).size
+            // Never insert an empty shell row (no text and nothing readable).
+            if (textBody.isBlank() && readableParts.isEmpty()) {
+                syncLogger.logError(TAG, "persistSentMms: no text and no readable parts — not inserting an empty shell (messageId=$messageId)")
+                return@withContext null
+            }
+
+            // ── 2. Canonical thread id for the recipient(s) ───────────────────────────
+            // The Set overload derives the group thread id from the full roster (precedent
+            // at RestoreWorker.kt:325); for a single recipient it equals the 1:1 thread id.
+            val threadId = try {
+                Telephony.Threads.getOrCreateThreadId(context, toAddresses.toSet())
+            } catch (e: Exception) {
+                // An orphaned-thread row is worse than none; the Room copy stays correct.
+                syncLogger.logError(TAG, "persistSentMms: getOrCreateThreadId failed — not inserting an orphaned row (messageId=$messageId)", e)
+                return@withContext null
+            }
+
+            /* ── 3. Insert the message row ────────────────────────────────────────────
+             * date is written in SECONDS (Telephony.Mms contract); extractMmsMessages
+             * multiplies by 1000 on the way back in, restoring the send-time ordering. */
+            val mSize = readableParts.sumOf { it.first.size } + textLen
+            val msgUri = context.contentResolver.insert(
+                Telephony.Mms.CONTENT_URI,
+                ContentValues().apply {
+                    put("thread_id", threadId)
+                    put("date", sentAtMs / 1000L)                     // SECONDS
+                    put("msg_box", Telephony.Mms.MESSAGE_BOX_SENT)    // 2
+                    put("m_type", 128)                                // SEND_REQ
+                    put(Telephony.Mms.MMS_VERSION, 0x12)  // column is literally "v" — a wrong name kills the whole insert
+                    put("ct_t", "application/vnd.wap.multipart.related")
+                    put("read", 1)
+                    put("seen", 1)
+                    put("m_size", mSize)
+                }
+            )
+            val rawId = msgUri?.lastPathSegment?.toLongOrNull()
+            if (rawId == null) {
+                syncLogger.logError(TAG, "persistSentMms: message insert returned no id (uri=$msgUri messageId=$messageId)")
+                return@withContext null
+            }
+
+            /* ── 4. Parts — one per readable attachment, plus an optional text part ────
+             * Deliberately NO SMIL part: modern readers (incl. Google Messages) render
+             * parts without it, and a SMIL layout referencing mismatched filenames is
+             * worse than none. */
+            val partUri = Uri.parse("content://mms/$rawId/part")
+            readableParts.forEachIndexed { index, (bytes, mimeType) ->
+                try {
+                    val partRowUri = context.contentResolver.insert(
+                        partUri,
+                        ContentValues().apply {
+                            put("mid", rawId)
+                            put("ct", mimeType)
+                            put("cid", "<part$index>")
+                            put("cl", "part$index")
+                        }
+                    )
+                    if (partRowUri != null) {
+                        context.contentResolver.openOutputStream(partRowUri)?.use { it.write(bytes) }
+                    } else {
+                        syncLogger.logError(TAG, "persistSentMms: part insert returned null [$index] messageId=$messageId")
+                    }
+                } catch (e: Exception) {
+                    syncLogger.logError(TAG, "persistSentMms: failed writing part [$index] messageId=$messageId", e)
+                }
+            }
+            if (textBody.isNotBlank()) {
+                try {
+                    context.contentResolver.insert(
+                        partUri,
+                        ContentValues().apply {
+                            put("mid", rawId)
+                            put("ct", "text/plain")
+                            put("chset", 106)   // UTF-8
+                            put("text", textBody)
+                        }
+                    )
+                } catch (e: Exception) {
+                    syncLogger.logError(TAG, "persistSentMms: failed writing text part messageId=$messageId", e)
+                }
+            }
+
+            // ── 5. Addr rows: FROM (self placeholder) + one TO per recipient ──────────
+            val addrUri = Uri.parse("content://mms/$rawId/addr")
+            try {
+                context.contentResolver.insert(addrUri, ContentValues().apply {
+                    put("address", "insert-address-token")   // FROM (AOSP convention for self)
+                    put("type", 137)
+                    put("charset", 106)
+                })
+                toAddresses.forEach { recipient ->
+                    context.contentResolver.insert(addrUri, ContentValues().apply {
+                        put("address", recipient)            // TO — one row per group participant
+                        put("type", 151)
+                        put("charset", 106)
+                    })
+                }
+            } catch (e: Exception) {
+                syncLogger.logError(TAG, "persistSentMms: failed writing addr rows messageId=$messageId", e)
+            }
+
+            syncLogger.log(TAG, "persistSentMms: wrote content://mms/$rawId (${readableParts.size} parts, $mSize bytes)")
+            rawId
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "persistSentMms FAILED for messageId=$messageId", e)
+            null
+        }
     }
 
     /**
@@ -300,6 +463,23 @@ class MmsManagerWrapper @Inject constructor(
         }
     }
 
+    /**
+     * [MAX_VOICE_MEMO_DURATION_MS] shortened for the SIM currently active, when its
+     * carrier config caps MMS size below the default budget the fixed constant assumes
+     * (as low as 300 KB on some carriers — a memo recorded up to the fixed ~1:42 cap
+     * would record fine and then fail at send there). Reads CarrierConfig the same way
+     * (and with the same fallback/sanity-clamp) as [sendMms]'s size-limit lookup, so the
+     * two never disagree about what this SIM can actually send.
+     */
+    suspend fun currentVoiceMemoCapMs(): Long = withContext(Dispatchers.IO) {
+        val carrierMaxBytes: Int = try {
+            val cfg = smsManager.getCarrierConfigValues()
+            cfg.getInt(SmsManager.MMS_CONFIG_MAX_MESSAGE_SIZE, DEFAULT_MAX_MMS_BYTES)
+                .coerceIn(300_000, 2_000_000)  // sanity-clamp: 300 KB – 2 MB
+        } catch (_: Exception) { DEFAULT_MAX_MMS_BYTES }
+        effectiveVoiceMemoCapMs(MAX_VOICE_MEMO_DURATION_MS, carrierMaxBytes, VOICE_MEMO_BITRATE_BPS)
+    }
+
     companion object {
         private const val TAG = "MmsManagerWrapper"
         /* UX-level cap, independent of the byte-budget math: a hard duration limit gives
@@ -309,6 +489,20 @@ class MmsManagerWrapper @Inject constructor(
          * profiles allowed only a few seconds at a watchable bitrate) while still comfortably
          * fitting T-Mobile/Verizon's ~3-3.5MB caps at a decent bitrate. */
         const val MAX_VIDEO_DURATION_MS = 10_000L
+        /* Voice memos are recorded straight at this bitrate (AAC mono), so unlike video
+         * there is no transcode fallback — the duration cap below is what guarantees the
+         * memo fits the MMS budget. 64 kbps AAC is transparent for speech. */
+        const val VOICE_MEMO_BITRATE_BPS = 64_000
+        /* Same "predictable rule of thumb" role as MAX_VIDEO_DURATION_MS, but derived
+         * rather than hand-picked: the longest memo whose bytes fit the default carrier
+         * budget at the recording bitrate (~1:42). Computed against the conservative
+         * DEFAULT_MAX_MMS_BYTES rather than live carrier config so the cap never varies
+         * between SIMs — a memo recorded on one network must not become unsendable after
+         * a carrier switch. */
+        val MAX_VOICE_MEMO_DURATION_MS = maxVoiceMemoDurationMs(
+            budgetBytes = DEFAULT_MAX_MMS_BYTES - PDU_OVERHEAD_BYTES,
+            bitrateBps  = VOICE_MEMO_BITRATE_BPS
+        )
         /* 860 KB (860,160 bytes) is Signal's proven-safe default ceiling.
          * AT&T and Verizon hard-cap at 1,048,576 bytes (1 MB). Our previous
          * value of 1,200,000 bytes silently exceeded this, causing images just
@@ -319,8 +513,11 @@ class MmsManagerWrapper @Inject constructor(
         /* Estimated overhead of MMS PDU headers + SMIL part + per-part headers on top
          * of raw media bytes. Subtracted from the carrier limit before budgeting so the
          * total PDU never exceeds what the MMSC accepts. 5 KB is generous: the SMIL for
-         * the max attachment count is < 1 KB and each part header is ~50 bytes. */
-        private const val PDU_OVERHEAD_BYTES = 5_000
+         * the max attachment count is < 1 KB and each part header is ~50 bytes.
+         * internal (not private): shared with the file-scope effectiveVoiceMemoCapMs
+         * below and VoiceMemoBudgetTest, which apply the same reservation to the live
+         * carrier budget that this class applies to the default one. */
+        internal const val PDU_OVERHEAD_BYTES = 5_000
 
         // ── Video compression tuning ──────────────────────────────────────────
         /* Video transcoding is expensive (real seconds-to-minutes per pass on-device),
@@ -351,28 +548,79 @@ class MmsManagerWrapper @Inject constructor(
                 else "mms_attach_${messageId}_$index.bin"
             )
 
+        // ── Voice memo cache files ────────────────────────────────────────────
+        /* Voice memos are the one attachment type that exists as an app-owned file
+         * BEFORE send (recorded straight into filesDir), so they get their own name
+         * pattern and join the same delete/sweep lifecycle as mms_attach_ files. */
+        const val VOICE_MEMO_FILE_PREFIX = "voice_memo_"
+        const val VOICE_MEMO_FILE_SUFFIX = ".m4a"
+        /* A recorded-but-unsent memo can legitimately sit in the pending-attachment
+         * queue for hours (it survives process death via SavedStateHandle), so it
+         * gets a much longer sweep grace than the 1-hour in-flight-send guard —
+         * only a memo abandoned for a full day (e.g. leaked by a crash mid-
+         * recording) is collected. */
+        private const val VOICE_MEMO_SWEEP_MIN_AGE_MS = 24 * 60 * 60 * 1000L
+
+        /** The filesDir file a new voice memo records into. [epochMs] makes the name
+         *  unique per recording. */
+        fun voiceMemoCacheFile(context: Context, epochMs: Long): File =
+            File(context.filesDir, "$VOICE_MEMO_FILE_PREFIX$epochMs$VOICE_MEMO_FILE_SUFFIX")
+
+        /** True for filenames this class owns in filesDir and may delete/sweep. */
+        internal fun isOutgoingCacheFileName(name: String): Boolean =
+            (name.startsWith("mms_attach_") && name.endsWith(".bin")) ||
+            (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX))
+
         /**
-         * Deletes the filesDir cache files (`mms_attach_*.bin`) backing [attachments] of an
-         * outgoing MMS. Received-MMS attachments carry `content://mms/part` URIs whose last
-         * segment isn't a cache-file name, so they're skipped; any non-cache URI is a no-op.
-         * Call after a message is deleted so its cached media doesn't leak.
+         * Deletes the filesDir file backing [attachment] ONLY if it is a voice memo
+         * recording. Used when the user removes a pending memo from the reply bar (×)
+         * and after a send pins the optimistic row to the mms_attach_ copy — in both
+         * cases the recording file is exclusively owned by that pending entry, unlike
+         * mms_attach_ files, which sent rows keep referencing.
+         */
+        fun deleteVoiceMemoCacheFile(context: Context, attachment: MessageAttachment) {
+            val name = Uri.parse(attachment.uri).lastPathSegment ?: return
+            if (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) {
+                runCatching { File(context.filesDir, name).delete() }
+            }
+        }
+
+        /** Bumps the mtime of the recording file behind [attachment] if it is a voice memo —
+         *  a draft restored from SavedStateHandle is being actively kept, so its 24 h
+         *  orphan-sweep clock must restart. No-op for anything else. */
+        fun touchVoiceMemoCacheFile(context: Context, attachment: MessageAttachment) {
+            val name = Uri.parse(attachment.uri).lastPathSegment ?: return
+            if (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) {
+                runCatching { File(context.filesDir, name).setLastModified(System.currentTimeMillis()) }
+            }
+        }
+
+        /**
+         * Deletes the filesDir cache files (`mms_attach_*.bin`, `voice_memo_*.m4a`)
+         * backing [attachments] of an outgoing MMS. Received-MMS attachments carry
+         * `content://mms/part` URIs whose last segment isn't a cache-file name, so
+         * they're skipped; any non-cache URI is a no-op. Call after a message is
+         * deleted so its cached media doesn't leak.
          */
         fun deleteAttachmentCacheFiles(context: Context, attachments: List<MessageAttachment>) {
             attachments.forEach { att ->
                 val name = Uri.parse(att.uri).lastPathSegment ?: return@forEach
-                if (name.startsWith("mms_attach_") && name.endsWith(".bin")) {
+                if (isOutgoingCacheFileName(name)) {
                     runCatching { File(context.filesDir, name).delete() }
                 }
             }
         }
 
         /**
-         * Deletes `mms_attach_*.bin` cache files in filesDir that no live message references.
-         * Each sent-MMS row (and any still-pending optimistic row) references its own cache
-         * file via a FileProvider URI, so a file whose name is absent from [referencedNames]
-         * is a leftover from a superseded/failed/deleted send. A file is only removed once
-         * [nowMs] − its mtime exceeds [minAgeMs], so a file an in-flight send just wrote but
-         * hasn't yet attached to a row is never swept. Returns the number of files deleted.
+         * Deletes cache files in filesDir (`mms_attach_*.bin`, `voice_memo_*.m4a`) that
+         * no live message references. Each sent-MMS row (and any still-pending optimistic
+         * row) references its own cache file via a FileProvider URI, so a file whose name
+         * is absent from [referencedNames] is a leftover from a superseded/failed/deleted
+         * send — or, for voice memos, from a cancelled/crashed recording. A file is only
+         * removed once [nowMs] − its mtime exceeds its minimum age ([minAgeMs] for
+         * mms_attach_ files, [VOICE_MEMO_SWEEP_MIN_AGE_MS] for memos — a pending unsent
+         * memo isn't referenced by any message row, so it needs the longer grace).
+         * Returns the number of files deleted.
          */
         fun sweepOrphanedAttachmentCache(
             context: Context,
@@ -381,11 +629,14 @@ class MmsManagerWrapper @Inject constructor(
             minAgeMs: Long = 60 * 60 * 1000L
         ): Int {
             val files = context.filesDir.listFiles { f ->
-                f.name.startsWith("mms_attach_") && f.name.endsWith(".bin")
+                isOutgoingCacheFileName(f.name)
             } ?: return 0
             var deleted = 0
             files.forEach { f ->
-                if (f.name !in referencedNames && nowMs - f.lastModified() > minAgeMs) {
+                val minAge = if (f.name.startsWith(VOICE_MEMO_FILE_PREFIX)) {
+                    maxOf(minAgeMs, VOICE_MEMO_SWEEP_MIN_AGE_MS)
+                } else minAgeMs
+                if (f.name !in referencedNames && nowMs - f.lastModified() > minAge) {
                     if (runCatching { f.delete() }.getOrDefault(false)) deleted++
                 }
             }
@@ -440,7 +691,7 @@ class MmsManagerWrapper @Inject constructor(
         /* ── Phase 2: scale down pixel dimensions ────────────────────────────── */
         val scaleSteps = listOf(2000, 1600, 1280, 960, 800)
         for ((stepIdx, maxDim) in scaleSteps.withIndex()) {
-            val scaled = scaleBitmapToFit(bitmap, maxDim)
+            val scaled = scaleToMaxDimension(bitmap, maxDim)
             val out = ByteArrayOutputStream()
             scaled.compress(compressFormat, 70, out)
             val bytes = out.toByteArray()
@@ -457,16 +708,6 @@ class MmsManagerWrapper @Inject constructor(
         // Image is still too large at the smallest scale — cannot send.
         bitmap.recycle()
         return null
-    }
-
-    /** Scales [bitmap] down so its longest edge fits within [maxDim] px. Returns the
-     *  original bitmap unchanged if it already fits. */
-    private fun scaleBitmapToFit(bitmap: Bitmap, maxDim: Int): Bitmap {
-        val w = bitmap.width
-        val h = bitmap.height
-        if (w <= maxDim && h <= maxDim) return bitmap
-        val scale = maxDim.toFloat() / maxOf(w, h)
-        return Bitmap.createScaledBitmap(bitmap, (w * scale).toInt(), (h * scale).toInt(), true)
     }
 
     // ── Video compression helper ──────────────────────────────────────────────
@@ -657,6 +898,31 @@ internal fun allocateAttachmentBudgets(
     return budgets.toList()
 }
 
+// ── Voice memo duration budgeting ──────────────────────────────────────────────
+/**
+ * The longest voice memo, in whole seconds expressed as milliseconds, whose encoded
+ * bytes fit within [budgetBytes] at [bitrateBps].
+ *
+ * Pure function (unit-tested on the JVM), the audio analogue of [planVideoTranscode]
+ * run in reverse: instead of fitting a bitrate to a known duration, it fits a duration
+ * cap to the fixed recording bitrate, since audio in the shared attachment budget is
+ * non-compressible ([allocateAttachmentBudgets] fails the send if it doesn't fit).
+ * [CONTAINER_OVERHEAD_FACTOR] reserves MP4 container/muxer overhead the same way the
+ * video path does. Floored to a whole second so the cap shown in the recording timer
+ * ("0:07 / 1:42") is exact.
+ */
+internal fun maxVoiceMemoDurationMs(budgetBytes: Int, bitrateBps: Int): Long {
+    if (budgetBytes <= 0 || bitrateBps <= 0) return 0L
+    val usableBits = budgetBytes * 8.0 * CONTAINER_OVERHEAD_FACTOR
+    return (usableBits / bitrateBps).toLong() * 1000L
+}
+
+/** The recording cap actually applied: the fixed default-budget cap, shortened when
+ *  the live carrier budget is stricter. Never longer than the fixed cap — see
+ *  MAX_VOICE_MEMO_DURATION_MS for why the cap must not grow with carrier config. */
+internal fun effectiveVoiceMemoCapMs(fixedCapMs: Long, liveCarrierMaxBytes: Int, bitrateBps: Int): Long =
+    minOf(fixedCapMs, maxVoiceMemoDurationMs(liveCarrierMaxBytes - MmsManagerWrapper.PDU_OVERHEAD_BYTES, bitrateBps))
+
 // ── Video transcode planning ───────────────────────────────────────────────────
 // File-scope (not companion-object) constants: shared by both the pure
 // [planVideoTranscode] function below and [MmsManagerWrapper]'s Transformer call site.
@@ -802,10 +1068,11 @@ internal object MmsPduBuilder {
     // ── Entry point ───────────────────────────────────────────────────────────
 
     fun buildPdu(
-        toAddress: String,
+        toAddresses: List<String>,
         mediaParts: List<MediaPart>,
         textBody: String
     ): ByteArray {
+        require(toAddresses.isNotEmpty()) { "buildPdu requires at least one recipient" }
         val out = ByteArrayOutputStream()
 
         // ── MMS headers ───────────────────────────────────────────────────────
@@ -829,10 +1096,13 @@ internal object MmsPduBuilder {
         // From: insert-address-token (MMSC fills in the sender's number)
         out.write(FIELD_FROM); out.write(0x01); out.write(VALUE_INSERT_ADDR_TOKEN)
 
-        // To: address with /TYPE=PLMN routing suffix (null-terminated)
-        val addr = normalizeAddress(toAddress)
-        out.write(FIELD_TO)
-        out.write(addr.toByteArray(Charsets.US_ASCII)); out.write(0x00)
+        // To: one repeated To header per recipient (WSP encodes multiple recipients as
+        // repeated headers, not a comma-joined value). Each is the /TYPE=PLMN-suffixed
+        // address as a null-terminated encoded-string. Order preserved.
+        for (recipient in toAddresses) {
+            out.write(FIELD_TO)
+            out.write(normalizeAddress(recipient).toByteArray(Charsets.US_ASCII)); out.write(0x00)
+        }
 
         out.write(FIELD_MESSAGE_CLASS); out.write(VALUE_PERSONAL)
         out.write(FIELD_PRIORITY);      out.write(VALUE_NORMAL)
@@ -907,6 +1177,12 @@ internal object MmsPduBuilder {
         }
 
         val body = buildString {
+            if (media.isEmpty()) {
+                // Text-only MMS (group text reply): a single slide carrying just the caption.
+                // No media means no visible region — only the Text region above is emitted.
+                if (hasText) append("""<par dur="5000ms"><text src="text.txt" region="Text"/></par>""")
+                return@buildString
+            }
             media.forEachIndexed { index, (filename, mime) ->
                 val dur = if (mime.startsWith("audio/") || mime.startsWith("video/")) "indefinite" else "5000ms"
                 append("""<par dur="$dur">""")

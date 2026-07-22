@@ -75,21 +75,39 @@ interface MessageDao {
     suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean)
 
     /** Returns the [MessageEntity.deliveryStatus] of the most recent optimistic (negative-ID)
-     *  sent message of the given transport in a thread. Used by [SmsSyncHandler.syncLatestMms]
-     *  to transfer a FAILED status to the real row before the temp row is deleted.
-     *  [isMms] scoping ensures a newer optimistic SMS row can't shadow the MMS row. */
+     *  sent message of the given transport in a thread. [isMms] scoping ensures a newer
+     *  optimistic SMS row can't shadow the MMS row.
+     *  Note: [SmsSyncHandler.syncLatestMms] no longer uses this latest-to-latest read for MMS —
+     *  it matches each real row to a specific optimistic row via [getOptimisticSentMms]
+     *  (see pickOptimisticMatch). Retained as a scoped optimistic-row read (DAO-test-covered). */
     @Query("SELECT deliveryStatus FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int?
 
     /** Returns the row id (negative tempId) of the most recent optimistic sent message of the
-     *  given transport in a thread. Used by [SmsSyncHandler.syncLatestMms] to derive the
-     *  cache file names (mms_attach_<tempId>*.bin) and build stable FileProvider URIs,
-     *  bypassing the race where [ThreadViewModel] hasn't yet updated the stored attachments. */
+     *  given transport in a thread. [isMms] scoping ensures a newer optimistic SMS row can't
+     *  shadow the MMS row.
+     *  Note: [SmsSyncHandler.syncLatestMms] no longer uses this latest-to-latest read for MMS —
+     *  it matches each real row to a specific optimistic row via [getOptimisticSentMms]
+     *  (see pickOptimisticMatch). Retained as a scoped optimistic-row read (DAO-test-covered). */
     @Query("SELECT id FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = :isMms ORDER BY id DESC LIMIT 1")
     suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long?
 
+    /** All optimistic (negative-ID) sent MMS temp rows in a thread, newest (largest id) first.
+     *  [SmsSyncHandler.syncLatestMms] matches each just-imported real sent row to at most one
+     *  of these per-row by trimmed body + send time (see pickOptimisticMatch), replacing the
+     *  old LIMIT 1 latest-real-to-latest-optimistic heuristic that could graft one send's
+     *  attachments onto an unrelated row and then blanket-delete the correctly-timed one. */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND id < 0 AND isSent = 1 AND isMms = 1 ORDER BY id DESC")
+    suspend fun getOptimisticSentMms(threadId: Long): List<MessageEntity>
+
     @Query("DELETE FROM messages WHERE id = :messageId")
     suspend fun deleteById(messageId: Long)
+
+    /** Deletes several rows by id in one statement. Used by the one-shot non-displayable
+     *  MMS cleanup (GROUP_MESSAGING_SPEC §4.2) — Room-side only, never touches the
+     *  telephony provider. */
+    @Query("DELETE FROM messages WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
 
     /** Latest message in a thread by timestamp — used to refresh the thread preview after
      *  reaction cleanup. No reaction filtering (the former name `getLatestNonReactionForThread`
@@ -113,6 +131,15 @@ interface MessageDao {
      *  FTS entries and re-ran every messages observer during the screen-entry animation. */
     @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId AND isRead = 0")
     suspend fun markAllRead(threadId: Long)
+
+    /** Marks a thread unread by clearing isRead on its single latest message only.
+     *  Reuses the whole existing unread-badge pipeline ([observeUnreadCounts]) with no
+     *  schema change: one unread row is enough to surface the badge and the "Unread"
+     *  filter, and marking exactly one row keeps the reverse of [markAllRead] cheap
+     *  (no bulk FTS-trigger rewrite). Called by the conversations-list "Mark unread"
+     *  bulk action, per selected thread. */
+    @Query("UPDATE messages SET isRead = 0 WHERE id = (SELECT id FROM messages WHERE threadId = :threadId ORDER BY timestamp DESC LIMIT 1)")
+    suspend fun markLatestUnread(threadId: Long)
 
     /** All messages in a thread that carry a media attachment, newest first.
      *  Used by ContactDetailScreen to build the shared-media grid. */
@@ -187,6 +214,15 @@ interface MessageDao {
 
     @Query("UPDATE messages SET isStarred = :isStarred WHERE id = :messageId")
     suspend fun updateStarred(messageId: Long, isStarred: Boolean)
+
+    @Query("UPDATE messages SET isPinned = :isPinned WHERE id = :messageId")
+    suspend fun updatePinned(messageId: Long, isPinned: Boolean)
+
+    /** This thread's pinned messages, oldest first (Discord-style) — backs the per-thread
+     *  Pinned messages panel. threadId is index-covered; the small pinned subset is filtered
+     *  in-row, so no dedicated isPinned index is needed. */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND isPinned = 1 ORDER BY timestamp ASC")
+    fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>>
 
     /** Every starred message with a media attachment, newest first — backs the global
      *  Starred Images gallery (Settings → Starred images). Image-vs-video/audio filtering

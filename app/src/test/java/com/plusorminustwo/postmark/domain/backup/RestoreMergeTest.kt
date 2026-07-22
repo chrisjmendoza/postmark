@@ -95,7 +95,8 @@ class RestoreMergeTest {
         backupPolicy = "NEVER_INCLUDE",
         participants = emptyList(),
         lastMessageAt = 9000L,
-        lastMessagePreview = "yo"
+        lastMessagePreview = "yo",
+        isSpam = true
     )
 
     @Test
@@ -106,7 +107,18 @@ class RestoreMergeTest {
         assertEquals(true, updates.isMuted)
         assertEquals(false, updates.notificationsEnabled)
         assertEquals(BackupPolicy.NEVER_INCLUDE, updates.backupPolicy)
+        assertEquals(true, updates.isSpam)
         assertFalse(updates.isEmpty)
+    }
+
+    @Test
+    fun `restore never unsets a local spam flag with a backup non-spam`() {
+        // Same rule as pin/mute: restore only ever raises the flag, never clears a local choice.
+        val spamLocal = defaultLocal.copy(isSpam = true)
+        val notSpamRecord = richRecord.copy(isSpam = false)
+        assertNull(mergeThreadMetadata(spamLocal, notSpamRecord).isSpam)
+        // And an already-spam local isn't re-flagged by a spam backup (no redundant write).
+        assertNull(mergeThreadMetadata(spamLocal, richRecord).isSpam)
     }
 
     @Test
@@ -116,7 +128,8 @@ class RestoreMergeTest {
             isPinned = true,
             isMuted = true,
             notificationsEnabled = false,
-            backupPolicy = BackupPolicy.ALWAYS_INCLUDE
+            backupPolicy = BackupPolicy.ALWAYS_INCLUDE,
+            isSpam = true
         )
         val updates = mergeThreadMetadata(customized, richRecord)
         assertTrue(updates.isEmpty)
@@ -129,7 +142,8 @@ class RestoreMergeTest {
             isPinned = false,
             isMuted = false,
             notificationsEnabled = true,
-            backupPolicy = "GLOBAL"
+            backupPolicy = "GLOBAL",
+            isSpam = false
         )
         assertTrue(mergeThreadMetadata(defaultLocal, plainRecord).isEmpty)
     }
@@ -170,6 +184,14 @@ class RestoreMergeTest {
     @Test
     fun `restored messages are always read`() {
         assertTrue(sanitizeForRestore(record.copy(isRead = false)).isRead)
+    }
+
+    @Test
+    fun `restore preserves the per-message pin flag`() {
+        // isPinned is a plain Postmark-only annotation carried verbatim through restore
+        // (like isStarred) — sanitizeForRestore only touches deliveryStatus and isRead.
+        assertTrue(sanitizeForRestore(record.copy(isPinned = true)).isPinned)
+        assertFalse(sanitizeForRestore(record.copy(isPinned = false)).isPinned)
     }
 
     // ---- restored id allocation ----

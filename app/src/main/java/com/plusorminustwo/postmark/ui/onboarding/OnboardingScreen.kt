@@ -92,13 +92,23 @@ fun OnboardingScreen(onComplete: () -> Unit) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             shape = RoundedCornerShape(16.dp)
         ) {
-            Text(
-                text = "To read your message history and receive notifications for new messages, Postmark needs to be your default SMS app. You can change this at any time in Android Settings.",
-                modifier = Modifier.padding(20.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    text = "To read your message history and receive notifications for new messages, Postmark needs to be your default SMS app. You can change this at any time in Android Settings.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    text = "Postmark supports SMS and MMS only. Conversations that used RCS chat will fall back to standard texting while Postmark is your default messaging app.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
 
         Spacer(Modifier.height(32.dp))

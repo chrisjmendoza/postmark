@@ -41,6 +41,11 @@ interface ReactionDao {
     @Query("SELECT * FROM reactions WHERE emoji = :emoji")
     suspend fun getByEmoji(emoji: String): List<ReactionEntity>
 
+    /** All reactions on any of [messageIds] — one batched lookup used to attach
+     *  reactions onto a search result set without a per-row query. */
+    @Query("SELECT * FROM reactions WHERE messageId IN (:messageIds)")
+    suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity>
+
     @Query("""
         SELECT emoji, COUNT(*) as count FROM reactions
         GROUP BY emoji ORDER BY count DESC LIMIT :limit

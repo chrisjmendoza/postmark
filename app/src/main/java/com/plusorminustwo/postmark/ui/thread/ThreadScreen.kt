@@ -10,24 +10,28 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.media.MediaMetadataRetriever
-import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.app.role.RoleManager
 import android.provider.MediaStore
+import android.provider.Settings
 import android.provider.Telephony
 import android.view.HapticFeedbackConstants
+import android.view.View
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -37,6 +41,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -71,6 +76,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalView
@@ -83,6 +89,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
@@ -95,26 +104,44 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
+import com.plusorminustwo.postmark.domain.model.previewText
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.Devices
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
+import com.plusorminustwo.postmark.domain.customization.ContactPalette
+import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEvent
+import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
+import com.plusorminustwo.postmark.domain.voicememo.formatMemoDuration
+import com.plusorminustwo.postmark.domain.voicememo.shouldCancelDrag
+import com.plusorminustwo.postmark.domain.voicememo.shouldLatchLock
+import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -126,9 +153,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed as lazyRowItemsIndexed
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.isUnspecified
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -138,14 +167,22 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.progressSemantics
+import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 
@@ -155,6 +192,38 @@ import coil.request.ImageRequest
  * Defaults to 1.0 so previews and other consumers outside the thread view are unaffected.
  */
 internal val LocalBubbleFontScale = compositionLocalOf { 1.0f }
+
+/**
+ * CompositionLocal carrying the current bubble shape style (rounded / pill / square).
+ * Set by [ThreadContent] and consumed in [MessageBubble] where it feeds [bubbleShape] —
+ * the single owner of the corner-radius math for the bubble's background silhouette
+ * (attachments inside inherit that silhouette; their own fixed inner-corner clips are
+ * unrelated to the style). Defaults to ROUNDED — today's shape — so previews and other
+ * consumers outside the thread view are unaffected.
+ */
+internal val LocalBubbleStyle = compositionLocalOf { BubbleStylePreference.ROUNDED }
+
+/**
+ * Container + content colors for a thread's customized bubbles (Phase FB2). The two
+ * directions are independent — a thread may set
+ * [com.plusorminustwo.postmark.domain.model.Thread.accentColorArgb] (the contact's
+ * color: avatar + received bubbles), [com.plusorminustwo.postmark.domain.model.Thread.sentColorArgb]
+ * (sent bubbles), both, or neither, so every field is individually nullable. Null
+ * leaves MessageBubble on its existing default (surfaceVariant for received,
+ * primaryContainer for sent, ambient content color) — EXCEPT `sentContent`, which
+ * [ThreadContent] fills with `onPrimaryContainer` instead of leaving null when a
+ * global app accent is set (Phase I) and this thread has no `sentColorArgb` of its
+ * own; primaryContainer is the accent itself in that case, so ambient content color
+ * is no longer guaranteed legible against it. Set by [ThreadContent], consumed by
+ * [MessageBubble].
+ */
+internal data class BubbleAccentColors(
+    val receivedContainer: Color? = null,
+    val receivedContent: Color? = null,
+    val sentContainer: Color? = null,
+    val sentContent: Color? = null
+)
+internal val LocalBubbleAccentColors = compositionLocalOf { BubbleAccentColors() }
 
 /**
  * Entry-point composable for a single conversation thread.
@@ -191,8 +260,20 @@ fun ThreadScreen(
     val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
     // Bubble font scale — driven by pinch gesture, persisted across sessions.
     val bubbleFontScale by viewModel.bubbleFontScale.collectAsState()
+    // Bubble shape style (rounded / pill / square) — global appearance preference.
+    val bubbleStyle by viewModel.bubbleStyle.collectAsState()
+    // Global default chat background — overridden per-thread when uiState.thread.chatBackgroundId is set.
+    val globalChatBackgroundId by viewModel.globalChatBackgroundId.collectAsState()
+    // Global app accent (Phase I) — feeds the sent-bubble default content-color fallback below.
+    val appAccentArgb by viewModel.appAccentArgb.collectAsState()
     // address → name for group threads; empty for 1:1 (doubles as the group signal).
     val participantNames by viewModel.participantNames.collectAsState()
+    // Voice memo recording phase for the reply bar's mic button.
+    val voiceMemo by viewModel.voiceMemoState.collectAsState()
+    // One-time gesture-tips card visibility (un-dismissed); UI also gates on message count.
+    val threadTipsDismissed by viewModel.threadTipsDismissed.collectAsState()
+    // This thread's pinned messages (oldest first) for the Pinned messages panel.
+    val pinnedMessages by viewModel.pinnedMessages.collectAsState()
 
     // ── Stable lambdas ────────────────────────────────────────────────────────
     // Wrapped in remember(viewModel) so the same function reference is reused
@@ -207,9 +288,60 @@ fun ThreadScreen(
     val view    = LocalView.current
     val haptics = LocalHapticFeedback.current
 
+    // Android 9+ feeds silence to a backgrounded app's mic, so the screen must stay on
+    // for exactly as long as the mic is actually capturing — HELD or LOCKED, never
+    // PREVIEW (nothing is recording then). Keyed on the boolean so a phase flip re-runs
+    // this effect; onDispose always clears the flag, whether from the key changing or
+    // this composable leaving — it can never be left stuck on.
+    val isActivelyRecording = voiceMemo.phase == VoiceMemoPhase.HELD || voiceMemo.phase == VoiceMemoPhase.LOCKED
+    DisposableEffect(isActivelyRecording) {
+        view.keepScreenOn = isActivelyRecording
+        onDispose { view.keepScreenOn = false }
+    }
+
+    // Screen-off/home also stops the activity, which counts as backgrounded for the
+    // same mic-silence rule above — park whatever take is in flight rather than let it
+    // keep "recording" silence until the user returns.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> viewModel.onHostStopped()
+                // Register/clear this thread as the on-screen conversation so an incoming
+                // SMS/MMS for it skips the notification banner while the user is looking at
+                // it. ON_PAUSE (not ON_STOP) so a partially-obscured thread still counts as
+                // "viewing"; the tracker's clear-on-match guard tolerates the pause-old/
+                // resume-new overlap during navigation between threads.
+                Lifecycle.Event.ON_RESUME -> viewModel.onScreenResumed()
+                Lifecycle.Event.ON_PAUSE -> viewModel.onScreenPaused()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            // Guarantee we don't leave this thread registered if the screen leaves the
+            // composition without an ON_PAUSE reaching the observer first.
+            viewModel.onScreenPaused()
+        }
+    }
+
+    // Back during an in-flight memo must park it (onBackDuringMemo), never let
+    // navigation silently discard the take — see the CHANGELOG entry on this. Compose's
+    // OnBackPressedDispatcher gives priority to the most-recently-composed *enabled*
+    // callback, so this is placed as the LAST BackHandler this function composes (there
+    // is no other one in ThreadScreen.kt today — multi-select exits via the top bar's ×
+    // instead of back — but a future one, e.g. a selection-mode close-on-back, would
+    // need to be composed BEFORE this point to keep this one taking precedence while a
+    // memo is active).
+    BackHandler(enabled = voiceMemo.phase != VoiceMemoPhase.IDLE) {
+        viewModel.onBackDuringMemo()
+    }
+
     val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
     val onDeleteMessage           = remember(viewModel) { { id: Long -> viewModel.deleteMessage(id) } }
     val onToggleStarred           = remember(viewModel) { { id: Long -> viewModel.toggleStarred(id) } }
+    val onTogglePinnedMessage     = remember(viewModel) { { id: Long -> viewModel.togglePinnedMessage(id) } }
     val onDismissDefaultSmsDialog = remember(viewModel) { { viewModel.dismissDefaultSmsDialog() } }
     val onUpdateBackupPolicy      = remember(viewModel) { { policy: BackupPolicy -> viewModel.updateBackupPolicy(policy) } }
     val onDismissReactionPicker   = remember(viewModel) { { viewModel.dismissReactionPicker() } }
@@ -222,6 +354,7 @@ fun ThreadScreen(
     val onToggleMute              = remember(viewModel) { { viewModel.toggleMute() } }
     val onBlockNumber             = remember(viewModel) { { viewModel.blockNumber() } }
     val onTogglePin               = remember(viewModel) { { viewModel.togglePin() } }
+    val onToggleSpam              = remember(viewModel) { { viewModel.toggleSpam() } }
     val onToggleNotifications     = remember(viewModel) { { viewModel.toggleNotificationsEnabled() } }
     val onEnterSelectionMode      = remember(viewModel) { { viewModel.enterSelectionMode() } }
     val onReplyTextChanged        = remember(viewModel) { { text: String -> viewModel.onReplyTextChanged(text) } }
@@ -250,6 +383,13 @@ fun ThreadScreen(
     val onSearchInThread_         = remember(viewModel, threadId, onSearchInThread) { { onSearchInThread(threadId) } }
     val onAdjustFontScale         = remember(viewModel) { { delta: Float -> viewModel.adjustFontScale(delta) } }
     val onResetFontScale          = remember(viewModel) { { viewModel.resetFontScale() } }
+    val onDismissThreadTips       = remember(viewModel) { { viewModel.dismissThreadTips() } }
+    val onVoiceMemoEvent          = remember(viewModel) { { event: VoiceMemoEvent -> viewModel.onVoiceMemoEvent(event) } }
+    val onAudioPlayPause          = remember(viewModel) { { uri: String -> viewModel.playPauseAudio(uri) } }
+    val onAudioSeek               = remember(viewModel) { { uri: String, fraction: Float -> viewModel.seekAudio(uri, fraction) } }
+    // Store-free File lookup for a custom-image chat background — ThreadContent resolves
+    // the effective id and calls this; the ViewModel owns the store.
+    val chatBackgroundFile        = remember(viewModel) { { id: String -> viewModel.chatBackgroundImageFile(id) } }
 
     ThreadContent(
         uiState = uiState,
@@ -257,18 +397,28 @@ fun ThreadScreen(
         activeDates = activeDates,
         quickReactionEmojis = quickReactionEmojis,
         bubbleFontScale = bubbleFontScale,
+        bubbleStyle = bubbleStyle,
+        globalChatBackgroundId = globalChatBackgroundId,
+        chatBackgroundFile = chatBackgroundFile,
+        appAccentArgb = appAccentArgb,
         participantNames = participantNames,
+        groupSendSupported = viewModel.groupSendSupported,
         scrollToMessageId = scrollToMessageId,
         scrollToDate = scrollToDate,
         scrollToBottomEvent = viewModel.scrollToBottomEvent,
         attachmentRejectedEvent = viewModel.attachmentRejectedEvent,
         blockResultEvent = viewModel.blockResultEvent,
+        reactionsLocalNoticeEvent = viewModel.reactionsLocalNoticeEvent,
+        threadTipsDismissed = threadTipsDismissed,
+        onDismissThreadTips = onDismissThreadTips,
         onBack = onBack,
         onViewContact = onViewContact,
         onViewStats = onViewStats,
         onHighlightMessage = onHighlightMessage,
         onDeleteMessage = onDeleteMessage,
         onToggleStarred = onToggleStarred,
+        pinnedMessages = pinnedMessages,
+        onTogglePinnedMessage = onTogglePinnedMessage,
         onDismissDefaultSmsDialog = onDismissDefaultSmsDialog,
         onUpdateBackupPolicy = onUpdateBackupPolicy,
         onDismissReactionPicker = onDismissReactionPicker,
@@ -279,6 +429,7 @@ fun ThreadScreen(
         onToggleMute = onToggleMute,
         onBlockNumber = onBlockNumber,
         onTogglePin = onTogglePin,
+        onToggleSpam = onToggleSpam,
         onToggleNotifications = onToggleNotifications,
         onEnterSelectionMode = onEnterSelectionMode,
         onReplyTextChanged = onReplyTextChanged,
@@ -296,7 +447,14 @@ fun ThreadScreen(
         onClearReplyingTo = onClearReplyingTo,
         onSearchInThread = onSearchInThread_,
         onAdjustFontScale = onAdjustFontScale,
-        onResetFontScale = onResetFontScale
+        onResetFontScale = onResetFontScale,
+        voiceMemo = voiceMemo,
+        onVoiceMemoEvent = onVoiceMemoEvent,
+        recordingLevel = viewModel.recordingLevel,
+        audioPlayback = viewModel.audioPlayback,
+        memoWaveforms = viewModel.memoWaveforms,
+        onAudioPlayPause = onAudioPlayPause,
+        onAudioSeek = onAudioSeek
     )
 }
 
@@ -339,19 +497,44 @@ private fun ThreadContent(
     activeDates: Set<LocalDate>,
     quickReactionEmojis: List<String>,
     bubbleFontScale: Float = 1.0f,
+    bubbleStyle: BubbleStylePreference = BubbleStylePreference.ROUNDED,
+    // Global default chat-background id (Phase C customization); null = none set.
+    // A per-thread override on uiState.thread.chatBackgroundId always wins.
+    globalChatBackgroundId: String? = null,
+    // Resolves a custom-image chat-background id to its File (Phase J); returns null for
+    // non-image ids or a missing file. Supplied by ThreadScreen (ViewModel owns the store).
+    chatBackgroundFile: (String) -> java.io.File? = { null },
+    // Global app accent (Phase I customization); null = Postmark's own brand blue.
+    // Feeds the sent-bubble default content-color fallback in bubbleAccentColors below —
+    // PostmarkTheme applies the accent to primaryContainer itself; this is the other
+    // half, keeping un-customized sent-bubble TEXT legible against it.
+    appAccentArgb: Int? = null,
     // address → contact name for group threads; empty for 1:1 threads.
     participantNames: Map<String, String> = emptyMap(),
+    // Whether this SIM's carrier permits group MMS (read once from carrier config). When
+    // false, group threads fall back to 1:1 sending and the ReplyBar keeps the banner.
+    groupSendSupported: Boolean = true,
     scrollToMessageId: Long = -1L,
     scrollToDate: String = "",
-    scrollToBottomEvent: SharedFlow<Unit> = MutableSharedFlow(),
+    scrollToBottomEvent: SharedFlow<Long> = MutableSharedFlow(),
     attachmentRejectedEvent: SharedFlow<String> = MutableSharedFlow(),
     blockResultEvent: SharedFlow<String> = MutableSharedFlow(),
+    // One-shot notice fired on the user's first reaction toggle — shown via the thread Snackbar.
+    reactionsLocalNoticeEvent: SharedFlow<String> = MutableSharedFlow(),
+    // Whether the one-time gesture-tips card has been dismissed; the card also gates on
+    // message count (see shouldShowThreadTips) so it never shows on an empty thread.
+    threadTipsDismissed: Boolean = true,
+    onDismissThreadTips: () -> Unit = {},
     onBack: () -> Unit,
     onViewContact: () -> Unit = {},
     onViewStats: () -> Unit,
     onHighlightMessage: (Long) -> Unit,
     onDeleteMessage: (Long) -> Unit = {},
     onToggleStarred: (Long) -> Unit = {},
+    // This thread's pinned messages (oldest first) + the per-message pin toggle — back
+    // the Pinned messages panel (⋮ overflow) and the long-press Pin/Unpin action.
+    pinnedMessages: List<Message> = emptyList(),
+    onTogglePinnedMessage: (Long) -> Unit = {},
     onDismissDefaultSmsDialog: () -> Unit,
     onUpdateBackupPolicy: (BackupPolicy) -> Unit,
     onDismissReactionPicker: () -> Unit,
@@ -362,6 +545,7 @@ private fun ThreadContent(
     onToggleMute: () -> Unit,
     onBlockNumber: () -> Unit = {},
     onTogglePin: () -> Unit,
+    onToggleSpam: () -> Unit = {},
     onToggleNotifications: () -> Unit,
     onEnterSelectionMode: () -> Unit,
     onReplyTextChanged: (String) -> Unit,
@@ -380,6 +564,19 @@ private fun ThreadContent(
     onSearchInThread: () -> Unit = {},
     onAdjustFontScale: (Float) -> Unit = {},
     onResetFontScale: () -> Unit = {},
+    // Voice memo recording phase driving the reply bar's mic button / recording row.
+    voiceMemo: ThreadViewModel.VoiceMemoUiState = ThreadViewModel.VoiceMemoUiState(),
+    onVoiceMemoEvent: (VoiceMemoEvent) -> Unit = {},
+    // Live 0..1 mic input level while recording; collected locally by the level meter.
+    recordingLevel: StateFlow<Float> = MutableStateFlow(0f),
+    // Shared thread-wide audio player state (perf-analysis #30). A StateFlow (stable)
+    // rather than a value so position ticks recompose only the chips that collect it.
+    audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    // uri → display waveform for recorded memos in the reply bar (preview + pending).
+    // Flows exactly like audioPlayback; the ReplyBar collects it once and resolves it.
+    memoWaveforms: StateFlow<Map<String, List<Float>>> = MutableStateFlow(emptyMap()),
+    onAudioPlayPause: (String) -> Unit = {},
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> },
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -398,6 +595,12 @@ private fun ThreadContent(
         }
     }
 
+    LaunchedEffect(reactionsLocalNoticeEvent) {
+        reactionsLocalNoticeEvent.collect { message ->
+            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
+        }
+    }
+
     // RoleManager.createRequestRoleIntent MUST be launched via startActivityForResult;
     // a plain startActivity() is silently ignored on API 29+.
     val roleRequestLauncher = rememberLauncherForActivityResult(
@@ -409,6 +612,12 @@ private fun ThreadContent(
     var showDateRangePicker by remember { mutableStateOf(false) }
     // Blocking is a system-wide, hard-to-discover-how-to-undo action, so it confirms first.
     var showBlockConfirmDialog by remember { mutableStateOf(false) }
+    // Reporting spam hides the conversation and silences it; confirm before hiding it away.
+    // Restoring ("Not spam") is immediate — nothing is hidden, so no confirmation needed.
+    var showSpamConfirmDialog by remember { mutableStateOf(false) }
+    // Pinned messages panel (⋮ → "Pinned messages"); a ModalBottomSheet listing this
+    // thread's pinned messages, tapping one jumps to it in the conversation.
+    var showPinnedSheet by remember { mutableStateOf(false) }
 
     // Non-null shows a "Delete message?" confirm dialog for this message id. Shared by the
     // action-bar Delete button and the image viewer's trash icon — deletion is real (removes
@@ -419,6 +628,80 @@ private fun ThreadContent(
     // Same nickname-falls-back-to-formatted-number resolution as the top app bar title —
     // hoisted here too since the image viewer's header needs it for the "You"/contact label.
     val contactDisplayName = uiState.thread?.let { t -> t.nickname ?: formatPhoneNumber(t.displayName) } ?: ""
+
+    // Per-thread bubble colors (Phase FB2 customization). accentColorArgb is the
+    // CONTACT's color (received bubbles); sentColorArgb is independent (sent bubbles).
+    // Either, both, or neither may be set — unset sides leave MessageBubble on its
+    // existing surfaceVariant/primaryContainer + ambient content color defaults.
+    val isDarkTheme = isAppInDarkTheme()
+    // The chat background these bubbles will actually sit on (thread override → global →
+    // none), resolved up here because the bubble-color guard needs it. A built-in gradient
+    // contributes its stops for the CURRENT theme variant so the guard can push a bubble
+    // off a same-hue background (e.g. a violet sent bubble on Deep Plum); a custom image
+    // contributes no stops (its pixels are unknowable), so those threads fall back to
+    // guarding the plain theme background below. Remembered so it's rebuilt only on change.
+    val chatBackgroundId = uiState.thread?.chatBackgroundId ?: globalChatBackgroundId
+    val activeBackgroundStopsArgb: List<Int> = remember(chatBackgroundId, isDarkTheme) {
+        if (ChatBackgrounds.isImageId(chatBackgroundId)) emptyList()
+        else ChatBackgrounds.resolve(chatBackgroundId).let { bg ->
+            if (isDarkTheme) bg.darkColorsArgb else bg.lightColorsArgb
+        }
+    }
+    // Phase H legibility guard: a free-form custom accent can land too close to the
+    // theme background (e.g. a near-white pick in light theme) and effectively
+    // vanish. Route both directions through adjustAccentForBackground first — it's
+    // the identity for every ContactPalette preset (proven in ColorMathTest), so
+    // un-customized/preset threads are unaffected; only genuinely low-contrast
+    // custom picks get nudged.
+    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
+    // Phase I: when a global app accent is set, PostmarkTheme has already made
+    // primaryContainer the vivid accent itself — the same fill an un-customized sent
+    // bubble falls back to below in MessageBubble. Its paired onPrimaryContainer is
+    // therefore the correct white/black-by-contrast text color for that fill; the
+    // *ambient* content color MessageBubble would otherwise fall back to was tuned for
+    // the old, muted default primaryContainer, not an arbitrary vivid accent. Only
+    // applies when this thread has no sentColorArgb of its own (a per-thread override
+    // always wins) and only when appAccentArgb is actually set — leaving it null keeps
+    // un-customized-everywhere threads byte-identical to pre-Phase-I behavior.
+    val appAccentOnPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
+    val bubbleAccentColors = remember(
+        uiState.thread?.accentColorArgb, uiState.thread?.sentColorArgb, isDarkTheme, backgroundArgb,
+        activeBackgroundStopsArgb, appAccentArgb, appAccentOnPrimaryContainer
+    ) {
+        val resolved = ContactPalette.resolveThreadBubbleColors(
+            accentColorArgb = uiState.thread?.accentColorArgb,
+            sentColorArgb = uiState.thread?.sentColorArgb,
+            appAccentArgb = appAccentArgb,
+            appAccentOnPrimaryContainerArgb = appAccentOnPrimaryContainer.toArgb(),
+            isDark = isDarkTheme,
+            backgroundArgb = backgroundArgb,
+            backgroundStopsArgb = activeBackgroundStopsArgb
+        )
+        BubbleAccentColors(
+            receivedContainer = resolved.receivedContainerArgb?.let { Color(it) },
+            receivedContent = resolved.receivedContentArgb?.let { Color(it) },
+            sentContainer = resolved.sentContainerArgb?.let { Color(it) },
+            sentContent = resolved.sentContentArgb?.let { Color(it) }
+        )
+    }
+
+    // Chat background: `chatBackgroundId` (thread override → global default → None) was
+    // resolved above where the bubble-color guard needed it. A custom "image:" id (Phase J)
+    // resolves to a File and is rendered by Coil below; every built-in id resolves via
+    // ChatBackgrounds.resolve to a gradient Brush (Phase C). Both are remembered keyed on the
+    // id (+ theme) so they're built once per change, never per frame. Null on both paths means
+    // no background — un-customized threads (and a missing image file) render pixel-identical.
+    val chatBackgroundImageFile = remember(chatBackgroundId) {
+        ChatBackgrounds.resolveImageFile(chatBackgroundId, chatBackgroundFile)
+    }
+    val chatBackground = ChatBackgrounds.resolve(chatBackgroundId)
+    val chatBackgroundBrush = remember(chatBackground.id, isDarkTheme) {
+        if (chatBackground == ChatBackgrounds.None) null
+        else Brush.verticalGradient(
+            (if (isDarkTheme) chatBackground.darkColorsArgb else chatBackground.lightColorsArgb)
+                .map { Color(it) }
+        )
+    }
 
     // Real navigation-bar height, read from THIS (Activity) window — not the image
     // viewer/video player Dialogs' own windows, whose WindowInsets reporting proved
@@ -496,7 +779,7 @@ private fun ThreadContent(
 
     // Scroll effects — each isolated in its own helper composable so unrelated
     // state changes don't trigger other effects unnecessarily.
-    ThreadScrollToBottomEffect(scrollToBottomEvent, listState)
+    ThreadScrollToBottomEffect(scrollToBottomEvent, listState, currentRenderState)
     ThreadNewMessageScrollEffect(
         messageCount = uiState.messages.size,
         listState    = listState,
@@ -640,7 +923,7 @@ private fun ThreadContent(
             text = {
                 Text(
                     "Calls and texts from this number will be rejected by your phone. " +
-                        "You can unblock it later from your phone's blocked-numbers settings."
+                        "You can unblock it later from Settings › Privacy › Blocked numbers."
                 )
             },
             confirmButton = {
@@ -651,6 +934,29 @@ private fun ThreadContent(
             },
             dismissButton = {
                 TextButton(onClick = { showBlockConfirmDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showSpamConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showSpamConfirmDialog = false },
+            title = { Text("Report as spam?") },
+            text = {
+                Text(
+                    "This conversation will be moved to the Spam folder — hidden from your " +
+                        "list and silenced (no notifications). You can restore it anytime from " +
+                        "Settings › Privacy › Spam."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSpamConfirmDialog = false
+                    onToggleSpam()
+                }) { Text("Report") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSpamConfirmDialog = false }) { Text("Cancel") }
             }
         )
     }
@@ -666,6 +972,20 @@ private fun ThreadContent(
         )
     }
 
+    if (showPinnedSheet) {
+        PinnedMessagesSheet(
+            pinnedMessages = pinnedMessages,
+            contactName = contactDisplayName,
+            participantNames = participantNames,
+            onJumpTo = { id ->
+                showPinnedSheet = false
+                scope.launch { scrollToMessageCentered(id) }
+            },
+            onUnpin = { id -> onTogglePinnedMessage(id) },
+            onDismiss = { showPinnedSheet = false }
+        )
+    }
+
     if (showDateRangePicker) {
         DateRangeBottomSheet(
             onSelect = { start, end ->
@@ -678,19 +998,49 @@ private fun ThreadContent(
 
     // ── Scaffold + overlay ────────────────────────────────────────────────────
 
-    // Provide the current font scale to all bubble composables via CompositionLocal.
-    // A two-finger pinch anywhere on the thread area updates the scale via onAdjustFontScale.
-    CompositionLocalProvider(LocalBubbleFontScale provides bubbleFontScale) {
+    // Provide the current font scale and per-thread accent to all bubble composables
+    // via CompositionLocal. A two-finger pinch anywhere on the thread area updates the
+    // scale via onAdjustFontScale.
+    CompositionLocalProvider(
+        LocalBubbleFontScale provides bubbleFontScale,
+        LocalBubbleStyle provides bubbleStyle,
+        LocalBubbleAccentColors provides bubbleAccentColors
+    ) {
     Box(
         Modifier
             .fillMaxSize()
-            // Detect two-finger pinch anywhere on the thread to adjust font scale.
+            // Two-finger pinch anywhere on the thread adjusts the bubble font scale.
+            //
+            // Hand-rolled and gated on pointer count instead of detectTransformGestures,
+            // observing in PointerEventPass.Initial — the parent Box sees each event
+            // BEFORE the LazyColumn does. detectTransformGestures cancels the instant a
+            // child consumes any change, and the list's vertical scroll (Main pass, which
+            // runs child-first) consumes the vertical component of a two-finger spread
+            // almost immediately, so the transform handler effectively never fired and
+            // pinch did nothing. Watching the Initial pass and only consuming once a
+            // second finger is down lets us claim the pinch before the scroll can. Same
+            // arbitration the full-screen image viewer uses (see ZoomableImage's
+            // `isPinch = event.changes.size > 1`).
+            //
+            // While fewer than 2 pointers are down we consume nothing and change nothing,
+            // so single-finger scroll, tap, long-press, swipe-to-reply and selection-mode
+            // taps are completely unaffected.
             .pointerInput(Unit) {
-                detectTransformGestures { _, _, zoomFactor, _ ->
-                    // zoomFactor > 1 = spreading (bigger), < 1 = pinching (smaller).
-                    // Map zoom to a delta relative to default 1.0, dampened so a single
-                    // gesture sweep doesn't jump the full range.
-                    onAdjustFontScale((zoomFactor - 1f) * 0.5f)
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.changes.count { it.pressed } >= 2) {
+                            // zoom > 1 = spreading (bigger), < 1 = pinching (smaller).
+                            // Dampened so one gesture sweep doesn't jump the full range.
+                            onAdjustFontScale((event.calculateZoom() - 1f) * 0.5f)
+                            // Claim every moving pointer so the list can't scroll or fling
+                            // underneath the pinch. When the gesture drops back below 2
+                            // pointers this branch is skipped, so we stop consuming and the
+                            // tail falls through to the list; the loop ends once all lift.
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
                 }
             }
     ) {
@@ -730,6 +1080,8 @@ private fun ThreadContent(
             ) { mode ->
             when (mode) {
                 TopBarMode.ACTION -> MessageActionTopBar(
+                    isPinned = uiState.messages
+                        .find { it.id == uiState.reactionPickerMessageId }?.isPinned == true,
                     onCancel  = { onDismissReactionPicker() },
                     onCopy    = {
                         val msg = uiState.messages.find { it.id == uiState.reactionPickerMessageId }
@@ -742,6 +1094,10 @@ private fun ThreadContent(
                     },
                     onSelect  = { onEnterSelectionModeFromActionMode() },
                     onForward = { uiState.reactionPickerMessageId?.let { onForwardMessage(it) } },
+                    onTogglePin = {
+                        uiState.reactionPickerMessageId?.let { onTogglePinnedMessage(it) }
+                        onDismissReactionPicker()
+                    },
                     onDelete  = {
                         pendingDeleteMessageId = uiState.reactionPickerMessageId
                         onDismissReactionPicker()
@@ -789,7 +1145,8 @@ private fun ThreadContent(
                             ContactAvatar(
                                 address = uiState.thread?.address ?: "",
                                 name = name,
-                                size = 36.dp
+                                size = 36.dp,
+                                overrideColor = uiState.thread?.accentColorArgb?.let { Color(it) }
                             )
                             Text(name)
                         }
@@ -801,6 +1158,9 @@ private fun ThreadContent(
                     },
                     actions = {
                         var menuExpanded by remember { mutableStateOf(false) }
+                        IconButton(onClick = onSearchInThread) {
+                            Icon(Icons.Default.Search, "Search in thread")
+                        }
                         Box {
                             IconButton(onClick = { menuExpanded = true }) {
                                 Icon(Icons.Default.MoreVert, "More options")
@@ -814,12 +1174,19 @@ private fun ThreadContent(
                                     onClick = { menuExpanded = false; onViewStats() }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text("Customize appearance") },
+                                    // Same destination as tapping the contact name/avatar —
+                                    // the ⋮ entry exists purely for discoverability (device
+                                    // feedback: the top-bar tap wasn't discoverable enough).
+                                    onClick = { menuExpanded = false; onViewContact() }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Select messages") },
                                     onClick = { menuExpanded = false; onEnterSelectionMode() }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Search in thread") },
-                                    onClick = { menuExpanded = false; onSearchInThread() }
+                                    text = { Text("Pinned messages") },
+                                    onClick = { menuExpanded = false; showPinnedSheet = true }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },
@@ -840,6 +1207,15 @@ private fun ThreadContent(
                                 DropdownMenuItem(
                                     text = { Text("Reset text size") },
                                     onClick = { menuExpanded = false; onResetFontScale() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (uiState.thread?.isSpam == true) "Not spam" else "Report as spam") },
+                                    // Marking spam hides the thread away, so confirm first; restoring is immediate.
+                                    onClick = {
+                                        menuExpanded = false
+                                        if (uiState.thread?.isSpam == true) onToggleSpam()
+                                        else showSpamConfirmDialog = true
+                                    }
                                 )
                                 // Hidden for group threads — "the number" is ambiguous when
                                 // the thread has multiple participants.
@@ -875,7 +1251,14 @@ private fun ThreadContent(
             // Keep ReplyBar in layout even when picker is open (alpha=0) so the
             // Scaffold doesn't resize and shift message positions.
             if (!uiState.isSelectionMode) {
-                ReplyBar(
+                Column {
+                    // Gesture-tips card pinned directly above the composer. Gated on message
+                    // count so an empty thread — nothing to swipe, long-press, or pinch yet —
+                    // never teaches gestures that have no target.
+                    if (ThreadViewModel.shouldShowThreadTips(threadTipsDismissed, uiState.messages.size)) {
+                        ThreadGestureTipsCard(onDismiss = onDismissThreadTips)
+                    }
+                    ReplyBar(
                     text                  = uiState.replyText,
                     pendingAttachments    = uiState.pendingAttachments,
                     // O(1) via the prebuilt index — a linear find here ran per keystroke
@@ -885,19 +1268,58 @@ private fun ThreadContent(
                             ?.let { uiState.renderState.items.getOrNull(it) as? ThreadListItem.Bubble }
                             ?.message
                     },
-                    // Sending is still 1:1-only (MMS_AUDIT #6) — thread.address, not the
-                    // full roster. Warn rather than silently reply to just one participant.
+                    // Group replies now send to the full roster as MMS (P1). The banner is
+                    // kept only when the carrier disables group MMS (rare) — then sending
+                    // falls back to 1:1 and we warn.
                     isGroupThread         = (uiState.thread?.participants?.size ?: 0) > 1,
+                    groupSendSupported    = groupSendSupported,
                     onTextChange          = { onReplyTextChanged(it) },
                     onAttachmentsSelected = onAttachmentsSelected,
                     onRemoveAttachment    = onRemoveAttachment,
                     onClearReplyingTo     = onClearReplyingTo,
-                    onSend                = { onSendMessage() }
+                    onSend                = { onSendMessage() },
+                    voiceMemo             = voiceMemo,
+                    onVoiceMemoEvent      = onVoiceMemoEvent,
+                    recordingLevel        = recordingLevel,
+                    audioPlayback         = audioPlayback,
+                    memoWaveforms         = memoWaveforms,
+                    onAudioPlayPause      = onAudioPlayPause,
+                    onAudioSeek           = onAudioSeek
                 )
+                }
             }
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .then(
+                    if (chatBackgroundBrush != null) Modifier.background(chatBackgroundBrush)
+                    else Modifier
+                )
+        ) {
+            // Custom image background (Phase J): fills the Box behind the LazyColumn,
+            // cropped to fill, under a theme-aware legibility scrim (Black/White @ 40%).
+            if (chatBackgroundImageFile != null) {
+                val ctx = LocalContext.current
+                AsyncImage(
+                    model = remember(chatBackgroundImageFile) {
+                        ImageRequest.Builder(ctx).data(chatBackgroundImageFile).crossfade(true).build()
+                    },
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            if (isDarkTheme) Color.Black.copy(alpha = 0.4f)
+                            else Color.White.copy(alpha = 0.4f)
+                        )
+                )
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 state = listState,
@@ -950,7 +1372,10 @@ private fun ThreadContent(
                             ) {
                                 participantNames[item.message.address]
                                     ?: formatPhoneNumber(item.message.address)
-                            } else null
+                            } else null,
+                            audioPlayback = audioPlayback,
+                            onAudioPlayPause = onAudioPlayPause,
+                            onAudioSeek = onAudioSeek
                         )
                         is ThreadListItem.DateHeader -> DateHeader(
                             label = item.dateLabel,
@@ -1049,6 +1474,12 @@ private fun ThreadContent(
                     fabVisible = false
                     scope.launch { listState.animateScrollToItem(0) }
                 },
+                // Same fallback an un-customized sent bubble uses (Phase I comment above,
+                // ~:619-627) so the FAB matches the thread's sent-bubble colors.
+                containerColor = bubbleAccentColors.sentContainer
+                    ?: MaterialTheme.colorScheme.primaryContainer,
+                contentColor = bubbleAccentColors.sentContent
+                    ?: MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 16.dp)
@@ -1138,6 +1569,8 @@ private fun SelectionTopBar(
 private fun ScrollToLatestButton(
     visible: Boolean,
     onClick: () -> Unit,
+    containerColor: Color,
+    contentColor: Color,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -1148,8 +1581,8 @@ private fun ScrollToLatestButton(
     ) {
         SmallFloatingActionButton(
             onClick = onClick,
-            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+            containerColor = containerColor,
+            contentColor = contentColor
         ) {
             Icon(Icons.Default.VerticalAlignBottom, contentDescription = "Scroll to latest")
         }
@@ -1248,12 +1681,25 @@ private fun MessageBubble(
     // cluster — rendered as a small name label above the bubble so participants
     // are distinguishable (they otherwise all render identically to a 1:1 thread).
     senderName: String? = null,
+    // Shared thread-wide audio player (perf-analysis #30) — audio chips collect the
+    // flow themselves so position ticks never recompose the bubble.
+    audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    onAudioPlayPause: (String) -> Unit = {},
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
+    // Read directly (like LocalBubbleFontScale) rather than threaded as a parameter —
+    // it's a thread-wide render input, not per-message state.
+    val accentColors = LocalBubbleAccentColors.current
+    val bubbleStyle = LocalBubbleStyle.current
+    val haptics = LocalHapticFeedback.current
     val baseBubbleColor = if (message.isSent)
-        MaterialTheme.colorScheme.primaryContainer
+        accentColors.sentContainer ?: MaterialTheme.colorScheme.primaryContainer
     else
-        MaterialTheme.colorScheme.surfaceVariant
+        accentColors.receivedContainer ?: MaterialTheme.colorScheme.surfaceVariant
+    // Bubble text color when a custom fill is set for this direction; null falls back
+    // to the ambient LocalContentColor read at each Text below, unchanged from before.
+    val bubbleContentColor = if (message.isSent) accentColors.sentContent else accentColors.receivedContent
     // Search-jump / "Go to chat" highlight. The ViewModel drops highlightedMessageId
     // 2 s after the jump; animating the colour turns that hard flip into a quick
     // tint-in and a gentle fade back to the resting bubble colour.
@@ -1263,6 +1709,16 @@ private fun MessageBubble(
         animationSpec = tween(durationMillis = if (isHighlighted) 150 else 600),
         label = "bubbleHighlight"
     )
+    // Phase FB2: give the flat container a subtle top-lit vertical gradient so bubbles
+    // read as gently lit rather than flat. remember keyed on the (rarely-changing) bubble
+    // color so scrolling and audio-position ticks never re-derive it — only the brief
+    // highlight animation recomputes, which is negligible.
+    val bubbleBrush = remember(bubbleColor) {
+        Brush.verticalGradient(ContactPalette.bubbleGradientStops(bubbleColor.toArgb()).map { Color(it) })
+    }
+    // Concrete content color for a contained audio chip (item 3): the message's own accent
+    // content when customized, else the ambient content color the text bubble also uses.
+    val chipContentColor = bubbleContentColor ?: LocalContentColor.current
 
     val alignment = if (message.isSent) Alignment.End else Alignment.Start
 
@@ -1393,7 +1849,7 @@ private fun MessageBubble(
             ) {
             Box(
                 modifier = Modifier
-                    .background(bubbleColor, bubbleShape(message.isSent, clusterPosition))
+                    .background(bubbleBrush, bubbleShape(bubbleStyle, message.isSent, clusterPosition))
                     .then(
                         // Tighter padding when an attachment fills the bubble edges.
                         if (message.attachments.isNotEmpty())
@@ -1414,7 +1870,12 @@ private fun MessageBubble(
                                 onImageClick = if (att.mimeType.startsWith("image/"))
                                     { { onImageTap(att.uri) } } else null,
                                 onVideoClick = if (att.mimeType.startsWith("video/"))
-                                    { { onVideoTap(att.uri) } } else null
+                                    { { onVideoTap(att.uri) } } else null,
+                                audioPlayback = audioPlayback,
+                                onAudioPlayPause = onAudioPlayPause,
+                                onAudioSeek = onAudioSeek,
+                                audioContainerColor = bubbleColor,
+                                audioContentColor = chipContentColor
                             )
                         } else {
                             // Multiple attachments — 2-column thumbnail grid for images/videos;
@@ -1442,14 +1903,26 @@ private fun MessageBubble(
                                 }
                             }
                             others.forEach { att ->
-                                MmsAttachment(uri = att.uri, mimeType = att.mimeType)
+                                MmsAttachment(
+                                    uri = att.uri,
+                                    mimeType = att.mimeType,
+                                    audioPlayback = audioPlayback,
+                                    onAudioPlayPause = onAudioPlayPause,
+                                    onAudioSeek = onAudioSeek,
+                                    audioContainerColor = bubbleColor,
+                                    audioContentColor = chipContentColor
+                                )
                             }
                         }
                         // Show caption text below the attachment if present.
                         if (message.body.isNotEmpty()) {
                             val fontScale   = LocalBubbleFontScale.current
-                            val linkColor   = MaterialTheme.colorScheme.primary
-                            val textColor   = LocalContentColor.current
+                            // On a custom-colored bubble, the default link blue/purple is
+                            // near-invisible — use the bubble's own content color instead
+                            // (linkifyText still underlines it, iMessage-style). Default
+                            // bubbles keep the primary link color unchanged.
+                            val linkColor   = bubbleContentColor ?: MaterialTheme.colorScheme.primary
+                            val textColor   = bubbleContentColor ?: LocalContentColor.current
                             val baseStyle   = MaterialTheme.typography.bodyMedium
                             val ctx         = LocalContext.current
                             val annotated   = remember(message.body, linkColor, ctx) {
@@ -1468,8 +1941,12 @@ private fun MessageBubble(
                 } else {
                     // Plain SMS bubble — linkify URLs and phone numbers.
                     val fontScale  = LocalBubbleFontScale.current
-                    val linkColor  = MaterialTheme.colorScheme.primary
-                    val textColor  = LocalContentColor.current
+                    // On a custom-colored bubble, the default link blue/purple is
+                    // near-invisible — use the bubble's own content color instead
+                    // (linkifyText still underlines it, iMessage-style). Default
+                    // bubbles keep the primary link color unchanged.
+                    val linkColor  = bubbleContentColor ?: MaterialTheme.colorScheme.primary
+                    val textColor  = bubbleContentColor ?: LocalContentColor.current
                     val baseStyle  = MaterialTheme.typography.bodyMedium
                     val ctx        = LocalContext.current
                     val annotated  = remember(message.body, linkColor, ctx) {
@@ -1500,7 +1977,10 @@ private fun MessageBubble(
                 //    the full overhang to keep the pill off the next message.
                 ReactionPills(
                     reactions = message.reactions,
-                    onReactionClick = onReactionClick,
+                    onReactionClick = { emoji ->
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onReactionClick(emoji)
+                    },
                     modifier = Modifier
                         .layout { measurable, constraints ->
                             val placeable = measurable.measure(constraints)
@@ -1521,7 +2001,7 @@ private fun MessageBubble(
             }
         }  // end Column(widthIn+align)
         }  // end Box(fillMaxWidth) swipe wrapper
-        if (showTimestamp || message.isSent) {
+        if (showTimestamp || message.isSent || message.isPinned) {
             Row(
                 modifier = Modifier
                     .padding(
@@ -1533,6 +2013,16 @@ private fun MessageBubble(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
+                // Subtle inline pin indicator — stays visible while scrolling so pinned
+                // messages are identifiable in-place, not only in the Pinned panel.
+                if (message.isPinned) {
+                    Icon(
+                        imageVector = Icons.Default.PushPin,
+                        contentDescription = "Pinned",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
                 if (showTimestamp) {
                     // SMS / MMS type label — helps when scrolling back into pre-RCS history.
                     Text(
@@ -1634,7 +2124,15 @@ private fun MmsAttachment(
     // Non-null when the image can be tapped to open the full-screen viewer.
     onImageClick: (() -> Unit)? = null,
     // Non-null when the video thumbnail can be tapped to open the player dialog.
-    onVideoClick: (() -> Unit)? = null
+    onVideoClick: (() -> Unit)? = null,
+    // Shared thread-wide audio player (perf-analysis #30); only the audio branch uses it.
+    audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    onAudioPlayPause: (String) -> Unit = {},
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> },
+    // Bubble accent pair for the audio chip (item 3) — only the audio branch uses these.
+    // Default to the theme secondary role so non-bubble callers keep the old look.
+    audioContainerColor: Color = MaterialTheme.colorScheme.secondaryContainer,
+    audioContentColor: Color = MaterialTheme.colorScheme.onSecondaryContainer
 ) {
     when {
         // ── Image ──────────────────────────────────────────────────────────────
@@ -1749,203 +2247,21 @@ private fun MmsAttachment(
 
         // ── Audio ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("audio/") == true -> {
-            val ctx = LocalContext.current
-            /* Explicit state objects so the AudioFocusRequest listener lambda can
-             * read/write them safely from inside the remember {} block. */
-            val isPlayingState = remember { mutableStateOf(false) }
-            var isPlaying by isPlayingState
-            var isScrubbing by remember { mutableStateOf(false) }
-            var isPreparing by remember { mutableStateOf(false) }
-            /* Normalised playback position 0f..1f, and total duration in ms.
-             * durationMs stays 0 until the player is prepared for the first time. */
-            var position   by remember { mutableStateOf(0f) }
-            var durationMs by remember { mutableStateOf(0) }
-            val playerRef  = remember { mutableStateOf<MediaPlayer?>(null) }
-            val scope = rememberCoroutineScope()
-
-            val audioManager = remember { ctx.getSystemService(AudioManager::class.java) }
-            /* Request audio focus when playback starts. Only react to full AUDIOFOCUS_LOSS
-             * (e.g. incoming phone call). AUDIOFOCUS_LOSS_TRANSIENT and _CAN_DUCK are
-             * intentionally ignored so notification sounds (new SMS, alarm) do not
-             * interrupt a voice memo the user is actively listening to. */
-            val focusRequest = remember {
-                AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build()
-                    )
-                    .setOnAudioFocusChangeListener { focusChange ->
-                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-                            if (isPlayingState.value) {
-                                playerRef.value?.pause()
-                                isPlayingState.value = false
-                            }
-                        }
-                        // AUDIOFOCUS_LOSS_TRANSIENT / _CAN_DUCK not handled on purpose.
-                    }
-                    .build()
-            }
-
-            /* Poll currentPosition every 200 ms while playing so the slider tracks
-             * progress. The poll is skipped while the user is dragging (isScrubbing)
-             * so the thumb doesn't jump back under their finger. */
-            LaunchedEffect(isPlaying) {
-                while (isPlaying) {
-                    val mp = playerRef.value
-                    if (mp != null && !isScrubbing && durationMs > 0) {
-                        position = mp.currentPosition.toFloat() / durationMs
-                    }
-                    delay(200)
-                }
-            }
-
-            DisposableEffect(uri) {
-                onDispose {
-                    playerRef.value?.release()
-                    playerRef.value = null
-                    audioManager.abandonAudioFocusRequest(focusRequest)
-                }
-            }
-
-            /* Format milliseconds as "m:ss". */
-            fun fmtMs(ms: Int): String {
-                val s = ms / 1000
-                return "%d:%02d".format(s / 60, s % 60)
-            }
-
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    /* Play / Pause button.
-                     * First press: creates and prepares a new MediaPlayer then starts it.
-                     * Subsequent presses toggle pause/resume on the same instance.
-                     * On completion the player is released and position resets to 0. */
-                    IconButton(
-                        onClick = {
-                            if (isPreparing) return@IconButton
-                            if (isPlaying) {
-                                playerRef.value?.pause()
-                                isPlaying = false
-                                audioManager.abandonAudioFocusRequest(focusRequest)
-                            } else {
-                                val existing = playerRef.value
-                                if (existing != null) {
-                                    // Resume from paused position.
-                                    audioManager.requestAudioFocus(focusRequest)
-                                    existing.start()
-                                    isPlaying = true
-                                } else {
-                                    val mp = MediaPlayer()
-                                    playerRef.value = mp
-                                    isPreparing = true
-                                    // prepare() blocks on I/O — run on IO dispatcher to avoid ANR.
-                                    scope.launch(Dispatchers.IO) {
-                                        try {
-                                            mp.setDataSource(ctx, Uri.parse(uri))
-                                            mp.prepare()
-                                            val dur = mp.duration
-                                            withContext(Dispatchers.Main) {
-                                                durationMs = dur
-                                                if (position > 0f && durationMs > 0) {
-                                                    mp.seekTo((position * durationMs).toInt())
-                                                }
-                                                mp.setOnCompletionListener {
-                                                    isPlayingState.value = false
-                                                    position  = 0f
-                                                    playerRef.value?.release()
-                                                    playerRef.value = null
-                                                    audioManager.abandonAudioFocusRequest(focusRequest)
-                                                }
-                                                audioManager.requestAudioFocus(focusRequest)
-                                                mp.start()
-                                                isPlaying = true
-                                                isPreparing = false
-                                            }
-                                        } catch (e: Exception) {
-                                            android.util.Log.e("AudioPlayer", "Playback failed for $uri", e)
-                                            withContext(Dispatchers.Main) {
-                                                mp.release()
-                                                playerRef.value = null
-                                                isPreparing = false
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        if (isPreparing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        } else {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        /* Progress slider — draggable even while paused.
-                         * onValueChange sets isScrubbing=true so the poll loop won't
-                         * overwrite the thumb position during the drag gesture.
-                         * onValueChangeFinished commits the seek to the player. */
-                        Slider(
-                            value    = position,
-                            onValueChange = { newVal ->
-                                isScrubbing = true
-                                position    = newVal
-                            },
-                            onValueChangeFinished = {
-                                val mp = playerRef.value
-                                if (mp != null && durationMs > 0) {
-                                    mp.seekTo((position * durationMs).toInt())
-                                }
-                                isScrubbing = false
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(20.dp),
-                            colors = SliderDefaults.colors(
-                                thumbColor        = MaterialTheme.colorScheme.onSecondaryContainer,
-                                activeTrackColor  = MaterialTheme.colorScheme.onSecondaryContainer,
-                                inactiveTrackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.3f)
-                            )
-                        )
-                        // Elapsed time (left) and total duration (right).
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text  = if (durationMs > 0) fmtMs((position * durationMs).toInt()) else "0:00",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                            )
-                            Text(
-                                // Show total duration once known; "Voice memo" until first play.
-                                text  = if (durationMs > 0) fmtMs(durationMs) else "Voice memo",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                            )
-                        }
-                    }
-                }
-            }
+            AudioChip(
+                uri = uri,
+                audioPlayback = audioPlayback,
+                onPlayPause = onAudioPlayPause,
+                onSeek = onAudioSeek,
+                // One metadata read per visible chip, once ever per uri (cached), so the
+                // real length shows before first play; scrolling past again is free.
+                fallbackDurationMs = rememberAudioDurationMs(uri),
+                // Item 4: real amplitude waveform decoded lazily off the audio file (once
+                // per uri, cached), so both sent and received audio bubbles show a real
+                // waveform instead of a flat bar. Null while decoding / on failure → Slider.
+                waveform = rememberAudioWaveform(uri),
+                containerColor = audioContainerColor,
+                contentColor = audioContentColor
+            )
         }
 
         // ── Unknown attachment ─────────────────────────────────────────────────
@@ -1956,6 +2272,284 @@ private fun MmsAttachment(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+// ── AudioChip ──────────────────────────────────────────────────────────────────
+
+/**
+ * Play/seek chip for an audio attachment, driven entirely by the single
+ * ViewModel-owned player (perf-analysis #30 — replaced a per-chip raw MediaPlayer;
+ * two chips can no longer play at once, and playback survives the chip scrolling
+ * off-screen because nothing player-related is tied to this composition).
+ *
+ * Collects [audioPlayback] itself (rather than taking a value) so the ~5 Hz position
+ * ticks recompose only audio chips, never the bubbles above them.
+ */
+@Composable
+private fun AudioChip(
+    uri: String,
+    audioPlayback: StateFlow<AudioPlaybackState>,
+    onPlayPause: (String) -> Unit,
+    onSeek: (String, Float) -> Unit,
+    // Duration read from file metadata, for chips that must show a real length
+    // before the player has ever loaded this uri (pending-memo review row).
+    // Bubbles pass nothing and keep the lazy "Voice memo" label until first play.
+    fallbackDurationMs: Long? = null,
+    // Real amplitude waveform. Non-empty → replaces the Slider with a waveform; null/empty
+    // → Slider (any chip whose data is missing — e.g. an undecodable file, or an
+    // exit-animation stale render). Reply-bar chips pass their live-captured samples;
+    // bubbles pass samples decoded lazily off the file (item 4).
+    waveform: List<Float>? = null,
+    // Item 3: the chip paints the message's own accent pair (container fill + content for
+    // the play icon, waveform and labels) instead of the theme secondary (green) role.
+    // Defaults keep the reply-bar chips on the theme secondary, since a draft memo has no
+    // sent/received direction yet.
+    containerColor: Color = MaterialTheme.colorScheme.secondaryContainer,
+    contentColor: Color = MaterialTheme.colorScheme.onSecondaryContainer,
+    // Whether the waveform may attach its own scrub gesture detectors. FALSE inside message
+    // bubbles (compose-gesture-conflict rule — raw drag/tap detectors over a bubble silently
+    // break its long-press/selection), so bubbles get a display-only waveform. TRUE only for
+    // the reply-bar / preview chips, which are not inside a bubble.
+    allowWaveformScrub: Boolean = false
+) {
+    val playback by audioPlayback.collectAsState()
+    val isCurrent  = playback.uri == uri
+    val isPlaying  = isCurrent && playback.isPlaying
+    val isLoading  = isCurrent && playback.isLoading
+    // Player duration drives position math; the fallback only labels the chip.
+    val durationMs = if (isCurrent) playback.durationMs else 0L
+    val displayDurationMs = if (durationMs > 0) durationMs else (fallbackDurationMs ?: 0L)
+
+    /* Non-null only mid-drag: the thumb follows the finger instead of the player's
+     * position ticks, then commits the seek on release. */
+    var scrubFraction by remember { mutableStateOf<Float?>(null) }
+    val position = scrubFraction
+        ?: if (durationMs > 0) (playback.positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+
+    // Item 2 + 3: the chip fill is the message's container color with the same subtle
+    // top-lit gradient the bubble uses. remember keyed on the color so the ~5 Hz position
+    // ticks that recompose this chip never re-derive the brush.
+    val shape = RoundedCornerShape(8.dp)
+    val chipBrush = remember(containerColor) {
+        Brush.verticalGradient(ContactPalette.bubbleGradientStops(containerColor.toArgb()).map { Color(it) })
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(chipBrush)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            IconButton(
+                onClick = { if (!isLoading) onPlayPause(uri) },
+                modifier = Modifier.size(36.dp)
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        color = contentColor
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        modifier = Modifier.size(24.dp),
+                        tint = contentColor
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                /* Seeking only applies to the loaded item — a chip that isn't playing
+                 * has nothing to seek, so its scrubber/slider is inert at 0. Recorded
+                 * memos with captured amplitudes get the waveform; everything else (and
+                 * any missing/empty entry) keeps the Slider. */
+                if (waveform != null && waveform.isNotEmpty()) {
+                    if (allowWaveformScrub) {
+                        // Reply-bar / preview chip — safe to scrub (not inside a bubble).
+                        WaveformScrubber(
+                            samples          = waveform,
+                            positionFraction = position,
+                            enabled          = isCurrent && durationMs > 0,
+                            baseColor        = contentColor,
+                            onScrub          = { scrubFraction = it },
+                            onScrubFinished  = {
+                                scrubFraction?.let { onSeek(uri, it) }
+                                scrubFraction = null
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        // Bubble chip — display only, no gesture detectors (bubbles keep
+                        // their long-press/selection; see compose-gesture-conflict rule).
+                        WaveformBars(
+                            samples          = waveform,
+                            positionFraction = position,
+                            enabled          = isCurrent && durationMs > 0,
+                            baseColor        = contentColor,
+                            modifier         = Modifier.fillMaxWidth()
+                        )
+                    }
+                } else {
+                    Slider(
+                        value    = position,
+                        onValueChange = { scrubFraction = it },
+                        onValueChangeFinished = {
+                            scrubFraction?.let { onSeek(uri, it) }
+                            scrubFraction = null
+                        },
+                        enabled  = isCurrent && durationMs > 0,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(20.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor         = contentColor,
+                            activeTrackColor   = contentColor,
+                            inactiveTrackColor = contentColor.copy(alpha = 0.3f),
+                            disabledThumbColor         = contentColor.copy(alpha = 0.5f),
+                            disabledActiveTrackColor   = contentColor.copy(alpha = 0.5f),
+                            disabledInactiveTrackColor = contentColor.copy(alpha = 0.3f)
+                        )
+                    )
+                }
+                // Elapsed time (left) and total duration (right).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text  = if (durationMs > 0) formatMemoDuration((position * durationMs).toLong()) else "0:00",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = contentColor.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        // Show total duration once known (from the player or the
+                        // metadata fallback); "Voice memo" until first play otherwise.
+                        text  = if (displayDurationMs > 0) formatMemoDuration(displayDurationMs)
+                                else "Voice memo",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = contentColor.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Waveform ──────────────────────────────────────────────────────────────────
+
+/**
+ * Shared bar-drawing for both waveform composables. Bars are split played/unplayed at
+ * [positionFraction] * width. All geometry is derived from the canvas size and sample
+ * count — no raw pixels. Colors are passed in (MaterialTheme can't be read in a DrawScope).
+ */
+private fun DrawScope.drawWaveformBars(
+    samples: List<Float>,
+    positionFraction: Float,
+    playedColor: Color,
+    unplayedColor: Color
+) {
+    val slotWidth    = size.width / samples.size
+    val barWidth     = slotWidth * 0.6f
+    val minBarHeight = 3.dp.toPx()
+    val radius       = CornerRadius(barWidth / 2f, barWidth / 2f)
+    val cutoff       = positionFraction * size.width
+    samples.forEachIndexed { index, sample ->
+        val barHeight = maxOf(minBarHeight, sample.coerceIn(0f, 1f) * size.height)
+        val barCenter = index * slotWidth + slotWidth / 2f
+        drawRoundRect(
+            color        = if (barCenter <= cutoff) playedColor else unplayedColor,
+            topLeft      = Offset(index * slotWidth + (slotWidth - barWidth) / 2f, (size.height - barHeight) / 2f),
+            size         = Size(barWidth, barHeight),
+            cornerRadius = radius
+        )
+    }
+}
+
+/** Played vs unplayed bar colors derived from a chip's content [base]: full-strength when
+ *  enabled (0.5-alpha when not), unplayed always at 0.3 alpha — matching the Slider's colors. */
+private fun waveformBarColors(base: Color, enabled: Boolean): Pair<Color, Color> =
+    (if (enabled) base else base.copy(alpha = 0.5f)) to base.copy(alpha = 0.3f)
+
+/**
+ * Display-only amplitude waveform for the bubble audio chips (item 4). NO gesture
+ * detectors — bubbles keep their own long-press/selection (compose-gesture-conflict
+ * rule), so a bubble waveform shows playback progress but is not itself a scrub control.
+ */
+@Composable
+private fun WaveformBars(
+    samples: List<Float>,
+    positionFraction: Float,
+    enabled: Boolean,
+    baseColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val (playedColor, unplayedColor) = waveformBarColors(baseColor, enabled)
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .progressSemantics(positionFraction)
+    ) {
+        drawWaveformBars(samples, positionFraction, playedColor, unplayedColor)
+    }
+}
+
+/**
+ * Google-Messages-style amplitude waveform that doubles as the seek control for a
+ * recorded memo chip (reply-bar preview + pending strip only — bubbles use the
+ * display-only [WaveformBars]; see the compose-gesture-conflict rule, these detectors
+ * must never sit on or over a message bubble).
+ *
+ * Fed values, never a collector: [positionFraction] follows the finger mid-drag
+ * (the caller passes its scrub value) and the player's position otherwise, so the
+ * bar split never freezes on a conflated flow.
+ *
+ * @param positionFraction 0..1 played/unplayed split point.
+ * @param baseColor        the chip's content color; bars derive from it.
+ * @param onScrub          finger-follow — set the caller's scrubFraction.
+ * @param onScrubFinished  commit — seek + clear scrubFraction.
+ */
+@Composable
+private fun WaveformScrubber(
+    samples: List<Float>,
+    positionFraction: Float,
+    enabled: Boolean,
+    baseColor: Color,
+    onScrub: (Float) -> Unit,
+    onScrubFinished: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val (playedColor, unplayedColor) = waveformBarColors(baseColor, enabled)
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            // TalkBack reads the position; scrub-by-accessibility-action isn't
+            // supported (play/pause remains — accepted).
+            .progressSemantics(positionFraction)
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectTapGestures { onScrub(it.x / size.width); onScrubFinished() }
+            }
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragStart = { onScrub((it.x / size.width).coerceIn(0f, 1f)) },
+                    onDragEnd   = { onScrubFinished() },
+                    onDragCancel = { onScrubFinished() }
+                ) { change, _ ->
+                    onScrub((change.position.x / size.width).coerceIn(0f, 1f))
+                }
+            }
+    ) {
+        drawWaveformBars(samples, positionFraction, playedColor, unplayedColor)
     }
 }
 
@@ -2175,6 +2769,69 @@ private fun DeliveryStatusIndicator(
     }
 }
 
+// ── Gesture-tips card ────────────────────────────────────────────────────────
+/**
+ * One-time discovery card teaching the thread's otherwise-invisible power gestures.
+ * Pinned above the composer; dismissed for good via the × (an [IconButton], whose
+ * default 48dp min-size satisfies the touch-target floor). Uses only colorScheme roles
+ * so it reads correctly in both light and dark themes.
+ */
+@Composable
+private fun ThreadGestureTipsCard(onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(top = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GestureTipRow(Icons.AutoMirrored.Filled.Reply, "Swipe a message to reply")
+                GestureTipRow(Icons.Default.Mood, "Long-press a message to react")
+                GestureTipRow(Icons.Default.FormatSize, "Pinch to resize text")
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Dismiss tips",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GestureTipRow(icon: ImageVector, text: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
 // ── ReplyBar ───────────────────────────────────────────────────────────────────
 // Bottom compose bar with text input, pending-attachment preview row,
 // attach button (photo/video multi-picker + audio picker), and send button.
@@ -2191,18 +2848,36 @@ private fun ReplyBar(
     pendingAttachments: List<MessageAttachment>,
     // Non-null when the user has swiped to quote a message; drives the quote strip.
     replyingTo: Message? = null,
-    // True when the thread has more than one MMS participant. Sending a group MMS
-    // isn't implemented yet (MMS_AUDIT #6) — see the warning row rendered below.
+    // True when the thread has more than one MMS participant.
     isGroupThread: Boolean = false,
+    // Whether the carrier permits group MMS. When false on a group thread, the send
+    // falls back to 1:1 and the warning row below is shown.
+    groupSendSupported: Boolean = true,
     onTextChange: (String) -> Unit,
     onAttachmentsSelected: (List<MessageAttachment>) -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onClearReplyingTo: () -> Unit = {},
     onSend: () -> Unit,
+    // Voice memo recording phase + event sink for the mic button (see VoiceMemoLogic).
+    voiceMemo: ThreadViewModel.VoiceMemoUiState = ThreadViewModel.VoiceMemoUiState(),
+    onVoiceMemoEvent: (VoiceMemoEvent) -> Unit = {},
+    // Live 0..1 mic input level while recording; feeds the panel's level meter.
+    recordingLevel: StateFlow<Float> = MutableStateFlow(0f),
+    // Shared audio player — lets a pending memo be reviewed (played/scrubbed)
+    // before sending.
+    audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
+    // uri → display waveform for recorded memos. Collected ONCE below (it changes
+    // rarely) and resolved to a List<Float>? per chip.
+    memoWaveforms: StateFlow<Map<String, List<Float>>> = MutableStateFlow(emptyMap()),
+    onAudioPlayPause: (String) -> Unit = {},
+    onAudioSeek: (String, Float) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var showAttachMenu by remember { mutableStateOf(false) }
+    // Collected once here (not per chip) — the map changes only when a take is
+    // stored/removed, so a single subscription feeds every chip its resolved value.
+    val waveforms by memoWaveforms.collectAsState()
 
     /* Android Photo Picker (multi-select, images + video). Jetpack-backed with a
      * Play Services shim below Android 13, so it works down to minSdk 26. Unlike the
@@ -2229,10 +2904,29 @@ private fun ReplyBar(
         }
     }
 
+    // RECORD_AUDIO gate for the attach-menu "Record voice memo" item (the mic button
+    // has its own). On grant do nothing — the user re-taps the menu item, the same
+    // convention the mic button uses; denial routes through the shared Settings helper.
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) onMicPermissionDenied(context)
+    }
+
     // Only show the SMS counter when no attachment is pending (pure SMS mode).
     val counterText = if (pendingAttachments.isEmpty()) {
         remember(text.length) { smsCounter(text.length) }
     } else null
+
+    val isRecording = voiceMemo.phase != VoiceMemoPhase.IDLE
+    /* Live IME height (reading it in composition subscribes to every frame of the
+     * open/close animation) and its value frozen at the moment recording began —
+     * together they drive the keyboard-space filler panel below the input row.
+     * Retained (non-snapshot) because it's written during composition. */
+    val density = LocalDensity.current
+    val imeVisiblePx = WindowInsets.ime.getBottom(density)
+    val imeAtRecordStart = remember { Retained(0) }
+    if (!isRecording) imeAtRecordStart.value = imeVisiblePx
 
     Column(modifier = modifier) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -2244,10 +2938,10 @@ private fun ReplyBar(
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
                 // ── Group reply notice ───────────────────────────────────────────
-                // Group MMS sending isn't implemented — a reply here would silently
-                // go to only one participant, not the whole group. Warn instead.
+                // Group MMS sending works (P1); the notice remains only when the carrier
+                // disables group MMS, in which case a reply falls back to one participant.
                 AnimatedVisibility(
-                    visible = isGroupThread,
+                    visible = isGroupThread && !groupSendSupported,
                     enter   = expandVertically() + fadeIn(),
                     exit    = shrinkVertically() + fadeOut()
                 ) {
@@ -2268,7 +2962,7 @@ private fun ReplyBar(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "Group replies aren't supported yet — this will only reply to one participant.",
+                            text = "Your carrier doesn't support group MMS — this will only reply to one participant.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer
                         )
@@ -2350,10 +3044,11 @@ private fun ReplyBar(
                         }
                     }
                 }
-                // Pending-attachment previews — one 80 dp thumbnail per attachment,
-                // each with its own × badge, scrolling horizontally when several.
-                // Last non-empty list retained for the shrink-out, like the quote
-                // strip above.
+                // Pending-attachment previews. Audio (usually a just-recorded voice
+                // memo) renders as a full-width play/seek chip — an 80 dp tile with a
+                // lone play button read as broken (found on-device July 17). Images
+                // and videos keep the 80 dp thumbnail LazyRow. Last non-empty list
+                // retained for the shrink-out, like the quote strip above.
                 val lastAttachments = remember { Retained(pendingAttachments) }
                 if (pendingAttachments.isNotEmpty()) lastAttachments.value = pendingAttachments
                 AnimatedVisibility(
@@ -2364,104 +3059,751 @@ private fun ReplyBar(
                     val shown =
                         if (pendingAttachments.isNotEmpty()) pendingAttachments
                         else lastAttachments.value
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(bottom = 6.dp)
+                    Column(
+                        modifier = Modifier.padding(bottom = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        lazyRowItemsIndexed(shown) { index, attachment ->
-                            PendingAttachmentPreview(
-                                attachment = attachment,
-                                onRemove   = {
-                                    // During exit the strip renders the retained stale
-                                    // list; only forward the removal while the tapped
-                                    // thumbnail still matches the live list, so a ×
-                                    // tap can never remove a different attachment.
-                                    if (pendingAttachments.getOrNull(index)?.uri == attachment.uri) {
-                                        onRemoveAttachment(index)
+                        // Indices stay those of the full pending list — that's what
+                        // onRemoveAttachment expects. During exit the strip renders
+                        // the retained stale list; each × only forwards while the
+                        // tapped item still matches the live list, so it can never
+                        // remove a different attachment.
+                        shown.forEachIndexed { index, attachment ->
+                            if (attachment.mimeType.startsWith("audio/")) {
+                                PendingAudioAttachment(
+                                    attachment = attachment,
+                                    audioPlayback = audioPlayback,
+                                    // Resolved per-attachment from the CURRENT uri, so a
+                                    // recycled position (an earlier attachment removed)
+                                    // can never show a stale neighbour's waveform.
+                                    waveform = waveforms[attachment.uri],
+                                    onAudioPlayPause = onAudioPlayPause,
+                                    onAudioSeek = onAudioSeek,
+                                    onRemove = {
+                                        if (pendingAttachments.getOrNull(index)?.uri == attachment.uri) {
+                                            onRemoveAttachment(index)
+                                        }
                                     }
+                                )
+                            }
+                        }
+                        val visual = shown.withIndex()
+                            .filter { !it.value.mimeType.startsWith("audio/") }
+                        if (visual.isNotEmpty()) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                lazyRowItemsIndexed(visual) { _, indexed ->
+                                    val (index, attachment) = indexed
+                                    PendingAttachmentPreview(
+                                        attachment = attachment,
+                                        onRemove   = {
+                                            if (pendingAttachments.getOrNull(index)?.uri == attachment.uri) {
+                                                onRemoveAttachment(index)
+                                            }
+                                        }
+                                    )
                                 }
-                            )
+                            }
                         }
                     }
                 }
 
-                // Text input row: [attach] [field] [send]
+                // Input row. Idle: [attach] [field] [send-or-mic]. Recording (held):
+                // attach + field give way to the timer/hint row, but the mic button
+                // keeps its call site so the node under the user's finger — and the
+                // hold gesture running on it — survives the swap. Locked: the finger
+                // is already up, so the row can freely become [timer] [cancel] [stop].
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Bottom
+                    verticalAlignment = if (isRecording) Alignment.CenterVertically else Alignment.Bottom
                 ) {
-                    // Attach button opens a dropdown with media type choices.
-                    Box {
-                        IconButton(onClick = { showAttachMenu = true }) {
-                            Icon(Icons.Default.AttachFile, contentDescription = "Attach media")
-                        }
-                        DropdownMenu(
-                            expanded = showAttachMenu,
-                            onDismissRequest = { showAttachMenu = false }
+                    if (voiceMemo.phase == VoiceMemoPhase.LOCKED) {
+                        // Stop / Restart / Cancel live in the voice panel below (big
+                        // targets in the keyboard's space); the row keeps the timer.
+                        RecordingStatusRow(
+                            voiceMemo = voiceMemo,
+                            locked = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                        )
+                    } else if (voiceMemo.phase == VoiceMemoPhase.PREVIEW) {
+                        // The take itself (chip + Discard/Restart/Attach) is in the
+                        // panel below; the row just says why the composer is parked.
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp),
+                            contentAlignment = Alignment.CenterStart
                         ) {
-                            DropdownMenuItem(
-                                text    = { Text("Photos or videos") },
-                                onClick = {
-                                    showAttachMenu = false
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(
-                                            ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                                        )
+                            Text(
+                                text  = "Voice memo ready",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        if (!isRecording) {
+                            // Attach button opens a dropdown with media type choices.
+                            Box {
+                                IconButton(onClick = { showAttachMenu = true }) {
+                                    Icon(Icons.Default.AttachFile, contentDescription = "Attach media")
+                                }
+                                DropdownMenu(
+                                    expanded = showAttachMenu,
+                                    onDismissRequest = { showAttachMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text    = { Text("Photos or videos") },
+                                        onClick = {
+                                            showAttachMenu = false
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(
+                                                    ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                                                )
+                                            )
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text    = { Text("Audio file") },
+                                        onClick = {
+                                            showAttachMenu = false
+                                            audioLauncher.launch("audio/*")
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text    = { Text("Record voice memo") },
+                                        onClick = {
+                                            showAttachMenu = false
+                                            // Tap-to-record straight into hands-free LOCKED
+                                            // via the same PRESS + LATCH_LOCK pair the
+                                            // TalkBack path uses. PRESS's attachment-cap
+                                            // guard and the table's no-ops make it safe from
+                                            // any state; the menu is only reachable while IDLE.
+                                            if (ContextCompat.checkSelfPermission(
+                                                    context, Manifest.permission.RECORD_AUDIO
+                                                ) != PackageManager.PERMISSION_GRANTED
+                                            ) {
+                                                recordAudioPermissionLauncher.launch(
+                                                    Manifest.permission.RECORD_AUDIO
+                                                )
+                                            } else {
+                                                onVoiceMemoEvent(VoiceMemoEvent.PRESS)
+                                                onVoiceMemoEvent(VoiceMemoEvent.LATCH_LOCK)
+                                            }
+                                        }
                                     )
                                 }
-                            )
-                            DropdownMenuItem(
-                                text    = { Text("Audio file") },
-                                onClick = {
-                                    showAttachMenu = false
-                                    audioLauncher.launch("audio/*")
-                                }
-                            )
+                            }
                         }
-                    }
-                    TextField(
-                        value         = text,
-                        onValueChange = onTextChange,
-                        modifier      = Modifier.weight(1f),
-                        placeholder   = { Text("Message") },
-                        maxLines      = 4,
-                        colors        = TextFieldDefaults.colors(
-                            focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            focusedIndicatorColor   = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            disabledIndicatorColor  = Color.Transparent,
-                        ),
-                        shape         = RoundedCornerShape(24.dp),
-                        textStyle     = MaterialTheme.typography.bodyMedium,
-                        trailingIcon  = counterText?.let { ct ->
-                            {
-                                Text(
-                                    text     = ct,
-                                    style    = MaterialTheme.typography.labelSmall,
-                                    color    = if (text.length > 160) MaterialTheme.colorScheme.error
-                                               else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(end = 8.dp)
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (isRecording) {
+                                RecordingStatusRow(
+                                    voiceMemo = voiceMemo,
+                                    locked = false,
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            } else {
+                                TextField(
+                                    value         = text,
+                                    onValueChange = onTextChange,
+                                    modifier      = Modifier.fillMaxWidth(),
+                                    placeholder   = { Text("Message") },
+                                    maxLines      = 4,
+                                    colors        = TextFieldDefaults.colors(
+                                        focusedContainerColor   = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        focusedIndicatorColor   = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                        disabledIndicatorColor  = Color.Transparent,
+                                    ),
+                                    shape         = RoundedCornerShape(24.dp),
+                                    textStyle     = MaterialTheme.typography.bodyMedium,
+                                    trailingIcon  = counterText?.let { ct ->
+                                        {
+                                            Text(
+                                                text     = ct,
+                                                style    = MaterialTheme.typography.labelSmall,
+                                                color    = if (text.length > 160) MaterialTheme.colorScheme.error
+                                                           else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(end = 8.dp)
+                                            )
+                                        }
+                                    }
                                 )
                             }
                         }
+                        Spacer(Modifier.width(4.dp))
+                        // WhatsApp/Google Messages pattern: the action button is a mic
+                        // while the composer is empty and becomes send once there is
+                        // anything to send. Typing and attaching are impossible while
+                        // holding, so text/pendingAttachments can't change mid-hold from
+                        // user input — but CAP_REACHED CAN fire mid-hold (MediaRecorder's
+                        // max-duration callback while HELD auto-attaches the memo), which
+                        // swaps mic -> send right under the still-held finger. That's
+                        // still safe: the freshly composed send button never received the
+                        // pointer-down, so lifting the finger doesn't click it — but don't
+                        // assume this branch is truly static when touching it.
+                        if (text.isBlank() && pendingAttachments.isEmpty()) {
+                            VoiceMemoMicButton(
+                                isRecording = isRecording,
+                                onEvent = onVoiceMemoEvent
+                            )
+                        } else {
+                            IconButton(
+                                onClick  = onSend,
+                                // Enabled when there is text OR media attachments are pending.
+                                enabled  = text.isNotBlank() || pendingAttachments.isNotEmpty(),
+                                colors   = IconButtonDefaults.iconButtonColors(
+                                    containerColor         = MaterialTheme.colorScheme.primary,
+                                    contentColor           = MaterialTheme.colorScheme.onPrimary,
+                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                )
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                            }
+                        }
+                    }
+                }
+
+                // ── Voice memo panel (in the keyboard's space) ────────────────────
+                // Starting a recording removes the focused TextField, which closes
+                // the IME; the Scaffold's imePadding would then slide this whole bar
+                // down mid-gesture — disorienting, and worse, the mic moving under a
+                // stationary finger reads as an upward relative drag (a spurious
+                // lock latch). The panel's minimum height therefore grows in exact
+                // counter-phase to the IME collapse (height captured at record start
+                // − live height), so the input row never moves. While HELD that
+                // stabilizer role is all it has (the finger is mid-gesture — no
+                // buttons to reach, and with no keyboard open it must stay absent or
+                // the bar would grow under the finger). Once hands-free (LOCKED /
+                // PREVIEW) it always shows, as the recording workspace: big
+                // stop/restart/cancel controls, then play/scrub + attach.
+                val lastFillerPx = remember { Retained(0) }
+                val fillerPx =
+                    if (isRecording) {
+                        (imeAtRecordStart.value - imeVisiblePx).coerceAtLeast(0)
+                            .also { lastFillerPx.value = it }
+                    } else lastFillerPx.value
+                val panelVisible = when (voiceMemo.phase) {
+                    VoiceMemoPhase.IDLE   -> false
+                    VoiceMemoPhase.HELD   -> imeAtRecordStart.value > 0
+                    VoiceMemoPhase.LOCKED,
+                    VoiceMemoPhase.PREVIEW -> true
+                }
+                AnimatedVisibility(
+                    visible = panelVisible,
+                    // Entry height is already animated by the IME hand-off (or is
+                    // content-sized) — an enter transition would fight it.
+                    enter   = EnterTransition.None,
+                    exit    = shrinkVertically() + fadeOut()
+                ) {
+                    VoiceMemoPanel(
+                        voiceMemo        = voiceMemo,
+                        minHeight        = with(density) { fillerPx.toDp() },
+                        recordingLevel   = recordingLevel,
+                        audioPlayback    = audioPlayback,
+                        previewWaveform  = voiceMemo.previewUri?.let { waveforms[it] },
+                        onAudioPlayPause = onAudioPlayPause,
+                        onAudioSeek      = onAudioSeek,
+                        onEvent          = onVoiceMemoEvent
                     )
-                    Spacer(Modifier.width(4.dp))
-                    IconButton(
-                        onClick  = onSend,
-                        // Enabled when there is text OR media attachments are pending.
-                        enabled  = text.isNotBlank() || pendingAttachments.isNotEmpty(),
-                        colors   = IconButtonDefaults.iconButtonColors(
-                            containerColor         = MaterialTheme.colorScheme.primary,
-                            contentColor           = MaterialTheme.colorScheme.onPrimary,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        )
+                }
+            }
+        }
+    }
+}
+
+// ── Voice memo recording UI ────────────────────────────────────────────────────
+
+/* Mic-button gesture thresholds — dp so they scale with density, converted at the
+ * gesture site (never raw pixels). Lock is a deliberate upward slide; cancel is a
+ * longer leftward slide so it can't fire from drift while talking. */
+private val VOICE_LOCK_DRAG_THRESHOLD   = 72.dp
+private val VOICE_CANCEL_DRAG_THRESHOLD = 96.dp
+
+/* Number of amplitude samples the level meter keeps on screen at once — a count, not a
+ * pixel dimension; the bar geometry is derived from the canvas size and this. */
+private const val VOICE_METER_BAR_COUNT = 30
+
+/** A short confirmation buzz for a successful capture (quick-flow keep, preview attach).
+ *  CONFIRM reads as "done" on API 30+; older devices fall back to the tick we already
+ *  use for the lock latch. */
+private fun View.performConfirmHaptic() {
+    performHapticFeedback(
+        if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM
+        else HapticFeedbackConstants.CONTEXT_CLICK
+    )
+}
+
+/** Denial handling shared by every RECORD_AUDIO request path. A permanent denial
+ *  (rationale flag false after a completed request = "don't ask again" or policy)
+ *  can only be undone in Settings, so deep-link there; a plain denial keeps the
+ *  explanatory toast. */
+private fun onMicPermissionDenied(context: Context) {
+    // Walk the ContextWrapper chain to the hosting Activity (needed for the rationale
+    // check); null if this context isn't Activity-backed.
+    val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }
+        .filterIsInstance<Activity>()
+        .firstOrNull()
+    if (activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(
+            activity, Manifest.permission.RECORD_AUDIO
+        )
+    ) {
+        Toast.makeText(
+            context,
+            "Microphone permission is off — enable it in Settings for voice memos",
+            Toast.LENGTH_LONG
+        ).show()
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.fromParts("package", context.packageName, null))
+            )
+        }
+    } else {
+        Toast.makeText(
+            context,
+            "Microphone permission is needed to record voice memos",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+}
+
+/**
+ * Live input-level meter: a right-anchored history of the most recent
+ * [VOICE_METER_BAR_COUNT] mic-amplitude samples as evenly spaced rounded bars, newest
+ * on the right. Proves the mic is actually capturing — a dead mic renders as a flatline
+ * instead of being discovered only after sending.
+ *
+ * Reads [level] LOCALLY so its ~15 Hz ticks recompose only this Canvas, never the
+ * reply bar around it (the same isolation the AudioChip uses for its playback position).
+ */
+@Composable
+private fun RecordingLevelMeter(
+    level: StateFlow<Float>,
+    modifier: Modifier = Modifier
+) {
+    // Ring buffer of recent samples, appended on the meter's own clock rather than on
+    // flow emissions: StateFlow conflates equal values, so a silent stretch (0f, 0f, …)
+    // emits nothing — collect-driven appends would freeze the scroll mid-pattern with
+    // stale loud bars on screen. Sampling level.value at the tick rate keeps the
+    // history scrolling, so silence visibly flattens out.
+    val samples = remember { mutableStateListOf<Float>() }
+    LaunchedEffect(level) {
+        while (true) {
+            samples.add(level.value)
+            while (samples.size > VOICE_METER_BAR_COUNT) samples.removeAt(0)
+            delay(66) // matches the ViewModel ticker's ~15 Hz
+        }
+    }
+    // Read the theme color OUTSIDE the draw lambda — MaterialTheme can't be read inside
+    // Canvas's DrawScope.
+    val barColor = MaterialTheme.colorScheme.primary
+    Canvas(
+        modifier = modifier
+            .widthIn(max = 240.dp)
+            .fillMaxWidth()
+            .height(48.dp)
+    ) {
+        val slotWidth = size.width / VOICE_METER_BAR_COUNT
+        val barWidth  = slotWidth / 2f
+        val minBarHeight = 4.dp.toPx()
+        val radius = CornerRadius(barWidth / 2f, barWidth / 2f)
+        samples.forEachIndexed { index, sample ->
+            // Newest sample sits in the rightmost slot; a partly-filled buffer hugs the
+            // right edge so the history scrolls in from the right as it grows.
+            val slot = VOICE_METER_BAR_COUNT - samples.size + index
+            val barHeight = maxOf(minBarHeight, sample * size.height)
+            drawRoundRect(
+                color        = barColor,
+                topLeft      = Offset(slot * slotWidth + (slotWidth - barWidth) / 2f, (size.height - barHeight) / 2f),
+                size         = Size(barWidth, barHeight),
+                cornerRadius = radius
+            )
+        }
+    }
+}
+
+/**
+ * The mic button and its entire capture gesture: hold to record, slide up to latch
+ * hands-free ([VoiceMemoEvent.LATCH_LOCK], CONTEXT_CLICK haptic), slide left to
+ * cancel, release to stop-and-keep. The pointerInput lives on this button ONLY —
+ * never on or over message bubbles (child detectors there break the bubbles'
+ * combinedClickable; see CHANGELOG 2026-07-12).
+ *
+ * On first press without RECORD_AUDIO, launches the system permission prompt
+ * instead of recording; a denial gets a toast so the button never fails silently.
+ */
+@Composable
+private fun VoiceMemoMicButton(
+    isRecording: Boolean,
+    onEvent: (VoiceMemoEvent) -> Unit
+) {
+    val context = LocalContext.current
+    val view    = LocalView.current
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val lockThresholdPx   = with(density) { VOICE_LOCK_DRAG_THRESHOLD.toPx() }
+    val cancelThresholdPx = with(density) { VOICE_CANCEL_DRAG_THRESHOLD.toPx() }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) onMicPermissionDenied(context)
+    }
+
+    // Shared by the touch gesture below and the TalkBack semantics path, so both
+    // agree on whether a press should record or ask first.
+    val hasMicPermission = {
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(
+                if (isRecording) MaterialTheme.colorScheme.primary else Color.Transparent
+            )
+            .semantics(mergeDescendants = true) {
+                // The hold/slide gesture below is invisible to accessibility services
+                // (pointerInput has no semantics of its own) — TalkBack's double-tap
+                // fires this onClick instead, never the pointerInput block below (its
+                // onClick only ever fires for accessibility actions, not physical
+                // touches, so the too-short-press toast path there is unaffected). One
+                // tap always starts a hands-free LOCKED recording; the panel's
+                // Stop/Cancel/Restart/Attach controls are ordinary buttons and already
+                // accessible. Safety is free here: if PRESS's phase guard fails (already
+                // recording) the phase just stays put, and LATCH_LOCK is a table no-op
+                // on every phase but HELD — this can never desync the state machine.
+                onClick(label = "start recording") {
+                    if (!hasMicPermission()) {
+                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        onEvent(VoiceMemoEvent.PRESS)
+                        onEvent(VoiceMemoEvent.LATCH_LOCK)
+                    }
+                    true
+                }
+                // mergeDescendants above folds the Icon's own contentDescription
+                // ("Record voice memo") into this node — no second description needed.
+                if (isRecording) stateDescription = "Recording"
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    if (!hasMicPermission()) {
+                        // First mic press: ask, don't record. The user holds again
+                        // after granting.
+                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        return@awaitEachGesture
+                    }
+                    down.consume()
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onEvent(VoiceMemoEvent.PRESS)
+                    var dragTotal = Offset.Zero
+                    var latched = false
+                    while (true) {
+                        val event  = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            // Lifting after the latch is the point of locking — ignore it.
+                            // A quick-flow keep gets a confirmation buzz (the latch path
+                            // already buzzed on CONTEXT_CLICK; cancel/discard stay silent).
+                            if (!latched) {
+                                view.performConfirmHaptic()
+                                onEvent(VoiceMemoEvent.RELEASE)
+                            }
+                            break
+                        }
+                        dragTotal += change.positionChange()
+                        change.consume()
+                        if (!latched && shouldCancelDrag(dragTotal.x, cancelThresholdPx)) {
+                            onEvent(VoiceMemoEvent.CANCEL)
+                            break
+                        }
+                        if (!latched && shouldLatchLock(dragTotal.y, lockThresholdPx)) {
+                            latched = true
+                            view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            onEvent(VoiceMemoEvent.LATCH_LOCK)
+                        }
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector        = Icons.Default.Mic,
+            contentDescription = "Record voice memo",
+            tint               = if (isRecording) MaterialTheme.colorScheme.onPrimary
+                                 else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** 10 Hz elapsed-time ticker for the recording UI — display-only; the hard duration
+ *  cap is enforced by MediaRecorder itself. [startedAtMs] is an elapsedRealtime()
+ *  timestamp (see VoiceMemoUiState.startedAtMs), so this stays correct across an
+ *  NTP step mid-recording. */
+@Composable
+private fun rememberRecordingElapsedMs(startedAtMs: Long): Long {
+    var elapsedMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(startedAtMs) {
+        while (true) {
+            elapsedMs = SystemClock.elapsedRealtime() - startedAtMs
+            delay(100)
+        }
+    }
+    return elapsedMs
+}
+
+/**
+ * The voice memo workspace that fills the space the keyboard vacates (and shows on
+ * its own for hands-free phases even when no keyboard was open). Content by phase:
+ * HELD — decorative pulsing mic (the finger is mid-gesture; hints are in the input
+ * row). LOCKED — big timer + Cancel / Stop / Restart. PREVIEW — the take as a
+ * play/scrub chip + Discard / Restart / Attach; attaching hands it to the pending
+ * strip like any other attachment. [minHeight] is the keyboard-compensation height
+ * (0 when the keyboard was closed); content may grow past it.
+ */
+@Composable
+private fun VoiceMemoPanel(
+    voiceMemo: ThreadViewModel.VoiceMemoUiState,
+    minHeight: Dp,
+    recordingLevel: StateFlow<Float>,
+    audioPlayback: StateFlow<AudioPlaybackState>,
+    // Display waveform for the parked preview take, or null (→ Slider fallback).
+    previewWaveform: List<Float>?,
+    onAudioPlayPause: (String) -> Unit,
+    onAudioSeek: (String, Float) -> Unit,
+    onEvent: (VoiceMemoEvent) -> Unit
+) {
+    val view = LocalView.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = minHeight)
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        when (voiceMemo.phase) {
+            VoiceMemoPhase.HELD -> {
+                // The live meter replaces the old decorative pulsing mic — it pulses with
+                // real input, so a dead mic reads as a flatline instead of a false "alive"
+                // animation the user only discovers is empty after sending.
+                RecordingLevelMeter(level = recordingLevel)
+            }
+            VoiceMemoPhase.LOCKED -> {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text  = formatMemoDuration(rememberRecordingElapsedMs(voiceMemo.startedAtMs)) +
+                                " / " + formatMemoDuration(voiceMemo.maxDurationMs),
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    RecordingLevelMeter(level = recordingLevel)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                        TextButton(onClick = { onEvent(VoiceMemoEvent.CANCEL) }) {
+                            Text("Cancel")
+                        }
+                        FilledIconButton(
+                            onClick  = { onEvent(VoiceMemoEvent.STOP_TAP) },
+                            modifier = Modifier.size(64.dp)
+                        ) {
+                            Icon(
+                                imageVector        = Icons.Default.Stop,
+                                contentDescription = "Stop recording",
+                                modifier           = Modifier.size(32.dp)
+                            )
+                        }
+                        TextButton(onClick = { onEvent(VoiceMemoEvent.RESTART) }) {
+                            Text("Restart")
+                        }
                     }
                 }
             }
+            VoiceMemoPhase.PREVIEW -> {
+                val uri = voiceMemo.previewUri
+                if (uri != null) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        AudioChip(
+                            uri = uri,
+                            audioPlayback = audioPlayback,
+                            onPlayPause = onAudioPlayPause,
+                            onSeek = onAudioSeek,
+                            fallbackDurationMs = rememberAudioDurationMs(uri),
+                            waveform = previewWaveform,
+                            // Reply-bar preview chip — not inside a bubble, so scrubbing is safe.
+                            allowWaveformScrub = true
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            TextButton(onClick = { onEvent(VoiceMemoEvent.CANCEL) }) {
+                                Text("Discard")
+                            }
+                            OutlinedButton(onClick = { onEvent(VoiceMemoEvent.RESTART) }) {
+                                Text("Restart")
+                            }
+                            Button(onClick = {
+                                view.performConfirmHaptic()
+                                onEvent(VoiceMemoEvent.ATTACH)
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Attach")
+                            }
+                        }
+                    }
+                }
+            }
+            VoiceMemoPhase.IDLE -> { /* composed only during the exit animation */ }
+        }
+    }
+}
+
+/**
+ * The in-progress recording indicator that replaces the text field: pulsing red dot,
+ * elapsed / cap timer, and (while still held) the lock & cancel gesture hints.
+ */
+@Composable
+private fun RecordingStatusRow(
+    voiceMemo: ThreadViewModel.VoiceMemoUiState,
+    locked: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val elapsedMs = rememberRecordingElapsedMs(voiceMemo.startedAtMs)
+    val pulse by rememberInfiniteTransition(label = "recPulse").animateFloat(
+        initialValue  = 1f,
+        targetValue   = 0.3f,
+        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+        label         = "recPulseAlpha"
+    )
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.error.copy(alpha = pulse))
+        )
+        Text(
+            text  = "${formatMemoDuration(elapsedMs)} / ${formatMemoDuration(voiceMemo.maxDurationMs)}",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        if (!locked) {
+            Text(
+                text     = "Slide ↑ to lock · ← to cancel",
+                style    = MaterialTheme.typography.labelSmall,
+                color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+/* Successful uri → duration-ms reads, so a chip labels correctly on its first frame
+ * (no IO) once any prior chip has read the same uri. Failures are never cached — a file
+ * still downloading may succeed later. Bounded so a long-lived process can't grow it. */
+private val audioDurationCache = android.util.LruCache<String, Long>(256)
+
+/** Duration of the audio at [uri] in ms; null while loading or on failure. Backs the
+ *  pending-memo preview tile and the bubble chips, which have no player state until the
+ *  user taps play. Each uri costs exactly one metadata read, ever — the result is cached,
+ *  so a chip scrolling back into view (or another chip on the same uri) is free. */
+@Composable
+private fun rememberAudioDurationMs(uri: String): Long? {
+    val ctx = LocalContext.current
+    // Cache hit seeds the initial value → correct label on the first frame with no IO.
+    val duration by produceState<Long?>(audioDurationCache.get(uri), uri) {
+        // A uri change restarts only this producer — the state keeps the PREVIOUS uri's
+        // value. Re-seed from the cache (null on miss) before deciding to skip the read,
+        // or a recycled call site would keep showing the old attachment's duration.
+        value = audioDurationCache.get(uri)
+        if (value != null) return@produceState
+        value = withContext(Dispatchers.IO) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(ctx, Uri.parse(uri))
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()
+                    ?.also { audioDurationCache.put(uri, it) }
+            } catch (e: Exception) {
+                null
+            } finally {
+                runCatching { retriever.release() }
+            }
+        }
+    }
+    return duration
+}
+
+// ── PendingAudioAttachment ─────────────────────────────────────────────────────
+
+/**
+ * Full-width review row for a pending audio attachment (usually a just-recorded
+ * voice memo): the same play/seek chip the audio bubbles use, plus an × to discard.
+ * Full-width rather than an 80 dp strip tile because reviewing a memo wants
+ * scrubbing and a visible duration (found on-device July 17). The duration comes
+ * from file metadata so it shows before the player ever loads the file.
+ */
+@Composable
+private fun PendingAudioAttachment(
+    attachment: MessageAttachment,
+    audioPlayback: StateFlow<AudioPlaybackState>,
+    // Display waveform for this recorded memo, or null (→ Slider fallback).
+    waveform: List<Float>?,
+    onAudioPlayPause: (String) -> Unit,
+    onAudioSeek: (String, Float) -> Unit,
+    onRemove: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(modifier = Modifier.weight(1f)) {
+            AudioChip(
+                uri = attachment.uri,
+                audioPlayback = audioPlayback,
+                onPlayPause = onAudioPlayPause,
+                onSeek = onAudioSeek,
+                fallbackDurationMs = rememberAudioDurationMs(attachment.uri),
+                waveform = waveform,
+                // Reply-bar pending chip — not inside a bubble, so scrubbing is safe.
+                allowWaveformScrub = true
+            )
+        }
+        IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Remove attachment",
+                modifier = Modifier.size(18.dp),
+                tint     = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -2470,8 +3812,9 @@ private fun ReplyBar(
 
 /**
  * One 80 dp preview tile in the reply bar's pending-attachment row: image thumbnail,
- * video first-frame (with play badge), or a labelled placeholder for audio/other.
- * The × badge at the top-right removes just this attachment.
+ * video first-frame (with play badge), or a labelled placeholder for other types.
+ * Audio never reaches this tile — it renders as [PendingAudioAttachment], a
+ * full-width playable chip. The × badge at the top-right removes just this attachment.
  */
 @Composable
 private fun PendingAttachmentPreview(
@@ -2540,7 +3883,7 @@ private fun PendingAttachmentPreview(
                 }
             }
             else -> {
-                // Audio / generic file — labelled placeholder tile.
+                // Generic file — labelled placeholder tile.
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -2549,7 +3892,7 @@ private fun PendingAttachmentPreview(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text  = if (attachment.mimeType.startsWith("audio/")) "🎵 Audio" else "📎 File",
+                        text  = "📎 File",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2634,28 +3977,54 @@ private fun localDateToLabel(date: LocalDate): String = date.format(DAY_FORMATTE
 /**
  * Corner radii for message bubbles.
  * The "sender side" (right for sent, left for received) gets the small corner radius
- * wherever the bubble attaches to its cluster neighbour.
+ * wherever the bubble attaches to its cluster neighbour. ROUNDED is Postmark's default;
+ * PILL keeps the same tail asymmetry with a much larger radius; SQUARE is uniform.
  *
- * All eight shapes are precomputed: bubbleShape() is called per visible bubble per
+ * All shapes are precomputed: bubbleShape() is called per visible bubble per
  * recomposition, and RoundedCornerShape allocation in that path is pure churn.
  */
-private val bubbleFull  = 16.dp
-private val bubbleSmall = 4.dp
-private val sentShapes = mapOf(
+private val bubbleFull     = 16.dp
+private val bubbleSmall    = 4.dp
+private val bubblePillFull = 24.dp
+private val bubbleSquare   = 6.dp
+
+private val roundedSentShapes = mapOf(
     ClusterPosition.SINGLE to RoundedCornerShape(bubbleFull),
     ClusterPosition.TOP    to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleFull,  bottomEnd = bubbleSmall, bottomStart = bubbleFull),
     ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleSmall, bottomEnd = bubbleSmall, bottomStart = bubbleFull),
     ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubbleFull, topEnd = bubbleSmall, bottomEnd = bubbleFull,  bottomStart = bubbleFull)
 )
-private val receivedShapes = mapOf(
+private val roundedReceivedShapes = mapOf(
     ClusterPosition.SINGLE to RoundedCornerShape(bubbleFull),
     ClusterPosition.TOP    to RoundedCornerShape(topStart = bubbleFull,  topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleSmall),
     ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleSmall),
     ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubbleFull, bottomEnd = bubbleFull, bottomStart = bubbleFull)
 )
 
-private fun bubbleShape(isSent: Boolean, position: ClusterPosition): RoundedCornerShape =
-    (if (isSent) sentShapes else receivedShapes).getValue(position)
+private val pillSentShapes = mapOf(
+    ClusterPosition.SINGLE to RoundedCornerShape(bubblePillFull),
+    ClusterPosition.TOP    to RoundedCornerShape(topStart = bubblePillFull, topEnd = bubblePillFull,  bottomEnd = bubbleSmall, bottomStart = bubblePillFull),
+    ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubblePillFull, topEnd = bubbleSmall, bottomEnd = bubbleSmall, bottomStart = bubblePillFull),
+    ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubblePillFull, topEnd = bubbleSmall, bottomEnd = bubblePillFull,  bottomStart = bubblePillFull)
+)
+private val pillReceivedShapes = mapOf(
+    ClusterPosition.SINGLE to RoundedCornerShape(bubblePillFull),
+    ClusterPosition.TOP    to RoundedCornerShape(topStart = bubblePillFull,  topEnd = bubblePillFull, bottomEnd = bubblePillFull, bottomStart = bubbleSmall),
+    ClusterPosition.MIDDLE to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubblePillFull, bottomEnd = bubblePillFull, bottomStart = bubbleSmall),
+    ClusterPosition.BOTTOM to RoundedCornerShape(topStart = bubbleSmall, topEnd = bubblePillFull, bottomEnd = bubblePillFull, bottomStart = bubblePillFull)
+)
+
+private val squareShape = RoundedCornerShape(bubbleSquare)
+
+internal fun bubbleShape(
+    style: BubbleStylePreference,
+    isSent: Boolean,
+    position: ClusterPosition
+): RoundedCornerShape = when (style) {
+    BubbleStylePreference.ROUNDED -> (if (isSent) roundedSentShapes else roundedReceivedShapes).getValue(position)
+    BubbleStylePreference.PILL    -> (if (isSent) pillSentShapes else pillReceivedShapes).getValue(position)
+    BubbleStylePreference.SQUARE  -> squareShape
+}
 
 /**
  * Calculates the top-Y offset (in pixels) for the emoji reaction pill.
@@ -2697,7 +4066,9 @@ private fun smsCounter(length: Int): String? {
  * double-annotating telephone numbers embedded in URLs (e.g. `tel:` links).
  *
  * @param text      Raw message body.
- * @param linkColor Colour applied to detected links; pass `MaterialTheme.colorScheme.primary`.
+ * @param linkColor Colour applied to detected links (always underlined). Callers pass the
+ *                  bubble's own content color on a custom-colored bubble, else
+ *                  `MaterialTheme.colorScheme.primary`.
  */
 private fun linkifyText(
     text: String,
@@ -2804,6 +4175,7 @@ private fun FullScreenImageViewer(
     ) { images.size }
     val currentImage = images.getOrNull(pagerState.currentPage)
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     // Allow the device to rotate while viewing full-screen photos (e.g. landscape shots);
     // reverts to the app-wide portrait lock on close.
     AllowScreenRotationWhileVisible()
@@ -3035,7 +4407,10 @@ private fun FullScreenImageViewer(
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(CircleShape)
-                                        .clickable { onToggleReaction(image.messageId, emoji) },
+                                        .clickable {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onToggleReaction(image.messageId, emoji)
+                                        },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(text = emoji, fontSize = 28.sp)
@@ -3667,9 +5042,11 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
  * @param onReactionClick  Called with the emoji string when a chip is tapped (toggles the reaction).
  * @param modifier       Receives the corner-straddle placement from [MessageBubble].
  */
+// `internal` (not `private`) so the search result rows can reuse the exact same
+// pills — passing an inert onReactionClick for display-only rendering.
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReactionPills(
+internal fun ReactionPills(
     reactions: List<Reaction>,
     onReactionClick: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -3715,6 +5092,7 @@ private fun EmojiReactionPopup(
     onDismiss: () -> Unit
 ) {
     val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
     val myReactionEmojis = remember(message.reactions) {
         message.reactions.filter { it.senderAddress == SELF_ADDRESS }.map { it.emoji }.toSet()
     }
@@ -3779,7 +5157,10 @@ private fun EmojiReactionPopup(
                                 if (isSelected) MaterialTheme.colorScheme.primaryContainer
                                 else Color.Transparent
                             )
-                            .clickable { onReact(emoji) },
+                            .clickable {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onReact(emoji)
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(emoji, fontSize = 24.sp)
@@ -3869,6 +5250,107 @@ private fun ThreadScreenPreview() {
     }
 }
 
+// ── PinnedMessagesSheet ───────────────────────────────────────────────────────
+
+/**
+ * Per-thread Pinned messages panel — a [ModalBottomSheet] listing every pinned message
+ * oldest-first (Discord-style). Each row shows a sender label ("You" / contact name),
+ * the body or an attachment placeholder ([previewText]), and a friendly timestamp;
+ * tapping a row jumps to that message via the shared scroll/highlight mechanism. A pin
+ * button on each row unpins in place.
+ *
+ * navigationBarsPadding on the content keeps the list (and the trailing row) clear of the
+ * Android gesture/nav bar — same treatment as [EmojiPickerBottomSheet].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PinnedMessagesSheet(
+    pinnedMessages: List<Message>,
+    contactName: String,
+    participantNames: Map<String, String>,
+    onJumpTo: (Long) -> Unit,
+    onUnpin: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp)
+        ) {
+            Text(
+                text = "Pinned messages",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+            if (pinnedMessages.isEmpty()) {
+                Text(
+                    text = "No pinned messages yet. Long-press a message and choose Pin.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    items(pinnedMessages, key = { it.id }) { msg ->
+                        val sender = when {
+                            msg.isSent -> "You"
+                            participantNames.isNotEmpty() ->
+                                participantNames[msg.address] ?: formatPhoneNumber(msg.address)
+                            else -> contactName
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onJumpTo(msg.id) }
+                                .padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = sender,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = formatEpochMillis(msg.timestamp, FRIENDLY_TIMESTAMP_FORMATTER),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = msg.previewText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(onClick = { onUnpin(msg.id) }) {
+                                Icon(
+                                    imageVector = Icons.Default.PushPin,
+                                    contentDescription = "Unpin",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── EmojiPickerBottomSheet ────────────────────────────────────────────────────
 
 /**
@@ -3907,10 +5389,12 @@ private fun EmojiPickerBottomSheet(
 
 @Composable
 private fun MessageActionTopBar(
+    isPinned: Boolean,
     onCancel: () -> Unit,
     onCopy: () -> Unit,
     onSelect: () -> Unit,
     onForward: () -> Unit,
+    onTogglePin: () -> Unit,
     onDelete: () -> Unit
 ) {
     Surface(
@@ -3929,6 +5413,7 @@ private fun MessageActionTopBar(
             ActionItem(Icons.Default.ContentCopy,      "Copy",    onCopy)
             ActionItem(Icons.Default.CheckBox,         "Select",  onSelect)
             ActionItem(Icons.AutoMirrored.Filled.Send, "Forward", onForward)
+            ActionItem(Icons.Default.PushPin, if (isPinned) "Unpin" else "Pin", onTogglePin)
             ActionItem(Icons.Default.Delete,           "Delete",  onDelete,  MaterialTheme.colorScheme.error)
         }
     }
@@ -3969,16 +5454,31 @@ private fun ActionItem(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Scrolls the list to the bottom whenever a scroll-to-bottom event is emitted.
- * Triggered by the user sending a message.
+ * Scrolls the list to the bottom when the user sends a message. Each event carries the
+ * optimistic message's id; the effect waits until that row is present in [renderState]
+ * before scrolling, so the animation targets the newly sent message rather than the old
+ * newest item. Scrolling a frame early lands on the old newest row and the keyed
+ * LazyColumn re-anchors there when the sent row arrives — the reported no-scroll bug.
  */
 @Composable
 private fun ThreadScrollToBottomEffect(
-    scrollToBottomEvent: kotlinx.coroutines.flow.Flow<Unit>,
-    listState: androidx.compose.foundation.lazy.LazyListState
+    scrollToBottomEvent: kotlinx.coroutines.flow.Flow<Long>,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    renderState: androidx.compose.runtime.State<ThreadRenderState>
 ) {
     LaunchedEffect(Unit) {
-        scrollToBottomEvent.collect { listState.animateScrollToItem(0) }
+        scrollToBottomEvent.collect { sentId ->
+            // Wait for the optimistic row to reach the composed list — scrolling
+            // before it exists lands on the old newest item and the keyed list
+            // re-anchors there when the row arrives (the reported no-scroll bug).
+            // withTimeoutOrNull guard: collect is sequential, so an id that never
+            // appears must not wedge every later send's scroll — on timeout, scroll anyway.
+            withTimeoutOrNull(1_000) {
+                snapshotFlow { renderState.value.messageIdToIndex.containsKey(sentId) }
+                    .first { it }
+            }
+            listState.animateScrollToItem(0)
+        }
     }
 }
 

@@ -18,6 +18,19 @@ fun encodeParticipantsJson(participants: List<String>): String? =
         "\"${escapeJson(it)}\""
     }
 
+/**
+ * The addresses an outgoing message in [thread] must reach.
+ *
+ * A group thread carries its full >1 roster in [Thread.participants] (the canonical
+ * roster after P0, the user's own number already excluded), so a reply — text-only or
+ * with media — goes to every participant as one group MMS. An ordinary 1:1 thread has an
+ * empty [Thread.participants] and sends to its single [Thread.address], preserving the
+ * cheap SMS path for plain text. Pure so the send/retry routing is table-testable
+ * (GROUP_MESSAGING_SPEC §2.3) without constructing a ViewModel.
+ */
+fun recipientsFor(thread: Thread): List<String> =
+    thread.participants.takeIf { it.size > 1 } ?: listOf(thread.address)
+
 /** Parses a string produced by [encodeParticipantsJson]. Returns an empty list for
  *  null/blank input or malformed JSON. */
 fun decodeParticipantsJson(json: String?): List<String> {

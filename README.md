@@ -1,6 +1,6 @@
 # Postmark
 
-A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark is a full default SMS replacement that maintains its own local copy of your messages, enabling fast full-text search, rich conversation export, detailed activity stats, and flexible per-thread backup control — all without any cloud dependency.
+A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark is a full default SMS replacement that maintains its own local copy of your messages, enabling photo/video/voice-memo messaging, fast full-text search, rich conversation export, detailed activity stats, deep per-conversation personalization, and flexible per-thread backup control — all without any cloud dependency.
 
 ---
 
@@ -10,6 +10,22 @@ A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark 
 - Threaded conversation list with contact names and message previews
 - Full message thread view with bubble UI, date dividers, and selection mode
 - Deep scroll targeting — tap a message anywhere in the app and land directly on it in the thread
+
+### Attachments
+- Up to 5 photos/videos per message via the Android Photo Picker, with a 2-column thumbnail grid in bubbles, a full-screen pinch-zoom pager for photos, and an in-app video player dialog
+- The carrier's MMS byte budget is split across every attachment in a message (`allocateAttachmentBudgets`) — a greedy smallest-first allocation where small images donate their surplus budget to larger ones
+- Images and over-budget video are compressed to fit (video via Media3 Transformer, with an analytically chosen bitrate/resolution tier); voice memos and other audio are fixed-cost and fail the send cleanly if they alone exceed the budget
+- Video is capped at 10 seconds at selection time — a flat, honest limit, since no API exposes the *recipient's* carrier inbound cap to check against
+- Reply bar shows one removable preview tile per pending photo/video, or a play/scrub chip for a pending voice memo
+
+### Voice Memos
+- Mic button replaces send while the composer is empty (WhatsApp / Google Messages pattern) — **hold to record**, release to queue the memo for review; **slide up to lock** into hands-free recording; **slide left while holding cancels**
+- Locked recording opens a dedicated recording workspace: a live input level meter driven by real mic amplitude (not decorative), a running timer, and Cancel / Stop / Restart controls
+- Stopping a locked take parks it in a preview chip — play, scrub, duration — with Discard / Restart / Attach; nothing is queued for send until you choose
+- Recording length is capped by the same MMS byte budget attachments use (~1:42 by default, shortened further if the active carrier's own limit is smaller), so a memo can't record itself into being unsendable
+- Resilient to real-world interruptions: keeps the screen on while recording, safely parks an in-flight take if you background the app or press back, recovers from a recorder/mic error instead of hanging silently, and survives process death as a draft
+- Operable with TalkBack (double-tap starts hands-free recording) and reachable from the attachment menu even when a photo or video is already attached
+- All playback — bubbles, pending review chips, and the preview take — goes through one shared per-thread audio player (`ThreadAudioPlayer`, Media3 ExoPlayer): only one chip plays at a time, playback survives the chip scrolling off-screen, and audio focus is handled automatically
 
 ### Stats
 - **Global stats** — total messages, sent/received split, active days, longest streak, top emoji, and activity by day of week
@@ -46,8 +62,14 @@ A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark 
 - Handles un-react ("Removed a heart from...") correctly
 - Stored as reactions, not messages — fully searchable and exportable
 
-### Privacy & Appearance
-- Dark theme by default, with Follow system / Always dark / Always light options
+### Personalization
+- **Per-contact colors** — give each contact their own color (12 presets or any custom color): it fills their avatar and their incoming bubbles, with an optional separate color for your sent bubbles; text stays legible automatically (white/black chosen by WCAG contrast, ≥ 4.5:1 guaranteed)
+- **Chat backgrounds** — six built-in gradients or any photo from your gallery (copied into app storage and downscaled; rendered behind the thread with a theme-aware scrim), settable per conversation or as a global default
+- **Custom color picker** — full HSV panel + hue slider + hex entry behind a "Custom…" tile, with a legibility guard so no pick can make bubbles vanish into the background
+- **Appearance screen** — theme (Follow system / Always dark / Always light), Material You wallpaper colors (Android 12+), global app accent color, font family (System / Serif / Monospace), bubble style (Rounded / Pill / Square), and message text size (also pinch-to-zoom in any thread)
+- Reachable from Settings → Appearance, the contact page, or "Customize appearance" in any thread's ⋮ menu; per-contact choices ride backups and restores
+
+### Privacy
 - All data stored locally — no analytics, no cloud sync, no ads
 
 ---
@@ -57,11 +79,11 @@ A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark 
 ```
 UI (Jetpack Compose + ViewModel + StateFlow)
             │
-    Domain (pure Kotlin models, ExportFormatter, AppleReactionParser)
+    Domain (pure Kotlin models, ExportFormatter, AppleReactionParser, VoiceMemoLogic)
             │
     Data (Room + FTS4, Repositories, SmsContentObserver, WorkManager)
             │
-    Android OS (content://sms, SmsManager, RoleManager)
+    Android OS (content://sms, SmsManager, RoleManager, MediaRecorder)
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, FTS sync strategy, and key design decisions (note: its schema section lags the code — the entity definitions are authoritative).
@@ -75,9 +97,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, 
 | UI | Jetpack Compose, Material 3, Navigation Compose |
 | State | ViewModel, StateFlow, Kotlin Coroutines + Flow |
 | Database | Room + FTS4 (SQLite virtual table) — versions in `gradle/libs.versions.toml` |
+| Media | Media3 (ExoPlayer, Transformer) — shared per-thread audio player, video compression |
 | Dependency injection | Hilt 2.56 |
 | Background work | WorkManager 2.10.0 |
-| Build | AGP 9.2.0, Kotlin 2.2.10, KSP |
+| Build | AGP 9.3.0, Kotlin 2.2.10, KSP |
 
 **Min SDK:** 26 (Android 8.0 Oreo) · **Target SDK:** 35
 
@@ -90,22 +113,27 @@ app/src/main/java/com/plusorminustwo/postmark/
 ├── data/
 │   ├── contacts/       # Shared contact-name lookup
 │   ├── db/             # Room database, entities, DAOs, migrations
-│   ├── repository/     # Data access layer
+│   ├── reaction/       # AppleReactionParser, AndroidReactionParser, fallback parsing
+│   ├── repository/     # Data access layer (incl. SearchRepository)
 │   ├── preferences/    # SharedPreferences-backed repositories
-│   └── sync/           # SmsSyncHandler, SmsHistoryImportWorker, StatsUpdater
-├── di/                 # Hilt modules (DatabaseModule, RepositoryModule)
+│   └── sync/           # SmsSyncHandler, SmsHistoryImportWorker, StatsAlgorithms
+├── di/                 # Hilt modules (DatabaseModule, RepositoryModule, BackupModule)
 ├── domain/
 │   ├── backup/         # Backup archive format v2 (pure, JVM-testable)
+│   ├── customization/  # ContactPalette, ChatBackgrounds, ColorMath (pure color math)
 │   ├── formatter/      # ExportFormatter, date/phone formatters
 │   ├── logging/        # Log PII redaction
-│   └── model/          # Clean domain models
-├── search/             # SearchRepository, FtsQueryBuilder, SearchDao
-│                       # (also houses the reaction parsers — historical accident)
+│   ├── model/          # Clean domain models (Message, Thread, MessageAttachment, ...)
+│   └── voicememo/      # VoiceMemoLogic — pure state machine + gesture math for recording
+├── search/             # FtsQueryBuilder (SearchDao/SearchRepository live under data/)
 ├── service/
-│   ├── sms/            # SmsReceiver, send wrappers, delivery receivers
+│   ├── audio/          # VoiceMemoRecorder (MediaRecorder wrapper)
+│   ├── customization/  # ChatBackgroundImageStore (custom background photos)
+│   ├── sms/            # SmsReceiver, send/receive wrappers, MmsManagerWrapper
+│   │                   # (attachment budget allocation, video transcode planning)
 │   └── backup/         # BackupWorker, ExportWorker, RestoreWorker, scheduler
 ├── ui/
-│   ├── components/     # Shared composables (avatars, date-range sheet)
+│   ├── components/     # Shared composables (avatars, color/background pickers)
 │   ├── contact/        # Contact detail screen
 │   ├── conversations/  # Conversation list, new-conversation screen
 │   ├── forward/        # Forward destination picker
@@ -116,7 +144,8 @@ app/src/main/java/com/plusorminustwo/postmark/
 │   ├── starred/        # Starred images gallery
 │   ├── stats/          # Stats screen (Numbers, Charts, Heatmap)
 │   ├── theme/          # Material 3 theme, ThemePreference
-│   └── thread/         # Thread detail screen, selection mode, image viewer
+│   └── thread/         # Thread detail, voice memo recording UI + ThreadAudioPlayer,
+│                       # selection mode, image viewer
 └── PostmarkApplication.kt
 ```
 
@@ -160,11 +189,13 @@ On first launch Postmark requests the **default SMS role** via `RoleManager`. On
 
 | Permission | Purpose |
 |---|---|
-| `READ_SMS`, `RECEIVE_SMS` | Read and receive SMS messages |
+| `READ_SMS`, `RECEIVE_SMS`, `WRITE_SMS`, `RECEIVE_MMS` | Read, receive, and write SMS/MMS as the default SMS app |
 | `SEND_SMS` | Send replies |
-| `BROADCAST_SMS` | Receive system SMS broadcasts |
+| `RECORD_AUDIO` | Record voice memos (requested on first mic press; denial never crashes) |
 | `READ_CONTACTS` | Resolve contact names from phone numbers |
-| `WRITE_EXTERNAL_STORAGE` (API ≤ 28) | Write backup files to external storage |
+| `POST_NOTIFICATIONS` (API 33+) | Post SMS notifications |
+| `RECEIVE_BOOT_COMPLETED`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `ACCESS_NETWORK_STATE` | Background sync catch-up and scheduled backups (WorkManager) |
+| `WRITE_EXTERNAL_STORAGE` (API ≤ 28) | Write backup files / gallery saves to external storage |
 
 ---
 
@@ -172,28 +203,51 @@ On first launch Postmark requests the **default SMS role** via `RoleManager`. On
 
 - **No RCS.** Postmark speaks SMS/MMS only. Setting it as your default SMS app means
   conversations that were using RCS (Google Messages "chat features") silently fall
-  back to SMS/MMS. RCS requires carrier/Google agreements unavailable to third-party apps.
+  back to SMS/MMS. RCS chat features route through Google's Jibe/carrier
+  infrastructure, and Google does not expose a public API for third-party apps to
+  send or receive over it — RCS is restricted to Google Messages and carrier-provided
+  apps. If that ever changes, supporting RCS becomes a roadmap candidate.
 - **Samsung devices** require Postmark to be set as the default SMS app before any messages can be read. This is a Samsung-specific restriction, not an Android platform limitation.
-- **Group MMS sending** is not yet supported — received group threads display correctly
-  (full roster, per-sender bubble labels), but replies reach only the first participant
-  and new group threads can't be started. A warning banner is shown in group threads.
+- **Group MMS sending** is implemented (multi-recipient PDU, replies reach the whole
+  roster, "Start group conversation" multi-select compose) but not yet verified on a
+  physical device against a real carrier. Carrier-disabled group MMS falls back to a
+  1:1 send with a warning banner instead of a broadcast-style N-separate-sends mode.
 - **Emoji reactions are local annotations.** Incoming Apple-style reaction texts are
   parsed and rendered, but reactions you add are stored only in Postmark's database —
   nothing is transmitted to the other person.
 - **Single-device validated.** Daily-driven at 620-thread/159k-message scale on a
   Samsung S24 Ultra; other OEMs and carriers (especially MMS behavior) are untested.
+- **Voice memo recording has no dedicated foreground service.** Locked (hands-free)
+  recording keeps the screen on and safely parks the take if you background the app,
+  which covers real-world usage, but it isn't the OS-guaranteed durability a foreground
+  service would provide. Deliberately deferred — see `docs/fable-voice-memo.md`.
+
+---
+
+## Documentation
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — layer map, database schema, FTS sync strategy, key design decisions
+- [`docs/TODO.md`](docs/TODO.md) — the live, tiered backlog; source of truth for what's next
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — dated development journal, newest entries first
+- [`docs/fable-voice-memo.md`](docs/fable-voice-memo.md) — voice memo review checklist: recording robustness (screen-off, recorder errors, ghost playback), accessibility, and polish items
+- [`docs/performance-analysis.md`](docs/performance-analysis.md) — tiered performance audit and the fixes it drove
+- [`docs/MMS_AUDIT.md`](docs/MMS_AUDIT.md) — point-in-time MMS system audit (June 2026); largely superseded by the multi-attachment/video work since
+- [`docs/OWNER-ACTIONS.md`](docs/OWNER-ACTIONS.md) — open items that need an owner decision, not just code
 
 ---
 
 ## Roadmap
 
-`docs/TODO.md` is the live, tiered backlog and the source of truth for what's next.
-(ROADMAP.md is historical and partially stale — trust TODO.md and the code over it.)
+The live, tiered backlog lives in `docs/TODO.md` — see [Documentation](#documentation) above.
 
 **Currently in progress / next up:**
-- Blocking & spam completion — blocked-numbers screen, spam folder (Play Store requirement)
-- Group MMS sending (multi-recipient PDU + recipient picker)
-- Contact photos in avatars
+- On-device verification pass — several July 2026 features (spam folder, blocked-numbers
+  screen, pinned messages, conversation-style notifications, notification settings screen)
+  are implemented and unit-tested but not yet confirmed on a physical device
+- Spam auto-flag heuristics + an inline "Report spam" notification action (manual
+  report/hide/restore is done; Play Store requirement)
+- On-device verification of the voice memo hardening rounds (screen-off/backgrounding,
+  TalkBack, audio focus, process death — see `docs/fable-voice-memo.md`)
 - Image export (Canvas to Bitmap rendering)
 - Play Store prep — SMS permissions declaration, privacy policy, store assets
 

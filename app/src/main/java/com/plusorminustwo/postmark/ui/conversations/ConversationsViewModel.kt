@@ -1,7 +1,9 @@
 package com.plusorminustwo.postmark.ui.conversations
 
+import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
+import android.provider.Telephony
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.ViewModel
@@ -10,16 +12,22 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.plusorminustwo.postmark.data.preferences.GestureHintsRepository
+import com.plusorminustwo.postmark.data.preferences.HomeBackgroundPreferenceRepository
+import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.selection.bulkToggleTarget
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,6 +39,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -48,8 +58,19 @@ class ConversationsViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val smsSyncHandler: SmsSyncHandler,
+    private val gestureHintsRepo: GestureHintsRepository,
+    private val homeBackgroundRepo: HomeBackgroundPreferenceRepository,
+    private val backgroundImageStore: ChatBackgroundImageStore,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
+
+    /** Conversation-list background id; null = none (the plain theme background). Set from
+     *  the Appearance screen; the same id vocabulary as the chat background. */
+    val homeBackgroundId: StateFlow<String?> = homeBackgroundRepo.backgroundId
+
+    /** Resolved file for a custom-image background id; null when the id isn't an image id
+     *  or its file is gone (e.g. a backup restored onto a new device carries ids, not bytes). */
+    fun homeBackgroundImageFile(id: String): File? = backgroundImageStore.fileFor(id)
 
     private val workManager = WorkManager.getInstance(context)
     private val prefs get() = context.getSharedPreferences("postmark_prefs", Context.MODE_PRIVATE)
@@ -104,10 +125,12 @@ class ConversationsViewModel @Inject constructor(
             }
         }
 
-        // One-shot sweep of orphaned outgoing-MMS cache files (mms_attach_*.bin) left by
-        // superseded/failed sends. Files still referenced by a live message (each sent or
-        // pending row points at its own via a FileProvider URI) are kept; a 1-hour age
-        // guard inside the sweep protects a file an in-flight send just wrote.
+        // One-shot sweep of orphaned outgoing-MMS cache files (mms_attach_*.bin, and
+        // voice_memo_*.m4a leaked by a crash mid-recording) left by superseded/failed
+        // sends. Files still referenced by a live message (each sent or pending row
+        // points at its own via a FileProvider URI) are kept; a 1-hour age guard inside
+        // the sweep protects a file an in-flight send just wrote (24 h for memos, which
+        // can sit unsent in the reply bar's pending queue).
         viewModelScope.launch(Dispatchers.IO) {
             val referenced = messageRepository.getMessagesWithAttachments()
                 .flatMap { it.attachments }
@@ -132,10 +155,10 @@ class ConversationsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     // Derived: full list or unread-only list depending on the filter toggle.
+    // The filter itself is a pure function (see [filterThreadsByUnread]) so it can be
+    // unit-tested — including that pinned-first ordering survives the filter.
     val threads: StateFlow<List<Thread>?> = combine(allThreads, unreadCounts, _showUnreadOnly) { list, counts, unreadOnly ->
-        if (list == null) null
-        else if (!unreadOnly) list
-        else list.filter { (counts[it.id] ?: 0) > 0 }
+        list?.let { filterThreadsByUnread(it, counts, unreadOnly) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** Flips the "show unread only" filter on or off. */
@@ -220,32 +243,164 @@ class ConversationsViewModel @Inject constructor(
         )
     }
 
-    // ── Thread quick actions ─────────────────────────────────────────────────
+    // ── Multi-select ──────────────────────────────────────────────────────────
+    // Set of selected thread ids. A non-empty set == selection mode is active.
+    // The UI derives everything (selection-bar visibility, per-row check) from this
+    // single flow — no parallel "isSelectionMode" boolean to keep in sync.
+    private val _selectedThreadIds = MutableStateFlow<Set<Long>>(emptySet())
+    val selectedThreadIds: StateFlow<Set<Long>> = _selectedThreadIds.asStateFlow()
 
-    /** Flips the [isPinned] flag for [threadId]. Called from the conversation-list
-     *  long-press context menu so the user can pin/unpin without opening the thread. */
-    fun togglePin(threadId: Long, currentlyPinned: Boolean) {
+    // One-shot result messages for the delete Snackbar. A buffered SharedFlow (not a
+    // StateFlow) so a message shows once and doesn't re-fire on recomposition/re-collect.
+    private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val snackbarMessages: SharedFlow<String> = _snackbarMessages
+
+    // One-time hint teaching the (invisible) long-press-to-multi-select gesture. True once
+    // the user has dismissed it; the UI also gates on a non-empty, non-selecting list
+    // (see [shouldShowMultiSelectHint]).
+    val multiSelectHintDismissed: StateFlow<Boolean> = gestureHintsRepo.multiSelectHintDismissed
+
+    /** Dismisses the multi-select hint row permanently. */
+    fun dismissMultiSelectHint() = gestureHintsRepo.markMultiSelectHintDismissed()
+
+    /** Long-press entry — enters selection mode with [threadId] selected. */
+    fun enterSelection(threadId: Long) {
+        _selectedThreadIds.update { it + threadId }
+    }
+
+    /** Tap while in selection mode — adds or removes [threadId] from the selection. */
+    fun toggleThreadSelection(threadId: Long) {
+        _selectedThreadIds.update { if (threadId in it) it - threadId else it + threadId }
+    }
+
+    /** Exits selection mode (X button, BackHandler, and after every bulk action). */
+    fun clearSelection() {
+        _selectedThreadIds.value = emptySet()
+    }
+
+    /** Selected threads resolved against the full (unfiltered) list. */
+    private fun selectedThreads(): List<Thread> {
+        val ids = _selectedThreadIds.value
+        return allThreads.value?.filter { it.id in ids } ?: emptyList()
+    }
+
+    /** Pin/unpin every selected thread as a unit (see [bulkToggleTarget]). */
+    fun pinSelected() {
+        val targets = selectedThreads()
+        val pin = bulkToggleTarget(targets.map { it.isPinned })
         viewModelScope.launch {
-            threadRepository.updatePinned(threadId, !currentlyPinned)
+            targets.forEach { threadRepository.updatePinned(it.id, pin) }
+            clearSelection()
         }
     }
 
-    /** Flips the [isMuted] flag for [threadId]. Called from the conversation-list
-     *  long-press context menu so the user can mute/unmute without opening the thread. */
-    fun toggleMute(threadId: Long, currentlyMuted: Boolean) {
+    /** Mute/unmute every selected thread as a unit (see [bulkToggleTarget]). */
+    fun muteSelected() {
+        val targets = selectedThreads()
+        val mute = bulkToggleTarget(targets.map { it.isMuted })
         viewModelScope.launch {
-            threadRepository.updateMuted(threadId, !currentlyMuted)
+            targets.forEach { threadRepository.updateMuted(it.id, mute) }
+            clearSelection()
         }
     }
 
-    /** Long-press → "Mark as read" on a conversation row. Same no-op-safe
-     *  markAllRead the thread screen uses on open (isRead = 0 predicate). */
-    fun markThreadRead(threadId: Long) {
+    /** Marks every selected thread read (no-op-safe markAllRead per thread). */
+    fun markSelectedRead() {
+        val ids = _selectedThreadIds.value.toList()
         viewModelScope.launch {
-            messageRepository.markAllRead(threadId)
+            ids.forEach { messageRepository.markAllRead(it) }
+            clearSelection()
         }
     }
 
+    /** Marks every selected thread unread by clearing isRead on its latest message. */
+    fun markSelectedUnread() {
+        val ids = _selectedThreadIds.value.toList()
+        viewModelScope.launch {
+            ids.forEach { messageRepository.markLatestUnread(it) }
+            clearSelection()
+        }
+    }
+
+    /**
+     * Permanently deletes every selected conversation. For each thread, on [Dispatchers.IO],
+     * deletes the system telephony conversation first, then the Room thread (its messages
+     * cascade-delete). The CLAUDE.md rule permits ContentResolver.delete() on telephony
+     * providers ONLY as a direct result of an explicit user delete action — this is that path;
+     * callers MUST confirm with the user first. Guarded by the default-SMS check as well since
+     * non-default apps can't write the providers.
+     *
+     * A provider-delete failure leaves that thread's Room row intact (a resync would just
+     * re-import it anyway), counts it as failed, and is surfaced in the result Snackbar.
+     */
+    fun deleteSelected() {
+        if (!context.isDefaultSmsApp()) return
+        val ids = _selectedThreadIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            var deleted = 0
+            var failed = 0
+            withContext(Dispatchers.IO) {
+                ids.forEach { threadId ->
+                    val thread = threadRepository.getById(threadId) ?: return@forEach
+                    try {
+                        val uri = ContentUris.withAppendedId(Telephony.Threads.CONTENT_URI, threadId)
+                        context.contentResolver.delete(uri, null, null)
+                        threadRepository.delete(thread)
+                        deleted++
+                    } catch (_: Exception) {
+                        failed++
+                    }
+                }
+            }
+            clearSelection()
+            _snackbarMessages.tryEmit(deleteResultMessage(deleted, failed))
+        }
+    }
+
+}
+
+/**
+ * Whether the long-press-to-multi-select hint row should show: only while the user hasn't
+ * [dismissed] it, the list actually has conversations to select ([threadCount] > 0), and
+ * selection mode isn't already active ([selectionActive] false). Extracted so the
+ * visibility rule is testable without composing the UI.
+ */
+internal fun shouldShowMultiSelectHint(
+    dismissed: Boolean,
+    threadCount: Int,
+    selectionActive: Boolean
+): Boolean = !dismissed && threadCount > 0 && !selectionActive
+
+/**
+ * Number of threads that have at least one unread message. Derived from the same
+ * threadId→unread-count map that drives the per-row badges, so the top-bar filter chip
+ * count can never disagree with the badges (no parallel unread pipeline). A thread only
+ * counts once no matter how many unread messages it holds.
+ */
+internal fun unreadThreadCount(unreadCounts: Map<Long, Int>): Int =
+    unreadCounts.count { (_, count) -> count > 0 }
+
+/**
+ * Applies the "unread only" filter to the ordered thread list. When [showUnreadOnly] is
+ * false the list is returned unchanged; when true, only threads whose [unreadCounts] entry
+ * is > 0 survive. Relative order is preserved, so the caller's pinned-first ordering carries
+ * through the filtered view untouched. Extracted as a pure function for testability.
+ */
+internal fun filterThreadsByUnread(
+    threads: List<Thread>,
+    unreadCounts: Map<Long, Int>,
+    showUnreadOnly: Boolean
+): List<Thread> =
+    if (!showUnreadOnly) threads
+    else threads.filter { (unreadCounts[it.id] ?: 0) > 0 }
+
+/** Human-readable Snackbar text for a bulk-delete result. */
+internal fun deleteResultMessage(deleted: Int, failed: Int): String = when {
+    failed == 0 && deleted == 1 -> "1 conversation deleted"
+    failed == 0                 -> "$deleted conversations deleted"
+    deleted == 0                -> "Couldn't delete ${if (failed == 1) "conversation" else "$failed conversations"}"
+    else                        -> "$deleted deleted, $failed failed"
 }
 
 /** Snapshot of in-progress sync data emitted by [SmsHistoryImportWorker] via setProgress(). */

@@ -30,10 +30,15 @@ fun avatarColor(seed: String): Color {
     return AVATAR_COLORS[idx]
 }
 
+/**
+ * @param overrideColor When non-null, used as the avatar background instead of the
+ *                       hash-derived [avatarColor] — the per-contact accent color
+ *                       (Thread.accentColorArgb), when the caller has a Thread in hand.
+ */
 @Composable
-fun LetterAvatar(name: String, colorSeed: String = name, size: Dp = 44.dp) {
+fun LetterAvatar(name: String, colorSeed: String = name, size: Dp = 44.dp, overrideColor: Color? = null) {
     val letter = name.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
-    val bg = avatarColor(colorSeed)
+    val bg = overrideColor ?: avatarColor(colorSeed)
     Box(
         modifier = Modifier
             .size(size)

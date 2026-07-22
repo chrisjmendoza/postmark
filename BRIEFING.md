@@ -1,15 +1,16 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: July 6, 2026
+Last updated: July 22, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
+Tests: 885 passing (`./gradlew test`)
 
 ═══════════════════════════════════════════════════════
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 11
+- Room (database) — currently on schema version 20
 - Hilt (dependency injection)
 - WorkManager (scheduled backup)
 - Kotlin Coroutines + Flow
@@ -27,66 +28,84 @@ com.plusorminustwo.postmark
 │   │   ├── Theme.kt          ← full custom dark/light
 │   │   └── ThemePreference.kt ← SYSTEM/ALWAYS_DARK/ALWAYS_LIGHT
 │   ├── AppThemeViewModel.kt
-│   ├── thread              ← thread view (in progress)
+│   ├── thread              ← thread view (done — selection mode, reactions,
+│   │                          pinning, voice memos, image viewer)
 │   ├── conversations       ← conversation list
-│   ├── search              ← search screen (scaffolded)
-│   ├── stats               ← stats screen (working)
-│   ├── export              ← export sheet (scaffolded)
-│   └── settings            ← settings screens
+│   ├── search              ← search screen (done — FTS4, filters, sort,
+│   │                          contact-match section, in-thread entry)
+│   ├── stats               ← stats screen (done — Numbers/Charts/Heatmap)
+│   ├── export              ← export sheet (done — Copy/Readable/Postmark
+│   │                          backup formats; image render still pending)
+│   └── settings            ← settings screens (Appearance, Notifications,
+│                              Backup/Export, Blocked numbers, Spam, Dev)
 ├── data
-│   ├── db                  ← Room database v2
+│   ├── db                  ← Room database, schema v20 (see DATABASE below)
 │   ├── repository
-│   └── sync                ← ContentObserver +
-│                              SmsHistoryImportWorker
+│   └── sync                ← ContentObserver + SmsHistoryImportWorker +
+│                              SmsSyncHandler
 ├── domain
 │   ├── model
-│   └── formatter           ← ExportFormatter (scaffolded)
+│   └── formatter           ← ExportFormatter (done)
 ├── service
-│   ├── sms                 ← BroadcastReceiver scaffold
-│   └── backup              ← WorkManager backup (scaffolded)
+│   ├── sms                 ← SmsReceiver/MmsManagerWrapper/IncomingNotifier
+│   │                          (done — send/receive/notify pipeline)
+│   └── backup              ← WorkManager backup + RestoreWorker + ExportWorker
+│                              (done)
 └── search
-    └── parser              ← AppleReactionParser (scaffolded)
+    └── parser              ← AndroidReactionParser + AppleReactionParser
+                                via ReactionFallbackParser (done)
+
+This tree predates most of the packages that exist today (domain/
+customization, domain/voicememo, domain/search, ui/contact, ui/forward,
+ui/starred, service/audio, service/customization, …) — see README.md's
+"Project Structure" section for the current, complete layout.
 
 ═══════════════════════════════════════════════════════
-DATABASE — ROOM SCHEMA v11
+DATABASE — ROOM SCHEMA v20
 ═══════════════════════════════════════════════════════
 Thread
 - id, displayName, address, lastMessageAt,
   lastMessagePreview (added v2),
   backupPolicy (GLOBAL/ALWAYS_INCLUDE/NEVER_INCLUDE),
   isMuted BOOLEAN DEFAULT false (added v5),
-  isPinned BOOLEAN DEFAULT false (added v6),
+  isPinned BOOLEAN DEFAULT false (added v6, whole-conversation pin),
   notificationsEnabled BOOLEAN DEFAULT true (added v8),
-  nickname TEXT nullable (added v11, Postmark-only, never synced to system Contacts)
+  nickname TEXT nullable (added v11, Postmark-only, never synced to system Contacts),
+  participantsJson TEXT nullable (added v13, group MMS roster),
+  accentColorArgb INT nullable (added v17, contact color: avatar + received bubbles),
+  chatBackgroundId TEXT nullable (added v17, per-thread chat background;
+    null falls back to the global default),
+  sentColorArgb INT nullable (added v18, independent sent-bubble color),
+  isSpam BOOLEAN DEFAULT false (added v20, hides thread from every list
+    surface except the Spam folder; Stats deliberately still counts it)
 
   Threads sort pinned-first (isPinned DESC, lastMessageAt DESC)
 
 Message
 - id, threadId, address, body, timestamp,
   isSent, type,
+  deliveryStatus INT DEFAULT 0 (added v3 — NONE/PENDING/SENT/DELIVERED/FAILED),
   isMms BOOLEAN (added v7),
   attachmentUri TEXT nullable (added v9, mirrors first attachment),
   mimeType TEXT nullable (added v9, mirrors first attachment),
   isRead BOOLEAN DEFAULT true (added v10),
   attachmentsJson TEXT nullable (added v12 — JSON list of ALL media parts;
-    NULL rows fall back to the singular attachmentUri/mimeType pair)
+    NULL rows fall back to the singular attachmentUri/mimeType pair),
+  isStarred BOOLEAN DEFAULT false (added v14, image-only "starred" flag —
+    feeds the global Starred Images gallery),
+  isPinned BOOLEAN DEFAULT false (added v19, any-message pin — distinct
+    column from Message.isStarred and from Thread.isPinned; feeds the
+    per-thread Pinned messages panel)
 
 Reaction
 - id, messageId, senderAddress, emoji,
   timestamp, rawText
 
-ThreadStats (pre-aggregated)
-- threadId, totalMessages, sentCount, receivedCount,
-  firstMessageAt, lastMessageAt, activeDayCount,
-  longestStreakDays, avgResponseTimeMs,
-  topEmojisJson, topReactionEmojisJson (added v5),
-  byDayOfWeekJson, byMonthJson,
-  lastUpdatedAt
-
-GlobalStats
-- same fields as ThreadStats aggregated across
-  all threads, plus threadCount;
-  topReactionEmojisJson added v5
+ThreadStats / GlobalStats — REMOVED at v15 (July 12, 2026). These were
+write-only pre-aggregated caches: StatsUpdater kept them current on every
+sync but the Stats screen always computed live from messages/reactions.
+Dropped as a derived cache, not user data (no destructive-migration rule
+violated). Stats are now always computed live — see StatsAlgorithms.kt.
 
 FTS4 virtual table (messages_fts)
 - mirrors message body, sync triggers in place
@@ -94,6 +113,10 @@ FTS4 virtual table (messages_fts)
 
 Reactions in separate table for independent
 emoji reaction querying.
+
+Indexes (added v16, query-driven): (threadId, timestamp) — per-thread
+reads in index order; (isRead, threadId) — unread-badge aggregation;
+isMms — sync watermark MIN/MAX; isStarred — Starred Images gallery.
 
 Migration 1→2: lastMessagePreview on threads
 Migration 2→3: deliveryStatus on messages
@@ -106,6 +129,14 @@ Migration 8→9: attachmentUri + mimeType on messages
 Migration 9→10: isRead on messages
 Migration 10→11: nickname on threads
 Migration 11→12: attachmentsJson on messages
+Migration 12→13: participantsJson on threads (group MMS roster)
+Migration 13→14: isStarred on messages
+Migration 14→15: DROP thread_stats + global_stats (dead pre-aggregated cache)
+Migration 15→16: query-driven indexes (see above)
+Migration 16→17: accentColorArgb + chatBackgroundId on threads
+Migration 17→18: sentColorArgb on threads
+Migration 18→19: isPinned on messages
+Migration 19→20: isSpam on threads
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
@@ -123,8 +154,10 @@ Accent amber:         #FF9F0A  (warnings)
 Sent bubble:          #378ADD
 Received bubble:      #2C2C2E  border #3A3A3C
 
-Extended colors in PostmarkColors via
-LocalPostmarkColors CompositionLocal.
+(The PostmarkColors/LocalPostmarkColors extended-color
+system was removed July 18, 2026 — it was never wired in,
+and customization v1/v2 superseded it: bubble colors come
+from colorScheme + per-thread accents via ContactPalette.)
 ThemePreferenceRepository (Hilt singleton) exposes
 StateFlow<ThemePreference> — theme changes are
 instantaneous, no activity restart needed.
@@ -134,6 +167,136 @@ Always dark / Always light.
 ═══════════════════════════════════════════════════════
 WHAT IS WORKING (tested on device)
 ═══════════════════════════════════════════════════════
+✅ Conversation notifications (July 22, 2026 — needs on-device verification):
+   IncomingNotifier posts a real MessagingStyle + Person notification tied
+   to a long-lived per-thread shortcut (ShortcutManagerCompat, id
+   thread_<threadId>) instead of the old BigTextStyle + setLargeIcon —
+   OneUI (and other launchers) promote this combination to the
+   Conversations section with the sender's photo large-left, which
+   setLargeIcon alone did not achieve. Messages from the same conversation
+   accumulate across a burst (capped at 8) instead of replacing each other.
+   Group titles ("Sender — Group name") split into Person + conversation
+   title. Privacy mode is untouched by design: still plain BigTextStyle,
+   no Person, no shortcut — a long-lived shortcut would carry the
+   redacted identity forward.
+✅ ActiveThreadTracker (July 22, 2026 — needs on-device verification):
+   no notification banner for the thread already open on screen.
+   @Singleton, @Volatile activeThreadId set/cleared by
+   ThreadViewModel.onScreenResumed()/onScreenPaused(); checked alongside
+   the existing mute/notificationsEnabled guards in both the SMS
+   (SmsReceiver) and MMS (SmsSyncHandler) notification paths.
+✅ Spam folder (July 22, 2026 — needs on-device verification):
+   threads.isSpam (schema v20). Thread ⋮ menu "Report as spam"/"Not
+   spam" (confirm-gated); hidden from every list surface (conversation
+   list, search, forward/export pickers) except the new Settings →
+   Privacy → Spam screen. Global Stats deliberately still counts spam
+   threads. Notifications suppressed like muted threads.
+✅ Blocked numbers screen (July 22, 2026 — needs on-device verification):
+   Settings → Privacy → "Blocked numbers" lists/unblocks via
+   BlockedNumberContract (new BlockedNumbersRepository); complements the
+   existing "Block number" thread ⋮ action (July 11).
+✅ Pinned messages — any message, not just images (July 22, 2026 — needs
+   on-device verification): messages.isPinned (schema v19), a column
+   distinct from the image-only isStarred (v14, feeds the Starred Images
+   gallery) and the whole-thread Thread.isPinned (v6). Long-press →
+   Pin/Unpin in the message action bar; per-thread "Pinned messages"
+   bottom sheet (thread ⋮ menu); 12dp pin indicator on the bubble.
+✅ Notification settings screen (July 22, 2026): Settings → Notifications
+   hosts privacy mode (moved, not duplicated) and channel deep-links;
+   footer points to each thread's ⋮ menu for per-conversation mute.
+   True per-conversation sound/vibration still needs one channel per
+   thread — deferred, see docs/TODO.md.
+✅ Contact name refresh (July 22, 2026): 1:1 thread display names
+   re-resolve from system Contacts on every catch-up
+   (SmsSyncHandler.refreshOneToOneDisplayNames()) instead of only once at
+   thread creation — renaming a contact now reaches the conversation list
+   and thread header. Group names are untouched (owned by the roster-
+   staleness mechanism); a deleted contact keeps its last-known name
+   rather than reverting to the raw number.
+✅ Search suite additions (July 22, 2026): "By contact" sort toggle
+   (sticky-header groups), a "Conversations" contact/thread-match section
+   above message results, reactions rendered on result rows, and a
+   dedicated Search icon in ThreadScreen's top bar (was buried in the ⋮
+   menu) as the entry point into search-within-thread.
+✅ User customization v2 (July 18, 2026):
+   - Bubble shape styles: global BubbleStylePreference
+     { ROUNDED, PILL, SQUARE } applied inside the pure
+     bubbleShape() owner, reaching MessageBubble via
+     LocalBubbleStyle. ROUNDED byte-identical to before.
+   - Material You (API 31+): DynamicColorPreferenceRepository
+     + dynamic schemes in PostmarkTheme (one pure
+     shouldUseDynamicColor gate). Appearance toggle hidden
+     below 31; when on it overrides the global app accent.
+   - Dual per-contact bubble colors (accent semantics
+     CHANGED after two device-feedback rounds):
+     accentColorArgb is now the CONTACT's color — their
+     avatar + their RECEIVED bubbles. New sentColorArgb
+     (schema v17 → v18, MIGRATION_17_18, additive) colors
+     sent bubbles independently. Either/both nullable; null
+     = today's neutral defaults. Containers are the raw
+     accent (vivid, iMessage-style), content white/black by
+     WCAG contrast (floor >= 4.5 for all 12 presets).
+     Background catalog recalibrated into a clearly-visible
+     saturated luminance band (same persisted ids).
+   - Custom color picker: HSV panel + hue slider + hex
+     field ("Custom…" tile in the shared AccentColorDialog);
+     all math pure in domain/customization/ColorMath
+     (hsv<->argb, hex parse/format → null never throws) plus
+     adjustAccentForBackground, a legibility guard that
+     nudges a low-contrast custom pick off the background.
+   - Global app accent: AppAccentPreferenceRepository (Int?,
+     null = brand blue); PostmarkTheme overrides only the
+     primary family, disabled under Material You.
+   - Custom image chat backgrounds: image:<fileName> id
+     scheme reusing the existing string columns/pref;
+     ChatBackgroundImageStore copies + downscales picked
+     photos (max 1440px, JPEG q85) off-main; Coil render
+     with a theme-aware scrim; missing file → no background;
+     orphaned images GC'd when unreferenced.
+   - Phase K review: fixed a CRITICAL save() bug (bounds-only
+     decode returns null by design, was mistaken for failure
+     → no image background ever saved); hoisted per-frame
+     brushes; consolidated duplicated composables/helpers
+     into pure domain functions; shared bitmap scaling in
+     util/BitmapScaling.kt. Full suite: 735 passed, 0 failed;
+     compileDebugAndroidTestSources + assembleDebug clean.
+✅ User customization v1 (July 17, 2026):
+   - Per-contact accent color: threads.accentColorArgb
+     (nullable Int ARGB, schema v17). Swatch-grid picker
+     (Default + 12 named presets) in ContactDetailScreen.
+     domain/customization/ContactPalette.kt derives
+     bubbleContainerColor/onBubbleContentColor (pure,
+     contrast-tested >= 3.0 both themes). Applied to the
+     contact's avatar everywhere a Thread is in hand
+     (conversations list, thread top bar, contact detail,
+     export/forward picker rows) and to the sent-bubble
+     container in that thread; StatsScreen intentionally
+     unchanged (no Thread in hand there).
+   - Chat backgrounds: threads.chatBackgroundId (nullable
+     TEXT, schema v17) + global default in
+     ChatBackgroundPreferenceRepository. Resolution:
+     thread override ?: global default ?: None.
+     domain/customization/ChatBackgrounds.kt is a pure
+     catalog (None + 6 curated gradients, luminance-
+     calibrated per theme). Per-thread null means "follow
+     global"; the global preference has no such concept,
+     so None's id collapses to null on write and expands
+     back on read (ChatBackgrounds.to/fromGlobalPreferenceId).
+     Picker dialog + preview swatch shared between
+     ContactDetailScreen and AppearanceScreen.
+   - New Settings → Appearance sub-screen: theme,
+     font family (SYSTEM/SERIF/MONOSPACE, applied via a
+     remembered Typography in PostmarkTheme), text size
+     slider, and the global chat background row — moved
+     off the main Settings screen once they outgrew it.
+   - Room schema v16 → v17 (MIGRATION_16_17, additive).
+     Both new fields flow through backup export/restore
+     (BackupRecord/RestoreMerge) additively — absent on
+     restore is tolerated.
+   - domain/customization test coverage: ContactPaletteTest
+     (14 cases), ChatBackgroundsTest (19 cases incl. the
+     global-preference-id round-trip). Full suite: 669
+     passed, 0 failed.
 ✅ App installs and launches on physical Android device
 ✅ Onboarding screen on first launch:
    - Explains default SMS role requirement
@@ -622,10 +785,15 @@ WHAT IS WORKING (tested on device)
      most used → least); unused defaults fill remaining
      slots up to 8
 ✅ Thread screen — send auto-scrolls to bottom:
-   ThreadViewModel emits scrollToBottomEvent (SharedFlow<Unit>)
-   on sendMessage(); ThreadContent collects it and calls
-   animateScrollToItem(0) unconditionally regardless of scroll pos.
-   Separate from the incoming-message FAB nudge path.
+   ThreadViewModel emits scrollToBottomEvent (SharedFlow<Long>,
+   the optimistic row's tempId) on sendMessage(); ThreadContent's
+   ThreadScrollToBottomEffect waits until that id is in
+   renderState.messageIdToIndex (1 s timeout guard), then
+   animateScrollToItem(0) regardless of scroll pos. The wait matters:
+   emitting right after the Room insert raced the list update and the
+   keyed LazyColumn re-anchored to the old newest item (July 19 fix,
+   docs/fable-thread-scroll-spec.md). Separate from the
+   incoming-message FAB nudge path.
 ✅ Settings screen — Default SMS app status row:
    New "General" section at top; green tick when already default;
    tappable row launches RoleManager/ACTION_CHANGE_DEFAULT otherwise;
@@ -664,7 +832,9 @@ WHAT IS WORKING (tested on device)
 ✅ Default SMS banner launcher fix — DONE (May 3)
 ✅ Thread screen UX improvements:
    - Scroll-to-latest button at bottom-center,
-     VerticalAlignBottom icon, tertiaryContainer color.
+     VerticalAlignBottom icon; colored with the thread's resolved
+     sent-bubble pair (primaryContainer fallback) since July 19 —
+     was fixed tertiaryContainer.
    - Cluster-aware spacing for message bubbles.
 ✅ Stats screen emoji cards:
    - "Top Emoji (Messages)" and "Top Emoji (Reactions)"
@@ -764,8 +934,8 @@ Five additional sync gaps resolved (May 3 audit):
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
-ACTIVE BRANCH: fix/fable-critical (July 11 2026 — critical-tier
-fixes from docs/fable-analysis.md; see docs/CHANGELOG.md)
+ACTIVE BRANCH: feat/theme-presets (as of July 22 2026 — customization
+work plus an overnight sweep of 16 TODO items; see docs/CHANGELOG.md)
 NOTE: this section goes stale — trust docs/TODO.md and
 docs/CHANGELOG.md over the tier lists below.
 
@@ -1157,7 +1327,9 @@ TESTING CONVENTIONS
   for helper factories: thread(id), msg(id, threadId, ts).
 - Gradle build + unit tests run after every implementation
   session.
-- Test files (26 passing test classes, all tests green as of 2026-05-05):
+- Test files — historical snapshot below is from 2026-05-05 (26 classes);
+  76 test classes exist as of 2026-07-22 (885 tests passing). Trust the
+  src/test + src/androidTest tree and docs/CHANGELOG.md over this list:
     src/test/.../data/sync/StatsAlgorithmsTest.kt
     src/test/.../data/sync/StatsComputationTest.kt
     src/test/.../data/sync/ComputeEtaTest.kt

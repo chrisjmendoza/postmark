@@ -1,6 +1,7 @@
 package com.plusorminustwo.postmark.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -19,6 +20,7 @@ import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
 import com.plusorminustwo.postmark.ui.navigation.AppNavigation
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * The single [ComponentActivity] that hosts the entire Compose UI.
@@ -35,6 +37,13 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var jankStats: JankStats
 
+    /**
+     * Thread id a message notification asked us to open, or null. Set from the
+     * incoming intent in [onCreate] / [onNewIntent]; consumed once by
+     * [AppNavigation], which navigates to the thread and clears it back to null.
+     */
+    private val pendingOpenThreadId = MutableStateFlow<Long?>(null)
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { triggerFirstLaunchSyncIfPermitted() }
@@ -43,12 +52,27 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestPermissionsIfNeeded()
+        // Capture any "open this thread" request that launched us before the UI is
+        // composed, so AppNavigation's first pass can act on it.
+        readPendingOpenThreadId(intent)
         val prefs = getSharedPreferences("postmark_prefs", MODE_PRIVATE)
         val showOnboarding = !prefs.getBoolean("onboarding_completed", false)
         setContent {
             val themePreference by themeViewModel.themePreference.collectAsState()
-            PostmarkTheme(themePreference = themePreference) {
-                AppNavigation(showOnboarding = showOnboarding)
+            val fontFamilyPreference by themeViewModel.fontFamilyPreference.collectAsState()
+            val useDynamicColor by themeViewModel.useDynamicColor.collectAsState()
+            val appAccentArgb by themeViewModel.appAccentArgb.collectAsState()
+            PostmarkTheme(
+                themePreference = themePreference,
+                fontFamilyPreference = fontFamilyPreference,
+                useDynamicColor = useDynamicColor,
+                appAccentArgb = appAccentArgb
+            ) {
+                AppNavigation(
+                    showOnboarding = showOnboarding,
+                    pendingOpenThreadId = pendingOpenThreadId,
+                    onThreadOpened = { pendingOpenThreadId.value = null }
+                )
             }
         }
         // Attributable jank: log-only listener; the "screen" state is stamped by
@@ -63,6 +87,23 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    /**
+     * With [android:launchMode=singleTask] a notification tap while the app is
+     * already running is delivered here instead of a fresh [onCreate]. Update
+     * the backing intent so [getIntent] stays current, then re-read the extra.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readPendingOpenThreadId(intent)
+    }
+
+    /** Publishes the notification's target thread id, if present, for AppNavigation. */
+    private fun readPendingOpenThreadId(intent: Intent?) {
+        val threadId = intent?.getLongExtra(EXTRA_OPEN_THREAD_ID, -1L) ?: -1L
+        if (threadId != -1L) pendingOpenThreadId.value = threadId
     }
 
     override fun onResume() {
@@ -103,5 +144,10 @@ class MainActivity : ComponentActivity() {
             ExistingWorkPolicy.KEEP,
             SmsHistoryImportWorker.buildRequest()
         )
+    }
+
+    companion object {
+        /** Intent extra carrying the telephony thread id a notification wants opened. */
+        const val EXTRA_OPEN_THREAD_ID = "com.plusorminustwo.postmark.extra.OPEN_THREAD_ID"
     }
 }

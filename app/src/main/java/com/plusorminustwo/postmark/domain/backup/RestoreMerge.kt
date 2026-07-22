@@ -87,11 +87,17 @@ data class ThreadMetadataUpdates(
     val isPinned: Boolean? = null,
     val isMuted: Boolean? = null,
     val notificationsEnabled: Boolean? = null,
-    val backupPolicy: BackupPolicy? = null
+    val backupPolicy: BackupPolicy? = null,
+    val accentColorArgb: Int? = null,
+    val chatBackgroundId: String? = null,
+    val sentColorArgb: Int? = null,
+    val isSpam: Boolean? = null
 ) {
     val isEmpty: Boolean
         get() = nickname == null && isPinned == null && isMuted == null &&
-            notificationsEnabled == null && backupPolicy == null
+            notificationsEnabled == null && backupPolicy == null &&
+            accentColorArgb == null && chatBackgroundId == null && sentColorArgb == null &&
+            isSpam == null
 }
 
 fun mergeThreadMetadata(local: Thread, record: ThreadRecord): ThreadMetadataUpdates {
@@ -104,7 +110,11 @@ fun mergeThreadMetadata(local: Thread, record: ThreadRecord): ThreadMetadataUpda
             false.takeIf { !record.notificationsEnabled && local.notificationsEnabled },
         backupPolicy = recordPolicy.takeIf {
             it != BackupPolicy.GLOBAL && local.backupPolicy == BackupPolicy.GLOBAL
-        }
+        },
+        accentColorArgb = record.accentColorArgb.takeIf { local.accentColorArgb == null },
+        chatBackgroundId = record.chatBackgroundId.takeIf { local.chatBackgroundId == null },
+        sentColorArgb = record.sentColorArgb.takeIf { local.sentColorArgb == null },
+        isSpam = true.takeIf { record.isSpam && !local.isSpam }
     )
 }
 

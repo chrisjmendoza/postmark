@@ -25,6 +25,18 @@ import androidx.compose.runtime.Immutable
  *                                 so most UI does not need to read this directly — it exists
  *                                 for logic that needs to know "is this a group thread?"
  *                                 (e.g. gating group-aware sending, which isn't implemented yet).
+ * @param accentColorArgb          Postmark-only contact color (ARGB) — the contact's
+ *                                 avatar and their received-message bubbles. Null means
+ *                                 use the app default (hash-derived avatar color, neutral
+ *                                 received bubble).
+ * @param chatBackgroundId         Postmark-only per-thread chat background id. Null falls
+ *                                 back to the global default background (also null = none).
+ * @param sentColorArgb            Postmark-only sent-bubble color (ARGB), independent of
+ *                                 [accentColorArgb]. Null means use the app default
+ *                                 (primaryContainer).
+ * @param isSpam                   When true the thread is hidden from every list surface
+ *                                 into the Spam folder, and posts no incoming notifications.
+ *                                 Postmark-only; never written to the telephony provider.
  */
 // @Immutable: the participants List makes Thread inferred-unstable, which made every
 // visible ThreadRow unskippable — all rows recomposed on each threads/unreadCounts
@@ -42,5 +54,14 @@ data class Thread(
     val notificationsEnabled: Boolean = true,
     // Postmark-only alias — null means fall back to displayName in the UI.
     val nickname: String? = null,
-    val participants: List<String> = emptyList()
+    val participants: List<String> = emptyList(),
+    // Postmark-only contact color (ARGB) — avatar + received bubbles. Null means default.
+    val accentColorArgb: Int? = null,
+    // Postmark-only chat background id. Null falls back to the global default.
+    val chatBackgroundId: String? = null,
+    // Postmark-only sent-bubble color (ARGB), independent of accentColorArgb. Null = default.
+    val sentColorArgb: Int? = null,
+    // When true the thread lives in the Spam folder: hidden from every list surface and
+    // silenced. Postmark-only; never written to the telephony provider.
+    val isSpam: Boolean = false
 )

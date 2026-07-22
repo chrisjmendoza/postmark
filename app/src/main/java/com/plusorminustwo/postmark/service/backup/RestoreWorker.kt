@@ -290,7 +290,11 @@ class RestoreWorker @AssistedInject constructor(
                     isPinned = record.isPinned,
                     notificationsEnabled = record.notificationsEnabled,
                     nickname = record.nickname,
-                    participants = record.participants
+                    participants = record.participants,
+                    accentColorArgb = record.accentColorArgb,
+                    chatBackgroundId = record.chatBackgroundId,
+                    sentColorArgb = record.sentColorArgb,
+                    isSpam = record.isSpam
                 )
             )
         } else {
@@ -300,6 +304,10 @@ class RestoreWorker @AssistedInject constructor(
             updates.isMuted?.let { threadRepository.updateMuted(threadId, it) }
             updates.notificationsEnabled?.let { threadRepository.updateNotificationsEnabled(threadId, it) }
             updates.backupPolicy?.let { threadRepository.updateBackupPolicy(threadId, it) }
+            updates.accentColorArgb?.let { threadRepository.setAccentColor(threadId, it) }
+            updates.chatBackgroundId?.let { threadRepository.setChatBackground(threadId, it) }
+            updates.sentColorArgb?.let { threadRepository.setSentColor(threadId, it) }
+            updates.isSpam?.let { threadRepository.updateSpam(threadId, it) }
         }
 
         val index = RestoreMessageIndex()
@@ -363,7 +371,8 @@ class RestoreWorker @AssistedInject constructor(
                 isMms = record.isMms,
                 attachments = attachments,
                 isRead = record.isRead,
-                isStarred = record.isStarred
+                isStarred = record.isStarred,
+                isPinned = record.isPinned
             )
             pendingMessages += message
             val newest = ctx.newestInserted
