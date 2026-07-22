@@ -18,11 +18,12 @@ import javax.inject.Singleton
  * imports have persisted — the quoted-text candidate pool must span both transports,
  * otherwise a reaction to an MMS-originated message (or a fallback that itself arrived
  * as MMS) can never match. Also called by DevOptionsViewModel.reprocessReactions()
- * as a manual repair tool for edge cases (e.g. originals outside the 100-message
- * search window at the time of an earlier pass).
+ * as a manual repair tool, by [EmptyMmsBodyRepair] for threads whose recovered MMS
+ * body turns out to be a reaction fallback, and once per install by
+ * [SmsSyncHandler]'s reaction-reprocess pass (after the truncated-quote matching fix).
  *
  * Incremental sync ([SmsSyncHandler]) resolves reactions inline as messages arrive
- * and does not use this class.
+ * and does not use this class for that path.
  */
 @Singleton
 class ReactionResolver @Inject constructor(

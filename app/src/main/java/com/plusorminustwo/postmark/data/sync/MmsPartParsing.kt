@@ -32,7 +32,12 @@ internal data class MmsParsedResult(
  * Pure function: turns a list of raw MMS parts into a [MmsParsedResult].
  *
  * Rules applied (matching Android MMS spec):
- * - `text/plain` parts are concatenated to form the message body.
+ * - `text/plain` parts are concatenated to form the message body. When the `text`
+ *   column is null the part is file-backed (`_data` set) — the provider stores larger
+ *   or externally-persisted text (notably Google Messages' RCS archival, which is how
+ *   RCS reaction fallbacks reach us) on disk instead of in the row. [readPartText] is
+ *   consulted to stream the part content in that case; it defaults to a no-op so the
+ *   function stays pure for tests.
  * - `application/smil` parts are skipped — presentation metadata only.
  * - Every `image/`, `video/`, or `audio/` part becomes an attachment with a stable
  *   `content://mms/part/{id}` URI, preserving PDU order. Matching is case-insensitive
@@ -42,7 +47,10 @@ internal data class MmsParsedResult(
  * Separated from the content-resolver layer so it can be unit-tested
  * on the JVM without Android instrumentation.
  */
-internal fun parseMmsRawParts(parts: List<MmsRawPart>): MmsParsedResult {
+internal fun parseMmsRawParts(
+    parts: List<MmsRawPart>,
+    readPartText: (partId: Long) -> String? = { null }
+): MmsParsedResult {
     val sb = StringBuilder()
     val attachments = mutableListOf<MessageAttachment>()
 
@@ -50,7 +58,7 @@ internal fun parseMmsRawParts(parts: List<MmsRawPart>): MmsParsedResult {
         val ct = part.contentType
         when {
             ct.equals("text/plain", ignoreCase = true) ->
-                sb.append(part.text ?: "")
+                sb.append(part.text ?: readPartText(part.id) ?: "")
 
             ct.equals("application/smil", ignoreCase = true) -> Unit
 

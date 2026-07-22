@@ -61,7 +61,9 @@ class SmsSyncHandler @Inject constructor(
     private val privacyModeRepository: PrivacyModeRepository,
     private val incomingNotifier: IncomingNotifier,
     private val activeThreadTracker: ActiveThreadTracker,
-    private val syncLogger: SyncLogger
+    private val syncLogger: SyncLogger,
+    private val emptyMmsBodyRepair: EmptyMmsBodyRepair,
+    private val reactionResolver: ReactionResolver
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -124,6 +126,11 @@ class SmsSyncHandler @Inject constructor(
         private const val KEY_ROSTER_REPAIR_DONE = "roster_repair_v1_done"
         // One-shot flag for the non-displayable-PDU Room cleanup (GROUP_MESSAGING_SPEC §4.2).
         private const val KEY_MTYPE_CLEANUP_DONE = "mtype_cleanup_v1_done"
+        // One-shot flag for the historical reaction re-resolution pass, run once after the
+        // truncated-quote matching fix landed so fallbacks that failed to match under the
+        // old strategies (e.g. ellipsized long URLs) finally resolve. v2: v1 was the
+        // original import-time pass.
+        private const val KEY_REACTION_REPROCESS_DONE = "reaction_reprocess_v2_done"
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -152,7 +159,55 @@ class SmsSyncHandler @Inject constructor(
         cleanupNonDisplayableMmsOnce()
         smsMutex.withLock { syncLatestSms() }
         mmsMutex.withLock { syncLatestMms() }
+        repairEmptyMmsBodies()
+        reprocessReactionsOnce()
         refreshOneToOneDisplayNames()
+    }
+
+    /*
+     * Self-healing for MMS rows that imported with no readable content — see
+     * [EmptyMmsBodyRepair]. Runs after the MMS sync pass so just-arrived rows are
+     * candidates too; under mmsMutex so a channel-triggered sync can't interleave.
+     * Runs every catch-up (not one-shot): the query returns nothing when the DB is
+     * healthy, so a clean pass costs a single bounded SELECT.
+     */
+    private suspend fun repairEmptyMmsBodies() {
+        try {
+            val result = mmsMutex.withLock {
+                emptyMmsBodyRepair.repair(
+                    rereadParts = { rawId -> getMmsBodyIncrementalOrNull(rawId) },
+                    log = { syncLogger.log("EmptyMmsRepair", it) }
+                )
+            }
+            if (result.repaired > 0 || result.stillEmpty > 0) {
+                syncLogger.log(TAG, "empty-MMS repair: repaired=${result.repaired} stillEmpty=${result.stillEmpty}")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "empty-MMS repair failed — will retry on next catch-up", e)
+        }
+    }
+
+    /*
+     * One-shot full re-resolution of stored reaction fallbacks (same flag pattern as
+     * [repairRostersOnce]): fallbacks that failed to match under the pre-truncation
+     * matching strategies were inserted as visible bubbles and nothing ever retried
+     * them. Runs ReactionResolver over every thread once; the flag is set only on a
+     * clean pass so a transient failure retries on the next catch-up. Room only.
+     */
+    private suspend fun reprocessReactionsOnce() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_REACTION_REPROCESS_DONE, false)) return
+        try {
+            val result = reactionResolver.resolveAll()
+            syncLogger.log(TAG, "reaction reprocess v2: inserted=${result.inserted} removed=${result.removed}")
+            prefs.edit().putBoolean(KEY_REACTION_REPROCESS_DONE, true).apply()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncLogger.logError(TAG, "reaction reprocess failed — will retry on next catch-up", e)
+        }
     }
 
     /*
@@ -727,14 +782,20 @@ class SmsSyncHandler @Inject constructor(
 
     // Reads text body and ALL media attachments from the given MMS part table.
     // Returns MmsParsedResult with stable content://mms/part/{id} URIs for image/video/audio.
-    private fun getMmsBodyIncremental(mmsId: Long): MmsParsedResult {
+    // Import call sites substitute a "[MMS]" placeholder when the cursor is unavailable.
+    private fun getMmsBodyIncremental(mmsId: Long): MmsParsedResult =
+        getMmsBodyIncrementalOrNull(mmsId) ?: MmsParsedResult("[MMS]", emptyList())
+
+    // Null when the parts cursor is unavailable — the repair pass treats that as
+    // "couldn't read, retry later" rather than writing a placeholder body.
+    private fun getMmsBodyIncrementalOrNull(mmsId: Long): MmsParsedResult? {
         val cursor = context.contentResolver.query(
             Uri.withAppendedPath(Telephony.Mms.CONTENT_URI, "$mmsId/part"),
             arrayOf("_id", Telephony.Mms.Part.CONTENT_TYPE, Telephony.Mms.Part.TEXT),
             null, null, null
         ) ?: run {
             Log.w(TAG, "getMmsBodyIncremental: parts cursor null for mmsId=$mmsId")
-            return MmsParsedResult("[MMS]", emptyList())
+            return null
         }
         debugLog("getMmsBodyIncremental: mmsId=$mmsId  partCount=${cursor.count}")
         val rawParts = mutableListOf<MmsRawPart>()
@@ -747,7 +808,9 @@ class SmsSyncHandler @Inject constructor(
                 rawParts += MmsRawPart(it.getLong(idIdx), ct, it.getString(textIdx))
             }
         }
-        return parseMmsRawParts(rawParts)
+        // File-backed text parts (text column null) are streamed from the part URI —
+        // Google Messages' RCS archival writes reaction fallbacks this way.
+        return parseMmsRawParts(rawParts) { partId -> context.contentResolver.readMmsPartText(partId) }
     }
 
     private fun getMmsAddressIncremental(mmsId: Long, isSent: Boolean): String {

@@ -8,14 +8,15 @@ import com.plusorminustwo.postmark.data.db.dao.UnreadCount
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
+import com.plusorminustwo.postmark.data.reaction.AndroidReactionParser
+import com.plusorminustwo.postmark.data.reaction.AppleReactionParser
+import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
-import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
-import com.plusorminustwo.postmark.data.reaction.AndroidReactionParser
-import com.plusorminustwo.postmark.data.reaction.AppleReactionParser
-import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
+import com.plusorminustwo.postmark.domain.model.MessageAttachment
+import com.plusorminustwo.postmark.domain.model.RESTORED_ID_OFFSET
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -26,38 +27,37 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Unit tests for [ReactionResolver] — the shared full-history reaction resolution pass
- * run by SmsHistoryImportWorker (after BOTH the SMS and MMS imports) and by
- * DevOptionsViewModel.reprocessReactions().
+ * Unit tests for [EmptyMmsBodyRepair] — the self-healing pass for MMS rows that
+ * imported with no readable content (file-backed text parts / parts written after the
+ * row was observed; see the class doc). The key behavior: a recovered body that turns
+ * out to be a reaction fallback must resolve into a Reaction and lose its bubble in
+ * the same pass, never surface as a late text bubble.
  *
- * The key regression these tests guard: the candidate pool must span both transports.
- * A reaction quoting an MMS-originated message, and a reaction fallback that itself
- * arrived as MMS, must both resolve into Reaction entities instead of remaining
- * visible text bubbles.
- *
- * Uses real parsers and repositories over in-memory fake DAOs (no mocking libraries,
- * per project convention). Apple verb patterns are supplied directly so no Android
- * Context / asset loading is needed.
+ * Uses real parsers, resolver, and repositories over in-memory fake DAOs (no mocking
+ * libraries, per project convention).
  */
-class ReactionResolverTest {
+class EmptyMmsBodyRepairTest {
 
-    private lateinit var messageDao: InMemoryMessageDao
-    private lateinit var reactionDao: InMemoryReactionDao
-    private lateinit var threadDao: RecordingThreadDao
-    private lateinit var resolver: ReactionResolver
+    private lateinit var messageDao: RepairInMemoryMessageDao
+    private lateinit var reactionDao: RepairInMemoryReactionDao
+    private lateinit var threadDao: RepairRecordingThreadDao
+    private lateinit var repair: EmptyMmsBodyRepair
 
     @Before
     fun setUp() {
-        messageDao = InMemoryMessageDao()
-        reactionDao = InMemoryReactionDao()
-        threadDao = RecordingThreadDao()
-        val appleParser = AppleReactionParser(patternsProvider = {
-            listOf(AppleReactionParser.ReactionPattern("👍", listOf("Liked"), listOf("Removed a like from")))
-        })
-        resolver = ReactionResolver(
-            MessageRepository(messageDao, reactionDao),
-            ThreadRepository(threadDao),
-            ReactionFallbackParser(AndroidReactionParser(), appleParser)
+        messageDao = RepairInMemoryMessageDao()
+        reactionDao = RepairInMemoryReactionDao()
+        threadDao = RepairRecordingThreadDao()
+        val messageRepository = MessageRepository(messageDao, reactionDao)
+        val threadRepository = ThreadRepository(threadDao)
+        val parser = ReactionFallbackParser(
+            AndroidReactionParser(),
+            AppleReactionParser(patternsProvider = { emptyList() })
+        )
+        repair = EmptyMmsBodyRepair(
+            messageRepository,
+            threadRepository,
+            ReactionResolver(messageRepository, threadRepository, parser)
         )
     }
 
@@ -67,162 +67,132 @@ class ReactionResolverTest {
         id: Long,
         body: String,
         timestamp: Long,
+        isMms: Boolean = true,
         isSent: Boolean = false,
-        isMms: Boolean = false,
+        attachmentUri: String? = null,
+        mimeType: String? = null,
         address: String = "+15551234567",
         threadId: Long = 1L
     ) = MessageEntity(
         id = id, threadId = threadId, address = address, body = body,
-        timestamp = timestamp, isSent = isSent, isMms = isMms
+        timestamp = timestamp, isSent = isSent, isMms = isMms,
+        attachmentUri = attachmentUri, mimeType = mimeType
     )
 
-    // ── cross-transport resolution (the first-launch import bug) ─────────────
+    private val emptyRowId = MMS_ID_OFFSET + 77
+
+    // ── recovery paths ───────────────────────────────────────────────────────
 
     @Test
-    fun `SMS fallback reacting to an MMS message resolves once both transports are present`() = runTest {
-        val mmsId = MMS_ID_OFFSET + 5
+    fun `recovered reaction fallback resolves into a reaction and removes its bubble`() = runTest {
+        // The July 2026 report: a friend's ❤️ to an image+caption MMS arrived as an
+        // RCS-archival row whose text part was unreadable at import → empty bubble.
+        val originalId = MMS_ID_OFFSET + 5
         messageDao.seed(
-            msg(mmsId, "Check out this sunset", timestamp = 1_000, isMms = true),
-            msg(42, "👍 to \"Check out this sunset\"", timestamp = 2_000)
+            msg(originalId, "How our chat looks like in my texting app 😎", timestamp = 1_000, isSent = true),
+            msg(emptyRowId, "", timestamp = 2_000)
         )
 
-        val result = resolver.resolveAll()
+        val result = repair.repair(rereadParts = { rawId ->
+            if (rawId == 77L) MmsParsedResult("❤️ to \"How our chat looks like in my texting app 😎\"", emptyList())
+            else null
+        })
 
-        assertEquals(ReactionResolver.Result(inserted = 1, removed = 1), result)
+        assertEquals(EmptyMmsBodyRepair.Result(repaired = 1, stillEmpty = 0), result)
         val reaction = reactionDao.rows.single()
-        assertEquals(mmsId, reaction.messageId)
-        assertEquals("👍", reaction.emoji)
-        assertEquals("+15551234567", reaction.senderAddress)
-        // The fallback bubble is gone; the MMS original remains.
-        assertFalse(messageDao.rows.containsKey(42L))
-        assertTrue(messageDao.rows.containsKey(mmsId))
-    }
-
-    @Test
-    fun `fallback delivered as MMS resolves into a reaction instead of remaining a bubble`() = runTest {
-        val mmsFallbackId = MMS_ID_OFFSET + 9
-        messageDao.seed(
-            msg(7, "Dinner at 7?", timestamp = 1_000),
-            msg(mmsFallbackId, "❤️ to \"Dinner at 7?\"", timestamp = 2_000, isSent = true, isMms = true)
-        )
-
-        val result = resolver.resolveAll()
-
-        assertEquals(ReactionResolver.Result(inserted = 1, removed = 1), result)
-        val reaction = reactionDao.rows.single()
-        assertEquals(7L, reaction.messageId)
+        assertEquals(originalId, reaction.messageId)
         assertEquals("❤️", reaction.emoji)
-        assertEquals(SELF_ADDRESS, reaction.senderAddress)
-        assertFalse(messageDao.rows.containsKey(mmsFallbackId))
+        assertEquals("+15551234567", reaction.senderAddress)
+        // The fallback bubble is gone; the original remains.
+        assertFalse(messageDao.rows.containsKey(emptyRowId))
+        assertTrue(messageDao.rows.containsKey(originalId))
     }
 
     @Test
-    fun `Apple-format fallback also matches an MMS-originated message`() = runTest {
-        val mmsId = MMS_ID_OFFSET + 3
+    fun `recovered caption and attachments update the row and thread preview`() = runTest {
         messageDao.seed(
-            msg(mmsId, "Check out this sunset", timestamp = 1_000, isMms = true),
-            msg(50, "Liked \"Check out this sunset\"", timestamp = 2_000)
+            msg(MMS_ID_OFFSET + 5, "earlier message", timestamp = 1_000),
+            msg(emptyRowId, "", timestamp = 2_000)
         )
 
-        val result = resolver.resolveAll()
+        val attachment = MessageAttachment("content://mms/part/901", "image/jpeg")
+        val result = repair.repair(rereadParts = { MmsParsedResult("Look at this", listOf(attachment)) })
 
-        assertEquals(ReactionResolver.Result(inserted = 1, removed = 1), result)
-        assertEquals(mmsId, reactionDao.rows.single().messageId)
-        assertEquals("👍", reactionDao.rows.single().emoji)
+        assertEquals(EmptyMmsBodyRepair.Result(repaired = 1, stillEmpty = 0), result)
+        val row = messageDao.rows.getValue(emptyRowId)
+        assertEquals("Look at this", row.body)
+        assertEquals("content://mms/part/901", row.attachmentUri)
+        // The repaired row is the thread's latest — the stale preview is refreshed.
+        assertEquals(1L to "Look at this", threadDao.lastPreviewUpdate)
+        assertEquals(1L to 2_000L, threadDao.lastMessageAtUpdate)
     }
 
-    @Test
-    fun `ellipsized link fallback resolves against the full-URL original`() = runTest {
-        // Long originals (links especially) are ellipsized inside the fallback's quotes
-        // by the sending platform, so exact/normalized/prefix could never match — the
-        // truncated-quote strategy resolves them (July 2026 fix).
-        messageDao.seed(
-            msg(7, "https://music.youtube.com/watch?v=ZKeroWatXDQ&si=F19hMsTBwf0n8HvQ", timestamp = 1_000, isSent = true),
-            msg(8, "❤️ to \"https://music.youtube.com/watch?v=ZKeroWatXDQ&si=F…\"", timestamp = 2_000)
-        )
-
-        val result = resolver.resolveAll()
-
-        assertEquals(ReactionResolver.Result(inserted = 1, removed = 1), result)
-        assertEquals(7L, reactionDao.rows.single().messageId)
-        assertEquals("❤️", reactionDao.rows.single().emoji)
-        assertFalse(messageDao.rows.containsKey(8L))
-    }
-
-    // ── unresolved / removal / dedup semantics ───────────────────────────────
+    // ── still-unreadable paths ───────────────────────────────────────────────
 
     @Test
-    fun `unresolved fallback stays as a visible bubble`() = runTest {
-        messageDao.seed(
-            msg(7, "Dinner at 7?", timestamp = 1_000),
-            msg(8, "👍 to \"text that matches nothing\"", timestamp = 2_000)
-        )
+    fun `unreadable parts leave the row untouched for the next pass`() = runTest {
+        messageDao.seed(msg(emptyRowId, "", timestamp = 2_000))
 
-        val result = resolver.resolveAll()
+        val result = repair.repair(rereadParts = { null })
 
-        assertEquals(ReactionResolver.Result(inserted = 0, removed = 0), result)
+        assertEquals(EmptyMmsBodyRepair.Result(repaired = 0, stillEmpty = 1), result)
+        assertEquals("", messageDao.rows.getValue(emptyRowId).body)
         assertTrue(reactionDao.rows.isEmpty())
-        assertTrue(messageDao.rows.containsKey(8L))
     }
 
     @Test
-    fun `removal fallback deletes the existing reaction and its bubble`() = runTest {
-        messageDao.seed(
-            msg(7, "Dinner at 7?", timestamp = 1_000),
-            msg(9, "❤️ to \"Dinner at 7?\" removed", timestamp = 3_000)
-        )
-        reactionDao.rows += ReactionEntity(
-            id = 1, messageId = 7, senderAddress = "+15551234567",
-            emoji = "❤️", timestamp = 2_000, rawText = "❤️ to \"Dinner at 7?\""
-        )
+    fun `content-free reread counts as still empty`() = runTest {
+        messageDao.seed(msg(emptyRowId, "", timestamp = 2_000))
 
-        val result = resolver.resolveAll()
+        val result = repair.repair(rereadParts = { MmsParsedResult("", emptyList()) })
 
-        assertEquals(ReactionResolver.Result(inserted = 0, removed = 1), result)
-        assertTrue(reactionDao.rows.isEmpty())
-        assertFalse(messageDao.rows.containsKey(9L))
+        assertEquals(EmptyMmsBodyRepair.Result(repaired = 0, stillEmpty = 1), result)
     }
 
-    @Test
-    fun `duplicate reaction is not inserted twice`() = runTest {
-        messageDao.seed(
-            msg(7, "Dinner at 7?", timestamp = 1_000),
-            msg(9, "❤️ to \"Dinner at 7?\"", timestamp = 3_000)
-        )
-        reactionDao.rows += ReactionEntity(
-            id = 1, messageId = 7, senderAddress = "+15551234567",
-            emoji = "❤️", timestamp = 2_000, rawText = "❤️ to \"Dinner at 7?\""
-        )
-
-        val result = resolver.resolveAll()
-
-        assertEquals(ReactionResolver.Result(inserted = 0, removed = 0), result)
-        assertEquals(1, reactionDao.rows.size)
-    }
+    // ── candidate selection ──────────────────────────────────────────────────
 
     @Test
-    fun `thread preview repaired after fallback deletion`() = runTest {
+    fun `only provider-backed empty mms rows are candidates`() = runTest {
         messageDao.seed(
-            msg(7, "Dinner at 7?", timestamp = 1_000),
-            msg(9, "❤️ to \"Dinner at 7?\"", timestamp = 3_000)
+            msg(42, "", timestamp = 1_000, isMms = false),                          // empty SMS
+            msg(RESTORED_ID_OFFSET + 9, "", timestamp = 2_000),                      // restored row
+            msg(-5, "", timestamp = 3_000),                                          // optimistic row
+            msg(MMS_ID_OFFSET + 8, "has a body", timestamp = 4_000),                 // non-empty
+            msg(MMS_ID_OFFSET + 9, "", timestamp = 5_000,
+                attachmentUri = "content://mms/part/1", mimeType = "image/jpeg")     // has attachment
         )
+        var rereadCalls = 0
 
-        resolver.resolveAll()
+        val result = repair.repair(rereadParts = { rereadCalls++; null })
 
-        // After the fallback (the newest message) is deleted, the preview must point
-        // back at the real latest message.
-        assertEquals(1L to 1_000L, threadDao.lastMessageAtUpdate)
-        assertEquals(1L to "Dinner at 7?", threadDao.lastPreviewUpdate)
+        assertEquals(EmptyMmsBodyRepair.Result(repaired = 0, stillEmpty = 0), result)
+        assertEquals(0, rereadCalls)
     }
 }
 
 // ── Fakes (scoped to this file, per project convention — no mocking libraries) ──
 
-/** MessageDao backed by an in-memory map. Only the methods ReactionResolver reaches are real. */
-private class InMemoryMessageDao : MessageDao {
+/** MessageDao with real semantics for the repair-path methods; the rest are stubs. */
+private class RepairInMemoryMessageDao : MessageDao {
     val rows = linkedMapOf<Long, MessageEntity>()
 
     fun seed(vararg messages: MessageEntity) = messages.forEach { rows[it.id] = it }
+
+    override suspend fun getEmptyMmsRows(limit: Int): List<MessageEntity> =
+        rows.values.filter {
+            it.isMms && it.body.isEmpty() && it.attachmentUri == null && it.attachmentsJson == null &&
+                it.id > 0 && it.id < RESTORED_ID_OFFSET
+        }.sortedByDescending { it.timestamp }.take(limit)
+
+    override suspend fun updateBody(messageId: Long, body: String) {
+        rows[messageId]?.let { rows[messageId] = it.copy(body = body) }
+    }
+
+    override suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?) {
+        rows[messageId]?.let {
+            rows[messageId] = it.copy(attachmentsJson = attachmentsJson, attachmentUri = firstUri, mimeType = firstMime)
+        }
+    }
 
     override suspend fun getByThread(threadId: Long): List<MessageEntity> =
         rows.values.filter { it.threadId == threadId }.sortedBy { it.timestamp }
@@ -246,9 +216,6 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity> = emptyList()
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
     override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
-    override suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?) = Unit
-    override suspend fun getEmptyMmsRows(limit: Int): List<MessageEntity> = emptyList()
-    override suspend fun updateBody(messageId: Long, body: String) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
     override suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? = null
     override suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? = null
@@ -272,7 +239,7 @@ private class InMemoryMessageDao : MessageDao {
 }
 
 /** ReactionDao backed by an in-memory list with real insert / count / delete semantics. */
-private class InMemoryReactionDao : ReactionDao {
+private class RepairInMemoryReactionDao : ReactionDao {
     val rows = mutableListOf<ReactionEntity>()
     private var nextId = 1L
 
@@ -303,7 +270,7 @@ private class InMemoryReactionDao : ReactionDao {
 }
 
 /** ThreadDao that records preview repairs; everything else is a no-op stub. */
-private class RecordingThreadDao : ThreadDao {
+private class RepairRecordingThreadDao : ThreadDao {
     var lastMessageAtUpdate: Pair<Long, Long>? = null
     var lastPreviewUpdate: Pair<Long, String>? = null
 

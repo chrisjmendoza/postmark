@@ -516,6 +516,8 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun getOptimisticSentId(threadId: Long, isMms: Boolean): Long? = null
     override suspend fun getOptimisticSentMms(threadId: Long): List<MessageEntity> = emptyList()
     override suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?) = Unit
+    override suspend fun getEmptyMmsRows(limit: Int): List<MessageEntity> = emptyList()
+    override suspend fun updateBody(messageId: Long, body: String) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun getMaxId(): Long? = null
     override suspend fun getMaxMmsId(): Long? = null

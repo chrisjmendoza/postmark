@@ -552,7 +552,11 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                 rawParts += MmsRawPart(it.getLong(idIdx), ct, it.getString(textIdx))
             }
         }
-        return parseMmsRawParts(rawParts)
+        // File-backed text parts (text column null) are streamed from the part URI —
+        // Google Messages' RCS archival writes reaction fallbacks this way.
+        return parseMmsRawParts(rawParts) { partId ->
+            applicationContext.contentResolver.readMmsPartText(partId)
+        }
     }
 
     // Returns the relevant address for an MMS message.

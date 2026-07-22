@@ -23,6 +23,15 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       popup/dialog treatment with a lightweight anchored popup and entering
       selection mode directly from long-press (today it takes long-press →
       action bar → "Select").
+- [ ] **Reaction parsing fixes — on-device verification** (July 22 2026,
+      `feat/reaction-parsing-fixes`) — run the checklist in
+      `docs/fable-reaction-parsing.md`: Fry thread empty bubble should heal
+      into a ❤️ on the image (or log `EmptyMmsRepair: still empty`), Tonya
+      thread's raw `❤️ to "https://…"` bubble should resolve via the one-shot
+      reprocess. Open question needing device data: what does the archival
+      fallback look like for a reaction to a caption-less image / voice memo
+      (placeholder quote? no text part?) — capture via SyncLogger before
+      deciding whether media-placeholder matching is worth building.
 - [x] **Reaction chip position** (reworked July 16 2026) — pills are a layout
       child of the bubble Column with a custom `layout` modifier reporting
       only their bottom half: they straddle the bubble's bottom-end corner

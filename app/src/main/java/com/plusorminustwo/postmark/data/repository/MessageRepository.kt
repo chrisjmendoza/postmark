@@ -122,6 +122,14 @@ class MessageRepository @Inject constructor(
     suspend fun getLatestForThread(threadId: Long): Message? =
         messageDao.getLatestForThread(threadId)?.toDomain()
 
+    /** Provider-backed MMS rows that imported with no readable content — the
+     *  EmptyMmsBodyRepair candidates. Bounded and newest-first; see the DAO query. */
+    suspend fun getEmptyMmsRows(limit: Int): List<Message> =
+        messageDao.getEmptyMmsRows(limit).map { it.toDomain() }
+
+    /** Replaces a message's body text (EmptyMmsBodyRepair after a successful part re-read). */
+    suspend fun updateBody(messageId: Long, body: String) = messageDao.updateBody(messageId, body)
+
     /** Returns all messages ordered by timestamp (used by reprocessReactions debug tool). */
     suspend fun getAll(): List<Message> = messageDao.getAll().map { it.toDomain() }
 

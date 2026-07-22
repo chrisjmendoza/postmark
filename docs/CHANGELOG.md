@@ -4,6 +4,59 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
+
+898 tests passing (up from 887). **Not yet verified on device.** Full analysis in
+`docs/fable-reaction-parsing.md`.
+
+**Reactions to images arrived as permanently-empty bubbles:** an RCS reaction
+from another phone reaches a non-RCS SMS app only as Google Messages' archival
+MMS row in the telephony provider, and both failure modes of that path hit the
+same import weakness — the row's `text/plain` part can be *file-backed*
+(`_data` set, `text` column null; only the column was ever read) or the row can
+be observed *mid-persist* before its parts exist. Either way the import saw an
+empty body, and because the incremental watermark (`_id > max`) only moves
+forward, the row froze as an empty bubble forever (the ❤️-to-an-image case).
+Three-part fix: (1) `parseMmsRawParts` now takes a `readPartText` lambda and
+streams file-backed text parts via new `ContentResolver.readMmsPartText`
+(`MmsPartTextReader.kt`), wired into both `SmsSyncHandler` and
+`SmsHistoryImportWorker`; (2) new `EmptyMmsBodyRepair` (same injectable shape
+as `ReactionResolver`, JVM-tested with fake DAOs) re-reads parts for a bounded
+newest-first set of empty provider-backed MMS rows on every `triggerCatchUp`
+(cheap no-op SELECT when healthy — new `MessageDao.getEmptyMmsRows`/`updateBody`),
+updates body/attachments, and re-runs `ReactionResolver.resolveThread` on
+touched threads so a recovered fallback attaches as a Reaction and loses its
+bubble in the same pass instead of surfacing as a late text bubble; (3)
+still-empty rows are logged via SyncLogger (`EmptyMmsRepair` tag) and retried
+next pass, so if Samsung/GM archival genuinely writes no text part we'll see it
+in the logs instead of guessing.
+
+**Reactions quoting long messages (links) stuck as raw text bubbles:** the
+sending platform ellipsizes a long original inside the fallback's quotes
+(`❤️ to "https://music.youtube.com/watch?v=ZKeroWatXDQ&si=F…"`), so the quote
+could never equal or prefix the original — it IS a prefix of the original plus
+an ellipsis the original doesn't contain. All three match strategies failed and
+the fallback stayed a visible bubble. New strategy 4 in
+`ReactionFallbackParser.findOriginalMessage`: if the normalized quote ends with
+`...`, strip it and prefix-match the stem (10-char floor so `ok…` can't latch
+onto an arbitrary recent message). Format-agnostic — covers Google and Apple
+truncation alike. A one-shot `reprocessReactionsOnce` pass in `SmsSyncHandler`
+(same prefs-flag pattern as the roster repair; `reaction_reprocess_v2_done`)
+runs `ReactionResolver.resolveAll()` once so historical stragglers like the
+stuck URL reaction finally resolve without a DevOptions visit.
+
+**Deleted the parallel matcher:** `AndroidReactionParser` carried internal
+mirror copies of `normalize`/`findOriginalMessage`/`processIncomingMessage`
+"for Context-free tests" — but `ReactionFallbackParser` is already Context-free
+via `AppleReactionParser`'s internal `patternsProvider` constructor, and a
+second matcher copy would have silently missed the strategy-4 fix. Mirror
+deleted; `AndroidReactionParserTest` trimmed to format recognition; matcher
+tests moved to new `ReactionFallbackParserMatchTest` (24 tests incl. the
+literal failing URL case) against the single shared implementation. New
+`EmptyMmsBodyRepairTest` (5), plus reader-fallback tests in
+`MmsPartParsingTest` (4) and an end-to-end ellipsized-link test in
+`ReactionResolverTest`. Five test fakes gained the two new DAO methods.
+
 ## 2026-07-22 (feat/theme-presets) — suppress notifications for the open thread
 
 887 tests passing (up from 829). **Not yet verified on device.**

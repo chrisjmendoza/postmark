@@ -59,6 +59,21 @@ class ReactionFallbackParser @Inject constructor(
             normalize(trimmedBody).startsWith(normalizedQuery, ignoreCase = true)
         }?.let { return it }
 
+        // 4. Truncated-quote match — both Google and Apple ellipsize a long original in
+        //    the fallback (`❤️ to "https://music.youtube.com/watch?v=ZKe…"`), so the
+        //    quote can never equal or prefix the original: it IS a prefix of the
+        //    original plus a trailing ellipsis the original doesn't contain. Strip the
+        //    marker and prefix-match what remains. The stem-length floor keeps a stub
+        //    like `ok…` from latching onto an arbitrary recent message.
+        if (normalizedQuery.endsWith("...")) {
+            val stem = normalizedQuery.removeSuffix("...").trimEnd()
+            if (stem.length >= TRUNCATED_QUOTE_MIN_STEM) {
+                searchWindow.firstOrNull {
+                    normalize(it.body.trim()).startsWith(stem, ignoreCase = true)
+                }?.let { return it }
+            }
+        }
+
         return null
     }
 
@@ -90,5 +105,11 @@ class ReactionFallbackParser @Inject constructor(
             timestamp = message.timestamp,
             rawText = message.body
         )
+    }
+
+    private companion object {
+        // Minimum characters that must survive ellipsis-stripping before the
+        // truncated-quote strategy is allowed to prefix-match (strategy 4 above).
+        const val TRUNCATED_QUOTE_MIN_STEM = 10
     }
 }

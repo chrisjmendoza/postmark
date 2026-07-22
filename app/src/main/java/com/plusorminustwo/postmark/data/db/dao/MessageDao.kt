@@ -115,6 +115,26 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE threadId = :threadId ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatestForThread(threadId: Long): MessageEntity?
 
+    /** Provider-backed MMS rows that imported with no readable content (empty body, no
+     *  attachment) — candidates for the part re-read repair pass (EmptyMmsBodyRepair).
+     *  Google Messages' RCS archival stores text parts file-backed and can be observed
+     *  mid-persist, so a row can import empty and — the incremental watermark only moves
+     *  forward — stay empty forever without this. Newest first so fresh races are healed
+     *  before historical leftovers; id bounds exclude optimistic (< 0) and restored
+     *  (>= RESTORED_ID_OFFSET) rows, which have no provider row to re-read. */
+    @Query("""
+        SELECT * FROM messages
+        WHERE isMms = 1 AND body = '' AND attachmentUri IS NULL AND attachmentsJson IS NULL
+          AND id > 0 AND id < 20000000000
+        ORDER BY timestamp DESC LIMIT :limit
+    """)
+    suspend fun getEmptyMmsRows(limit: Int): List<MessageEntity>
+
+    /** Replaces a message's body text. Used by EmptyMmsBodyRepair after a successful
+     *  part re-read; the FTS sync triggers keep the search index in step. */
+    @Query("UPDATE messages SET body = :body WHERE id = :messageId")
+    suspend fun updateBody(messageId: Long, body: String)
+
     @Query("DELETE FROM messages")
     suspend fun deleteAll()
 

@@ -130,6 +130,40 @@ class MmsPartParsingTest {
         )
     }
 
+    // ── file-backed text parts (readPartText fallback) ──────────────────────
+
+    @Test fun `null text column falls back to the part reader`() {
+        // File-backed part (`_data` set): the text column is null and the content must
+        // be streamed — the shape Google Messages' RCS archival writes for reactions.
+        val result = parseMmsRawParts(listOf(part(5, "text/plain", null))) { id ->
+            if (id == 5L) "❤️ to \"the original\"" else null
+        }
+        assertEquals("❤️ to \"the original\"", result.body)
+    }
+
+    @Test fun `reader is not consulted when the text column is present`() {
+        var readerCalled = false
+        val result = parseMmsRawParts(listOf(part(5, "text/plain", "inline"))) {
+            readerCalled = true; "file-backed"
+        }
+        assertEquals("inline", result.body)
+        assertFalse(readerCalled)
+    }
+
+    @Test fun `reader returning null yields empty body`() {
+        val result = parseMmsRawParts(listOf(part(5, "text/plain", null))) { null }
+        assertEquals("", result.body)
+    }
+
+    @Test fun `reader is not consulted for non-text parts`() {
+        var readerCalled = false
+        val result = parseMmsRawParts(listOf(part(5, "image/jpeg", null))) {
+            readerCalled = true; "never"
+        }
+        assertFalse(readerCalled)
+        assertEquals(listOf(MessageAttachment("content://mms/part/5", "image/jpeg")), result.attachments)
+    }
+
     // ── previewText ─────────────────────────────────────────────────────────
 
     @Test fun `previewText prefers body over media label`() {
