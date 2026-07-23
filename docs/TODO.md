@@ -1011,22 +1011,34 @@ instance, but flagged:
       (July 22 2026) — `* text=auto eol=lf`, plus explicit CRLF for `.bat`
       files and binary handling for the wrapper jar. Left untouched; item
       closed as already-done.
-- [ ] **AGP 10 deprecation cleanup** (noted July 18 2026, Android Studio build
-      output; still present July 19 on AGP 9.3.0 — Android Studio bumped
-      9.2.1 → 9.3.0 and added `org.gradle.tooling.parallel`, wrapper already
-      Gradle 9.6.1) — six legacy-behavior flags in `gradle.properties`
-      are deprecated and will be REMOVED in AGP 10 (they were almost
-      certainly written by the AGP Upgrade Assistant to freeze old behavior). Each needs its real migration, not just deletion:
-      `android.newDsl=false` and `android.builtInKotlin=false` are the meaty
-      ones (new AGP DSL + AGP built-in Kotlin replacing the standalone
-      kotlin-android plugin); the rest are small (`resvalues=true` → declare
-      `buildFeatures { resValues = true }` where used; explicit `targetSdk`;
-      compile-time R class; drop any `<uses-sdk>` manifest tag). Also one
-      obsolete-API warning: `applicationVariants` → `androidComponents` —
-      NOT in our build scripts (grep clean), so it comes from a third-party
-      plugin; identify it (likely google-services/Firebase) and update.
-      Do this as its own branch/PR with a full `./gradlew test` +
-      staging-build verification; behavior flips can be subtle.
+- [x] **AGP 10 deprecation cleanup, part 1** (`chore/agp10-flags`, 2026-07-23)
+      — 4 of 6 legacy-behavior flags dropped clean, one commit each, all
+      verified no-ops for this project: `android.defaults.buildfeatures.resvalues`
+      (no `resValue()` use anywhere), `android.sdk.defaultTargetSdkToCompileSdkIfUnset`
+      (`targetSdk` already explicit), `android.enableAppCompileTimeRClass`,
+      `android.usesSdkInManifest.disallowed` (no `<uses-sdk>` in any manifest).
+      `assembleDebug`/`test` green after each, 898 tests.
+- [ ] **AGP 10 deprecation cleanup, part 2 — `newDsl` / `builtInKotlin`**
+      (deferred from `chore/agp10-flags`, 2026-07-23). Root cause identified:
+      the obsolete-API warning (`applicationVariants`/`testVariants`/
+      `unitTestVariants`) is **not** google-services/Firebase as previously
+      guessed — `-Pandroid.debug.obsoleteApi=true` traces it directly to the
+      standalone `org.jetbrains.kotlin.android` (KGP) plugin itself, v2.2.10.
+      Dropping either flag alone breaks the build against this KGP version:
+      `android.builtInKotlin` alone → `Cannot add extension with name 'kotlin'`
+      (AGP's built-in Kotlin support collides with the extension KGP registers);
+      `android.newDsl` alone → `ApplicationExtensionImpl$AgpDecorated_Decorated
+      cannot be cast to ... BaseExtension` (KGP still expects the legacy AGP
+      extension type). Real fix is one of: (a) wait for a KGP release that
+      supports AGP's new DSL / built-in Kotlin cleanly, then drop the
+      `org.jetbrains.kotlin.android` + `kotlin.plugin.compose` plugin
+      applications in favor of AGP's built-in Kotlin support entirely
+      (https://developer.android.com/r/tools/built-in-kotlin), or (b) migrate
+      DSL usage first if KGP adds new-DSL support before built-in-Kotlin
+      support. Not mechanical — touches every Kotlin/Compose/Hilt/KSP plugin
+      wiring in `app/build.gradle.kts` — do NOT attempt piecemeal. Revisit when
+      bumping the Kotlin Gradle Plugin version; check KGP release notes for
+      AGP 10 / built-in-Kotlin compatibility first.
 
 ### Accessibility
 - [ ] **Content descriptions** on all icon buttons for screen readers.

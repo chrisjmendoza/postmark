@@ -112,6 +112,38 @@ Before the height is measured the popup renders at the below position (height 0 
 fits) and self-corrects on the next frame — no visible jump. Placement test evolved to
 `ReactionPopupPositionTest` (fits below, flips above, clamps, nav-inset respected,
 first-frame); selection-state test extended for the top-Y plumbing.
+## 2026-07-23 (chore/agp10-flags) — AGP 10 deprecated flag cleanup (part 1)
+
+898 tests passing. Mechanical build-hygiene pass over the six deprecated
+`android.*` compat flags in `gradle.properties` flagged for removal before
+AGP 10, one flag per commit, `assembleDebug` + `test` green before each commit.
+
+**Dropped clean (4 of 6), each verified a no-op for this project before
+removal:** `android.defaults.buildfeatures.resvalues` (project never calls
+`resValue()`), `android.sdk.defaultTargetSdkToCompileSdkIfUnset` (`targetSdk`
+is already explicit in `app/build.gradle.kts`), `android.enableAppCompileTimeRClass`,
+`android.usesSdkInManifest.disallowed` (no `<uses-sdk>` tag in any manifest).
+
+**Deferred (2 of 6): `android.builtInKotlin` and `android.newDsl`.** Both are
+load-bearing, not just legacy-behavior freezes. Removing `builtInKotlin` alone
+fails with "Cannot add extension with name 'kotlin'" (AGP's built-in Kotlin
+support collides with the standalone `org.jetbrains.kotlin.android` plugin's
+own extension). Removing `newDsl` alone fails with a `ClassCastException`
+(`ApplicationExtensionImpl$AgpDecorated_Decorated` → `BaseExtension`) because
+KGP 2.2.10 still targets the legacy AGP extension type. `-Pandroid.debug.obsoleteApi=true`
+confirms the underlying obsolete-API warnings (`applicationVariants`/
+`testVariants`/`unitTestVariants`) are emitted by the `kotlin-android` (KGP)
+plugin itself, not by our build scripts or a Google/Firebase plugin as
+previously suspected. Real migration requires either an updated KGP release
+compatible with AGP's new DSL / built-in Kotlin, or dropping the standalone
+KGP plugin in favor of AGP's built-in Kotlin support outright — not a
+mechanical fix, so both flags stay in `gradle.properties` for now. Details in
+`docs/TODO.md`.
+
+Also fixed three trivial compiler warnings while in the file: `@param:`
+annotation-target disambiguation on the `@ApplicationContext` constructor
+parameters in `SmsSyncHandler` and `SyncLogger`, and swapped
+`SettingsScreen`'s default-SMS-app row icon to `Icons.AutoMirrored.Filled.Message`.
 
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 

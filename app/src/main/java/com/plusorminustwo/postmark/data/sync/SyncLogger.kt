@@ -20,7 +20,7 @@ import javax.inject.Singleton
  *  Size-bounded: trims to [MAX_LINES] lines when [MAX_BYTES] is exceeded. */
 @Singleton
 class SyncLogger @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
     // Log file lives alongside the app's other private data — never on external storage.
     private val logFile: File get() = File(context.filesDir, "sync_log.txt")
