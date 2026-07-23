@@ -5035,29 +5035,38 @@ internal fun ReactionPills(
     modifier: Modifier = Modifier
 ) {
     val grouped = remember(reactions) { reactions.groupBy { it.emoji } }
-    FlowRow(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        grouped.forEach { (emoji, reactors) ->
-            val iMine = reactors.any { it.senderAddress == SELF_ADDRESS }
-            val count = reactors.size
-            val label = if (count > 1) "$emoji $count" else emoji
-            Surface(
-                onClick = { onReactionClick(emoji) },
-                shape = RoundedCornerShape(10.dp),
-                color = if (iMine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-                border = BorderStroke(
-                    width = if (iMine) 1.dp else 0.5.dp,
-                    color = if (iMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                )
-            ) {
-                Text(
-                    text = label,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                )
+    // M3's clickable Surface silently pads itself out to the 48dp minimum touch
+    // target, so each ~24dp chip occupied a 48dp-tall slot with the visual centered
+    // — read as a big phantom gap between the bubble and its pills once they moved
+    // into normal layout below the bubble. Opting the chips out keeps the row's
+    // height equal to what's drawn; the deliberate tradeoff is a smaller tap
+    // target, acceptable for a secondary toggle that also exists in the long-press
+    // popup and the image viewer's quick-reaction row.
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+        FlowRow(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            grouped.forEach { (emoji, reactors) ->
+                val iMine = reactors.any { it.senderAddress == SELF_ADDRESS }
+                val count = reactors.size
+                val label = if (count > 1) "$emoji $count" else emoji
+                Surface(
+                    onClick = { onReactionClick(emoji) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (iMine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                    border = BorderStroke(
+                        width = if (iMine) 1.dp else 0.5.dp,
+                        color = if (iMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                    )
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
             }
         }
     }

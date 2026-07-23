@@ -4,6 +4,21 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
+
+**Phantom gap between bubble and reaction pills** (found on-device right after
+the pills-below-bubble merge): M3's clickable `Surface` silently enforces the
+48dp minimum interactive size, so each ~24dp chip occupied a 48dp-tall slot
+with the visual centered — ~12dp of invisible padding above and below. The old
+corner-straddle layout math happened to swallow it; normal Column layout
+exposed it. `ReactionPills` now opts its chips out via
+`LocalMinimumInteractiveComponentSize provides Dp.Unspecified`, so the row is
+exactly as tall as it draws and the pills sit at the bubble's bottom edge
+(2dp gap). Deliberate tradeoff: smaller tap target on the chips — acceptable
+for a secondary toggle that also exists in the long-press popup and the image
+viewer's quick-reaction row. Also tightens the display-only pills on search
+result rows. 898 tests unchanged.
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in
