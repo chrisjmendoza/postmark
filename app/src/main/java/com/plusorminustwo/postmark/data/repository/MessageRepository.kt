@@ -147,6 +147,11 @@ class MessageRepository @Inject constructor(
     suspend fun getMessagesWithAttachments(): List<Message> =
         messageDao.getAllWithAttachments().map { it.toDomain() }
 
+    /** (threadId → total message count) for every thread — the Storage usage screen's
+     *  per-conversation breakdown source. */
+    suspend fun getMessageCountsByThread(): Map<Long, Int> =
+        messageDao.getMessageCountsByThread().associate { it.threadId to it.count }
+
     /** Returns all distinct thread IDs in the messages table; used for batched iteration. */
     suspend fun getAllThreadIds(): List<Long> = messageDao.getAllThreadIds()
 

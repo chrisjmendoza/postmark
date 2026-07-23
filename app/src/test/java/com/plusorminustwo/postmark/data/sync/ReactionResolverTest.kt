@@ -270,6 +270,7 @@ private class InMemoryMessageDao : MessageDao {
     override fun observeUnreadCounts(): Flow<List<UnreadCount>> = flowOf(emptyList())
     override fun observeMediaMessages(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
     override suspend fun getAllWithAttachments(): List<MessageEntity> = emptyList()
+    override suspend fun getMessageCountsByThread(): List<com.plusorminustwo.postmark.data.db.dao.ThreadMessageCount> = emptyList()
     override suspend fun updateStarred(messageId: Long, isStarred: Boolean) = Unit
     override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
     override suspend fun updatePinned(messageId: Long, isPinned: Boolean) = Unit

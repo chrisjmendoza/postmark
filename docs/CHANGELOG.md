@@ -4,6 +4,22 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (feat/storage-usage) — Storage usage screen
+
+New Settings › Storage usage screen (docs/TODO.md Tier 3): per-section
+breakdown (database incl. `-wal`/`-shm`, attachments & voice memos, chat
+backgrounds, Coil image cache, backups incl. the optional SAF folder, sync
+log), a top-20 per-conversation breakdown (new `MessageDao
+.getMessageCountsByThread()` projection + filename-matched app-local
+attachment attribution), and two safe cleanup actions — "Clean up unused
+files" (reuses the existing orphaned-attachment sweep with `minAgeMs = 0`;
+the sweep's own longer grace for voice memos still protects an unsent
+recording) and "Clear image cache" (Coil refetches from content URIs, so
+this is lossless). No delete button for the database or backups themselves.
+Received MMS media lives in the OS's own content provider, not app storage
+— the screen's footer says so. Attribution/breakdown logic extracted to
+`domain/storage/StorageUsage.kt`, unit tested. 959 tests. Needs on-device
+verification (plausible sizes, SAF folder size/label, cleanup actions).
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 
 **Phantom gap between bubble and reaction pills** (found on-device right after
