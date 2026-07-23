@@ -325,14 +325,23 @@ fun ThreadScreen(
         }
     }
 
+    // Long-press flow back handling, composed BEFORE the memo handler so an in-flight
+    // memo keeps priority (see the comment on that handler below): with the popup open,
+    // back dismisses the popup only and leaves selection mode running; otherwise back
+    // exits an active selection (which also clears any orphan popup state).
+    BackHandler(enabled = uiState.reactionPickerMessageId != null) {
+        viewModel.dismissReactionPicker()
+    }
+    BackHandler(enabled = uiState.reactionPickerMessageId == null && uiState.isSelectionMode) {
+        viewModel.exitSelectionMode()
+    }
+
     // Back during an in-flight memo must park it (onBackDuringMemo), never let
     // navigation silently discard the take — see the CHANGELOG entry on this. Compose's
     // OnBackPressedDispatcher gives priority to the most-recently-composed *enabled*
-    // callback, so this is placed as the LAST BackHandler this function composes (there
-    // is no other one in ThreadScreen.kt today — multi-select exits via the top bar's ×
-    // instead of back — but a future one, e.g. a selection-mode close-on-back, would
-    // need to be composed BEFORE this point to keep this one taking precedence while a
-    // memo is active).
+    // callback, so this is placed as the LAST BackHandler this function composes (the
+    // long-press-flow handlers above are composed first so this one wins while a memo is
+    // active).
     BackHandler(enabled = voiceMemo.phase != VoiceMemoPhase.IDLE) {
         viewModel.onBackDuringMemo()
     }
@@ -344,9 +353,8 @@ fun ThreadScreen(
     val onDismissDefaultSmsDialog = remember(viewModel) { { viewModel.dismissDefaultSmsDialog() } }
     val onUpdateBackupPolicy      = remember(viewModel) { { policy: BackupPolicy -> viewModel.updateBackupPolicy(policy) } }
     val onDismissReactionPicker   = remember(viewModel) { { viewModel.dismissReactionPicker() } }
-    val onEnterSelectionModeFromActionMode = remember(viewModel) { { viewModel.enterSelectionModeFromActionMode() } }
     val onForwardMessage_         = remember(viewModel, onForwardMessage) {
-        { id: Long -> viewModel.dismissReactionPicker(); onForwardMessage(id) }
+        { id: Long -> viewModel.exitSelectionMode(); onForwardMessage(id) }
     }
     val onExitSelectionMode       = remember(viewModel) { { viewModel.exitSelectionMode() } }
     val onSetSelectionScope       = remember(viewModel) { { scope: SelectionScope -> viewModel.setSelectionScope(scope) } }
@@ -421,7 +429,6 @@ fun ThreadScreen(
         onDismissDefaultSmsDialog = onDismissDefaultSmsDialog,
         onUpdateBackupPolicy = onUpdateBackupPolicy,
         onDismissReactionPicker = onDismissReactionPicker,
-        onEnterSelectionModeFromActionMode = onEnterSelectionModeFromActionMode,
         onForwardMessage = onForwardMessage_,
         onExitSelectionMode = onExitSelectionMode,
         onSetSelectionScope = onSetSelectionScope,
@@ -462,7 +469,7 @@ fun ThreadScreen(
  * stable discriminator — keying on uiState itself would restart the transition on
  * every keystroke or selection tap, since a new state object arrives per emission.
  */
-private enum class TopBarMode { ACTION, SELECTION, NORMAL }
+private enum class TopBarMode { SELECTION, NORMAL }
 
 /**
  * Non-snapshot holder retaining the last meaningful value so an [AnimatedVisibility]
@@ -537,7 +544,6 @@ private fun ThreadContent(
     onDismissDefaultSmsDialog: () -> Unit,
     onUpdateBackupPolicy: (BackupPolicy) -> Unit,
     onDismissReactionPicker: () -> Unit,
-    onEnterSelectionModeFromActionMode: () -> Unit,
     onForwardMessage: (Long) -> Unit,
     onExitSelectionMode: () -> Unit,
     onSetSelectionScope: (SelectionScope) -> Unit,
@@ -1053,9 +1059,8 @@ private fun ThreadContent(
             // disappearing behind the bar.
             Box {
             val topBarMode = when {
-                uiState.reactionPickerMessageId != null -> TopBarMode.ACTION
-                uiState.isSelectionMode                 -> TopBarMode.SELECTION
-                else                                    -> TopBarMode.NORMAL
+                uiState.isSelectionMode -> TopBarMode.SELECTION
+                else                    -> TopBarMode.NORMAL
             }
             // Written only while selection mode is live; read by the exiting
             // SELECTION branch below, which AnimatedContent keeps composing after
@@ -1078,30 +1083,6 @@ private fun ThreadContent(
                 label = "topBarSwap"
             ) { mode ->
             when (mode) {
-                TopBarMode.ACTION -> MessageActionTopBar(
-                    isPinned = uiState.messages
-                        .find { it.id == uiState.reactionPickerMessageId }?.isPinned == true,
-                    onCancel  = { onDismissReactionPicker() },
-                    onCopy    = {
-                        val msg = uiState.messages.find { it.id == uiState.reactionPickerMessageId }
-                        if (msg != null) {
-                            val cb = context.getSystemService(ClipboardManager::class.java)
-                            cb.setPrimaryClip(ClipData.newPlainText("message", msg.body))
-                            Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
-                        }
-                        onDismissReactionPicker()
-                    },
-                    onSelect  = { onEnterSelectionModeFromActionMode() },
-                    onForward = { uiState.reactionPickerMessageId?.let { onForwardMessage(it) } },
-                    onTogglePin = {
-                        uiState.reactionPickerMessageId?.let { onTogglePinnedMessage(it) }
-                        onDismissReactionPicker()
-                    },
-                    onDelete  = {
-                        pendingDeleteMessageId = uiState.reactionPickerMessageId
-                        onDismissReactionPicker()
-                    }
-                )
                 TopBarMode.SELECTION -> SelectionTopBar(
                     // During the exit animation the live selection is already empty —
                     // render the retained in-mode value so the bar doesn't flash
@@ -1496,7 +1477,28 @@ private fun ThreadContent(
                 message        = msg,
                 quickEmojis    = quickReactionEmojis,
                 bubbleBottomY  = liveBubbleY,
+                isPinned       = msg.isPinned,
                 onReact     = { emoji -> onToggleReaction(msg.id, emoji) },
+                onCopy      = {
+                    val cb = context.getSystemService(ClipboardManager::class.java)
+                    cb.setPrimaryClip(ClipData.newPlainText("message", msg.body))
+                    Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
+                    // Exit clears the popup + selection in one step.
+                    onExitSelectionMode()
+                },
+                onForward   = {
+                    // onForwardMessage already exits selection (see onForwardMessage_).
+                    onForwardMessage(msg.id)
+                },
+                onTogglePin = {
+                    onTogglePinnedMessage(msg.id)
+                    onExitSelectionMode()
+                },
+                onDelete    = {
+                    // Confirm dialog takes over; selection is exited (popup cleared too).
+                    pendingDeleteMessageId = msg.id
+                    onExitSelectionMode()
+                },
                 onDismiss   = { onDismissReactionPicker() }
             )
         }
@@ -5071,7 +5073,12 @@ private fun EmojiReactionPopup(
     message: Message,
     quickEmojis: List<String>,
     bubbleBottomY: Float,
+    isPinned: Boolean,
     onReact: (String) -> Unit,
+    onCopy: () -> Unit,
+    onForward: () -> Unit,
+    onTogglePin: () -> Unit,
+    onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val density = LocalDensity.current
@@ -5100,21 +5107,21 @@ private fun EmojiReactionPopup(
     val moreTint   = MaterialTheme.colorScheme.onSurfaceVariant
 
     Box(Modifier.fillMaxSize()) {
-        // Scrim — covers only below the action bar so the action bar stays
-        // fully visible and tappable. Tap anywhere in the scrim to dismiss.
+        // Transparent click-catcher — no dim, so the conversation stays fully readable.
+        // Covers only below the top bar (statusBarsPadding + 56dp) so the SelectionTopBar
+        // stays tappable. Tap anywhere here to dismiss the popup (selection mode persists).
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .padding(top = 56.dp)
-                .background(Color.Black.copy(alpha = 0.45f))
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
                 ) { onDismiss() }
         )
 
-        // Emoji pill — 5 emoji + more button, floats above (or below) the bubble
+        // Anchored pill — emoji row + compact action row — floats above (or below) the bubble
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -5125,44 +5132,60 @@ private fun EmojiReactionPopup(
             shadowElevation = 8.dp,
             tonalElevation = 0.dp
         ) {
-            Row(
+            Column(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                quickEmojis.forEach { emoji ->
-                    val isSelected = emoji in myReactionEmojis
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    quickEmojis.forEach { emoji ->
+                        val isSelected = emoji in myReactionEmojis
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                                    else Color.Transparent
+                                )
+                                .clickable {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onReact(emoji)
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(emoji, fontSize = 24.sp)
+                        }
+                    }
+                    // More button — opens extended picker
                     Box(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(CircleShape)
-                            .background(
-                                if (isSelected) MaterialTheme.colorScheme.primaryContainer
-                                else Color.Transparent
-                            )
-                            .clickable {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onReact(emoji)
-                            },
+                            .clickable { showMoreSheet = true },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(emoji, fontSize = 24.sp)
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "More emoji",
+                            tint = moreTint,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
-                // More button — opens extended picker
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .clickable { showMoreSheet = true },
-                    contentAlignment = Alignment.Center
+                // Compact action row — same operations the old ACTION top bar exposed.
+                // Each action closes the popup; see the call site for select-mode handling.
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "More emoji",
-                        tint = moreTint,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    ActionItem(Icons.Default.ContentCopy,      "Copy",    onCopy)
+                    ActionItem(Icons.AutoMirrored.Filled.Send, "Forward", onForward)
+                    ActionItem(Icons.Default.PushPin, if (isPinned) "Unpin" else "Pin", onTogglePin)
+                    ActionItem(Icons.Default.Delete, "Delete", onDelete, MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -5213,7 +5236,6 @@ private fun ThreadScreenPreview() {
             onDismissDefaultSmsDialog = {},
             onUpdateBackupPolicy = {},
             onDismissReactionPicker = {},
-            onEnterSelectionModeFromActionMode = {},
             onForwardMessage = {},
             onExitSelectionMode = {},
             onSetSelectionScope = {},
@@ -5368,39 +5390,7 @@ private fun EmojiPickerBottomSheet(
     }
 }
 
-// ── MessageActionTopBar ───────────────────────────────────────────────────────
-
-@Composable
-private fun MessageActionTopBar(
-    isPinned: Boolean,
-    onCancel: () -> Unit,
-    onCopy: () -> Unit,
-    onSelect: () -> Unit,
-    onForward: () -> Unit,
-    onTogglePin: () -> Unit,
-    onDelete: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 4.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .height(56.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ActionItem(Icons.Default.Close,            "Cancel",  onCancel,  MaterialTheme.colorScheme.error)
-            ActionItem(Icons.Default.ContentCopy,      "Copy",    onCopy)
-            ActionItem(Icons.Default.CheckBox,         "Select",  onSelect)
-            ActionItem(Icons.AutoMirrored.Filled.Send, "Forward", onForward)
-            ActionItem(Icons.Default.PushPin, if (isPinned) "Unpin" else "Pin", onTogglePin)
-            ActionItem(Icons.Default.Delete,           "Delete",  onDelete,  MaterialTheme.colorScheme.error)
-        }
-    }
-}
+// ── ActionItem ────────────────────────────────────────────────────────────────
 
 @Composable
 private fun ActionItem(

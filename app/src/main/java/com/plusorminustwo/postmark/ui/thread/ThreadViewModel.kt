@@ -419,11 +419,25 @@ class ThreadViewModel @Inject constructor(
         _selectionState.update { it + messageId }
     }
 
-    fun exitSelectionMode() {
-        _isSelectionMode.value = false
-        _selectionState.value  = emptySet()
-        _selectionScope.value  = SelectionScope.MESSAGES
+    // Bridges the five separate selection-flow values to/from the pure [SelectionSnapshot]
+    // reducer so every long-press-flow transition has one source of truth.
+    private fun selectionSnapshot() = SelectionSnapshot(
+        pickerMessageId = _reactionPickerMessageId.value,
+        bubbleY         = _reactionPickerBubbleY.value,
+        isSelectionMode = _isSelectionMode.value,
+        selection       = _selectionState.value,
+        scope           = _selectionScope.value
+    )
+
+    private fun applySelectionSnapshot(s: SelectionSnapshot) {
+        _reactionPickerMessageId.value = s.pickerMessageId
+        _reactionPickerBubbleY.value   = s.bubbleY
+        _isSelectionMode.value         = s.isSelectionMode
+        _selectionState.value          = s.selection
+        _selectionScope.value          = s.scope
     }
+
+    fun exitSelectionMode() = applySelectionSnapshot(exitSelection())
 
     fun toggleSelection(messageId: Long) {
         _selectionState.update { cur ->
@@ -468,26 +482,18 @@ class ThreadViewModel @Inject constructor(
 
     // ── Reactions ─────────────────────────────────────────────────────────────
 
-    fun showReactionPicker(messageId: Long, bubbleY: Float) {
-        _reactionPickerMessageId.value = messageId
-        _reactionPickerBubbleY.value   = bubbleY
-        _selectionState.value          = setOf(messageId)
-    }
+    /**
+     * Long-press entry point. When not already in selection mode this opens the anchored
+     * emoji popup AND enters selection mode with [messageId] as the sole selection. When
+     * selection mode is already live a long-press just toggles that message (like a tap),
+     * without opening a popup or clobbering the running multi-selection.
+     */
+    fun showReactionPicker(messageId: Long, bubbleY: Float) =
+        applySelectionSnapshot(longPress(selectionSnapshot(), messageId, bubbleY))
 
-    fun dismissReactionPicker() {
-        _reactionPickerMessageId.value = null
-        _reactionPickerBubbleY.value   = 0f
-        _selectionState.value          = emptySet()
-    }
-
-    /** Transitions from single-message action mode into full multi-select mode. */
-    fun enterSelectionModeFromActionMode() {
-        _reactionPickerMessageId.value = null
-        _reactionPickerBubbleY.value   = 0f
-        _isSelectionMode.value         = true
-        _selectionScope.value          = SelectionScope.MESSAGES
-        // _selectionState already contains the long-pressed message
-    }
+    /** Dismisses the popup only — selection mode and the current selection are preserved. */
+    fun dismissReactionPicker() =
+        applySelectionSnapshot(dismissPicker(selectionSnapshot()))
 
     fun toggleStarred(messageId: Long) {
         viewModelScope.launch {
@@ -570,7 +576,8 @@ class ThreadViewModel @Inject constructor(
                     )
                 )
             }
-            dismissReactionPicker()
+            // Reacting completes the user's intent: close the popup AND leave selection mode.
+            exitSelectionMode()
             // First-ever reaction (add OR remove): reactions live only on this device and
             // are never sent, so a private note doesn't silently masquerade as a two-way
             // reaction. Show the notice once, then mark it shown forever.
@@ -1374,6 +1381,49 @@ class ThreadViewModel @Inject constructor(
          *  local annotations, never transmitted, so the pill UI's two-way look is set straight. */
         const val REACTIONS_LOCAL_NOTICE =
             "Reactions stay on your phone — the other person doesn't see them."
+
+        /**
+         * Immutable snapshot of the long-press / selection state. The ViewModel keeps these
+         * five values in separate StateFlows (for the [combine] that assembles [uiState]);
+         * routing every long-press-flow mutation through this snapshot keeps the transition
+         * rules in one pure, testable place instead of scattered imperative assignments.
+         */
+        data class SelectionSnapshot(
+            val pickerMessageId: Long? = null,
+            val bubbleY: Float = 0f,
+            val isSelectionMode: Boolean = false,
+            val selection: Set<Long> = emptySet(),
+            val scope: SelectionScope = SelectionScope.MESSAGES
+        )
+
+        /**
+         * Long-press on [messageId]: while already in selection mode this just toggles the
+         * message (identical to a tap) and keeps the popup closed and the rest of the running
+         * selection intact; otherwise it opens the anchored emoji popup AND enters selection
+         * mode with that message as the sole selection.
+         */
+        internal fun longPress(s: SelectionSnapshot, messageId: Long, bubbleY: Float): SelectionSnapshot =
+            if (s.isSelectionMode) {
+                s.copy(
+                    selection = if (messageId in s.selection) s.selection - messageId
+                                else s.selection + messageId
+                )
+            } else {
+                SelectionSnapshot(
+                    pickerMessageId = messageId,
+                    bubbleY         = bubbleY,
+                    isSelectionMode = true,
+                    selection       = setOf(messageId),
+                    scope           = SelectionScope.MESSAGES
+                )
+            }
+
+        /** Tap-outside / back with the popup open: close the popup only, keep selection running. */
+        internal fun dismissPicker(s: SelectionSnapshot): SelectionSnapshot =
+            s.copy(pickerMessageId = null, bubbleY = 0f)
+
+        /** Leave selection entirely — also clears any open popup so nothing is orphaned. */
+        internal fun exitSelection(): SelectionSnapshot = SelectionSnapshot()
 
         /**
          * Whether the thread gesture-tips card should be visible: only while the user hasn't

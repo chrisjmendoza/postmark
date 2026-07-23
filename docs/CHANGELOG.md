@@ -4,6 +4,41 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (feat/longpress-selection) — long-press enters selection directly with an undimmed anchored popup
+
+905 tests passing (up from 887). **Not yet verified on device.**
+
+**Long-press used to darken the whole screen and hide multi-select two taps deep.**
+Long-pressing a bubble popped a scrimmed emoji picker (45% black dim) plus a
+per-message ACTION top bar, and reaching multi-select took long-press → action bar
+→ "Select". Now a single long-press opens the lightweight anchored emoji popup AND
+enters selection mode (SelectionTopBar, scope MESSAGES, that message selected) at
+once, with **no dimming** — the 45% scrim is replaced by a fully transparent
+full-screen click-catcher (same statusBarsPadding + 56dp top inset so the top bar
+stays tappable), so the conversation stays fully readable behind the popup.
+
+The popup surface gains a compact second row carrying the actions the deleted ACTION
+bar held — Copy, Forward, Pin/Unpin (label follows `isPinned`), Delete — wired to the
+same clipboard-copy+toast / forward / pin-toggle / `pendingDeleteMessageId` confirm
+flow. Emoji anchoring math, haptics, and the "more" bottom sheet are unchanged.
+
+Behavior rules: long-press while already selecting toggles that message (like a tap,
+no popup, existing selection preserved); tap-outside or back with the popup open
+dismisses the popup only and keeps selection running; reacting (including from the
+"more" sheet) dismisses the popup and exits selection; each action-row action closes
+the popup and exits selection. Back handling composed before the in-flight-memo
+handler so the memo keeps priority.
+
+**Deletions:** `MessageActionTopBar` composable, `TopBarMode.ACTION` and its
+AnimatedContent branch (topBarMode is now just SELECTION / NORMAL),
+`ThreadViewModel.enterSelectionModeFromActionMode()`, and the
+`onEnterSelectionModeFromActionMode`/`onSelect` plumbing. The long-press/selection
+transition rules are consolidated into a pure `ThreadViewModel.SelectionSnapshot`
+reducer (`longPress` / `dismissPicker` / `exitSelection`) the ViewModel delegates to,
+with new `ThreadViewModelSelectionStateTest` coverage (7 tests). `dismissReactionPicker()`
+no longer clears the selection; `exitSelectionMode()` now also clears the popup so
+nothing is orphaned.
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in

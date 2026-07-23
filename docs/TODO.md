@@ -14,15 +14,17 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       new bar's controls. Rethink the header/pill layout: simplest is hiding the
       pill while `topBarMode != NORMAL`; alternatively re-anchor it below
       whichever bar is active so it never covers actionable controls.
-- [ ] **Long-press flow: no full-screen dim + selection header immediately**
-      (July 16 2026) — entering message selection currently darkens the whole
-      screen (the scrim behind the reaction popup). Desired behavior: long-press
-      a message pops the emoji reaction picker AND opens the selection header at
-      the same time, with no screen darkening — the conversation stays fully
-      readable behind the popup. Likely means replacing the scrimmed
-      popup/dialog treatment with a lightweight anchored popup and entering
-      selection mode directly from long-press (today it takes long-press →
-      action bar → "Select").
+- [x] **Long-press flow: no full-screen dim + selection header immediately**
+      (done July 23 2026, `feat/longpress-selection`) — long-press now opens the
+      lightweight anchored emoji popup AND enters selection mode (SelectionTopBar)
+      in one gesture, with the 45% black scrim replaced by a fully transparent
+      click-catcher so the conversation stays readable. The per-message ACTION top
+      bar (`MessageActionTopBar`, `TopBarMode.ACTION`, `enterSelectionModeFromActionMode`)
+      is deleted; Copy / Forward / Pin·Unpin / Delete moved to a compact action row
+      on the popup surface. Long-press while already selecting toggles that message
+      (no popup); tap-outside/back dismisses the popup but keeps selection; reacting
+      dismisses the popup and exits selection. State rules extracted to a pure
+      `SelectionSnapshot` reducer with unit coverage.
 - [ ] **Reaction parsing fixes — on-device verification** (July 22 2026,
       `feat/reaction-parsing-fixes`) — run the checklist in
       `docs/fable-reaction-parsing.md`: Fry thread empty bubble should heal
