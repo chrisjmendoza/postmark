@@ -22,6 +22,28 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       the inbound reaction parsing we already do. Needs a decision on exact
       outbound text format so our own parser (and Google Messages') recognizes
       it; reuse the quote-truncation rules from the July 22 parser work.
+- [x] **Timestamp legibility + same-level layout** (July 23 2026, on-device
+      request from tonight, `fix/timestamp-legibility`) — two fixes to the
+      timestamp row under a bubble, both from screenshots over a photo chat
+      background. (A) Over a photo background the `MMS 4:01 PM` label was bare
+      text on the image; it now renders on a compact rounded contrast chip
+      (`surfaceContainerHighest`, `FloatingDatePill` idiom, no shadow) via a new
+      `onImageBackground` param — the chip is not clickable, so bubble gestures
+      are untouched. (B) A reacted message stacked its timestamp a full
+      pill-height below the pills; the two now share one level — pills hug the
+      bubble's inner bottom corner, timestamp at the outer edge — via a `Row`
+      pinned to the bubble's `onSizeChanged` width with `SpaceBetween` and
+      weighted (`fill = false`) pills so a wide reaction row wraps inside its
+      FlowRow instead of overlapping the timestamp. No-reaction messages are
+      unchanged. Branch logic extracted to pure `belowBubbleLayout(...)`
+      (`BelowBubbleLayoutTest`). **On-device verification pending.**
+- [ ] **Date pill overlaps selection/action top bars** (found on-device July 16
+      2026) — the floating date pill straddles the top bar's bottom edge from the
+      shared `topBar` Box in `ThreadScreen`, so when selection or action mode
+      swaps the bar (now via AnimatedContent), the pill renders in front of the
+      new bar's controls. Rethink the header/pill layout: simplest is hiding the
+      pill while `topBarMode != NORMAL`; alternatively re-anchor it below
+      whichever bar is active so it never covers actionable controls.
 - [ ] **Long-press flow: no full-screen dim + selection header immediately**
       (July 16 2026) — entering message selection currently darkens the whole
       screen (the scrim behind the reaction popup). Desired behavior: long-press

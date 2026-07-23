@@ -1392,7 +1392,9 @@ private fun ThreadContent(
                             } else null,
                             audioPlayback = audioPlayback,
                             onAudioPlayPause = onAudioPlayPause,
-                            onAudioSeek = onAudioSeek
+                            onAudioSeek = onAudioSeek,
+                            // Photo background active → timestamp renders on a contrast chip.
+                            onImageBackground = chatBackgroundImageFile != null
                         )
                         is ThreadListItem.DateHeader -> DateHeader(
                             label = item.dateLabel,
@@ -1758,6 +1760,9 @@ private fun MessageBubble(
     audioPlayback: StateFlow<AudioPlaybackState> = MutableStateFlow(AudioPlaybackState()),
     onAudioPlayPause: (String) -> Unit = {},
     onAudioSeek: (String, Float) -> Unit = { _, _ -> },
+    // True when a custom photo background is active for this thread — the timestamp row
+    // then renders on a compact contrast chip so it stays legible over the image.
+    onImageBackground: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     // Read directly (like LocalBubbleFontScale) rather than threaded as a parameter —
@@ -1819,6 +1824,21 @@ private fun MessageBubble(
     val coroutineScope = rememberCoroutineScope()
     val maxDragPx  = with(density) { 72.dp.toPx() }   // hard cap on drag distance
     val thresholdPx = with(density) { 56.dp.toPx() }  // crossing this fires onSwipeToReply
+
+    // Below-bubble layout: the timestamp row renders whenever there's a timestamp to show,
+    // a delivery indicator (sent), or a pin marker. When the message also has reactions we
+    // merge the two onto one level (see [belowBubbleLayout]).
+    val showTimestampRow = showTimestamp || message.isSent || message.isPinned
+    val below = belowBubbleLayout(message.reactions.isNotEmpty(), showTimestampRow)
+    // Bubble's measured width (px). Only sampled for a COMBINED row, whose width we pin to
+    // the bubble so its two ends map to the bubble's inner/outer corners — derived from
+    // layout, never hardcoded.
+    var bubbleWidthPx by remember { mutableStateOf(0) }
+    // One reaction-tap handler shared by the COMBINED and PILLS_ONLY branches.
+    val reactionClickHandler: (String) -> Unit = { emoji ->
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        onReactionClick(emoji)
+    }
 
     Column(
         modifier = modifier
@@ -1926,6 +1946,12 @@ private fun MessageBubble(
             ) {
             Box(
                 modifier = Modifier
+                    // Only a COMBINED row needs the bubble width, so only measure then.
+                    .then(
+                        if (below == BelowBubbleLayout.COMBINED)
+                            Modifier.onSizeChanged { bubbleWidthPx = it.width }
+                        else Modifier
+                    )
                     .background(bubbleBrush, bubbleShape(bubbleStyle, message.isSent, clusterPosition))
                     .then(
                         // Tighter padding when an attachment fills the bubble edges.
@@ -2038,76 +2064,147 @@ private fun MessageBubble(
                     )
                 }
             }
-            if (message.reactions.isNotEmpty()) {
-                // Google Messages-style reaction pills, but sitting in their own row just
-                // below the bubble (not overlapping its corner). They hug the bubble's
-                // inner / center-facing bottom corner: Start for a sent (right-aligned)
-                // bubble, End for a received (left-aligned) one. Aligned per-pill via
-                // ColumnScope.align — overriding the Column's outer-edge alignment — so
-                // the bubble keeps hugging the screen edge even when a wide pill row is
-                // the widest child. FlowRow inside still wraps at the 280.dp max width so
-                // the row never leaves the screen, and taking part in normal Column
-                // layout reserves its full height so it can't collide with the next
-                // message. A small top gap keeps it clear of the bubble.
-                ReactionPills(
-                    reactions = message.reactions,
-                    onReactionClick = { emoji ->
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onReactionClick(emoji)
-                    },
-                    modifier = Modifier
-                        .align(if (message.isSent) Alignment.Start else Alignment.End)
-                        .padding(top = 2.dp)
-                )
+            when (below) {
+                // Reactions + a timestamp share one level below the bubble. The row is
+                // pinned to the bubble's measured width so SpaceBetween maps its two ends
+                // onto the bubble's inner and outer bottom corners: pills hug the inner
+                // corner (exactly as before), the timestamp sits at the outer edge. Pills
+                // are weighted (fill = false) so a wide reaction row wraps inside its own
+                // FlowRow rather than crowding the timestamp — if they still can't share
+                // the line the FlowRow simply grows taller (graceful, never overlapping).
+                // This lives inside the swipe-translated Column, so bubble + pills + stamp
+                // move together on swipe-to-reply.
+                BelowBubbleLayout.COMBINED -> {
+                    val widthMod = if (bubbleWidthPx > 0)
+                        Modifier.width(with(density) { bubbleWidthPx.toDp() }) else Modifier
+                    Row(
+                        modifier = widthMod.padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        if (message.isSent) {
+                            ReactionPills(
+                                reactions = message.reactions,
+                                onReactionClick = reactionClickHandler,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            TimestampRow(message, showTimestamp, onImageBackground, onRetry)
+                        } else {
+                            TimestampRow(message, showTimestamp, onImageBackground, onRetry)
+                            ReactionPills(
+                                reactions = message.reactions,
+                                onReactionClick = reactionClickHandler,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                        }
+                    }
+                }
+                // Reactions but no timestamp: pills alone, hugging the bubble's inner
+                // bottom corner. Per-pill align overrides the Column's outer-edge alignment;
+                // the FlowRow inside still wraps at the 280.dp max width. Reserving the row's
+                // full height keeps it from colliding with the next message.
+                BelowBubbleLayout.PILLS_ONLY -> {
+                    ReactionPills(
+                        reactions = message.reactions,
+                        onReactionClick = reactionClickHandler,
+                        modifier = Modifier
+                            .align(if (message.isSent) Alignment.Start else Alignment.End)
+                            .padding(top = 2.dp)
+                    )
+                }
+                else -> Unit  // TIMESTAMP_ONLY / NONE handled below the swipe wrapper
             }
         }  // end Column(widthIn+align)
         }  // end Box(fillMaxWidth) swipe wrapper
-        if (showTimestamp || message.isSent || message.isPinned) {
-            Row(
-                modifier = Modifier
-                    .padding(
-                        start  = if (!message.isSent) 4.dp else 0.dp,
-                        end    = if (message.isSent)  4.dp else 0.dp,
-                        top    = 2.dp,
-                        bottom = 2.dp
-                    ),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                // Subtle inline pin indicator — stays visible while scrolling so pinned
-                // messages are identifiable in-place, not only in the Pinned panel.
-                if (message.isPinned) {
-                    Icon(
-                        imageVector = Icons.Default.PushPin,
-                        contentDescription = "Pinned",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        modifier = Modifier.size(12.dp)
-                    )
-                }
-                if (showTimestamp) {
-                    // SMS / MMS type label — helps when scrolling back into pre-RCS history.
-                    Text(
-                        text = if (message.isMms) "MMS" else "SMS",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-                    )
-                    Text(
-                        text = remember(message.timestamp) {
-                            formatEpochMillis(message.timestamp, timeFormatter)
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (message.isSent) {
-                    DeliveryStatusIndicator(
-                        status = message.deliveryStatus,
-                        onRetry = onRetry,
-                        modifier = Modifier.padding(start = 2.dp)
-                    )
-                }
-            }
+        // Timestamp with no reactions: unchanged from before — a sibling below the bubble
+        // at the outer edge (does not translate on swipe, matching prior behaviour).
+        if (below == BelowBubbleLayout.TIMESTAMP_ONLY) {
+            TimestampRow(
+                message = message,
+                showTimestamp = showTimestamp,
+                onImageBackground = onImageBackground,
+                onRetry = onRetry,
+                modifier = Modifier.padding(
+                    start  = if (!message.isSent) 4.dp else 0.dp,
+                    end    = if (message.isSent)  4.dp else 0.dp,
+                    top    = 2.dp,
+                    bottom = 2.dp
+                )
+            )
         }
+    }
+}
+
+/**
+ * The timestamp line below a bubble: an optional pin marker, the SMS/MMS type label + time,
+ * and (for sent messages) the delivery indicator. Over a photo background ([onImageBackground])
+ * the whole line renders on a compact rounded contrast chip — same colour family as
+ * [FloatingDatePill], no shadow/tonal elevation — so it stays legible on the image. On
+ * gradient/None backgrounds it keeps the prior bare look. The chip is never clickable
+ * (gesture-conflict rule); tap handling stays on the parent bubble.
+ */
+@Composable
+private fun TimestampRow(
+    message: Message,
+    showTimestamp: Boolean,
+    onImageBackground: Boolean,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val content: @Composable RowScope.() -> Unit = {
+        // Subtle inline pin indicator — stays visible while scrolling so pinned
+        // messages are identifiable in-place, not only in the Pinned panel.
+        if (message.isPinned) {
+            Icon(
+                imageVector = Icons.Default.PushPin,
+                contentDescription = "Pinned",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.size(12.dp)
+            )
+        }
+        if (showTimestamp) {
+            // SMS / MMS type label — helps when scrolling back into pre-RCS history.
+            Text(
+                text = if (message.isMms) "MMS" else "SMS",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+            )
+            Text(
+                text = remember(message.timestamp) {
+                    formatEpochMillis(message.timestamp, timeFormatter)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (message.isSent) {
+            DeliveryStatusIndicator(
+                status = message.deliveryStatus,
+                onRetry = onRetry,
+                modifier = Modifier.padding(start = 2.dp)
+            )
+        }
+    }
+    if (onImageBackground) {
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            modifier = modifier
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                content = content
+            )
+        }
+    } else {
+        Row(
+            modifier = modifier,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            content = content
+        )
     }
 }
 
@@ -4127,6 +4224,36 @@ internal fun reactionPopupTopPx(
     // Fits neither way — clamp into the visible band.
     return below.coerceIn(minTopPx, (maxBottomPx - popupHeightPx).coerceAtLeast(minTopPx))
 }
+
+/**
+ * What renders on the row(s) directly below a message bubble.
+ *
+ *  - [COMBINED]       reactions AND a timestamp: pills hug the bubble's inner bottom corner
+ *                     and the timestamp sits at the outer edge on the SAME level (one row,
+ *                     spread across the bubble's measured width).
+ *  - [PILLS_ONLY]     reactions but no timestamp: pills alone, hugging the inner corner.
+ *  - [TIMESTAMP_ONLY] a timestamp but no reactions: timestamp alone at the outer edge,
+ *                     exactly where it rendered before this change (a sibling below the bubble).
+ *  - [NONE]           neither.
+ */
+internal enum class BelowBubbleLayout { COMBINED, PILLS_ONLY, TIMESTAMP_ONLY, NONE }
+
+/**
+ * Decides how the reaction pills and the timestamp share the space below a bubble.
+ *
+ * @param hasReactions     the message carries at least one reaction pill.
+ * @param showTimestampRow the timestamp row would render at all — an ALWAYS/ON_TAP
+ *                         timestamp, a sent message's delivery indicator, or a pin marker.
+ *
+ * Extracted as a pure function so the branch logic is unit-testable without Compose.
+ */
+internal fun belowBubbleLayout(hasReactions: Boolean, showTimestampRow: Boolean): BelowBubbleLayout =
+    when {
+        hasReactions && showTimestampRow -> BelowBubbleLayout.COMBINED
+        hasReactions                     -> BelowBubbleLayout.PILLS_ONLY
+        showTimestampRow                 -> BelowBubbleLayout.TIMESTAMP_ONLY
+        else                             -> BelowBubbleLayout.NONE
+    }
 
 private fun smsCounter(length: Int): String? {
     if (length <= 120) return null

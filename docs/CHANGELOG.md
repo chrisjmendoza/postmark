@@ -171,6 +171,40 @@ three-state select/partial/deselect icon). Since `DateHeader` sits in a
 region none of tonight's PRs touch, that one line was fixed here after all:
 the icon now announces "Select all messages on {day}" / "Deselect all
 messages on {day}". Nothing else in ThreadScreen needed changing.
+## 2026-07-23 (fix/timestamp-legibility) — timestamp chips over photo backgrounds + same-level layout
+
+902 tests passing (up from 898). **Not yet verified on device** — user-reported from
+on-device screenshots tonight, so he'll confirm tomorrow.
+
+Two thread-view fixes to the timestamp row under a message bubble, both from user
+screenshots over a custom photo chat background:
+
+**(A) Timestamp illegible over a photo background.** The `MMS 4:01 PM` label was bare
+`labelSmall` text in `onSurfaceVariant` painted directly on the image. It now renders on a
+compact rounded contrast chip when a photo background is active — a `Surface`
+(`RoundedCornerShape(50)`, `surfaceContainerHighest`, `8.dp × 2.dp` padding), the same
+colour idiom as `FloatingDatePill` but with no shadow/tonal elevation (it's inline content,
+not a floating overlay). The pin icon, SMS/MMS label, time, and delivery indicator all sit
+on the chip. Gradient/None backgrounds keep the prior bare look. Threaded down as a new
+`onImageBackground: Boolean` param (`chatBackgroundImageFile != null`); the chip is never
+clickable, so the bubble's tap/long-press gestures are untouched.
+
+**(B) Timestamp stacked below the reaction pills.** A reacted message pushed its timestamp a
+full pill-height down, wasting the horizontal room most messages have. The two rows now merge
+onto one level: pills keep hugging the bubble's inner bottom corner and the timestamp sits at
+the outer edge on the SAME line. Implemented as a single `Row` pinned to the bubble's
+**measured** width (captured via `onSizeChanged`, no hardcoded offsets) with
+`Arrangement.SpaceBetween` — its two ends map onto the bubble's inner/outer corners. The
+pills are weighted (`weight(1f, fill = false)`) so a wide reaction row wraps inside its own
+`FlowRow` rather than crowding the timestamp; if they still can't share the line the FlowRow
+simply grows taller (graceful, never overlapping). The combined row lives inside the
+swipe-translated Column, so bubble + pills + timestamp now move together on swipe-to-reply.
+Messages with **no reactions** are byte-identical to before (timestamp stays a sibling row
+below the bubble at the outer edge). The four-branch decision (COMBINED / PILLS_ONLY /
+TIMESTAMP_ONLY / NONE) is extracted as a pure `belowBubbleLayout(...)` function, plain-JUnit
+tested (`BelowBubbleLayoutTest`, +4 tests). No window-inset change (mid-list content).
+
+---
 
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
