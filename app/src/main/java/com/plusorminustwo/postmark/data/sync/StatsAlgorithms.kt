@@ -1,11 +1,12 @@
 package com.plusorminustwo.postmark.data.sync
 
-import com.plusorminustwo.postmark.data.db.entity.MessageEntity
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
+import com.plusorminustwo.postmark.data.db.dao.GlobalAggregateRow
+import com.plusorminustwo.postmark.data.db.dao.MessageMeta
+import com.plusorminustwo.postmark.data.db.dao.ThreadAggregateRow
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import kotlin.math.ceil
 
 /** 24 hours — response gaps beyond this are considered dormant and excluded from avg. */
@@ -53,6 +54,30 @@ internal data class GlobalStatsData(
     val byMonth: IntArray = IntArray(12)
 )
 
+// ── Timezone-free aggregate mirrors ─────────────────────────────────────────────
+//
+// The Stats ViewModel gets these from StatsDao's SQL GROUP BY at runtime. These Kotlin
+// mirrors compute the identical values from an in-memory meta list — used by the
+// per-thread drilldown (which already holds the selected thread's rows) and as the
+// oracle in the unit + instrumented parity tests.
+
+internal fun threadAggregateOf(metas: List<MessageMeta>): ThreadAggregateRow =
+    ThreadAggregateRow(
+        threadId       = metas.firstOrNull()?.threadId ?: 0L,
+        totalMessages  = metas.size,
+        sentCount      = metas.count { it.isSent },
+        firstMessageAt = metas.minOfOrNull { it.timestamp } ?: 0L,
+        lastMessageAt  = metas.maxOfOrNull { it.timestamp } ?: 0L
+    )
+
+internal fun globalAggregateOf(metas: List<MessageMeta>): GlobalAggregateRow =
+    GlobalAggregateRow(
+        totalMessages  = metas.size,
+        sentCount      = metas.count { it.isSent },
+        firstMessageAt = metas.minOfOrNull { it.timestamp } ?: 0L,
+        lastMessageAt  = metas.maxOfOrNull { it.timestamp } ?: 0L
+    )
+
 // ── Core computation ──────────────────────────────────────────────────────────
 
 /**
@@ -66,39 +91,40 @@ internal fun countReactionEmojis(reactions: List<String>, limit: Int = 6): Map<S
         .take(limit).associate { it.key to it.value }
 }
 
+/** Extract and count emoji across a list of message bodies, top [limit] descending. */
+internal fun countBodyEmojis(bodies: List<String>, limit: Int = 6): Map<String, Int> {
+    if (bodies.isEmpty()) return emptyMap()
+    val counts = mutableMapOf<String, Int>()
+    bodies.forEach { body -> extractEmojis(body).forEach { e -> counts[e] = (counts[e] ?: 0) + 1 } }
+    return counts.entries.sortedByDescending { it.value }.take(limit).associate { it.key to it.value }
+}
+
+/**
+ * Assemble a thread's stats from the SQL [aggregate] (timezone-free counts) plus the
+ * zone-dependent buckets derived in Kotlin over [metas] and the emoji from [emojiBodies].
+ * [zone] defaults to the device zone at every call site — the same boundary the UI uses.
+ */
 internal fun buildThreadStatsData(
-    messages: List<MessageEntity>,
-    reactions: List<String> = emptyList()
+    aggregate: ThreadAggregateRow,
+    metas: List<MessageMeta>,
+    emojiBodies: List<String> = emptyList(),
+    reactions: List<String> = emptyList(),
+    zone: ZoneId = ZoneId.systemDefault()
 ): ThreadStatsData {
-    if (messages.isEmpty()) return ThreadStatsData()
-    val sorted = messages.sortedBy { it.timestamp }
-
-    val dayFmt = localDayFormatter()
-    val activeDays = sorted.map { dayFmt.format(Date(it.timestamp)) }.distinct().sorted()
-
-    val emojiCounts = mutableMapOf<String, Int>()
-    val dowArray = IntArray(7)
-    val monthArray = IntArray(12)
-    val cal = Calendar.getInstance()
-
-    sorted.forEach { msg ->
-        extractEmojis(msg.body).forEach { e -> emojiCounts[e] = (emojiCounts[e] ?: 0) + 1 }
-        cal.timeInMillis = msg.timestamp
-        dowArray[(cal.get(Calendar.DAY_OF_WEEK) - Calendar.MONDAY + 7) % 7]++
-        monthArray[cal.get(Calendar.MONTH)]++
-    }
+    if (aggregate.totalMessages == 0) return ThreadStatsData()
+    val sorted = metas.sortedBy { it.timestamp }
+    val (activeDays, dowArray, monthArray) = dayBuckets(sorted, zone)
 
     return ThreadStatsData(
-        totalMessages     = sorted.size,
-        sentCount         = sorted.count { it.isSent },
-        receivedCount     = sorted.count { !it.isSent },
-        firstMessageAt    = sorted.first().timestamp,
-        lastMessageAt     = sorted.last().timestamp,
+        totalMessages     = aggregate.totalMessages,
+        sentCount         = aggregate.sentCount,
+        receivedCount     = aggregate.totalMessages - aggregate.sentCount,
+        firstMessageAt    = aggregate.firstMessageAt,
+        lastMessageAt     = aggregate.lastMessageAt,
         activeDayCount    = activeDays.size,
-        longestStreakDays  = computeLongestStreak(activeDays),
+        longestStreakDays = computeLongestStreak(activeDays),
         avgResponseTimeMs = computeAvgResponseTimeMs(sorted),
-        topEmojis         = emojiCounts.entries.sortedByDescending { it.value }
-                                .take(6).associate { it.key to it.value },
+        topEmojis         = countBodyEmojis(emojiBodies),
         topReactionEmojis = countReactionEmojis(reactions),
         byDayOfWeek       = dowArray,
         byMonth           = monthArray
@@ -106,57 +132,62 @@ internal fun buildThreadStatsData(
 }
 
 internal fun buildGlobalStatsData(
-    allMessages: List<MessageEntity>,
+    aggregate: GlobalAggregateRow,
     threadCount: Int,
-    reactions: List<String> = emptyList()
+    metas: List<MessageMeta>,
+    emojiBodies: List<String> = emptyList(),
+    reactions: List<String> = emptyList(),
+    zone: ZoneId = ZoneId.systemDefault()
 ): GlobalStatsData {
-    if (allMessages.isEmpty()) return GlobalStatsData(threadCount = threadCount)
-    val sorted = allMessages.sortedBy { it.timestamp }
+    if (aggregate.totalMessages == 0) return GlobalStatsData(threadCount = threadCount)
+    val sorted = metas.sortedBy { it.timestamp }
+    val (activeDays, dowArray, monthArray) = dayBuckets(sorted, zone)
 
-    val dayFmt = localDayFormatter()
-    val activeDays = sorted.map { dayFmt.format(Date(it.timestamp)) }.distinct().sorted()
-
-    val emojiCounts = mutableMapOf<String, Int>()
-    val dowArray = IntArray(7)
-    val monthArray = IntArray(12)
-    val cal = Calendar.getInstance()
-
-    sorted.forEach { msg ->
-        extractEmojis(msg.body).forEach { e -> emojiCounts[e] = (emojiCounts[e] ?: 0) + 1 }
-        cal.timeInMillis = msg.timestamp
-        dowArray[(cal.get(Calendar.DAY_OF_WEEK) - Calendar.MONDAY + 7) % 7]++
-        monthArray[cal.get(Calendar.MONTH)]++
-    }
-
-    // Global avg response time: per-thread averages weighted by message count.
-    // We can't compute this cleanly from pre-aggregated stats alone, so we approximate
-    // by grouping the global message list by threadId and averaging per-thread results.
-    val threadGroups = sorted.groupBy { it.threadId }
+    // Global avg response time: per-thread averages weighted by message count. Can't be
+    // computed cleanly from pre-aggregated stats, so approximate by grouping metas by
+    // threadId and averaging per-thread results.
     var totalAvgNumerator = 0L
     var totalWeight = 0
-    threadGroups.values.forEach { msgs ->
-        val avg = computeAvgResponseTimeMs(msgs.sortedBy { it.timestamp })
+    sorted.groupBy { it.threadId }.values.forEach { threadMetas ->
+        val avg = computeAvgResponseTimeMs(threadMetas.sortedBy { it.timestamp })
         if (avg > 0) {
-            totalAvgNumerator += avg * msgs.size
-            totalWeight += msgs.size
+            totalAvgNumerator += avg * threadMetas.size
+            totalWeight += threadMetas.size
         }
     }
     val globalAvg = if (totalWeight > 0) totalAvgNumerator / totalWeight else 0L
 
     return GlobalStatsData(
-        totalMessages     = sorted.size,
-        sentCount         = sorted.count { it.isSent },
-        receivedCount     = sorted.count { !it.isSent },
+        totalMessages     = aggregate.totalMessages,
+        sentCount         = aggregate.sentCount,
+        receivedCount     = aggregate.totalMessages - aggregate.sentCount,
         threadCount       = threadCount,
         activeDayCount    = activeDays.size,
-        longestStreakDays  = computeLongestStreak(activeDays),
+        longestStreakDays = computeLongestStreak(activeDays),
         avgResponseTimeMs = globalAvg,
-        topEmojis         = emojiCounts.entries.sortedByDescending { it.value }
-                                .take(6).associate { it.key to it.value },
+        topEmojis         = countBodyEmojis(emojiBodies),
         topReactionEmojis = countReactionEmojis(reactions),
         byDayOfWeek       = dowArray,
         byMonth           = monthArray
     )
+}
+
+/**
+ * Single pass over sorted [metas] producing the three zone-dependent buckets:
+ * the distinct sorted "yyyy-MM-dd" active-day labels, the Mon=0..Sun=6 day-of-week
+ * histogram, and the Jan=0..Dec=11 month histogram — all in [zone].
+ */
+private fun dayBuckets(sorted: List<MessageMeta>, zone: ZoneId): Triple<List<String>, IntArray, IntArray> {
+    val dowArray = IntArray(7)
+    val monthArray = IntArray(12)
+    val days = LinkedHashSet<String>()
+    sorted.forEach { m ->
+        val zdt = Instant.ofEpochMilli(m.timestamp).atZone(zone)
+        days.add(zdt.toLocalDate().toString())
+        dowArray[(zdt.dayOfWeek.value + 6) % 7]++   // ISO Mon=1..Sun=7 → Mon=0..Sun=6
+        monthArray[zdt.monthValue - 1]++            // ISO Jan=1..Dec=12 → 0..11
+    }
+    return Triple(days.toList().sorted(), dowArray, monthArray)
 }
 
 // ── Individual algorithms ─────────────────────────────────────────────────────
@@ -170,9 +201,9 @@ internal fun computeLongestStreak(sortedDays: List<String>): Int {
     var maxStreak = 1
     var current = 1
     for (i in 1 until sortedDays.size) {
-        val prev = java.time.LocalDate.parse(sortedDays[i - 1])
-        val curr = java.time.LocalDate.parse(sortedDays[i])
-        if (java.time.temporal.ChronoUnit.DAYS.between(prev, curr) == 1L) {
+        val prev = LocalDate.parse(sortedDays[i - 1])
+        val curr = LocalDate.parse(sortedDays[i])
+        if (ChronoUnit.DAYS.between(prev, curr) == 1L) {
             if (++current > maxStreak) maxStreak = current
         } else {
             current = 1
@@ -184,10 +215,10 @@ internal fun computeLongestStreak(sortedDays: List<String>): Int {
 /**
  * Average time between direction-changes in a sorted message list.
  * Gaps over [maxGapMs] (default 24 h) are excluded so dormant threads
- * don't inflate the average.
+ * don't inflate the average. Operates on lean [MessageMeta] (timestamp + isSent).
  */
 internal fun computeAvgResponseTimeMs(
-    sorted: List<MessageEntity>,
+    sorted: List<MessageMeta>,
     maxGapMs: Long = MAX_RESPONSE_GAP_MS
 ): Long {
     var total = 0L
@@ -207,7 +238,7 @@ internal fun computeAvgResponseTimeMs(
  * Returns IntArray(4): [<1 min, 1–5 min, 5–30 min, >30 min], counts (not percentages).
  */
 internal fun computeResponseTimeBuckets(
-    sorted: List<MessageEntity>,
+    sorted: List<MessageMeta>,
     maxGapMs: Long = MAX_RESPONSE_GAP_MS
 ): IntArray {
     val buckets = IntArray(4)
@@ -256,13 +287,15 @@ internal fun heatmapTierForCount(count: Int, maxCount: Int): Int {
     return ceil(count.toFloat() / maxCount.toFloat() * 6).toInt().coerceIn(1, 6)
 }
 
-/** Groups messages into a date→count map using local-timezone day boundaries. */
-internal fun groupMessagesByDay(messages: List<MessageEntity>): Map<String, Int> {
-    val fmt = localDayFormatter()
-    return messages.groupingBy { fmt.format(Date(it.timestamp)) }.eachCount()
-}
+/** The local calendar day of [timestampMs] in [zone] — the single day-bucket boundary
+ *  shared by the heatmap, the streak/active-day math, and the day-panel grouping so all
+ *  of them agree on which day a near-midnight message belongs to. */
+internal fun localDay(timestampMs: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate =
+    Instant.ofEpochMilli(timestampMs).atZone(zone).toLocalDate()
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-private fun localDayFormatter() =
-    SimpleDateFormat("yyyy-MM-dd", Locale.US).also { it.timeZone = TimeZone.getDefault() }
+/** Groups message timestamps into a "yyyy-MM-dd" → count map using local-timezone days. */
+internal fun groupMessagesByDay(
+    metas: List<MessageMeta>,
+    zone: ZoneId = ZoneId.systemDefault()
+): Map<String, Int> =
+    metas.groupingBy { localDay(it.timestamp, zone).toString() }.eachCount()

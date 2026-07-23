@@ -4,20 +4,21 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.plusorminustwo.postmark.data.db.dao.MessageDao
-import com.plusorminustwo.postmark.data.db.dao.ReactionDao
+import com.plusorminustwo.postmark.data.db.dao.MessageMeta
+import com.plusorminustwo.postmark.data.db.dao.StatsDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
-import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.sync.buildGlobalStatsData
 import com.plusorminustwo.postmark.data.sync.buildThreadStatsData
 import com.plusorminustwo.postmark.data.sync.computeResponseTimeBuckets
 import com.plusorminustwo.postmark.data.sync.groupMessagesByDay
+import com.plusorminustwo.postmark.data.sync.localDay
+import com.plusorminustwo.postmark.data.sync.threadAggregateOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -67,9 +68,12 @@ data class HeatmapData(
 /**
  * ViewModel for the Stats screen.
  *
- * Drives both the global aggregate view and the per-thread drilldown view from a
- * single reactive Room query, re-computing [ParsedStats] and [HeatmapData] whenever
- * the underlying messages or reactions change.
+ * Drives both the global aggregate view and the per-thread drilldown view from lean,
+ * reactive Room projections — re-computing [ParsedStats] and [HeatmapData] whenever the
+ * underlying messages or reactions change. The timezone-free counts come straight from
+ * SQL GROUP BY ([StatsDao]); the zone-dependent buckets (active days, streaks,
+ * day-of-week, month, response time) are derived in Kotlin over a 3-primitive
+ * [MessageMeta] projection so an invalidation never materializes the full table.
  *
  * The [selectedScope] / [selectedThreadId] pair controls which data is displayed.
  * When launched with a `threadId` in [SavedStateHandle] (from a thread overflow menu),
@@ -81,7 +85,7 @@ data class HeatmapData(
 class StatsViewModel @Inject constructor(
     private val threadDao: ThreadDao,
     private val messageDao: MessageDao,
-    private val reactionDao: ReactionDao,
+    private val statsDao: StatsDao,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -118,61 +122,98 @@ class StatsViewModel @Inject constructor(
         if (threadId != -1L) preSelectThread(threadId)
     }
 
-    // ── Live message source ───────────────────────────────────────────────────
+    // ── Live projection sources ───────────────────────────────────────────────
     //
-    // Room emits a new list every time any message is inserted/updated/deleted.
-    // All stats are derived from this single reactive source — no manual
-    // refresh needed.
+    // Room emits on every insert/update/delete. All stats are derived from these lean
+    // reactive projections — no full-entity table load, no manual refresh.
 
-    /** Coalesces Room invalidation storms: while Stats is open during a sync or
-     *  import burst, a full-table observer would otherwise re-materialize every
-     *  row once per write. The first emission passes through untouched so the
-     *  screen isn't blank for a second on open. Runs in the shareIn collector's
-     *  context (viewModelScope), so tests drive it with virtual time. */
+    /** Coalesces Room invalidation storms: while Stats is open during a sync or import
+     *  burst, an observer would otherwise re-project every row once per write. The first
+     *  emission passes through untouched so the screen isn't blank for a second on open.
+     *  Runs in the shareIn collector's context (viewModelScope), so tests drive it with
+     *  virtual time. */
     private fun <T> Flow<T>.debounceAfterFirst(timeoutMs: Long = 1_000L): Flow<T> =
         withIndex()
             .debounce { if (it.index == 0) 0L else timeoutMs }
             .map { it.value }
 
-    private val allMessages: SharedFlow<List<MessageEntity>> =
-        messageDao.observeMessagesFrom(0L)
-            .debounceAfterFirst()
-            .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
-
-    private val allReactions: SharedFlow<List<ReactionEntity>> =
-        reactionDao.observeAll()
-            .debounceAfterFirst()
-            .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
-
     // ── Global + per-thread stats (live, one shared pass) ────────────────────
+
+    private data class StatsInputs(
+        val threadAggregates: List<com.plusorminustwo.postmark.data.db.dao.ThreadAggregateRow>,
+        val globalAggregate: com.plusorminustwo.postmark.data.db.dao.GlobalAggregateRow,
+        val metas: List<MessageMeta>,
+        val emojiBodies: List<com.plusorminustwo.postmark.data.db.dao.EmojiBodyRow>,
+        val reactionEmojis: List<com.plusorminustwo.postmark.data.db.dao.ThreadEmojiRow>,
+        val threadCount: Int
+    )
 
     private data class StatsPayload(
         val global: ParsedStats?,
         val perThread: List<Pair<Long, ParsedStats>>
     )
 
-    /** Global and per-thread stats computed in ONE transform per emission —
-     *  previously two independent combines each re-walked all messages on every
-     *  invalidation. Shared on Default so neither consumer re-triggers the pass. */
-    private val statsPayload: SharedFlow<StatsPayload> =
-        combine(allMessages, allReactions, threadDao.observeAll()) { msgs, reactions, threads ->
-            val global =
-                if (msgs.isEmpty()) null
-                else buildGlobalStatsData(msgs, threads.size, reactions.map { it.emoji }).toParsed()
-            val msgToThread = msgs.associate { it.id to it.threadId }
-            val reactionsByThread = reactions
-                .groupBy { r -> msgToThread[r.messageId] ?: -1L }
-                .filterKeys { it != -1L }
-            val perThread = msgs.groupBy { it.threadId }
-                .map { (threadId, threadMsgs) ->
-                    val threadReactionEmojis = reactionsByThread[threadId]?.map { it.emoji } ?: emptyList()
-                    threadId to buildThreadStatsData(threadMsgs, threadReactionEmojis).toParsed()
-                }
-                .sortedByDescending { (_, stats) -> stats.totalMessages }
-            StatsPayload(global, perThread)
+    /** The five lean projections coalesced into one debounced source. The combine transform
+     *  (just packing references) and the [debounceAfterFirst] run in the shareIn collector
+     *  context (viewModelScope), so invalidation storms coalesce with the first emission
+     *  passing through untouched — and tests drive the debounce with virtual time. */
+    private val statsInputs: SharedFlow<StatsInputs> =
+        combine(
+            statsDao.observeThreadAggregates(),
+            statsDao.observeMessageMetas(),
+            statsDao.observeEmojiBodies(),
+            statsDao.observeReactionEmojisByThread(),
+            combine(statsDao.observeGlobalAggregates(), threadDao.observeAll()) { g, threads -> g to threads.size }
+        ) { threadAggs, metas, emojiBodies, reactionEmojis, globalAndCount ->
+            StatsInputs(threadAggs, globalAndCount.first, metas, emojiBodies, reactionEmojis, globalAndCount.second)
         }
-        .flowOn(Dispatchers.Default)
-        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+            .debounceAfterFirst()
+            .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    /** Global and per-thread stats computed in ONE transform per emission. The SQL
+     *  aggregate rows supply the timezone-free counts; the meta/emoji projections supply
+     *  the zone-dependent buckets and emoji. The heavy pass runs on Default and is shared
+     *  so neither consumer re-triggers it. */
+    private val statsPayload: SharedFlow<StatsPayload> =
+        statsInputs
+            .map { inputs -> computeStatsPayload(inputs) }
+            .flowOn(Dispatchers.Default)
+            .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    private fun computeStatsPayload(inputs: StatsInputs): StatsPayload {
+        val zone = ZoneId.systemDefault()
+        val allBodies = inputs.emojiBodies.map { it.body }
+        val allReactionEmojis = inputs.reactionEmojis.map { it.emoji }
+
+        val global =
+            if (inputs.globalAggregate.totalMessages == 0) null
+            else buildGlobalStatsData(
+                aggregate = inputs.globalAggregate,
+                threadCount = inputs.threadCount,
+                metas = inputs.metas,
+                emojiBodies = allBodies,
+                reactions = allReactionEmojis,
+                zone = zone
+            ).toParsed()
+
+        val metasByThread = inputs.metas.groupBy { it.threadId }
+        val bodiesByThread = inputs.emojiBodies.groupBy { it.threadId }
+        val reactionsByThread = inputs.reactionEmojis.groupBy { it.threadId }
+
+        val perThread = inputs.threadAggregates
+            .map { agg ->
+                agg.threadId to buildThreadStatsData(
+                    aggregate = agg,
+                    metas = metasByThread[agg.threadId].orEmpty(),
+                    emojiBodies = bodiesByThread[agg.threadId].orEmpty().map { it.body },
+                    reactions = reactionsByThread[agg.threadId].orEmpty().map { it.emoji },
+                    zone = zone
+                ).toParsed()
+            }
+            .sortedByDescending { (_, stats) -> stats.totalMessages }
+
+        return StatsPayload(global, perThread)
+    }
 
     /**
      * Null until Room delivers the first emission (typically < 50 ms after
@@ -197,25 +238,39 @@ class StatsViewModel @Inject constructor(
 
     // ── Per-thread drilldown (live) ───────────────────────────────────────────
 
-    /** Full message list for the selected thread — switches automatically. */
+    /** Full message list for the selected thread — switches automatically. Feeds the
+     *  per-thread "recent messages by day" panel, which renders message bodies (so it
+     *  genuinely needs full rows), and is reused to derive the drilldown's stats. */
     val selectedThreadMessages: StateFlow<List<MessageEntity>> = _selectedThreadId
         .flatMapLatest { id ->
             if (id == null) flowOf(emptyList()) else messageDao.observeByThread(id)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Reactions for the selected thread — switches automatically with the thread. */
-    private val selectedThreadReactions: StateFlow<List<ReactionEntity>> = _selectedThreadId
+    /** Reaction emoji for the selected thread — switches automatically with the thread. */
+    private val selectedThreadReactionEmojis: StateFlow<List<String>> = _selectedThreadId
         .flatMapLatest { id ->
-            if (id == null) flowOf(emptyList()) else reactionDao.observeByThread(id)
+            if (id == null) flowOf(emptyList())
+            else statsDao.observeReactionEmojisByThread().map { rows -> rows.filter { it.threadId == id }.map { it.emoji } }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Stats for the selected thread, derived live from its messages and reactions. */
+    /** Stats for the selected thread, derived live from its messages and reactions.
+     *  Reuses the already-loaded full rows (projected to lean metas here) instead of a
+     *  second query. */
     val parsedSelectedStats: StateFlow<ParsedStats?> =
-        combine(selectedThreadMessages, selectedThreadReactions) { msgs, reactions ->
+        combine(selectedThreadMessages, selectedThreadReactionEmojis) { msgs, reactionEmojis ->
             if (msgs.isEmpty()) null
-            else buildThreadStatsData(msgs, reactions.map { it.emoji }).toParsed()
+            else {
+                val metas = msgs.toMetas()
+                buildThreadStatsData(
+                    aggregate = threadAggregateOf(metas),
+                    metas = metas,
+                    emojiBodies = msgs.filter { it.body.isNotEmpty() }.map { it.body },
+                    reactions = reactionEmojis,
+                    zone = ZoneId.systemDefault()
+                ).toParsed()
+            }
         }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -224,29 +279,31 @@ class StatsViewModel @Inject constructor(
     val responseBuckets: StateFlow<IntArray> = selectedThreadMessages
         .map { msgs ->
             if (msgs.isEmpty()) IntArray(4)
-            else computeResponseTimeBuckets(msgs.sortedBy { it.timestamp })
+            else computeResponseTimeBuckets(msgs.toMetas().sortedBy { it.timestamp })
         }
         .flowOn(Dispatchers.Default) // full-thread sort — keep it off Main
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), IntArray(4))
 
     // ── Heatmap (live, month-scoped) ──────────────────────────────────────────
 
-    val heatmapMessages: StateFlow<List<MessageEntity>> =
+    /** Lean month-scoped metas — the heatmap grid, day-of-week chart, and top-contacts
+     *  panel all need only (threadId, timestamp), never full rows. */
+    val heatmapMetas: StateFlow<List<MessageMeta>> =
         combine(_selectedThreadId, _heatmapMonth) { id, month -> id to month }
             .flatMapLatest { (id, month) ->
                 val startMs = month.atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 val endMs   = month.plusMonths(1).atDay(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                if (id == null) messageDao.observeMessagesInRange(startMs, endMs)
-                else messageDao.observeMessagesInRangeForThread(id, startMs, endMs)
+                if (id == null) statsDao.observeMessageMetasInRange(startMs, endMs)
+                else statsDao.observeMessageMetasInRangeForThread(id, startMs, endMs)
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val heatmapData: StateFlow<HeatmapData> =
-        combine(heatmapMessages, _heatmapMonth) { msgs, month ->
-            // LocalDate.toString() is ISO yyyy-MM-dd — same labels the old
+        combine(heatmapMetas, _heatmapMonth) { metas, month ->
+            // LocalDate.toString() is ISO yyyy-MM-dd — the same labels the old
             // SimpleDateFormat produced, no formatter or Date boxing needed.
             val dayLabels = (1..month.lengthOfMonth()).map { day -> month.atDay(day).toString() }
-            HeatmapData(dayLabels = dayLabels, countByDay = groupMessagesByDay(msgs))
+            HeatmapData(dayLabels = dayLabels, countByDay = groupMessagesByDay(metas))
         }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), run {
@@ -260,34 +317,44 @@ class StatsViewModel @Inject constructor(
     /** Message count by day-of-week (Mon=0..Sun=6) for the currently displayed heatmap month
      *  and scope — used by the "By day of week" chart so it reflects the visible month. */
     val heatmapByDayOfWeek: StateFlow<IntArray> =
-        heatmapMessages
-            .map { msgs ->
+        heatmapMetas
+            .map { metas ->
                 val result = IntArray(7)
-                msgs.forEach { msg ->
-                    val dow = Instant.ofEpochMilli(msg.timestamp)
-                        .atZone(ZoneId.systemDefault())
+                val zone = ZoneId.systemDefault()
+                metas.forEach { meta ->
+                    val dow = Instant.ofEpochMilli(meta.timestamp)
+                        .atZone(zone)
                         .dayOfWeek.value - 1  // Mon=0 .. Sun=6
                     result[dow]++
                 }
                 result
             }
-            // No dispatcher hop: one formatter-free pass over a single month's
-            // messages (the full-table work runs on Default upstream), and the
-            // DoW tests collect synchronously on an unconfined dispatcher.
+            // No dispatcher hop: one formatter-free pass over a single month's metas,
+            // and the DoW tests collect synchronously on an unconfined dispatcher.
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), IntArray(7))
 
+    /** Full message rows for the currently selected day(s) — needs bodies for the detail
+     *  panel, so scoped to the selected day RANGE (not the whole month) and not observed
+     *  at all while nothing is selected. */
     val selectedDayMessages: StateFlow<List<MessageEntity>> =
-        combine(heatmapMessages, _heatmapSelection) { msgs, selection ->
-            if (selection.days.isEmpty()) emptyList()
-            else {
-                val zone = ZoneId.systemDefault()
-                msgs.filter { msg ->
-                    Instant.ofEpochMilli(msg.timestamp).atZone(zone).toLocalDate() in selection.days
+        combine(_selectedThreadId, _heatmapSelection) { id, selection -> id to selection }
+            .flatMapLatest { (id, selection) ->
+                if (selection.days.isEmpty()) flowOf(emptyList())
+                else {
+                    val zone = ZoneId.systemDefault()
+                    val startMs = selection.days.min().atStartOfDay(zone).toInstant().toEpochMilli()
+                    val endMs   = selection.days.max().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                    val ranged =
+                        if (id == null) messageDao.observeMessagesInRange(startMs, endMs)
+                        else messageDao.observeMessagesInRangeForThread(id, startMs, endMs)
+                    ranged.map { msgs ->
+                        // Selection may be non-contiguous (multi-select) inside the range.
+                        msgs.filter { localDay(it.timestamp, zone) in selection.days }
+                    }
                 }
             }
-        }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -353,7 +420,10 @@ class StatsViewModel @Inject constructor(
         }
     }
 
-    // ── Data class → ParsedStats ──────────────────────────────────────────────
+    // ── Mapping helpers ───────────────────────────────────────────────────────
+
+    private fun List<MessageEntity>.toMetas(): List<MessageMeta> =
+        map { MessageMeta(it.threadId, it.timestamp, it.isSent) }
 
     private fun com.plusorminustwo.postmark.data.sync.ThreadStatsData.toParsed() = ParsedStats(
         totalMessages     = totalMessages,

@@ -631,12 +631,27 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 > (render-state memoization, markAllRead/FTS-trigger fix, schema v16 indexes,
 > catch-up poll off Main, video thumbnail cache, and more). The items below are
 > kept for continuity but the new doc supersedes them.
-- [ ] **Heatmap query performance** — with 150k+ messages the heatmap is slow to load and
+- [x] **Heatmap query performance** — with 150k+ messages the heatmap was slow to load and
       unresponsive on month navigation. ~~Option (a) pre-compute in ThreadStatsEntity~~
       (obsolete — stats tables deleted at v15). The `messages(threadId, timestamp)` index
-      landed July 15 (schema v16); remaining work is performance-analysis.md Tier 1 #5:
-      debounce + single-pass stats, `flowOn` the heatmap flows, then SQL aggregation.
-      Target: month switch feels instant.
+      landed July 15 (schema v16); the near-term debounce + single-pass + `flowOn` landed
+      July 16. **SQL aggregation done July 23 2026** (`perf/stats-sql-aggregation`,
+      performance-analysis.md Tier 1 #5 long-term form): the full-table
+      `observeMessagesFrom(0L)` load is gone. **Moved to SQL** (new read-only `StatsDao`,
+      no schema change — version stays 20, `20.json` unchanged): timezone-free per-thread +
+      global `COUNT`/`SUM(isSent)`/`MIN`/`MAX(timestamp)`. **Stayed in Kotlin but on lean
+      projections** (not `SELECT *`): the zone-dependent buckets (active days, streak,
+      day-of-week, month, response time) + emoji observe a `MessageMeta(threadId, timestamp,
+      isSent)` projection and a `(threadId, body WHERE body != '')` projection; the heatmap
+      grid / DoW / top-contacts observe month-ranged metas; `selectedDayMessages` keeps full
+      rows but scoped to the selected day range only. **Why strftime stayed out:** SQLite
+      `strftime('localtime')` day-bucketing can't be parity-proven without device runs, and
+      there's precedent (deleted `getActiveDatesForThread`) of SQL day-bucketing silently
+      disagreeing with the UI's `ZoneId.systemDefault()` dates — so day boundaries stay in
+      `java.time` Kotlin, parity-tested. Parity + DST tests added (multi-zone oracle,
+      spring-forward/fall-back); 7 instrumented `StatsDao` GROUP BY parity cases added
+      (compile-verified). **On-device perf check still pending** (staging: month switch +
+      Stats-open smoothness at 150k rows).
 - [x] ~~**`StatsUpdater` incremental updates**~~ — obsolete: `StatsUpdater` and the
       pre-aggregated tables were deleted outright (July 12, fable-analysis #9); stats
       compute live. The live-compute cost is tracked in performance-analysis.md Tier 1 #5.

@@ -30,8 +30,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.plusorminustwo.postmark.data.db.dao.MessageMeta
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import com.plusorminustwo.postmark.data.sync.heatmapTierForCount
+import com.plusorminustwo.postmark.data.sync.localDay
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
 import com.plusorminustwo.postmark.ui.components.avatarColor
 import java.time.Instant
@@ -60,7 +62,7 @@ fun StatsScreen(
     val selectedDayMessages by viewModel.selectedDayMessages.collectAsState()
     val allThreadMessages   by viewModel.selectedThreadMessages.collectAsState()
     val heatmapByDayOfWeek  by viewModel.heatmapByDayOfWeek.collectAsState()
-    val heatmapMessages     by viewModel.heatmapMessages.collectAsState()
+    val heatmapMetas        by viewModel.heatmapMetas.collectAsState()
     val directThreadNavigation by viewModel.directThreadNavigation.collectAsState()
     val responseBuckets by viewModel.responseBuckets.collectAsState()
 
@@ -160,7 +162,7 @@ fun StatsScreen(
                                 allThreadMessages   = allThreadMessages,
                                 threadNames         = threadNames,
                                 isGlobal            = !isInDrilldown,
-                                monthMessages       = heatmapMessages,
+                                monthMetas          = heatmapMetas,
                                 byDayOfWeek         = heatmapByDayOfWeek,
                                 onMonthChange       = { viewModel.setHeatmapMonth(it) },
                                 onDayTap            = { viewModel.tapHeatmapDay(it) },
@@ -360,7 +362,7 @@ private fun HeatmapView(
     allThreadMessages: List<MessageEntity>,
     threadNames: Map<Long, String>,
     isGlobal: Boolean,
-    monthMessages: List<MessageEntity>,
+    monthMetas: List<MessageMeta>,
     byDayOfWeek: IntArray,
     onMonthChange: (YearMonth) -> Unit,
     onDayTap: (LocalDate) -> Unit,
@@ -404,27 +406,26 @@ private fun HeatmapView(
     }
 
     // Top contacts for the current month (global no-selection panel)
-    val allMonthContacts = remember(monthMessages) {
-        monthMessages
+    val allMonthContacts = remember(monthMetas) {
+        monthMetas
             .groupBy { it.threadId }
             .entries
             .sortedByDescending { it.value.size }
             .map { it.key to it.value.size }
     }
     val topMonthContacts = remember(allMonthContacts) { allMonthContacts.take(3) }
-    val monthTotal = monthMessages.size
-    var showAllMonthContacts by remember(monthMessages) { mutableStateOf(false) }
+    val monthTotal = monthMetas.size
+    var showAllMonthContacts by remember(monthMetas) { mutableStateOf(false) }
 
-    // All messages grouped by day: newest day first, oldest message first within each day
+    // All messages grouped by day: newest day first, oldest message first within each day.
+    // localDay() shares the exact device-zone day boundary the heatmap and streak math use.
     val allMessagesByDay = remember(allThreadMessages) {
-        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-            .also { it.timeZone = java.util.TimeZone.getDefault() }
         allThreadMessages
             .sortedBy { it.timestamp }          // oldest message at top within a day
-            .groupBy { fmt.format(java.util.Date(it.timestamp)) }
+            .groupBy { localDay(it.timestamp) }
             .entries
             .sortedByDescending { it.key }      // newest day first in the list
-            .map { (dayStr, msgs) -> LocalDate.parse(dayStr) to msgs }
+            .map { (day, msgs) -> day to msgs }
     }
     var showAllMessages by remember(allThreadMessages) { mutableStateOf(false) }
     // Track which days are collapsed in each panel — reset when underlying data changes
@@ -728,8 +729,6 @@ private fun HeatmapView(
         // ── Day detail panel ──────────────────────────────────────────────────
         if (hasSelection) {
             val sortedDays = selectedDays.sorted()
-            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-                .also { it.timeZone = java.util.TimeZone.getDefault() }
 
             item {
                 Spacer(Modifier.height(12.dp))
@@ -803,7 +802,7 @@ private fun HeatmapView(
                 sortedDays.sortedDescending().forEach { day ->
                     val isCollapsed = day in collapsedSelectedDays
                     val dayMsgs = selectedDayMessages
-                        .filter { msg -> fmt.format(java.util.Date(msg.timestamp)) == day.toString() }
+                        .filter { msg -> localDay(msg.timestamp) == day }
                         .sortedBy { it.timestamp }   // oldest message on top
                     val dayCount = dayMsgs.size
 

@@ -406,6 +406,116 @@ class PostmarkDatabaseTest {
         assertTrue(result.isEmpty())
     }
 
+    // ── StatsDao SQL aggregation (parity with Kotlin over the same rows) ────
+    // Proves the GROUP BY / SUM / MIN / MAX projections agree with an in-memory
+    // Kotlin aggregation of the identical inserted rows. Device run pending; this
+    // is the SQL half of the "prove parity with tests" requirement.
+
+    @Test
+    fun statsThreadAggregates_matchKotlinAggregation() = runTest {
+        db.threadDao().insertAll(listOf(thread(1), thread(2)))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, ts = 100L, isSent = true),
+            msg(2, 1, ts = 400L, isSent = false),
+            msg(3, 1, ts = 250L, isSent = true),
+            msg(4, 2, ts = 900L, isSent = false)
+        ))
+
+        val rows = db.statsDao().observeThreadAggregates().first().associateBy { it.threadId }
+
+        // Thread 1: 3 msgs, 2 sent, min 100, max 400
+        assertEquals(3, rows.getValue(1L).totalMessages)
+        assertEquals(2, rows.getValue(1L).sentCount)
+        assertEquals(100L, rows.getValue(1L).firstMessageAt)
+        assertEquals(400L, rows.getValue(1L).lastMessageAt)
+        // Thread 2: 1 msg, 0 sent
+        assertEquals(1, rows.getValue(2L).totalMessages)
+        assertEquals(0, rows.getValue(2L).sentCount)
+        assertEquals(900L, rows.getValue(2L).firstMessageAt)
+        assertEquals(900L, rows.getValue(2L).lastMessageAt)
+    }
+
+    @Test
+    fun statsGlobalAggregates_matchKotlinAggregation() = runTest {
+        db.threadDao().insertAll(listOf(thread(1), thread(2)))
+        val inserted = listOf(
+            msg(1, 1, ts = 100L, isSent = true),
+            msg(2, 1, ts = 400L, isSent = false),
+            msg(3, 2, ts = 900L, isSent = true)
+        )
+        db.messageDao().insertAll(inserted)
+
+        val g = db.statsDao().observeGlobalAggregates().first()
+        assertEquals(inserted.size, g.totalMessages)
+        assertEquals(inserted.count { it.isSent }, g.sentCount)
+        assertEquals(inserted.minOf { it.timestamp }, g.firstMessageAt)
+        assertEquals(inserted.maxOf { it.timestamp }, g.lastMessageAt)
+    }
+
+    @Test
+    fun statsGlobalAggregates_emptyTableIsZero() = runTest {
+        val g = db.statsDao().observeGlobalAggregates().first()
+        assertEquals(0, g.totalMessages)
+        assertEquals(0, g.sentCount)
+        assertEquals(0L, g.firstMessageAt)
+        assertEquals(0L, g.lastMessageAt)
+    }
+
+    @Test
+    fun statsMessageMetas_projectEveryRow() = runTest {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, ts = 100L, isSent = true),
+            msg(2, 1, ts = 200L, isSent = false)
+        ))
+        val metas = db.statsDao().observeMessageMetas().first().sortedBy { it.timestamp }
+        assertEquals(2, metas.size)
+        assertEquals(100L, metas[0].timestamp)
+        assertTrue(metas[0].isSent)
+        assertEquals(1L, metas[0].threadId)
+        assertFalse(metas[1].isSent)
+    }
+
+    @Test
+    fun statsEmojiBodies_excludeEmptyBodies() = runTest {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, body = "hello 😂"),
+            msg(2, 1, body = ""),          // empty — excluded
+            msg(3, 1, body = "hi")
+        ))
+        val bodies = db.statsDao().observeEmojiBodies().first()
+        assertEquals(2, bodies.size)
+        assertTrue(bodies.none { it.body.isEmpty() })
+    }
+
+    @Test
+    fun statsReactionEmojisByThread_joinsThroughMessages() = runTest {
+        db.threadDao().insertAll(listOf(thread(1), thread(2)))
+        db.messageDao().insertAll(listOf(msg(10, 1), msg(20, 2)))
+        db.reactionDao().insert(reaction(messageId = 10, emoji = "❤️"))
+        db.reactionDao().insert(reaction(messageId = 20, emoji = "👍"))
+
+        val rows = db.statsDao().observeReactionEmojisByThread().first()
+        assertEquals(2, rows.size)
+        assertEquals("❤️", rows.first { it.threadId == 1L }.emoji)
+        assertEquals("👍", rows.first { it.threadId == 2L }.emoji)
+    }
+
+    @Test
+    fun statsMessageMetasInRange_respectsBounds() = runTest {
+        db.threadDao().insert(thread(1))
+        db.messageDao().insertAll(listOf(
+            msg(1, 1, ts = 500L),
+            msg(2, 1, ts = 1000L),   // at start — included
+            msg(3, 1, ts = 1999L),   // inside
+            msg(4, 1, ts = 2000L)    // at end — excluded
+        ))
+        val metas = db.statsDao().observeMessageMetasInRange(1000L, 2000L).first()
+        assertEquals(2, metas.size)
+        assertTrue(metas.all { it.timestamp in 1000L until 2000L })
+    }
+
     // ── Factories ─────────────────────────────────────────────────────────
 
     private fun thread(id: Long, policy: BackupPolicy = BackupPolicy.GLOBAL) = ThreadEntity(

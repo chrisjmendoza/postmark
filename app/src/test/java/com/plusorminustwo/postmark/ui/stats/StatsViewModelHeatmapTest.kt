@@ -1,11 +1,15 @@
 package com.plusorminustwo.postmark.ui.stats
 
 import androidx.lifecycle.SavedStateHandle
+import com.plusorminustwo.postmark.data.db.dao.EmojiBodyRow
+import com.plusorminustwo.postmark.data.db.dao.GlobalAggregateRow
 import com.plusorminustwo.postmark.data.db.dao.MessageDao
-import com.plusorminustwo.postmark.data.db.dao.ReactionDao
+import com.plusorminustwo.postmark.data.db.dao.MessageMeta
+import com.plusorminustwo.postmark.data.db.dao.StatsDao
+import com.plusorminustwo.postmark.data.db.dao.ThreadAggregateRow
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
+import com.plusorminustwo.postmark.data.db.dao.ThreadEmojiRow
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
-import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +54,7 @@ class StatsViewModelHeatmapTest {
     ): StatsViewModel {
         val messageDao = FakeMessageDao()
         val threadDao  = FakeThreadDao()
-        return StatsViewModel(threadDao, messageDao, FakeReactionDao(), savedStateHandle)
+        return StatsViewModel(threadDao, messageDao, FakeStatsDao(), savedStateHandle)
     }
 
     // ── Default state ─────────────────────────────────────────────────────
@@ -326,21 +330,12 @@ private class FakeThreadDao : ThreadDao {
     override suspend fun updateSentColor(threadId: Long, argb: Int?) = Unit
 }
 
-private class FakeReactionDao : ReactionDao {
-    override fun observeAll(): Flow<List<ReactionEntity>> = flowOf(emptyList())
-    override suspend fun getAll(): List<ReactionEntity> = emptyList()
-    override fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
-    override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
-    override suspend fun insert(reaction: ReactionEntity): Long = 0L
-    override suspend fun delete(reaction: ReactionEntity) = Unit
-    override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) = Unit
-    override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
-    override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
-    override suspend fun getTopEmojis(limit: Int): List<com.plusorminustwo.postmark.data.db.dao.EmojiCount> = emptyList()
-    override fun observeTopEmojisBySender(senderAddress: String): Flow<List<com.plusorminustwo.postmark.data.db.dao.EmojiCount>> = flowOf(emptyList())
-    override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
-    override suspend fun getByThread(threadId: Long): List<ReactionEntity> = emptyList()
-    override suspend fun deleteAll() = Unit
-    override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
-    override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0
+private class FakeStatsDao : StatsDao {
+    override fun observeThreadAggregates(): Flow<List<ThreadAggregateRow>> = flowOf(emptyList())
+    override fun observeGlobalAggregates(): Flow<GlobalAggregateRow> = flowOf(GlobalAggregateRow(0, 0, 0L, 0L))
+    override fun observeMessageMetas(): Flow<List<MessageMeta>> = flowOf(emptyList())
+    override fun observeEmojiBodies(): Flow<List<EmojiBodyRow>> = flowOf(emptyList())
+    override fun observeReactionEmojisByThread(): Flow<List<ThreadEmojiRow>> = flowOf(emptyList())
+    override fun observeMessageMetasInRange(startMs: Long, endMs: Long): Flow<List<MessageMeta>> = flowOf(emptyList())
+    override fun observeMessageMetasInRangeForThread(threadId: Long, startMs: Long, endMs: Long): Flow<List<MessageMeta>> = flowOf(emptyList())
 }
