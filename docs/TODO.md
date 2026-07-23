@@ -1052,8 +1052,28 @@ instance, but flagged:
 ### CI and test hygiene
 - [x] **Unit tests on every push** (July 11 2026) — `distribute.yml` now runs
       `./gradlew test` before `assembleDebug`, so broken code can't reach testers.
-- [ ] **GitHub Actions CI — remaining** — instrumented tests on merge to
-      main. Badge in README.
+- [x] **GitHub Actions CI — remaining** — instrumented tests on merge to
+      main. Badge in README. (July 23 2026, `ci/instrumented-tests`) — new
+      `.github/workflows/instrumented.yml`: `push` to `master` +
+      `workflow_dispatch`, ubuntu-latest + KVM enabled, JDK 17/temurin
+      matching `distribute.yml`, `reactivecircus/android-emulator-runner@v2`
+      (API 34, x86_64, headless `-no-window -no-boot-anim`) running
+      `connectedDebugAndroidTest`; reports uploaded as an artifact on
+      failure; 45 min timeout; concurrency group cancels superseded runs.
+      Two badges added near the top of README (`distribute.yml` unit tests,
+      `instrumented.yml` connected tests).
+      **⚠️ Needs a `workflow_dispatch` run to validate** — this was built and
+      committed from a machine with no way to execute GitHub Actions; YAML
+      was parsed clean with PyYAML and `connectedDebugAndroidTest` was
+      confirmed to exist via `./gradlew tasks --all`, but the action names/
+      versions/emulator flags are unverified until someone runs it for real
+      (Actions tab → Instrumented Tests → Run workflow, on this branch,
+      before merging). Flag any red run back here.
+      **Cost note for the owner**: this job boots an x86_64 emulator on
+      every push to master — expect ~15-25 min per run (hosted-runner
+      minutes, not free-tier-friendly at high push volume). Keep as-is if
+      that's acceptable, or restrict the `push` trigger further (e.g. a
+      `[ci-instrumented]` commit-message tag, or a schedule) if it isn't.
 - [x] **Replace `runBlocking` in instrumented tests** with `runTest`
       (July 22 2026) — all 28 test bodies in `PostmarkDatabaseTest.kt`
       converted (import swapped); `kotlinx-coroutines-test` was already an

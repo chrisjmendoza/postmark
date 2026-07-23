@@ -4,6 +4,31 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (ci/instrumented-tests) — instrumented tests run on merge to master
+
+Closed the last "GitHub Actions CI — remaining" Tier 4 item. New
+`.github/workflows/instrumented.yml` mirrors `distribute.yml`'s JDK setup
+(JDK 17, temurin, gradle cache) and runs `connectedDebugAndroidTest` — the
+`DatabaseMigrationTest` (`@LargeTest`, full v1→v20 migration chain) and
+`PostmarkDatabaseTest` (`@MediumTest`, in-memory Room DAO tests) suites that
+nobody can run locally most days, since no physical device is attached to
+the dev machine. Triggers on `push` to `master` (the "on merge to main" ask)
+and `workflow_dispatch` for manual pre-merge validation from any branch.
+`reactivecircus/android-emulator-runner@v2` boots a headless API 34 x86_64
+emulator on a KVM-enabled ubuntu-latest runner; connected-test reports
+upload as a workflow artifact on failure; 45-minute timeout; a concurrency
+group cancels a superseded run if master gets pushed twice in quick
+succession. Added two status badges near the top of README (unit tests via
+`distribute.yml`, instrumented tests via `instrumented.yml`).
+
+Validated what's possible from a machine with no way to execute GitHub
+Actions: YAML parses clean (PyYAML), and `connectedDebugAndroidTest`
+confirmed present via `./gradlew tasks --all`. Action names, versions, and
+emulator flags are unverified until an actual run happens — flagged in
+TODO.md as needing a `workflow_dispatch` run before this is trusted to gate
+master. Also flagged the ~15-25 min-per-push emulator cost for the owner to
+weigh against restricting the trigger further.
+
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 
 **Phantom gap between bubble and reaction pills** (found on-device right after
