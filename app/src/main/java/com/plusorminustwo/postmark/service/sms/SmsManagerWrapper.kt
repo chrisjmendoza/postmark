@@ -39,17 +39,34 @@ class SmsManagerWrapper @Inject constructor(
      *
      * @param messageId The optimistic Room row ID; used as the request code for
      *   PendingIntents so the receiver can identify which message to update.
+     * @param existingSmsRowId When > 0, the message already has a `content://sms/sent`
+     *   row with this id — reuse it instead of inserting a new one. Used by
+     *   [SendQueueWorker] when flushing a queued send that already failed once: the
+     *   pre-send insert of the first attempt succeeded (the provider insert is local and
+     *   doesn't need the radio), so re-inserting would DUPLICATE the message for every
+     *   reader of the provider. Replacing the row by delete+insert is not an option
+     *   either — deleting from `content://sms` outside an explicit user delete is
+     *   forbidden by the project's hard rule. The default (-1) inserts a fresh row, so
+     *   first-time sends are unchanged.
      *
      * Suspends onto IO internally (same contract as [MmsManagerWrapper.sendMms]):
      * getOrCreateThreadId and the provider insert are blocking binder/disk calls.
      */
-    suspend fun sendTextMessage(destinationAddress: String, text: String, messageId: Long) = withContext(Dispatchers.IO) {
+    suspend fun sendTextMessage(
+        destinationAddress: String,
+        text: String,
+        messageId: Long,
+        existingSmsRowId: Long = -1L,
+    ) = withContext(Dispatchers.IO) {
         // SmsManager transmits over the radio; as default SMS app we must write the row
         // to content://sms/sent so other apps can see it. We also capture the assigned
         // row ID so SmsSentDeliveryReceiver can update the correct Room row (the optimistic
         // negative-ID entry will have been replaced by SmsSyncHandler before that fires).
         var smsRowId = -1L
-        try {
+        if (existingSmsRowId > 0L) {
+            // Queued re-send: the provider row already exists — reuse it, never duplicate.
+            smsRowId = existingSmsRowId
+        } else try {
             val now = System.currentTimeMillis()
             // getOrCreateThreadId ensures Samsung/MIUI devices assign the message to the
             // correct thread; omitting THREAD_ID can cause mis-grouping on those ROMs.

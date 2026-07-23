@@ -120,6 +120,21 @@ class MultipartSendTracker @Inject constructor() {
         }
     }
 
+    /**
+     * Forgets all state for [key] so the next [record] for it starts fresh.
+     *
+     * Needed by the offline send queue: a message that failed its first send ends with a
+     * terminal FAILED marker for its key (the Room id), which is *retained* (see class doc)
+     * so stragglers can't reopen it. But a queued re-send reuses that same key — without
+     * clearing it, every part of the re-send hits the `terminal != null` guard and returns
+     * [Decision.None], leaving the message stuck PENDING forever. [SendQueueWorker] calls
+     * this before re-dispatching so the retry aggregates as a brand-new send.
+     */
+    @Synchronized
+    fun reset(key: Long) {
+        entries.remove(key)
+    }
+
     /** Number of keys currently held (live + terminal markers). Test/diagnostic only. */
     @Synchronized
     fun trackedKeyCount(): Int = entries.size

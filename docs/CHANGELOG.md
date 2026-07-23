@@ -42,9 +42,25 @@ go out unchanged as soon as service returns.
   tap-to-retry is unchanged). The conversations list renders no delivery status, so it
   needed nothing.
 
+**Queued flush reuses the existing provider row (no duplicates) and resets part
+tracking.** The receiver-requeued path (the common airplane-mode case) parks a *real*
+provider-backed row: the pre-send `content://sms/sent` insert already succeeded (it's
+local, doesn't need the radio), so the row exists at STATUS_PENDING. `SmsManagerWrapper
+.sendTextMessage` gains an `existingSmsRowId` parameter — when set (positive-id rows
+only), it skips the insert and reuses that row, so a queued re-send can't duplicate the
+message for every provider reader; deleting/replacing the old row isn't an option
+(forbidden by the content://sms delete rule). Negative-id optimistic rows (the
+ThreadViewModel-queued path) keep the default insert — they have no provider row yet.
+The re-send reuses the same tracker key (the Room id), and the first failed attempt left
+a *terminal* FAILED marker there, so without intervention every part of the retry would
+return `Decision.None` and the message would sit PENDING forever — a real bug.
+`MultipartSendTracker` gains `reset(key)`, which `SendQueueWorker` calls before each
+reused-row re-dispatch so the retry aggregates as a fresh send.
+
 Tests: `SendQueueClassifierTest` (+6) covers both queue-worthy codes, three non-worthy
-codes, and RESULT_OK. Full suite: 916 passing. The ordering decision is a trivial
-`hasQueuedInThread` guard (inlined, documented) rather than a manufactured helper.
+codes, and RESULT_OK; `MultipartSendTrackerTest` (+2) covers re-send-after-reset and a
+no-op reset of an unknown key. Full suite: 918 passing. The ordering decision is a
+trivial `hasQueuedInThread` guard (inlined, documented) rather than a manufactured helper.
 
 ---
 

@@ -117,6 +117,27 @@ class MultipartSendTrackerTest {
     }
 
     @Test
+    fun `reset lets a re-send after failure aggregate fresh`() {
+        val t = tracker()
+        // First send fails → terminal FAILED marker retained for this key.
+        assertEquals(Decision.MarkFailed, t.record(5L, 0, 1, Outcome.KnownFailure))
+        // The offline send queue re-sends the SAME key. Without a reset the retained
+        // terminal marker swallows every part as already-decided — the message would be
+        // stuck PENDING forever.
+        assertEquals(Decision.None, t.record(5L, 0, 1, Outcome.Ok))
+        // reset() clears the marker; the re-send now completes normally.
+        t.reset(5L)
+        assertEquals(Decision.MarkSent(null), t.record(5L, 0, 1, Outcome.Ok))
+    }
+
+    @Test
+    fun `reset of an unknown key is a harmless no-op`() {
+        val t = tracker()
+        t.reset(999L) // never recorded — must not throw or create state
+        assertEquals(Decision.MarkSent(null), t.record(999L, 0, 1, Outcome.Ok))
+    }
+
+    @Test
     fun `terminal markers are bounded by the LRU cap`() {
         val t = tracker()
         val overflow = MultipartSendTracker.MAX_TRACKED_KEYS + 50

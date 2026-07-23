@@ -40,7 +40,8 @@ class SendQueueWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
     private val messageRepository: MessageRepository,
-    private val smsManagerWrapper: SmsManagerWrapper
+    private val smsManagerWrapper: SmsManagerWrapper,
+    private val multipartSendTracker: MultipartSendTracker
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -58,7 +59,24 @@ class SendQueueWorker @AssistedInject constructor(
              * again with a queue-worthy code SmsSentDeliveryReceiver re-parks it as QUEUED
              * and re-enqueues a fresh flush. */
             messageRepository.updateDeliveryStatus(message.id, DELIVERY_STATUS_PENDING)
-            smsManagerWrapper.sendTextMessage(message.address, message.body, message.id)
+
+            if (message.id > 0L) {
+                /* Real provider-backed row (receiver-requeued path): its content://sms/sent
+                 * row already exists from the failed first attempt, so reuse it rather than
+                 * inserting a duplicate. The receiver keys the tracker on this same id, and
+                 * the first attempt left a terminal FAILED marker there — clear it so the
+                 * re-send aggregates fresh instead of every part returning Decision.None
+                 * (which would leave the message stuck PENDING forever). */
+                multipartSendTracker.reset(message.id)
+                smsManagerWrapper.sendTextMessage(
+                    message.address, message.body, message.id, existingSmsRowId = message.id
+                )
+            } else {
+                /* Optimistic (negative-id) row from the ThreadViewModel-queued path: it has
+                 * no provider row yet, so the normal insert path is correct and there is no
+                 * stale tracker marker (this row never went through a failed send). */
+                smsManagerWrapper.sendTextMessage(message.address, message.body, message.id)
+            }
             processed++
         }
         return Result.success()
