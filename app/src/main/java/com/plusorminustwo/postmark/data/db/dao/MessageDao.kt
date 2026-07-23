@@ -144,6 +144,16 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
     suspend fun getAll(): List<MessageEntity>
 
+    /** Every message parked in the offline send queue (deliveryStatus = DELIVERY_STATUS_QUEUED),
+     *  oldest first — [SendQueueWorker] flushes them in this order. Value-only query, no schema. */
+    @Query("SELECT * FROM messages WHERE deliveryStatus = 5 ORDER BY timestamp ASC")
+    suspend fun getQueuedMessages(): List<MessageEntity>
+
+    /** True when a thread has any message parked in the send queue. Backs the ordering rule
+     *  that a new send joins the back of the queue rather than overtaking earlier queued ones. */
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE threadId = :threadId AND deliveryStatus = 5)")
+    suspend fun hasQueuedInThread(threadId: Long): Boolean
+
     /** Marks every message in the given thread as read; called when the user opens the thread.
      *  The `AND isRead = 0` predicate matters: SQLite fires UPDATE triggers (including the
      *  FTS sync trigger) and Room invalidation for every matched row even when the value is

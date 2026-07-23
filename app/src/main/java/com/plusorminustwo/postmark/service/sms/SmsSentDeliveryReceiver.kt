@@ -9,6 +9,7 @@ import android.content.Intent
 import android.provider.Telephony
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_QUEUED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
@@ -112,10 +113,10 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                                     }
                                 }
                                 is MultipartSendTracker.Decision.MarkFailed -> {
-                                    messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
-                                    /* Mirror failure status into content://sms so third-party apps
-                                     * (e.g. Google Messages) don't keep showing it as pending. */
-                                    mirrorProviderStatus(context, smsRowId, Telephony.Sms.STATUS_FAILED)
+                                    /* A no-service / radio-off failure isn't a real failure — the
+                                     * message can go out unchanged when service returns. Park it in
+                                     * the send queue instead of marking it FAILED. */
+                                    applyFailedOutcome(context, roomId, smsRowId, isQueueWorthyFailure(resultCode))
                                 }
                                 is MultipartSendTracker.Decision.None -> {
                                     /* Still awaiting parts, an ambiguous part, or already decided —
@@ -174,10 +175,33 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                 }
             }
             isKnownFailure -> {
-                messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
-                mirrorProviderStatus(context, smsRowId, Telephony.Sms.STATUS_FAILED)
+                applyFailedOutcome(context, roomId, smsRowId, isQueueWorthyFailure(resultCode))
             }
             // resultCode == 0: ambiguous — leave as PENDING.
+        }
+    }
+
+    /**
+     * Applies a send failure. A [queueWorthy] failure (no service / radio off) parks the row
+     * in the offline send queue ([DELIVERY_STATUS_QUEUED]) and enqueues a flush — the provider
+     * status is deliberately left PENDING (not mirrored to STATUS_FAILED) so nothing presents
+     * the message as permanently failed while it waits for service. Any other failure is a real
+     * failure: FAILED in Room, mirrored to the provider so other apps stop showing it as pending.
+     */
+    private suspend fun applyFailedOutcome(
+        context: Context,
+        roomId: Long,
+        smsRowId: Long,
+        queueWorthy: Boolean,
+    ) {
+        if (queueWorthy) {
+            messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_QUEUED)
+            SendQueueWorker.enqueue(context)
+        } else {
+            messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
+            /* Mirror failure status into content://sms so third-party apps
+             * (e.g. Google Messages) don't keep showing it as pending. */
+            mirrorProviderStatus(context, smsRowId, Telephony.Sms.STATUS_FAILED)
         }
     }
 

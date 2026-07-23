@@ -95,6 +95,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_QUEUED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
@@ -2728,6 +2729,7 @@ private fun DeliveryStatusIndicator(
     // a screen-reader user gets that a message failed.
     val (icon, tint, description) = when (status) {
         DELIVERY_STATUS_PENDING   -> Triple(Icons.Default.Schedule, MaterialTheme.colorScheme.onSurfaceVariant, "Sending")
+        DELIVERY_STATUS_QUEUED    -> Triple(Icons.Default.Schedule, MaterialTheme.colorScheme.onSurfaceVariant, "Queued")
         DELIVERY_STATUS_SENT      -> Triple(Icons.Default.Done, sentColor, "Sent")
         DELIVERY_STATUS_DELIVERED -> Triple(Icons.Default.DoneAll, deliveredColor, "Delivered")
         DELIVERY_STATUS_FAILED    -> Triple(Icons.Default.Error, MaterialTheme.colorScheme.error, "Failed to send. Tap to retry.")

@@ -133,6 +133,16 @@ class MessageRepository @Inject constructor(
     /** Returns all messages ordered by timestamp (used by reprocessReactions debug tool). */
     suspend fun getAll(): List<Message> = messageDao.getAll().map { it.toDomain() }
 
+    /** Every message parked in the offline send queue, oldest first — the [SendQueueWorker]
+     *  flush source. */
+    suspend fun getQueuedMessages(): List<Message> =
+        messageDao.getQueuedMessages().map { it.toDomain() }
+
+    /** True when a thread already has queued (unsent) messages — a new send must join the
+     *  back of the queue instead of overtaking them. */
+    suspend fun hasQueuedInThread(threadId: Long): Boolean =
+        messageDao.hasQueuedInThread(threadId)
+
     /** Returns every message carrying a media attachment; used by the orphaned MMS-cache sweep. */
     suspend fun getMessagesWithAttachments(): List<Message> =
         messageDao.getAllWithAttachments().map { it.toDomain() }

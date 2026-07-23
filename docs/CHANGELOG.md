@@ -4,6 +4,50 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (feat/send-queue) — offline sends queue and flush in order
+
+Stacks on fix/multipart-sent-status. **Not yet verified on device** (needs an
+airplane-mode send).
+
+**With no signal, an outgoing SMS just failed with a red `!`.** The radio returns
+`RESULT_ERROR_NO_SERVICE` / `RESULT_ERROR_RADIO_OFF`, `SmsSentDeliveryReceiver`
+marked the message FAILED, and the only recourse was tapping retry by hand once
+service came back. Those two result codes aren't real failures — the message can
+go out unchanged as soon as service returns.
+
+**Such sends now queue automatically and flush in order.**
+- New `DELIVERY_STATUS_QUEUED = 5` — a VALUE in the existing `deliveryStatus` Int
+  column, no schema change, no migration. The Room rows carrying this status *are*
+  the queue.
+- Pure `isQueueWorthyFailure(resultCode)` classifier: true only for
+  `RESULT_ERROR_NO_SERVICE` and `RESULT_ERROR_RADIO_OFF`; every other code stays a
+  real FAILED. `SmsSentDeliveryReceiver` (both the `MultipartSendTracker.MarkFailed`
+  arm and the legacy fallback) consults the current intent's result code: queue-worthy
+  → status QUEUED, provider status left PENDING (not mirrored to STATUS_FAILED), and a
+  flush enqueued; otherwise the existing FAILED behaviour is untouched.
+- `SendQueueWorker` (@HiltWorker) — unique work "send-queue-flush", ExistingWorkPolicy
+  .KEEP, `NetworkType.CONNECTED` constraint (a heuristic for "radio likely back";
+  backoff retries cover the gap), exponential backoff. Loads all QUEUED messages
+  oldest-first, and for each SMS row (MMS ignored — never queued) sets PENDING then
+  re-sends via `SmsManagerWrapper`. Sequential, so order is preserved.
+- Flush is enqueued from three places: the receiver on a queue-worthy failure, app
+  start (`PostmarkApplication`, so queued sends survive reboot / process death), and a
+  new send that joins a non-empty queue.
+- Ordering with new sends: `ThreadViewModel.sendMessage`'s SMS path checks
+  `hasQueuedInThread` — if the thread already has queued messages the new one is
+  inserted as QUEUED (joining the back of the queue) and a flush enqueued, rather than
+  sending immediately and overtaking earlier queued sends.
+- UI: `DeliveryStatusIndicator` gains a QUEUED case — `Icons.Default.Schedule`,
+  `onSurfaceVariant` tint, contentDescription "Queued", non-interactive (FAILED's
+  tap-to-retry is unchanged). The conversations list renders no delivery status, so it
+  needed nothing.
+
+Tests: `SendQueueClassifierTest` (+6) covers both queue-worthy codes, three non-worthy
+codes, and RESULT_OK. Full suite: 916 passing. The ordering decision is a trivial
+`hasQueuedInThread` guard (inlined, documented) rather than a manufactured helper.
+
+---
+
 ## 2026-07-23 (fix/multipart-sent-status) — aggregate per-part sent results so multipart status is all-or-failed
 
 910 tests passing (up from 898). **Not yet verified on device** (needs a real

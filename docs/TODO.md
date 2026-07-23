@@ -169,8 +169,17 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       wrongly SENT. **Needs on-device verification** for a real multipart send
       (>160 chars): confirm all-parts-OK → SENT, an induced part failure → FAILED
       that stays FAILED, and the sent-row recovery still fires.
-- [ ] **Send queue** — if no signal, queue outgoing messages and
-      send when connectivity restored. Show "Queued" status on bubble.
+- [x] **Send queue** (July 23 2026, feat/send-queue) — a send that fails with a
+      queue-worthy radio result (`RESULT_ERROR_NO_SERVICE` / `RESULT_ERROR_RADIO_OFF`)
+      is parked as `DELIVERY_STATUS_QUEUED` (value 5 — value-only in the existing Int
+      column, no schema change) instead of FAILED, showing "Queued" on the bubble.
+      A `SendQueueWorker` (unique work "send-queue-flush", NetworkType.CONNECTED,
+      exponential backoff) flushes all queued SMS in timestamp order when service
+      returns, re-enqueued by the receiver, by app start (survives reboot), and by a
+      new send. Ordering decision: a new send in a thread that already has queued
+      messages joins the back of the queue rather than overtaking. MMS is excluded
+      (never queued). **Needs on-device verification**: airplane-mode send → "Queued"
+      → disable airplane mode → sends flush in order.
 
 ---
 
