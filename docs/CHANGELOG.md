@@ -40,6 +40,78 @@ only — never the telephony provider). Existing duplicate-semantics test
 updated to assert the row is removed.
 
 ---
+## 2026-07-23 (feat/longpress-selection) — long-press enters selection directly with an undimmed anchored popup
+
+905 tests passing (up from 887). **Not yet verified on device.**
+
+**Long-press used to darken the whole screen and hide multi-select two taps deep.**
+Long-pressing a bubble popped a scrimmed emoji picker (45% black dim) plus a
+per-message ACTION top bar, and reaching multi-select took long-press → action bar
+→ "Select". Now a single long-press opens the lightweight anchored emoji popup AND
+enters selection mode (SelectionTopBar, scope MESSAGES, that message selected) at
+once, with **no dimming** — the 45% scrim is replaced by a fully transparent
+full-screen click-catcher (same statusBarsPadding + 56dp top inset so the top bar
+stays tappable), so the conversation stays fully readable behind the popup.
+
+The popup surface gains a compact second row carrying the actions the deleted ACTION
+bar held — Copy, Forward, Pin/Unpin (label follows `isPinned`), Delete — wired to the
+same clipboard-copy+toast / forward / pin-toggle / `pendingDeleteMessageId` confirm
+flow. Emoji anchoring math, haptics, and the "more" bottom sheet are unchanged.
+
+Behavior rules: long-press while already selecting toggles that message (like a tap,
+no popup, existing selection preserved); tap-outside or back with the popup open
+dismisses the popup only and keeps selection running; reacting (including from the
+"more" sheet) dismisses the popup and exits selection; each action-row action closes
+the popup and exits selection. Back handling composed before the in-flight-memo
+handler so the memo keeps priority.
+
+**Deletions:** `MessageActionTopBar` composable, `TopBarMode.ACTION` and its
+AnimatedContent branch (topBarMode is now just SELECTION / NORMAL),
+`ThreadViewModel.enterSelectionModeFromActionMode()`, and the
+`onEnterSelectionModeFromActionMode`/`onSelect` plumbing. The long-press/selection
+transition rules are consolidated into a pure `ThreadViewModel.SelectionSnapshot`
+reducer (`longPress` / `dismissPicker` / `exitSelection`) the ViewModel delegates to,
+with new `ThreadViewModelSelectionStateTest` coverage (7 tests). `dismissReactionPicker()`
+no longer clears the selection; `exitSelectionMode()` now also clears the popup so
+nothing is orphaned.
+
+### Follow-up: bulk delete/forward from the selection bar; popup flips above near the screen bottom
+
+903 tests passing. **Not yet verified on device.** Two gaps from on-device feedback:
+
+**Bulk delete + forward once the popup is dismissed.** SelectionTopBar exposed only
+Copy, so multi-message delete/forward was impossible after tapping a second bubble
+closed the popup. It now carries **Forward** (AutoMirrored Send, "Forward selected")
+and **Delete** (error-tinted, "Delete selected") next to Copy, both guarded by the
+same exiting-bar `topBarMode != SELECTION` tap-drop as Copy (plus an empty-selection
+guard). Delete opens a "Delete N messages?" confirm reusing the single-message
+dialog's permanent/system-provider wording; confirming deletes every selected id and
+exits selection. New `ThreadViewModel.deleteMessages(ids)` applies the existing
+per-id delete logic (extracted to a private `deleteMessageRow` suspend helper) in one
+sequential coroutine, with the default-SMS-app guard applied once up front — these
+provider deletes are the sanctioned explicit-user-delete case.
+
+Forward from the selection bar took the **multi-message** path: the forward nav arg
+became a comma-joined id list (`forward/{messageIds}`, `NavType.StringType`),
+`ForwardPickerViewModel` parses the list and sends each source message to the chosen
+destination in timestamp order (distinct tempId/timestamp per optimistic row so
+rapid-fire inserts don't collide), and the confirm dialog pluralizes to
+"Forward N messages?". Single-message entry points (popup, image viewer) are
+unchanged via a `route(messageId)` convenience overload.
+
+**Popup flips above the bubble near the screen bottom.** The taller popup (emoji +
+action rows) could land under the nav/gesture area where taps don't register, because
+placement only clamped downward. The bubble now reports both its top and bottom root-Y
+(the `onReactionTargetYChanged` channel and the `SelectionSnapshot`/uiState plumbing
+carry both), the popup measures its own height via `onSizeChanged`, and a new pure
+`reactionPopupTopPx` (replacing `reactionPillTopPx`) prefers below, flips above when
+below would pass the bottom bound (screen height − nav-bar inset − margin), and clamps
+into the visible band as a last resort. The nav-bar/status-bar insets are read via
+`WindowInsets` in composition (the overlay lives in the Activity window, not a Dialog).
+Before the height is measured the popup renders at the below position (height 0 always
+fits) and self-corrects on the next frame — no visible jump. Placement test evolved to
+`ReactionPopupPositionTest` (fits below, flips above, clamps, nav-inset respected,
+first-frame); selection-state test extended for the top-Y plumbing.
 
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 

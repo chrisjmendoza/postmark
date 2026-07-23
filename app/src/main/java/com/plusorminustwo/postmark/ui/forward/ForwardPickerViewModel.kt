@@ -54,7 +54,15 @@ class ForwardPickerViewModel @Inject constructor(
     private val smsManagerWrapper: SmsManagerWrapper
 ) : ViewModel() {
 
-    private val sourceMessageId: Long = checkNotNull(savedStateHandle["messageId"])
+    // One or more source messages to forward, parsed from the comma-joined nav arg. A whole
+    // selection forwards in one trip; each message is sent to the chosen destination in
+    // timestamp order (see [forward]).
+    private val sourceMessageIds: List<Long> =
+        checkNotNull(savedStateHandle.get<String>("messageIds"))
+            .split(",").filter { it.isNotBlank() }.map { it.toLong() }
+
+    /** How many messages this picker will forward — drives the confirm-dialog wording. */
+    val messageCount: Int = sourceMessageIds.size
 
     // ── Recent conversations ──────────────────────────────────────────────────
     val recentThreads: StateFlow<List<Thread>> = threadRepository.observeAll()
@@ -107,32 +115,41 @@ class ForwardPickerViewModel @Inject constructor(
     }
 
     private suspend fun forward(destThreadId: Long, destAddress: String) {
-        val source = messageRepository.getById(sourceMessageId) ?: return
+        // Load every source message and send them in timestamp order (oldest first) so the
+        // destination thread preserves the original sequence. A missing row is skipped.
+        val sources = sourceMessageIds
+            .mapNotNull { messageRepository.getById(it) }
+            .sortedBy { it.timestamp }
         val now = System.currentTimeMillis()
-        val tempId = -now
-        val optimistic = Message(
-            id = tempId,
-            threadId = destThreadId,
-            address = destAddress,
-            body = source.body,
-            timestamp = now,
-            isSent = true,
-            type = Telephony.Sms.MESSAGE_TYPE_SENT,
-            deliveryStatus = DELIVERY_STATUS_PENDING,
-            isMms = source.attachments.isNotEmpty(),
-            attachments = source.attachments
-        )
-        messageRepository.insert(optimistic)
-        if (source.attachments.isNotEmpty()) {
-            mmsManagerWrapper.sendMms(
-                toAddresses = listOf(destAddress),
-                textBody = source.body,
-                attachments = source.attachments,
-                messageId = tempId,
-                sentIntent = null
+        sources.forEachIndexed { index, source ->
+            // Distinct tempId + timestamp per message so rapid-fire optimistic inserts don't
+            // collide on the primary key or reorder within the same millisecond.
+            val stamp = now + index
+            val tempId = -stamp
+            val optimistic = Message(
+                id = tempId,
+                threadId = destThreadId,
+                address = destAddress,
+                body = source.body,
+                timestamp = stamp,
+                isSent = true,
+                type = Telephony.Sms.MESSAGE_TYPE_SENT,
+                deliveryStatus = DELIVERY_STATUS_PENDING,
+                isMms = source.attachments.isNotEmpty(),
+                attachments = source.attachments
             )
-        } else {
-            smsManagerWrapper.sendTextMessage(destAddress, source.body, tempId)
+            messageRepository.insert(optimistic)
+            if (source.attachments.isNotEmpty()) {
+                mmsManagerWrapper.sendMms(
+                    toAddresses = listOf(destAddress),
+                    textBody = source.body,
+                    attachments = source.attachments,
+                    messageId = tempId,
+                    sentIntent = null
+                )
+            } else {
+                smsManagerWrapper.sendTextMessage(destAddress, source.body, tempId)
+            }
         }
         _forwardedToThreadId.value = destThreadId
     }
