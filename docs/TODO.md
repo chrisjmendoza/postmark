@@ -347,8 +347,20 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       conversation" multi-select compose (P2), MMS notifications (none existed
       at all before) + m_type artifact filter/cleanup + roster staleness (P3).
       Carrier-disabled group MMS keeps a reworded banner + 1:1 send; no broadcast
-      mode. Remaining: on-device verification matrix (spec §5) and the flagged
-      `MarkAsReadReceiver` MMS read-state gap.
+      mode. Remaining: on-device verification matrix (spec §5).
+      - [x] **`MarkAsReadReceiver` MMS read-state gap — FIXED July 23 2026**
+            (`fix/markread-mms`): notification "Mark as read" only updated
+            `Telephony.Sms` filtered by sender address, so incoming MMS (group
+            messages, media) never got `read = 1` and re-synced back to unread.
+            `IncomingNotifier` now passes the telephony `threadId` (confirmed —
+            see below — to be the same id space as Room's `ThreadEntity.id`)
+            through to `MarkAsReadReceiver`, which uses new pure
+            `ConversationReadMarker.buildUpdates()` to mark both
+            `Telephony.Sms` and `Telephony.Mms` read, scoped to `thread_id`,
+            falling back to the old address-scoped Sms-only update when no
+            thread id is available. On-device verification still pending
+            (group MMS notification → Mark as read → thread shows read after
+            sync).
 - [x] **Voice memos — record + send** (July 16 2026) — mic button in the reply bar
       (replaces send while the composer is empty, WhatsApp/Google Messages pattern)
       with both capture gestures. **Hold to record** → release drops the memo into
@@ -534,11 +546,21 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       migration test extended to v20, codec/merge tests extended, new
       `PostmarkDatabaseTest` cases for the DAO partition/update. 885 tests,
       0 failures. Needs on-device verification.
-- [ ] **Spam auto-flag heuristics + notification action** — deferred out of
-      the item above: basic heuristics (unknown sender, contains URL + short
-      body) to auto-flag obvious spam with a dismissable banner, plus an
-      inline "Report spam" action on notifications from unknown numbers.
-      Required for Play Store messaging category approval.
+- [x] **Spam auto-flag heuristics + notification action** (July 23 2026) —
+      conservative, pure heuristic (`domain/spam/looksLikeSpam`): SUSPECTS spam
+      only when the sender is not a saved contact, the thread is not a group, the
+      body is short (< 200 chars) and contains a URL (http/https/www or a bare
+      `domain.tld`). It never auto-moves a thread to the Spam folder — it only
+      drives a dismissable "Looks like spam?" banner at the top of the thread
+      (recomputed live from the first inbound message; no schema change).
+      "Report spam" on the banner marks spam via the existing DAO path and leaves;
+      "Dismiss" persists per-thread in `SpamSuspicionRepository`'s own prefs file
+      (dismissed banner never returns). Notifications from unknown 1:1 senders now
+      carry a third "Report spam" action → `ReportSpamReceiver` (goAsync, mirrors
+      `MarkAsReadReceiver`) sets `isSpam=1` and cancels the notification (+ summary
+      if last); group threads drop Reply so the action count stays ≤3. Recovery for
+      both paths: Settings › Privacy › Spam → "Not spam". Needs on-device
+      verification (notification action rendering, contact-lookup gating).
 
 ### Search — remaining items
 - [x] **Thread filter chip** — done.

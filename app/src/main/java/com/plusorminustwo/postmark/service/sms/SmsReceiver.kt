@@ -105,7 +105,8 @@ class SmsReceiver : BroadcastReceiver() {
                              * always current even for contacts added after the initial sync
                              * (which can leave a stale phone number in Room's displayName).
                              * Falls back to Room's stored name, then to the raw number. */
-                            val displayName = context.lookupContactName(rawSender)
+                            val contactName = context.lookupContactName(rawSender)
+                            val displayName = contactName
                                 ?: threadRepository.getDisplayNameByAddress(rawSender)
                                 ?: sender
                             syncLogger.log("SmsReceiver", "notification: address=${rawSender.redactPhone()} nameResolved=${displayName != sender}")
@@ -126,7 +127,10 @@ class SmsReceiver : BroadcastReceiver() {
                                 title = displayName,
                                 body = body,
                                 privacyMode = privacyModeRepository.isEnabled(),
-                                allowDirectReply = !isGroupThread
+                                allowDirectReply = !isGroupThread,
+                                // Contact-name lookup (above) is the known-contact signal; a
+                                // blank/null result means an unsaved number → offer Report spam.
+                                senderIsKnownContact = !contactName.isNullOrBlank()
                             )
                         }
                     } finally {

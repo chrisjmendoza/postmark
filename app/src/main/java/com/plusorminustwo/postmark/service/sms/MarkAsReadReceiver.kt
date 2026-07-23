@@ -12,11 +12,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
- * Handles the "Mark as read" action on incoming SMS notifications.
+ * Handles the "Mark as read" action on incoming SMS/MMS notifications.
  *
  * Tapping the action button triggers this receiver, which:
- *  1. Updates [Telephony.Sms.CONTENT_URI] to set `read = 1` for all unread messages
- *     from the sender's [EXTRA_ADDRESS].
+ *  1. Marks unread rows read in both [Telephony.Sms.CONTENT_URI] and
+ *     [Telephony.Mms.CONTENT_URI], scoped to [EXTRA_THREAD_ID] when available (see
+ *     [ConversationReadMarker]) — this covers MMS (group messages, media), which have
+ *     no single stable sender address to filter on. Falls back to the address-scoped
+ *     SMS-only update when no thread id was passed (older/edge-case notifications).
  *  2. Cancels the individual notification so it disappears from the shade.
  *  3. Cancels the group summary notification if no other SMS notifications remain.
  *
@@ -28,8 +31,9 @@ import kotlinx.coroutines.launch
 class MarkAsReadReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return
+        val address  = intent.getStringExtra(EXTRA_ADDRESS) ?: return
         val notifId  = intent.getIntExtra(EXTRA_NOTIF_ID, 0)
+        val threadId = intent.getLongExtra(EXTRA_THREAD_ID, -1L)
 
         // ── Extend receiver lifetime ──────────────────────────────────────────────
         // goAsync() keeps the receiver alive past onReceive() so the ContentResolver
@@ -38,14 +42,27 @@ class MarkAsReadReceiver : BroadcastReceiver() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // ── Mark messages as read in the telephony provider ───────────────
-                // Updates all unread messages from this sender atomically.
-                context.contentResolver.update(
-                    Telephony.Sms.CONTENT_URI,
-                    ContentValues().apply { put(Telephony.Sms.READ, 1) },
-                    "${Telephony.Sms.ADDRESS} = ? AND ${Telephony.Sms.READ} = 0",
-                    arrayOf(address)
-                )
+                // ── Mark messages as read in the telephony provider(s) ────────────
+                // Each provider update is wrapped independently so a failure in one
+                // (e.g. MMS write rejected) can't skip the other or the notification
+                // cancel below.
+                ConversationReadMarker.buildUpdates(threadId, address).forEach { update ->
+                    try {
+                        val uri = when (update.table) {
+                            ConversationReadMarker.Table.SMS -> Telephony.Sms.CONTENT_URI
+                            ConversationReadMarker.Table.MMS -> Telephony.Mms.CONTENT_URI
+                        }
+                        context.contentResolver.update(
+                            uri,
+                            ContentValues().apply { put(Telephony.Sms.READ, 1) }, // "read" — same column name in both providers
+                            update.selection,
+                            update.selectionArgs.toTypedArray()
+                        )
+                    } catch (e: Exception) {
+                        // Best-effort: one provider failing must not prevent the other
+                        // update or the notification dismissal in `finally` below.
+                    }
+                }
             } finally {
                 val nm = context.getSystemService(NotificationManager::class.java)
 
@@ -70,7 +87,8 @@ class MarkAsReadReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        const val EXTRA_ADDRESS  = "extra_mark_read_address"
-        const val EXTRA_NOTIF_ID = "extra_mark_read_notif_id"
+        const val EXTRA_ADDRESS   = "extra_mark_read_address"
+        const val EXTRA_NOTIF_ID  = "extra_mark_read_notif_id"
+        const val EXTRA_THREAD_ID = "extra_mark_read_thread_id"
     }
 }
