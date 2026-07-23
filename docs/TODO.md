@@ -758,22 +758,51 @@ instance, but flagged:
       Show in global stats as "You haven't talked to Jake in a while."
 
 ### Thread view — deeper polish
-- [ ] **Scrolling screenshot ("capture more") support in threads** (July 22
-      2026, found on-device) — Samsung's scroll capture works on the
-      conversations list but reports it can't scroll in a thread, so the user
-      gets a plain screenshot. Diagnosis CONFIRMED by on-device experiment:
-      the platform ScrollCapture API (Android 12+) finds no drivable
-      scrollable because the thread list is `LazyColumn(reverseLayout =
-      true)`; Compose's built-in long-screenshot support (since 1.7, present
-      via BOM 2025.01.00) handles normal top-down scrollables — the
-      conversations list — but not the reversed thread list. Options, in
-      order: (1) check whether a newer Compose BOM lifts the reversed-scroll
-      limitation; (2) register a custom `ScrollCaptureCallback` on the
-      Compose host view that answers tile requests by driving `listState`
-      (we already do programmatic scrolls for search-jump) — ~150-300 lines
-      of reversed-coordinate math, needs a device-test loop; (3) do NOT
-      un-reverse the list — `reverseLayout` is load-bearing (bottom
-      anchoring, scroll restore, date pill math).
+- [~] **Scrolling screenshot ("capture more") support in threads**
+      (IMPLEMENTED-UNTESTED July 23 2026, `feat/thread-scrollcapture`) — took
+      option (2) from the diagnosis below: a custom `ScrollCaptureCallback`.
+      Web research (July 22-23) reconfirmed option (1) is a dead end — no
+      Compose release lifts the reversed-scrollable exclusion, and the blind
+      BOM bump was rejected for blast radius. Option (3) stands: `reverseLayout`
+      is load-bearing and untouched.
+      **What landed:** `ui/thread/ThreadScrollCapture.kt` — API 31+ only
+      (`Build.VERSION_CODES.S` guard; older devices keep today's flat
+      screenshot). `ThreadScrollCaptureEffect` registers an explicit
+      `View.setScrollCaptureCallback` on the host `AndroidComposeView` inside a
+      `DisposableEffect` (unregisters on dispose — thread-screen-scoped, no
+      global handler). The callback reports the LazyColumn's bounds (published
+      via `onGloballyPositioned { boundsInRoot() }`), then per tile request:
+      resets `listState` to the session-start position, `scrollBy`s the
+      **sign-flipped** delta (the reversed-list conversion stock Compose
+      declines — pure `ScrollCaptureMath.scrollDeltaForCaptureTop`, unit
+      tested), waits two frames, `PixelCopy`s the aligned strip out of the
+      window, and blits it into the capture surface at (0,0). Scroll position
+      is restored in `onScrollCaptureEnd`. LazyColumn gesture handling and
+      bubble internals untouched. 903 tests (was 898), `assembleDebug` green.
+      **⚠️ NOT DEVICE-VERIFIED — cannot be tonight.** On-device test steps for
+      tomorrow (needs an Android 12+ / API 31+ device):
+        1. Open a thread long enough to scroll (several screens of messages).
+        2. Take a screenshot; the system preview should now offer **"Capture
+           more"** / the scroll-capture crop UI (it currently does not).
+        3. Tap it and confirm the long image stitches older messages upward
+           WITHOUT gaps, overlaps, or duplicated tiles, and includes the top
+           bar + reply bar once (not repeated per tile).
+        4. Confirm the thread is left at its original scroll position after the
+           capture UI closes.
+      **Most likely to need iteration on-device** (flagged in-code): the
+      reversed scroll-delta *sign*, the two-frame `awaitDraw` timing before
+      `PixelCopy`, and the exact strip origin / edge-tile handling (a partial
+      tile at the very top/bottom may be dropped by the `EDGE_TOLERANCE_PX`
+      guard). If the platform never offers "Capture more" at all, verify our
+      callback is actually being selected (Compose's own view-level
+      registration vs. our explicit one).
+      _Original diagnosis (July 22 2026, found on-device):_ Samsung's scroll
+      capture works on the conversations list but reports it can't scroll in a
+      thread. CONFIRMED by on-device experiment: the platform ScrollCapture API
+      (Android 12+) finds no drivable scrollable because the thread list is
+      `LazyColumn(reverseLayout = true)`; Compose's built-in long-screenshot
+      support (since 1.7, via BOM 2025.01.00) handles normal top-down
+      scrollables — the conversations list — but not the reversed thread list.
 - [x] **Muted thread visual indicator** — `NotificationsOff` icon (14 dp)
       shown in `ConversationsScreen` thread rows when `isMuted = true`.
 - [x] **Reaction chip cluster-aware spacing** — superseded July 16 2026:

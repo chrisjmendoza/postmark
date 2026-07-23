@@ -381,6 +381,50 @@ does not mark anything read (only sends + cancels notifications), so it was
 left alone — no shared helper needed since only one receiver touches the
 read state.
 
+## 2026-07-23 (feat/thread-scrollcapture) — custom ScrollCaptureCallback for the reversed thread list (long-screenshot support)
+
+**⚠️ NOT DEVICE-VERIFIED — cannot be tested tonight.** 903 tests passing (up from
+898), `assembleDebug` compiles. Needs an on-device capture loop on API 31+; steps
+in `docs/TODO.md` (Tier 3, scrolling screenshot).
+
+**Android never offers "Capture more" in a thread:** the thread list is a
+`LazyColumn(reverseLayout = true)`, and Compose's built-in ScrollCapture support
+(foundation 1.7+, present via BOM 2025.01.00) walks the semantics tree for a
+scrollable node but *declines reversed scrollables* — so the platform's
+long-screenshot UI finds no drivable target and falls back to a flat shot. The
+conversations list (a normal top-down `LazyColumn`) already works. Web research
+(July 22-23) found no Compose release that lifts the reversed exclusion, and a
+blind BOM bump was rejected for blast radius.
+
+**The fix — a custom `ScrollCaptureCallback` (`ui/thread/ThreadScrollCapture.kt`):**
+- API 31+ only (`Build.VERSION_CODES.S` guard); older devices keep today's flat
+  screenshot. `ThreadScrollCaptureEffect` registers an explicit
+  `View.setScrollCaptureCallback` on the host `AndroidComposeView` in a
+  `DisposableEffect` — thread-screen-scoped, unregistered on dispose. An explicit
+  callback takes precedence over Compose's own view-level registration (verified
+  against AOSP `View.dispatchScrollCaptureSearch`).
+- `onScrollCaptureSearch` reports the LazyColumn's bounds, published to the
+  callback via `Modifier.onGloballyPositioned { boundsInRoot() }` (host-view /
+  compose-root space, matching `getLocationInWindow` + `PixelCopy`).
+- Per tile request: reset `listState` to the session-start position, `scrollBy`
+  the **sign-flipped** delta (the reversed-list conversion stock Compose won't
+  do — pure `ScrollCaptureMath.scrollDeltaForCaptureTop`, unit tested), wait two
+  frames for layout+draw, `PixelCopy` the aligned strip out of the window, and
+  blit it into `session.surface` at (0,0) per the platform contract. Bands that
+  can't reach the requested position (content edge) return an empty rect so the
+  platform stops extending.
+- `onScrollCaptureEnd` restores the original scroll position — capture never
+  leaves the user scrolled somewhere random. The LazyColumn's gesture handling
+  and every bubble internal are untouched.
+- New pure `domain/scrollcapture/ScrollCaptureMath.kt` (reversed sign flip +
+  viewport clamp) with 5 plain-JUnit tests in `ScrollCaptureMathTest`.
+
+**Flagged as most likely to need on-device iteration** (all noted in-code): the
+reversed scroll-delta sign, the two-frame `awaitDraw` timing before `PixelCopy`,
+and the exact strip origin / partial edge-tile handling.
+
+---
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in

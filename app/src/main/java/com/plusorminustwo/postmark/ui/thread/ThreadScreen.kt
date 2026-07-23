@@ -162,6 +162,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.boundsInRoot
+import kotlin.math.roundToInt
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -613,6 +615,12 @@ private fun ThreadContent(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    // Thread list bounds in the host-view coordinate space, published by the LazyColumn's
+    // onGloballyPositioned below. Feeds the custom scroll-capture callback (long-screenshot
+    // support for the reversed list — see ThreadScrollCapture.kt). NOT device-verified.
+    var listBoundsInRoot by remember { mutableStateOf<android.graphics.Rect?>(null) }
+    ThreadScrollCaptureEffect(listState = listState, boundsProvider = { listBoundsInRoot })
 
     LaunchedEffect(attachmentRejectedEvent) {
         attachmentRejectedEvent.collect { message ->
@@ -1365,7 +1373,17 @@ private fun ThreadContent(
                 LazyColumn(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coords ->
+                        // Publish the list region for the scroll-capture callback, in the
+                        // host-view (compose-root) space that PixelCopy + getLocationInWindow
+                        // expect. NOT device-verified — see ThreadScrollCapture.kt.
+                        val b = coords.boundsInRoot()
+                        listBoundsInRoot = android.graphics.Rect(
+                            b.left.roundToInt(), b.top.roundToInt(),
+                            b.right.roundToInt(), b.bottom.roundToInt()
+                        )
+                    },
                 state = listState,
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
