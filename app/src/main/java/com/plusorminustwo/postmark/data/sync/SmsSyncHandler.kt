@@ -54,7 +54,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class SmsSyncHandler @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val reactionParser: ReactionFallbackParser,
