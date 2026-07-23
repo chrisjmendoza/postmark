@@ -92,22 +92,28 @@ class SmsReceiver : BroadcastReceiver() {
                             Log.w(TAG, "getOrCreateThreadId failed for notification", e)
                             -1L
                         }
-                        // Check suppression/mute/notifications before posting the banner.
-                        // Suppress when the user is already viewing this exact thread — the
-                        // message still synced above; only the notification is skipped.
-                        val notificationsEnabled =
-                            threadRepository.isNotificationsEnabledByAddress(rawSender)
+                        /* Gate on the resolved thread id, not the raw address string: the
+                         * incoming PDU's sender format doesn't have to match whatever format
+                         * the thread's stored `address` column happens to hold (and a
+                         * contact's other number reaching this same thread wouldn't match
+                         * it at all). Telephony.Threads.getOrCreateThreadId() already applies
+                         * the OS's own number-identity rules, so keying Room's lookup off its
+                         * result inherits that normalization for free. No Room row yet (first
+                         * message ever) falls back to today's defaults: notify, not muted,
+                         * not spam, no stored display name. */
+                        val thread = if (threadId > 0L) threadRepository.getById(threadId) else null
+                        val notificationsEnabled = thread?.notificationsEnabled ?: true
                         if (activeThreadTracker.activeThreadId != threadId &&
                             notificationsEnabled &&
-                            !threadRepository.isMutedByAddress(rawSender) &&
-                            !threadRepository.isSpamByAddress(rawSender)) {
+                            thread?.isMuted != true &&
+                            thread?.isSpam != true) {
                             /* Look up the display name from ContactsContract first — it is
                              * always current even for contacts added after the initial sync
                              * (which can leave a stale phone number in Room's displayName).
                              * Falls back to Room's stored name, then to the raw number. */
                             val contactName = context.lookupContactName(rawSender)
                             val displayName = contactName
-                                ?: threadRepository.getDisplayNameByAddress(rawSender)
+                                ?: thread?.displayName?.ifEmpty { null }
                                 ?: sender
                             syncLogger.log("SmsReceiver", "notification: address=${rawSender.redactPhone()} nameResolved=${displayName != sender}")
                             /* Suppress the inline reply action on group threads: a single-
@@ -118,8 +124,7 @@ class SmsReceiver : BroadcastReceiver() {
                              * false-positive (GROUP_MESSAGING_SPEC §2.2). Always false for
                              * incoming SMS today (group traffic is MMS); correct future-
                              * proofing for when MMS notifications land (P3). */
-                            val isGroupThread =
-                                threadId > 0L && (threadRepository.getById(threadId)?.participants?.size ?: 0) > 1
+                            val isGroupThread = (thread?.participants?.size ?: 0) > 1
                             incomingNotifier.notify(
                                 notifKey = rawSender.hashCode(),
                                 threadId = threadId,

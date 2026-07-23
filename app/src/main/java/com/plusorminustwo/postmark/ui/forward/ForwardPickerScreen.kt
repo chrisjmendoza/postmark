@@ -39,6 +39,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.plusorminustwo.postmark.data.contacts.formatContactSupportingText
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
 
@@ -194,7 +195,9 @@ fun ForwardPickerScreen(
                 items(contacts, key = { "contact_${it.address}" }) { contact ->
                     ListItem(
                         headlineContent = { Text(contact.displayName) },
-                        supportingContent = { Text(formatPhoneNumber(contact.address)) },
+                        supportingContent = {
+                            Text(formatContactSupportingText(contact.label, formatPhoneNumber(contact.address)))
+                        },
                         leadingContent = {
                             ContactAvatar(
                                 address = contact.address,

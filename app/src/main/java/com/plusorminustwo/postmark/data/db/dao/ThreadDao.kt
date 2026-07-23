@@ -78,12 +78,6 @@ interface ThreadDao {
     @Query("UPDATE threads SET isSpam = :isSpam WHERE id = :threadId")
     suspend fun updateSpam(threadId: Long, isSpam: Boolean)
 
-    @Query("SELECT isSpam FROM threads WHERE address = :address LIMIT 1")
-    suspend fun isSpamByAddress(address: String): Boolean?
-
-    @Query("SELECT notificationsEnabled FROM threads WHERE address = :address LIMIT 1")
-    suspend fun isNotificationsEnabledByAddress(address: String): Boolean?
-
     @Query("SELECT * FROM threads WHERE backupPolicy != 'NEVER_INCLUDE'")
     suspend fun getThreadsForBackup(): List<ThreadEntity>
 
@@ -111,12 +105,6 @@ interface ThreadDao {
 
     @Query("UPDATE threads SET lastMessagePreview = :preview WHERE id = :threadId")
     suspend fun updateLastMessagePreview(threadId: Long, preview: String)
-
-    @Query("SELECT isMuted FROM threads WHERE address = :address LIMIT 1")
-    suspend fun isMutedByAddress(address: String): Boolean?
-
-    @Query("SELECT displayName FROM threads WHERE address = :address LIMIT 1")
-    suspend fun getDisplayNameByAddress(address: String): String?
 
     /** Saves a Postmark-only nickname for the thread; pass null to clear it. */
     @Query("UPDATE threads SET nickname = :nickname WHERE id = :threadId")

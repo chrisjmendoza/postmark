@@ -301,14 +301,10 @@ private class RepairRecordingThreadDao : ThreadDao {
     override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
     override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
     override suspend fun updateSpam(threadId: Long, isSpam: Boolean) = Unit
-    override suspend fun isSpamByAddress(address: String): Boolean? = null
-    override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
     override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsWithParticipants(): List<ThreadEntity> = emptyList()
     override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
-    override suspend fun isMutedByAddress(address: String): Boolean? = null
-    override suspend fun getDisplayNameByAddress(address: String): String? = null
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
     override suspend fun updateAccentColor(threadId: Long, argb: Int?) = Unit
     override suspend fun updateChatBackground(threadId: Long, backgroundId: String?) = Unit

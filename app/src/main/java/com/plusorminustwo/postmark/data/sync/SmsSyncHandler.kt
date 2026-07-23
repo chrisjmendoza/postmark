@@ -902,7 +902,7 @@ class SmsSyncHandler @Inject constructor(
         val isGroup = thread.participants.size > 1
         val contactName = context.lookupContactName(message.address)
         val senderName = contactName
-            ?: threadRepository.getDisplayNameByAddress(message.address)
+            ?: thread.displayName.ifEmpty { null }
             ?: message.address.ifEmpty { "Unknown" }
         val title = if (isGroup) {
             "$senderName — ${thread.nickname ?: thread.displayName}"

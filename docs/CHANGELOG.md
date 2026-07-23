@@ -4,6 +4,54 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (fix/multi-number-contacts) — notification gates keyed by threadId; contact pickers show number type
+
+**Bug 1 (correctness): `SmsReceiver` gated mute/spam/notifications-enabled by exact-string
+address match.** The incoming PDU's sender format doesn't have to match whatever format the
+thread's stored `address` column holds — and a contact's *other* number reaching the same
+logical thread wouldn't match at all — so mute/spam suppression and per-number notification
+toggles could be silently defeated. Fixed by resolving `threadId` first (already computed via
+`Telephony.Threads.getOrCreateThreadId`, unchanged) and gating on one `threadRepository.
+getById(threadId)` fetch instead of four separate address-keyed queries — Room's `Thread.id`
+IS the telephony thread id (confirmed project-wide invariant), and `getOrCreateThreadId`
+already applies the OS's own number-identity rules, so keying off its result inherits that
+normalization for free. No hand-rolled normalizer needed. A thread not yet in Room (first
+message ever) keeps today's defaults: notify, not muted, not spam, no stored display name.
+Deleted the four `ThreadDao`/`ThreadRepository` `...ByAddress` queries — `isSpamByAddress`,
+`isNotificationsEnabledByAddress`, `isMutedByAddress`, `getDisplayNameByAddress` — after
+confirming every caller: `SmsReceiver`'s three gate calls now read off the fetched `Thread`
+object's `notificationsEnabled`/`isMuted`/`isSpam` fields directly; `SmsSyncHandler.
+notifyIncomingMms`'s `getDisplayNameByAddress` fallback already had the same `Thread` in hand
+(its own gating was already threadId-keyed via `thread.notificationsEnabled`/`isMuted`/
+`isSpam` — only the display-name fallback was still address-keyed) and now reads `thread.
+displayName` directly. Deleted their test coverage: the `PostmarkDatabaseTest` address-lookup
+assertions (kept the by-id assertions, renamed `updateSpamFlagAndAddressLookup` →
+`updateSpamFlagById`), and the now-nonexistent-override lines from 10 fake `ThreadDao` test
+doubles across the search/thread/stats/sync test suites.
+
+**Bug 2 (usability + duplication): contact pickers couldn't distinguish a contact's numbers,
+and `searchContacts` was a verbatim copy in two ViewModels.** `NewConversationViewModel` and
+`ForwardPickerViewModel` each queried `ContactsContract.CommonDataKinds.Phone` with only
+DISPLAY_NAME + NUMBER, so a contact with two numbers showed as two identical-looking rows.
+Extracted the shared implementation to `data/contacts/ContactSearch.kt`: `Context.
+searchContacts()` (adds TYPE + LABEL to the projection, resolves the human label via
+`Phone.getTypeLabel`), the `ContactResult` data class (moved out of
+`NewConversationViewModel`, gained a `label: String?` field), and the pure
+`formatContactSupportingText(typeLabel, formattedNumber)` combiner (e.g. "Mobile · (206)
+555-1234", falls back to the number alone with no label) — 3 new JUnit tests. Dedupe switched
+from the raw whitespace-stripped number to `normalizeAddressForDedupe` (already used by the
+New Conversation chip strip), so the same number stored in two formats collapses to one row.
+Both `NewConversationScreen` and `ForwardPickerScreen` now show the type label in the picker
+row's supporting text. Contact NAME and PHOTO resolution needed no changes — `PhoneLookup`
+already normalizes a number to its owning contact internally.
+
+**Out of scope, left for a product decision:** contact-level sharing of per-thread settings
+(mute/notifications/nickname/colors) across a single person's multiple numbers/threads.
+
+Needs on-device verification: mute/spam suppression when the alternate-format number for a
+saved contact texts in; the picker's new type-label supporting text on a device with real
+multi-number contacts. 952 tests, `assembleDebug` green.
+
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 
 **Phantom gap between bubble and reaction pills** (found on-device right after

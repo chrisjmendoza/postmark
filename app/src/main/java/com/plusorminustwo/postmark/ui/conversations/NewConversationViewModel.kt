@@ -1,11 +1,12 @@
 package com.plusorminustwo.postmark.ui.conversations
 
 import android.content.Context
-import android.provider.ContactsContract
 import android.provider.Telephony
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.plusorminustwo.postmark.data.contacts.ContactResult
 import com.plusorminustwo.postmark.data.contacts.lookupContactName
+import com.plusorminustwo.postmark.data.contacts.searchContacts
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -28,16 +29,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
-
-// ── Data model ────────────────────────────────────────────────────────────────
-
-/** A single contact entry returned by the live search. */
-data class ContactResult(
-    /** Human-readable contact name (or raw number if no match). */
-    val displayName: String,
-    /** Raw phone number — passed to [NewConversationViewModel.startConversation]. */
-    val address: String
-)
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
 
@@ -73,7 +64,7 @@ class NewConversationViewModel @Inject constructor(
     @OptIn(FlowPreview::class)
     val contacts: StateFlow<List<ContactResult>> = _query
         .debounce(200)
-        .mapLatest { q -> if (q.length < 2) emptyList() else searchContacts(q) }
+        .mapLatest { q -> if (q.length < 2) emptyList() else context.searchContacts(q) }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // ── Navigation event ───────────────────────────────────────────────────────
@@ -253,49 +244,5 @@ class NewConversationViewModel @Inject constructor(
             _navigateToThread.value = threadId
         }
     }
-
-    // ── Contacts helpers ───────────────────────────────────────────────────────
-
-    /**
-     * Queries [ContactsContract.CommonDataKinds.Phone] for entries whose display
-     * name or number contains [query]. Returns at most 20 deduplicated results,
-     * sorted by display name.
-     *
-     * Runs on whichever dispatcher [mapLatest] uses — caller must ensure this
-     * is not the main thread (the [stateIn] + [mapLatest] pipeline runs on the
-     * default dispatcher inside viewModelScope).
-     */
-    private suspend fun searchContacts(query: String): List<ContactResult> =
-        withContext(Dispatchers.IO) {
-            val results = mutableListOf<ContactResult>()
-            val seen    = mutableSetOf<String>()
-            try {
-                context.contentResolver.query(
-                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                    arrayOf(
-                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                        ContactsContract.CommonDataKinds.Phone.NUMBER
-                    ),
-                    "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? OR " +
-                        "${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?",
-                    arrayOf("%$query%", "%$query%"),
-                    "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC"
-                )?.use { cursor ->
-                    val nameIdx = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-                    val numIdx  = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                    while (cursor.moveToNext() && results.size < 20) {
-                        val name = cursor.getString(nameIdx) ?: continue
-                        // Strip whitespace so the de-dup set is number-normalised.
-                        val num  = cursor.getString(numIdx)?.replace("\\s".toRegex(), "") ?: continue
-                        if (seen.add(num)) {
-                            results += ContactResult(name, num)
-                        }
-                    }
-                }
-            } catch (_: SecurityException) {
-                // READ_CONTACTS not granted — return empty list; screen handles gracefully.
-            }
-            results
-        }
 
 }

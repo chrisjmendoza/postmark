@@ -1,12 +1,13 @@
 package com.plusorminustwo.postmark.ui.forward
 
 import android.content.Context
-import android.provider.ContactsContract
 import android.provider.Telephony
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.plusorminustwo.postmark.data.contacts.ContactResult
 import com.plusorminustwo.postmark.data.contacts.lookupContactName
+import com.plusorminustwo.postmark.data.contacts.searchContacts
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -15,7 +16,6 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
-import com.plusorminustwo.postmark.ui.conversations.ContactResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -76,7 +76,7 @@ class ForwardPickerViewModel @Inject constructor(
     @OptIn(FlowPreview::class)
     val contacts: StateFlow<List<ContactResult>> = _query
         .debounce(200)
-        .mapLatest { q -> if (q.length < 2) emptyList() else searchContacts(q) }
+        .mapLatest { q -> if (q.length < 2) emptyList() else context.searchContacts(q) }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // ── Forward result ────────────────────────────────────────────────────────
@@ -153,38 +153,5 @@ class ForwardPickerViewModel @Inject constructor(
         }
         _forwardedToThreadId.value = destThreadId
     }
-
-    // ── Contacts helpers (copied from NewConversationViewModel — see its doc for why
-    // this queries system Contacts directly rather than going through Room) ──────────
-
-    private suspend fun searchContacts(query: String): List<ContactResult> =
-        withContext(Dispatchers.IO) {
-            val results = mutableListOf<ContactResult>()
-            val seen = mutableSetOf<String>()
-            try {
-                context.contentResolver.query(
-                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                    arrayOf(
-                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                        ContactsContract.CommonDataKinds.Phone.NUMBER
-                    ),
-                    "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? OR " +
-                        "${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?",
-                    arrayOf("%$query%", "%$query%"),
-                    "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC"
-                )?.use { cursor ->
-                    val nameIdx = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-                    val numIdx = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                    while (cursor.moveToNext() && results.size < 20) {
-                        val name = cursor.getString(nameIdx) ?: continue
-                        val num = cursor.getString(numIdx)?.replace("\\s".toRegex(), "") ?: continue
-                        if (seen.add(num)) results += ContactResult(name, num)
-                    }
-                }
-            } catch (_: SecurityException) {
-                // READ_CONTACTS not granted — return empty list; screen handles gracefully.
-            }
-            results
-        }
 
 }
