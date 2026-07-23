@@ -4,6 +4,43 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (feat/image-export) — export selected messages as a shareable image
+
+**"Share as image" is back.** From selection mode the top-bar Export (share)
+icon now opens a restored `ExportBottomSheet` (`ui/export/`) offering **Copy as
+text** (the existing clipboard export) and **Share as image**. The image path
+renders the selected messages — which can span far offscreen — to PNG(s) with
+classic `android.graphics` (`Canvas`/`Paint`/`StaticLayout`), deliberately NOT a
+Compose screenshot.
+
+The look is a clean, fixed **light** chat rendering independent of the app's dark
+theme: accent-blue sent bubbles right, neutral bubbles left (with a sender label
+in group threads), rounded corners, day separators, small timestamps, a `❤️ 2`
+reaction row under reacted bubbles, and a footer watermark
+"Exported from Postmark · <date>". Media-bearing messages render a placeholder
+chip using the `previewText` idiom ("📷 Photo", "🎥 Video", …) — no inline
+thumbnails in v1 (follow-up).
+
+**Size safety is pure and tested.** All sizing/pagination lives in
+`domain/export/ImageExportPlan.kt` (plain JVM, 9 tests): fixed 1080px width, a
+12000px per-page hard cap, and a greedy `paginate()` that never splits a single
+message. When a selection exceeds the cap it auto-splits into sequential
+"part X of N" PNGs shared together via `ACTION_SEND_MULTIPLE`. The Android side
+(`service/export/ImageExportRenderer.kt`, `@Singleton`) only measures rows with
+StaticLayout and paints them; it runs on `Dispatchers.Default`, writes to
+`getExternalFilesDir("exports")`, and sweeps export PNGs older than 24h each run
+(mirrors the `mms_attach_` orphan-sweep idiom).
+
+**FileProvider:** no manifest change needed — the existing
+`${applicationId}.fileprovider` already declares an `exports/` external-files
+path, so the shares reuse it (grant-read flag on the intent).
+
+`ThreadViewModel.renderSelectionAsImage()` orchestrates (chronological order,
+group sender labels from `participantNames`); the sheet shows a spinner while
+rendering and routes failures to a snackbar. 958 unit tests pass;
+`assembleDebug` clean. **Needs on-device VISUAL verification** — rendering
+quality, the share sheet, and the multi-part (part X of N) case are all
+unit-covered on the math but not yet exercised on hardware.
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 
 **Phantom gap between bubble and reaction pills** (found on-device right after

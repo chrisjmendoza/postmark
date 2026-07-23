@@ -55,6 +55,7 @@ import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.service.audio.VoiceMemoRecorder
 import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
+import com.plusorminustwo.postmark.service.export.ImageExportRenderer
 import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
@@ -147,7 +148,8 @@ class ThreadViewModel @Inject constructor(
     private val spamSuspicionRepository: SpamSuspicionRepository,
     private val gestureHintsRepo: GestureHintsRepository,
     private val voiceMemoRecorder: VoiceMemoRecorder,
-    private val activeThreadTracker: ActiveThreadTracker
+    private val activeThreadTracker: ActiveThreadTracker,
+    private val imageExportRenderer: ImageExportRenderer
 ) : ViewModel() {
 
     private val threadId: Long = checkNotNull(savedStateHandle["threadId"])
@@ -182,6 +184,27 @@ class ThreadViewModel @Inject constructor(
      *  carrier disables group MMS — then it collapses to the single 1:1 address. */
     private fun sendRecipientsFor(thread: Thread): List<String> =
         if (groupSendSupported) recipientsFor(thread) else listOf(thread.address)
+
+    /**
+     * Renders the currently-selected messages [ids] to shareable PNG(s) and returns
+     * FileProvider content URIs (one per part; a long selection auto-splits — see
+     * [ImageExportRenderer]). Messages are taken in chronological order from the current
+     * snapshot; group threads get a per-sender label resolved from [participantNames].
+     * The renderer runs entirely off the main thread; callers show progress while awaiting.
+     */
+    suspend fun renderSelectionAsImage(ids: Set<Long>): List<Uri> {
+        val state = uiState.value
+        val thread = state.thread ?: return emptyList()
+        val selected = state.messages.filter { it.id in ids }.sortedBy { it.timestamp }
+        if (selected.isEmpty()) return emptyList()
+        val names = participantNames.value
+        return imageExportRenderer.render(
+            messages = selected,
+            threadName = thread.nickname ?: thread.displayName,
+            isGroup = thread.participants.size > 1,
+            senderLabel = { msg -> names[msg.address] ?: formatPhoneNumber(msg.address) }
+        )
+    }
 
     init {
         // Mark all messages in this thread as read as soon as the thread is opened.

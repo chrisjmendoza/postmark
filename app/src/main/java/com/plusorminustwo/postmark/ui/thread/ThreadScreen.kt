@@ -99,6 +99,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_QUEUED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
+import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
@@ -453,6 +454,7 @@ fun ThreadScreen(
         onForwardMessages = onForwardMessages_,
         onExitSelectionMode = onExitSelectionMode,
         onSetSelectionScope = onSetSelectionScope,
+        onRenderSelectionAsImage = { ids -> viewModel.renderSelectionAsImage(ids) },
         onToggleMute = onToggleMute,
         onBlockNumber = onBlockNumber,
         onTogglePin = onTogglePin,
@@ -575,6 +577,9 @@ private fun ThreadContent(
     onForwardMessages: (Collection<Long>) -> Unit = {},
     onExitSelectionMode: () -> Unit,
     onSetSelectionScope: (SelectionScope) -> Unit,
+    // Renders the given selected message ids to shareable PNG(s), returning FileProvider
+    // URIs (one per part). Suspends off the main thread; the export sheet shows progress.
+    onRenderSelectionAsImage: suspend (Set<Long>) -> List<Uri> = { emptyList() },
     onToggleMute: () -> Unit,
     onBlockNumber: () -> Unit = {},
     onTogglePin: () -> Unit,
@@ -657,6 +662,14 @@ private fun ThreadContent(
     // Pinned messages panel (⋮ → "Pinned messages"); a ModalBottomSheet listing this
     // thread's pinned messages, tapping one jumps to it in the conversation.
     var showPinnedSheet by remember { mutableStateOf(false) }
+
+    // Export sheet (selection-mode "Export" action): Copy as text or Share as image. The
+    // selection is snapshotted into exportIds when the sheet opens so the render/copy uses a
+    // stable set even if the sheet outlives selection mode. isExporting drives the spinner
+    // while the Canvas→PNG render runs off the main thread.
+    var showExportSheet by remember { mutableStateOf(false) }
+    var isExporting by remember { mutableStateOf(false) }
+    var exportIds by remember { mutableStateOf(emptySet<Long>()) }
 
     // Non-null shows a "Delete message?" confirm dialog for this message id. Shared by the
     // action-bar Delete button and the image viewer's trash icon — deletion is real (removes
@@ -1044,6 +1057,46 @@ private fun ThreadContent(
         )
     }
 
+    if (showExportSheet) {
+        ExportBottomSheet(
+            messageCount = exportIds.size,
+            isExporting = isExporting,
+            onCopy = {
+                val text = ExportFormatter.formatForCopy(
+                    uiState.messages.filter { it.id in exportIds }.sortedBy { it.timestamp },
+                    uiState.thread?.let { t -> t.nickname ?: t.displayName } ?: "",
+                    "",
+                    uiState.thread?.address ?: ""
+                )
+                context.getSystemService(ClipboardManager::class.java)
+                    .setPrimaryClip(ClipData.newPlainText("Postmark export", text))
+                showExportSheet = false
+                onExitSelectionMode()
+                scope.launch { snackbarHostState.showSnackbar("Copied", duration = SnackbarDuration.Short) }
+            },
+            onShareAsImage = {
+                scope.launch {
+                    isExporting = true
+                    try {
+                        val uris = onRenderSelectionAsImage(exportIds)
+                        if (uris.isEmpty()) {
+                            snackbarHostState.showSnackbar("Nothing to export")
+                        } else {
+                            context.startActivity(imageShareIntent(uris))
+                            showExportSheet = false
+                            onExitSelectionMode()
+                        }
+                    } catch (_: Exception) {
+                        snackbarHostState.showSnackbar("Couldn't create image")
+                    } finally {
+                        isExporting = false
+                    }
+                }
+            },
+            onDismiss = { if (!isExporting) showExportSheet = false }
+        )
+    }
+
     // ── Scaffold + overlay ────────────────────────────────────────────────────
 
     // Provide the current font scale and per-thread accent to all bubble composables
@@ -1137,24 +1190,15 @@ private fun ThreadContent(
                     onClose = { onExitSelectionMode() },
                     onScopeChange = { onSetSelectionScope(it) },
                     onShowDateRange = { showDateRangePicker = true },
-                    onCopy = {
-                        // Drop taps on the exiting bar: the live selection is empty,
-                        // so copying would clobber the clipboard with an empty export
-                        // (pre-animation the bar vanished the same frame and was
-                        // untappable in this window).
+                    onExport = {
+                        // Drop taps on the exiting bar: the live selection is empty, so an
+                        // export would snapshot nothing (pre-animation the bar vanished the
+                        // same frame and was untappable in this window).
                         if (topBarMode != TopBarMode.SELECTION) return@SelectionTopBar
-                        val text = ExportFormatter.formatForCopy(
-                            uiState.messages.filter { it.id in uiState.selectedMessageIds },
-                            uiState.thread?.let { t -> t.nickname ?: t.displayName } ?: "",
-                            "",
-                            uiState.thread?.address ?: ""
-                        )
-                        val cb = context.getSystemService(ClipboardManager::class.java)
-                        cb.setPrimaryClip(ClipData.newPlainText("Postmark export", text))
-                        scope.launch {
-                            snackbarHostState.showSnackbar("Copied", duration = SnackbarDuration.Short)
-                        }
-                        onExitSelectionMode()
+                        val ids = uiState.selectedMessageIds
+                        if (ids.isEmpty()) return@SelectionTopBar
+                        exportIds = ids
+                        showExportSheet = true
                     },
                     onForward = {
                         // Same exiting-bar guard as onCopy — the live selection is empty
@@ -1624,7 +1668,7 @@ private fun SelectionTopBar(
     onClose: () -> Unit,
     onScopeChange: (SelectionScope) -> Unit,
     onShowDateRange: () -> Unit,
-    onCopy: () -> Unit,
+    onExport: () -> Unit,
     onForward: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -1641,7 +1685,7 @@ private fun SelectionTopBar(
                 }
             },
             actions = {
-                IconButton(onClick = onCopy) { Icon(Icons.Default.ContentCopy, "Copy") }
+                IconButton(onClick = onExport) { Icon(Icons.Default.IosShare, "Export") }
                 IconButton(onClick = onForward) {
                     Icon(Icons.AutoMirrored.Filled.Send, "Forward selected")
                 }
@@ -1678,6 +1722,28 @@ private fun SelectionTopBar(
             )
         }
     }
+}
+
+/**
+ * Builds a share-sheet chooser Intent for exported image URIs: [Intent.ACTION_SEND] for a
+ * single PNG, [Intent.ACTION_SEND_MULTIPLE] for a multi-part export. The read-permission
+ * grant flag lets the chosen target open the FileProvider URIs.
+ */
+private fun imageShareIntent(uris: List<Uri>): Intent {
+    val send = if (uris.size == 1) {
+        Intent(Intent.ACTION_SEND).apply {
+            type = "image/png"
+            putExtra(Intent.EXTRA_STREAM, uris.first())
+        }
+    } else {
+        Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "image/png"
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        }
+    }
+    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    return Intent.createChooser(send, "Share as image")
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 }
 
 // DateRangeBottomSheet moved to ui/components/DateRangeSheet.kt — shared with the
