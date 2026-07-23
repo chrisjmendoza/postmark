@@ -8,9 +8,11 @@ import com.plusorminustwo.postmark.data.db.dao.MessageMeta
 import com.plusorminustwo.postmark.data.db.dao.StatsDao
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
+import com.plusorminustwo.postmark.data.sync.GoneQuietThread
 import com.plusorminustwo.postmark.data.sync.buildGlobalStatsData
 import com.plusorminustwo.postmark.data.sync.buildThreadStatsData
 import com.plusorminustwo.postmark.data.sync.computeResponseTimeBuckets
+import com.plusorminustwo.postmark.data.sync.detectGoneQuiet
 import com.plusorminustwo.postmark.data.sync.groupMessagesByDay
 import com.plusorminustwo.postmark.data.sync.localDay
 import com.plusorminustwo.postmark.data.sync.threadAggregateOf
@@ -150,7 +152,10 @@ class StatsViewModel @Inject constructor(
 
     private data class StatsPayload(
         val global: ParsedStats?,
-        val perThread: List<Pair<Long, ParsedStats>>
+        val perThread: List<Pair<Long, ParsedStats>>,
+        /** Global-only — threads that have gone quiet relative to their own usual cadence.
+         *  See [detectGoneQuiet]. Empty when there's no global data or nothing qualifies. */
+        val goneQuiet: List<GoneQuietThread> = emptyList()
     )
 
     /** The five lean projections coalesced into one debounced source. The combine transform
@@ -212,7 +217,13 @@ class StatsViewModel @Inject constructor(
             }
             .sortedByDescending { (_, stats) -> stats.totalMessages }
 
-        return StatsPayload(global, perThread)
+        // "Gone quiet" is a global-only signal, derived from the same per-thread metas
+        // grouping above — no extra DB observation. now() is read here, at the ViewModel
+        // boundary, same as heatmapMonth's YearMonth.now() default; detectGoneQuiet itself
+        // is pure and takes it as a parameter.
+        val goneQuiet = detectGoneQuiet(metasByThread, nowMs = System.currentTimeMillis(), zone = zone)
+
+        return StatsPayload(global, perThread, goneQuiet)
     }
 
     /**
@@ -229,6 +240,15 @@ class StatsViewModel @Inject constructor(
      */
     val allLiveThreadStats: StateFlow<List<Pair<Long, ParsedStats>>> = statsPayload
         .map { it.perThread }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Global-only: threads that have gone quiet relative to their own usual cadence,
+     *  longest-silent first, capped at [com.plusorminustwo.postmark.data.sync.GONE_QUIET_DEFAULT_LIMIT].
+     *  Resolve display names via [threadNames], same as [allLiveThreadStats].
+     *  `internal` (not `public`) because [GoneQuietThread] itself is internal — both types
+     *  are module-visible, which is all `StatsScreen` (same module) needs. */
+    internal val goneQuietThreads: StateFlow<List<GoneQuietThread>> = statsPayload
+        .map { it.goneQuiet }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** threadId → displayName for the thread list labels. */

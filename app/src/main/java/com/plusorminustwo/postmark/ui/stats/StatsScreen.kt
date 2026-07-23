@@ -1,6 +1,9 @@
 package com.plusorminustwo.postmark.ui.stats
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,7 +27,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -32,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.data.db.dao.MessageMeta
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
+import com.plusorminustwo.postmark.data.sync.GoneQuietThread
 import com.plusorminustwo.postmark.data.sync.heatmapTierForCount
 import com.plusorminustwo.postmark.data.sync.localDay
 import com.plusorminustwo.postmark.ui.components.LetterAvatar
@@ -65,6 +73,7 @@ fun StatsScreen(
     val heatmapMetas        by viewModel.heatmapMetas.collectAsState()
     val directThreadNavigation by viewModel.directThreadNavigation.collectAsState()
     val responseBuckets by viewModel.responseBuckets.collectAsState()
+    val goneQuietThreads by viewModel.goneQuietThreads.collectAsState()
 
     val isInDrilldown = selectedScope == StatsScope.PER_THREAD && selectedThreadId != null
     val isInThreadList = selectedScope == StatsScope.PER_THREAD && selectedThreadId == null
@@ -147,6 +156,7 @@ fun StatsScreen(
                             allLiveThreadStats = if (!isInDrilldown) allLiveThreadStats else emptyList(),
                             threadNames = threadNames,
                             responseBuckets = if (isInDrilldown) responseBuckets else null,
+                            goneQuietThreads = if (!isInDrilldown) goneQuietThreads else emptyList(),
                             onThreadSelect = { viewModel.selectThread(it) }
                         )
                         StatsDisplayStyle.CHARTS  -> ChartsView(stats = stats)
@@ -234,6 +244,7 @@ private fun NumbersView(
     allLiveThreadStats: List<Pair<Long, ParsedStats>>,
     threadNames: Map<Long, String>,
     responseBuckets: IntArray?,
+    goneQuietThreads: List<GoneQuietThread> = emptyList(),
     onThreadSelect: (Long) -> Unit
 ) {
     LazyColumn(
@@ -257,6 +268,15 @@ private fun NumbersView(
         if (stats.threadCount > 0) {
             item {
                 StatCard("Conversations", stats.threadCount.toString())
+            }
+        }
+        if (goneQuietThreads.isNotEmpty()) {
+            item {
+                GoneQuietCard(
+                    goneQuiet = goneQuietThreads,
+                    threadNames = threadNames,
+                    onThreadSelect = onThreadSelect
+                )
             }
         }
         item { EmojiCard("Top Emoji (Messages)", stats.topEmojis) }
@@ -320,8 +340,147 @@ private fun ChartsView(stats: ParsedStats) {
                 )
             }
         }
-        item { EmojiCard("Top Emoji (Messages)", stats.topEmojis) }
-        item { EmojiCard("Top Emoji (Reactions)", stats.topReactionEmojis) }
+        item {
+            ChartCard("Sent vs Received") {
+                DoughnutChart(
+                    sent = stats.sentCount,
+                    received = stats.receivedCount,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+        item { EmojiBarChart("Top Emoji (Messages)", stats.topEmojis) }
+        item { EmojiBarChart("Top Emoji (Reactions)", stats.topReactionEmojis) }
+    }
+}
+
+// ── Doughnut chart (sent vs received) ─────────────────────────────────────────
+
+@Composable
+private fun DoughnutChart(sent: Int, received: Int, modifier: Modifier = Modifier) {
+    val (sentSweep, _) = remember(sent, received) { doughnutSweeps(sent, received) }
+    val animatedSentSweep by animateFloatAsState(
+        targetValue = sentSweep,
+        animationSpec = tween(durationMillis = 600),
+        label = "doughnutSentSweep"
+    )
+    val sentColor = MaterialTheme.colorScheme.primary
+    val receivedColor = MaterialTheme.colorScheme.secondary
+    val trackColor = MaterialTheme.colorScheme.surfaceVariant
+    val total = sent + received
+
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(modifier = Modifier.size(140.dp), contentAlignment = Alignment.Center) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokeWidth = size.minDimension * 0.18f
+                val diameter = size.minDimension - strokeWidth
+                val topLeft = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
+                val arcSize = Size(diameter, diameter)
+                val stroke = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                if (total <= 0) {
+                    // Degenerate zero-total case — an empty track ring, no arcs.
+                    drawArc(
+                        color = trackColor,
+                        startAngle = 0f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = stroke
+                    )
+                } else {
+                    // Received drawn first as the remainder of the ring, so the two arcs
+                    // always meet exactly regardless of the sent arc's animated progress.
+                    drawArc(
+                        color = receivedColor,
+                        startAngle = -90f + animatedSentSweep,
+                        sweepAngle = 360f - animatedSentSweep,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = stroke
+                    )
+                    drawArc(
+                        color = sentColor,
+                        startAngle = -90f,
+                        sweepAngle = animatedSentSweep,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = stroke
+                    )
+                }
+            }
+            Text(total.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            DoughnutLegendEntry(color = sentColor, label = "Sent $sent")
+            DoughnutLegendEntry(color = receivedColor, label = "Received $received")
+        }
+    }
+}
+
+@Composable
+private fun DoughnutLegendEntry(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(color))
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+// ── Emoji bar chart ────────────────────────────────────────────────────────────
+
+@Composable
+private fun EmojiBarChart(title: String, topEmojis: List<Pair<String, Int>>) {
+    ChartCard(title) {
+        if (topEmojis.isEmpty()) {
+            Text(
+                "None yet",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            val maxCount = topEmojis.maxOf { it.second }
+            val barColor = MaterialTheme.colorScheme.primary
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                topEmojis.forEach { (emoji, count) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            emoji,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.width(28.dp)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(14.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(barFraction(count, maxCount))
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(barColor)
+                            )
+                        }
+                        Text(
+                            count.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.widthIn(min = 24.dp),
+                            textAlign = TextAlign.End
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1104,6 +1263,55 @@ private fun ChartCard(title: String, content: @Composable () -> Unit) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
             content()
+        }
+    }
+}
+
+/** Global-only card: threads that have dropped below their usual messaging frequency for
+ *  7+ days (see [com.plusorminustwo.postmark.data.sync.detectGoneQuiet]). Hidden entirely
+ *  by the caller when [goneQuiet] is empty. */
+@Composable
+private fun GoneQuietCard(
+    goneQuiet: List<GoneQuietThread>,
+    threadNames: Map<Long, String>,
+    onThreadSelect: (Long) -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Gone quiet", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            goneQuiet.forEachIndexed { index, thread ->
+                if (index > 0) HorizontalDivider()
+                val name = threadNames[thread.threadId] ?: "Thread ${thread.threadId}"
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onThreadSelect(thread.threadId) }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    LetterAvatar(name = name, size = 40.dp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "You haven't talked to $name in a while",
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "${thread.daysQuiet} days quiet · usually every ~${thread.usualGapDays}d",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
 }

@@ -731,23 +731,34 @@ instance, but flagged:
 ### Stats — remaining
 - [x] **Numbers style** — done.
 - [x] **Heatmap style** — done.
-- [ ] **Charts style** — monthly bar chart, sent/received doughnut,
-      emoji bar chart. Use `Vico` charting library (Compose-native,
-      actively maintained). Add to `build.gradle`. *(Partially done,
-      checked July 22 2026 during the stale-checkbox audit: `StatsScreen`
-      already has a working "Charts" display style —
-      `ChartsView`/`BarChart` render "Messages by Month" and "Most Active
-      Day" as hand-rolled Compose bar charts (no Vico dependency added).
-      Still missing: the sent/received doughnut, and "emoji bar chart" is
-      actually a plain emoji+count row (`EmojiCard`), not a chart. Left
-      unchecked — the doughnut and the real emoji chart are the
-      remaining gap.)*
+- [x] **Charts style** — monthly bar chart, sent/received doughnut,
+      emoji bar chart. *(Closed July 23 2026, `feat/stats-followups`:
+      the remaining gap flagged during the July 22 stale-checkbox audit —
+      the sent/received doughnut and a real emoji bar chart — is done.
+      Both are hand-rolled Compose (`Canvas`/`drawArc` for the doughnut,
+      animated sweep via `animateFloatAsState`; horizontal bars for
+      emoji), matching the existing `BarChart` idiom — still no Vico
+      dependency added, and none needed. Pure math (`doughnutSweeps`,
+      `barFraction`, both 0-total/0-max guarded) lives in
+      `ui/stats/ChartMath.kt` with plain-JUnit tests. NEEDS ON-DEVICE
+      VISUAL VERIFICATION — not yet seen rendered on a real
+      device/emulator.)*
 - [x] **Persist topReactionEmojis** — `topReactionEmojisJson` now
       persisted in both `ThreadStatsEntity` and `GlobalStatsEntity`
       via `StatsUpdater` (Room migration 4→5).
-- [ ] **"Gone quiet" detection** — surface threads that have dropped
+- [x] **"Gone quiet" detection** — surface threads that have dropped
       significantly below their usual frequency for 7+ days.
       Show in global stats as "You haven't talked to Jake in a while."
+      *(Done July 23 2026, `feat/stats-followups`: pure
+      `detectGoneQuiet` in `data/sync/GoneQuiet.kt` — ≥20 messages in
+      the 90 days before now, ≥7 days quiet, and quiet ≥ 4x the
+      thread's median (not mean) inter-message gap over that window,
+      so a sporadic-but-consistent thread isn't falsely flagged and a
+      single reply burst can't skew the "usual" cadence. Wired into
+      `StatsViewModel` off the existing `statsInputs` metas grouping —
+      no new DB observation — and rendered as a "Gone quiet" card in
+      the global Numbers view, hidden when nothing qualifies. NEEDS
+      ON-DEVICE VISUAL VERIFICATION.)*
 
 ### Thread view — deeper polish
 - [~] **Scrolling screenshot ("capture more") support in threads**
