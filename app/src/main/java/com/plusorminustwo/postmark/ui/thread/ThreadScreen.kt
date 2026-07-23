@@ -99,6 +99,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_QUEUED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
+import com.plusorminustwo.postmark.ui.contact.addContactIntent
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
@@ -281,6 +282,8 @@ fun ThreadScreen(
     val pinnedMessages by viewModel.pinnedMessages.collectAsState()
     // Whether the conservative "Looks like spam?" banner should show for this thread.
     val spamBannerVisible by viewModel.spamBannerVisible.collectAsState()
+    // Whether the "Add to contacts?" banner should show for this thread (spam banner wins).
+    val saveNumberPromptVisible by viewModel.saveNumberPromptVisible.collectAsState()
 
     // ── Stable lambdas ────────────────────────────────────────────────────────
     // Wrapped in remember(viewModel) so the same function reference is reused
@@ -407,6 +410,7 @@ fun ThreadScreen(
     // Banner "Report spam": mark spam via the existing DAO path (thread hides + silences),
     // then leave the thread — the banner is itself the prompt, so no confirm dialog.
     val onReportSpamFromBanner    = remember(viewModel, onBack) { { viewModel.toggleSpam(); onBack() } }
+    val onDismissSaveNumberPrompt = remember(viewModel) { { viewModel.dismissSaveNumberPrompt() } }
     val onVoiceMemoEvent          = remember(viewModel) { { event: VoiceMemoEvent -> viewModel.onVoiceMemoEvent(event) } }
     val onAudioPlayPause          = remember(viewModel) { { uri: String -> viewModel.playPauseAudio(uri) } }
     val onAudioSeek               = remember(viewModel) { { uri: String, fraction: Float -> viewModel.seekAudio(uri, fraction) } }
@@ -437,6 +441,8 @@ fun ThreadScreen(
         spamBannerVisible = spamBannerVisible,
         onReportSpamSuspicion = onReportSpamFromBanner,
         onDismissSpamSuspicion = onDismissSpamSuspicion,
+        saveNumberPromptVisible = saveNumberPromptVisible,
+        onDismissSaveNumberPrompt = onDismissSaveNumberPrompt,
         onBack = onBack,
         onViewContact = onViewContact,
         onViewStats = onViewStats,
@@ -557,6 +563,13 @@ private fun ThreadContent(
     spamBannerVisible: Boolean = false,
     onReportSpamSuspicion: () -> Unit = {},
     onDismissSpamSuspicion: () -> Unit = {},
+    // "Add to contacts?" banner: offered for a 1:1 thread whose address has no matching
+    // contact and is a plausible phone number (see domain/contacts/SaveNumberPrompt.kt).
+    // Never shown at the same time as the spam banner above (that one wins). "Add to
+    // contacts" fires the system Intent directly — see SaveNumberPromptBanner — and does
+    // NOT persist dismissal; only the X does, via onDismissSaveNumberPrompt.
+    saveNumberPromptVisible: Boolean = false,
+    onDismissSaveNumberPrompt: () -> Unit = {},
     onBack: () -> Unit,
     onViewContact: () -> Unit = {},
     onViewStats: () -> Unit,
@@ -1368,6 +1381,14 @@ private fun ThreadContent(
                     SpamSuspicionBanner(
                         onReportSpam = onReportSpamSuspicion,
                         onDismiss = onDismissSpamSuspicion
+                    )
+                } else if (saveNumberPromptVisible) {
+                    SaveNumberPromptBanner(
+                        address = uiState.thread?.address.orEmpty(),
+                        onAddToContacts = {
+                            uiState.thread?.address?.let { context.startActivity(addContactIntent(it)) }
+                        },
+                        onDismiss = onDismissSaveNumberPrompt
                     )
                 }
                 LazyColumn(
@@ -3031,6 +3052,63 @@ private fun SpamSuspicionBanner(
             }
             TextButton(onClick = onDismiss) { Text("Dismiss") }
             TextButton(onClick = onReportSpam) { Text("Report spam") }
+        }
+    }
+}
+
+/**
+ * "Add to contacts?" banner shown at the top of the message area for a 1:1 thread whose
+ * address has no matching contact and looks like a real phone number (see
+ * [com.plusorminustwo.postmark.domain.contacts.shouldShowSaveNumberPrompt]). Same Material 3
+ * surface/typography idiom as [SpamSuspicionBanner] — colorScheme roles only, so it reads in
+ * light and dark, and it sits in normal content flow (not a Dialog), respecting the same
+ * four-edge inset contract as the message list around it.
+ *
+ * "Add to contacts" fires the system "create contact" Intent and does NOT persist — the user
+ * may cancel that system UI, so the banner stays until the contact actually exists (the
+ * contact-name lookup then hides it naturally) or the X is tapped. "Dismiss" (X) persists per
+ * thread forever via [com.plusorminustwo.postmark.data.preferences.SaveNumberPromptRepository].
+ */
+@Composable
+private fun SaveNumberPromptBanner(
+    address: String,
+    onAddToContacts: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.PersonAdd,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "Add ${formatPhoneNumber(address)} to your contacts?",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onAddToContacts) { Text("Add to contacts") }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Dismiss",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }

@@ -912,13 +912,22 @@ private fun openInContacts(context: Context, address: String, scope: CoroutineSc
                 Intent(Intent.ACTION_VIEW, contactUri)
             } else {
                 // Unknown number → pre-fill the "Create contact" screen.
-                Intent(Intent.ACTION_INSERT_OR_EDIT).apply {
-                    type = ContactsContract.Contacts.CONTENT_ITEM_TYPE
-                    putExtra(ContactsContract.Intents.Insert.PHONE, address)
-                }
+                addContactIntent(address)
             }
             context.startActivity(intent)
         }
     }
 }
+
+/**
+ * Builds the "Create contact" Intent (ACTION_INSERT_OR_EDIT) pre-filled with [address], so the
+ * user can add it without manual typing. Shared by [openInContacts] above (unknown-number branch)
+ * and the thread "Save number?" banner (ThreadScreen) — both cases only ever reach this when the
+ * number is already known to have no matching contact, so there is no ACTION_VIEW branch here.
+ */
+internal fun addContactIntent(address: String): Intent =
+    Intent(Intent.ACTION_INSERT_OR_EDIT).apply {
+        type = ContactsContract.Contacts.CONTENT_ITEM_TYPE
+        putExtra(ContactsContract.Intents.Insert.PHONE, address)
+    }
 

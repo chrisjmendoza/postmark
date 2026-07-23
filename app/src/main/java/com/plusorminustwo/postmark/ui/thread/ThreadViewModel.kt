@@ -25,6 +25,7 @@ import com.plusorminustwo.postmark.data.preferences.BubbleStylePreferenceReposit
 import com.plusorminustwo.postmark.data.preferences.ChatBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.DraftRepository
 import com.plusorminustwo.postmark.data.preferences.GestureHintsRepository
+import com.plusorminustwo.postmark.data.preferences.SaveNumberPromptRepository
 import com.plusorminustwo.postmark.data.preferences.SpamSuspicionRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
@@ -39,6 +40,7 @@ import com.plusorminustwo.postmark.domain.model.recipientsFor
 import com.plusorminustwo.postmark.domain.model.decodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
+import com.plusorminustwo.postmark.domain.contacts.shouldShowSaveNumberPrompt
 import com.plusorminustwo.postmark.domain.spam.looksLikeSpam
 import com.plusorminustwo.postmark.domain.spam.shouldShowSpamBanner
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
@@ -145,6 +147,7 @@ class ThreadViewModel @Inject constructor(
     private val appAccentPrefRepo: AppAccentPreferenceRepository,
     private val draftRepository: DraftRepository,
     private val spamSuspicionRepository: SpamSuspicionRepository,
+    private val saveNumberPromptRepository: SaveNumberPromptRepository,
     private val gestureHintsRepo: GestureHintsRepository,
     private val voiceMemoRecorder: VoiceMemoRecorder,
     private val activeThreadTracker: ActiveThreadTracker
@@ -349,15 +352,16 @@ class ThreadViewModel @Inject constructor(
     /** True once the user dismisses the banner for this thread; seeded from prefs. */
     private val _spamSuspicionDismissed = MutableStateFlow(spamSuspicionRepository.isDismissed(threadId))
 
-    /** Whether this thread's address resolves to a saved contact — looked up off-main on each
-     *  address change. A known contact suppresses the banner outright. */
-    private val senderIsKnownContact: StateFlow<Boolean> = threadRepository
+    /** This thread's address resolved to a contact display name (null = no matching contact) —
+     *  looked up off-main on each address change. Feeds both the spam banner (known contact
+     *  suppresses it outright) and the save-number-prompt banner below. */
+    private val senderContactName: StateFlow<String?> = threadRepository
         .observeById(threadId)
         .map { it?.address.orEmpty() }
         .distinctUntilChanged()
-        .map { address -> address.isNotEmpty() && !context.lookupContactName(address).isNullOrBlank() }
+        .map { address -> address.ifEmpty { null }?.let { context.lookupContactName(it) } }
         .flowOn(Dispatchers.IO)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**
      * Whether to show the "Looks like spam?" banner. Suspect when [looksLikeSpam] holds for
@@ -369,14 +373,34 @@ class ThreadViewModel @Inject constructor(
     val spamBannerVisible: StateFlow<Boolean> = combine(
         threadRepository.observeById(threadId),
         renderPayload,
-        senderIsKnownContact,
+        senderContactName,
         _spamSuspicionDismissed
-    ) { thread, payload, known, dismissed ->
+    ) { thread, payload, contactName, dismissed ->
         val isSpam  = thread?.isSpam ?: false
         val isGroup = (thread?.participants?.size ?: 0) > 1
         val firstInbound = payload.messages.firstOrNull { !it.isSent }?.body
-        val suspect = firstInbound != null && looksLikeSpam(firstInbound, known, isGroup)
+        val suspect = firstInbound != null && looksLikeSpam(firstInbound, !contactName.isNullOrBlank(), isGroup)
         shouldShowSpamBanner(suspect, isSpam, dismissed)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    // ── "Add to contacts?" banner ───────────────────────────────────────────────
+    // Same shape as the spam banner above: display-only, recomputed live, only the user's
+    // dismissal persisted. The spam banner wins when both would otherwise apply — never
+    // shown together (see domain/contacts/SaveNumberPrompt.kt).
+
+    /** True once the user dismisses the banner for this thread; seeded from prefs. */
+    private val _saveNumberPromptDismissed =
+        MutableStateFlow(saveNumberPromptRepository.isDismissed(threadId))
+
+    /** Whether to show the "Add to contacts?" banner — see [shouldShowSaveNumberPrompt]. */
+    val saveNumberPromptVisible: StateFlow<Boolean> = combine(
+        threadRepository.observeById(threadId),
+        senderContactName,
+        _saveNumberPromptDismissed,
+        spamBannerVisible
+    ) { thread, contactName, dismissed, spamVisible ->
+        val isGroup = (thread?.participants?.size ?: 0) > 1
+        shouldShowSaveNumberPrompt(isGroup, contactName, thread?.address.orEmpty(), dismissed, spamVisible)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     // Named holder for the action-related sub-state to stay within combine's 5-arg limit.
@@ -1408,6 +1432,15 @@ class ThreadViewModel @Inject constructor(
     fun dismissSpamSuspicion() {
         spamSuspicionRepository.dismiss(threadId)
         _spamSuspicionDismissed.value = true
+    }
+
+    /** Permanently dismisses this thread's "Add to contacts?" banner (persists to prefs).
+     *  Not called on "Add to contacts" itself — the system UI can be cancelled, so that action
+     *  leaves the banner up; once the contact actually exists, [senderContactName] resolving
+     *  non-null hides it naturally. */
+    fun dismissSaveNumberPrompt() {
+        saveNumberPromptRepository.dismiss(threadId)
+        _saveNumberPromptDismissed.value = true
     }
 
     // ── Block number ──────────────────────────────────────────────────────────
