@@ -18,6 +18,17 @@ exactly as tall as it draws and the pills sit at the bubble's bottom edge
 for a secondary toggle that also exists in the long-press popup and the image
 viewer's quick-reaction row. Also tightens the display-only pills on search
 result rows. 898 tests unchanged.
+## 2026-07-23 (fix/date-pill-selection-overlap) — date pill hides in selection/action mode
+
+**Date pill overlapped the selection/action top bars** (on-device July 16): the
+pill deliberately overhangs the top bar's bottom edge, which put it in front of
+the swapped-in bars' controls. It now fades out (existing `AnimatedVisibility`
+animation) whenever `topBarMode != NORMAL` — one-line visibility gate, no layout
+rework. Also logged a new Tier 1 TODO from Chris's on-device report: outbound
+reactions are local-only (other person never sees them); needs an outbound
+fallback-message format mirroring the inbound parser.
+
+---
 
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 

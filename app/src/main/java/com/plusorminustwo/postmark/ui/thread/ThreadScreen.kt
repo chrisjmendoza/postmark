@@ -1238,7 +1238,9 @@ private fun ThreadContent(
             // space for it.
             FloatingDatePill(
                 dateLabel = pillDateLabel,
-                visible = pillDateLabel.isNotEmpty(),
+                // Hidden outside NORMAL mode: the pill overhangs the bar's bottom
+                // edge, which put it in front of the selection/action bars' controls.
+                visible = pillDateLabel.isNotEmpty() && topBarMode == TopBarMode.NORMAL,
                 onClick = { showCalendarPicker = true },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
