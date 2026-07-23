@@ -4,6 +4,18 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (fix/date-pill-selection-overlap) — date pill hides in selection/action mode
+
+**Date pill overlapped the selection/action top bars** (on-device July 16): the
+pill deliberately overhangs the top bar's bottom edge, which put it in front of
+the swapped-in bars' controls. It now fades out (existing `AnimatedVisibility`
+animation) whenever `topBarMode != NORMAL` — one-line visibility gate, no layout
+rework. Also logged a new Tier 1 TODO from Chris's on-device report: outbound
+reactions are local-only (other person never sees them); needs an outbound
+fallback-message format mirroring the inbound parser.
+
+---
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in
