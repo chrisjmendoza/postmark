@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MarkEmailRead
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PushPin
@@ -57,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
@@ -65,7 +68,10 @@ import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.selection.SwipeAction
+import com.plusorminustwo.postmark.domain.selection.SwipeDirection
 import com.plusorminustwo.postmark.domain.selection.bulkToggleTarget
+import com.plusorminustwo.postmark.domain.selection.resolveSwipeAction
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.formatter.friendlyTimestamp
 
@@ -115,6 +121,15 @@ fun ConversationsScreen(
     }
     // Confirmation dialog visibility for the destructive bulk delete.
     var showDeleteDialog by remember { mutableStateOf(false) }
+    // Non-null while the swipe-left confirm dialog is up for that thread id (see
+    // SwipeableThreadRow's onSwipeDelete). Mirrors the bulk-delete dialog above but for a
+    // single conversation — same delete path, same confirm-gate, one fewer thing to select.
+    var pendingSwipeDeleteId by remember { mutableStateOf<Long?>(null) }
+    // Shown instead of the swipe-delete confirm dialog when Postmark isn't the default SMS
+    // app (mirrors ThreadScreen's "Set Postmark as default SMS app" dialog) — swiping to
+    // delete can't be gated by hiding a button the way the bulk-select bar hides Delete, so
+    // it prompts to fix the role instead.
+    var showSwipeSetDefaultDialog by remember { mutableStateOf(false) }
 
     // Back exits selection mode rather than leaving the screen.
     BackHandler(enabled = selectionMode) { viewModel.clearSelection() }
@@ -136,6 +151,22 @@ fun ConversationsScreen(
         ActivityResultContracts.StartActivityForResult()
     ) {
         viewModel.refreshDefaultSmsStatus()
+    }
+    // Shared by the RoleDenialBanner tap target and the swipe-delete "set default" dialog
+    // below — one place that knows how to launch the system default-SMS-app prompt.
+    val screenContext = LocalContext.current
+    val launchRoleRequest: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val rm = screenContext.getSystemService(RoleManager::class.java)
+            roleRequestLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
+        } else {
+            @Suppress("DEPRECATION")
+            screenContext.startActivity(
+                Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT).putExtra(
+                    Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, screenContext.packageName
+                )
+            )
+        }
     }
 
     // ── Home-screen background ────────────────────────────────────────────────
@@ -277,26 +308,9 @@ fun ConversationsScreen(
                 // Role denial banner — shown when the app is not the default SMS app
                 // and the user hasn't dismissed it this install.
                 if (!isDefaultSmsApp && !roleBannerDismissed && !selectionMode) {
-                    val context = LocalContext.current
                     RoleDenialBanner(
                         onDismiss = viewModel::dismissRoleBanner,
-                        onSetDefault = {
-                            // API 29+: RoleManager shows the system "Set default SMS app?" prompt.
-                            // Must be launched via startActivityForResult — startActivity() is
-                            // silently ignored by the system on API 29+.
-                            // API 26-28: ACTION_CHANGE_DEFAULT shows the equivalent system dialog.
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                val rm = context.getSystemService(RoleManager::class.java)
-                                roleRequestLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_SMS))
-                            } else {
-                                @Suppress("DEPRECATION")
-                                context.startActivity(
-                                    Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT).putExtra(
-                                        Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, context.packageName
-                                    )
-                                )
-                            }
-                        }
+                        onSetDefault = launchRoleRequest
                     )
                 }
                 // Slim one-time hint teaching the long-press multi-select gesture. Sits below
@@ -350,15 +364,34 @@ fun ConversationsScreen(
                                 // animateItem: pin/unpin and new-message reordering slide rows
                                 // to their new position instead of teleporting them.
                                 Column(modifier = Modifier.animateItem()) {
-                                    ThreadRow(
-                                        thread = thread,
-                                        unreadCount = unreadCounts[thread.id] ?: 0,
-                                        selectionMode = selectionMode,
-                                        selected = thread.id in selectedIds,
-                                        onClick = { onThreadClick(thread.id) },
-                                        onToggleSelect = { viewModel.toggleThreadSelection(thread.id) },
-                                        onLongPress = { viewModel.enterSelection(thread.id) }
-                                    )
+                                    if (selectionMode) {
+                                        // Swipe is disabled while selecting — a swiped-away row
+                                        // fighting the selection tap target would be confusing,
+                                        // and the selection top bar already covers these actions.
+                                        ThreadRow(
+                                            thread = thread,
+                                            unreadCount = unreadCounts[thread.id] ?: 0,
+                                            selectionMode = true,
+                                            selected = thread.id in selectedIds,
+                                            onClick = { onThreadClick(thread.id) },
+                                            onToggleSelect = { viewModel.toggleThreadSelection(thread.id) },
+                                            onLongPress = { viewModel.enterSelection(thread.id) }
+                                        )
+                                    } else {
+                                        SwipeableThreadRow(
+                                            thread = thread,
+                                            unreadCount = unreadCounts[thread.id] ?: 0,
+                                            onClick = { onThreadClick(thread.id) },
+                                            onLongPress = { viewModel.enterSelection(thread.id) },
+                                            onSwipeDeleteRequested = { threadId ->
+                                                if (isDefaultSmsApp) pendingSwipeDeleteId = threadId
+                                                else showSwipeSetDefaultDialog = true
+                                            },
+                                            onSwipeToggleRead = { threadId, markRead ->
+                                                viewModel.toggleThreadRead(threadId, markRead)
+                                            }
+                                        )
+                                    }
                                     HorizontalDivider()
                                 }
                             }
@@ -398,6 +431,53 @@ fun ConversationsScreen(
                     },
                     dismissButton = {
                         TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
+
+            // ── Swipe-to-delete confirmation ─────────────────────────────────────────
+            // Same real, irreversible delete as above (viewModel.deleteThread reuses the
+            // exact deleteThreadsInternal path deleteSelected uses) — a swipe only ever
+            // snaps back and opens this dialog, it never deletes on its own.
+            pendingSwipeDeleteId?.let { threadId ->
+                AlertDialog(
+                    onDismissRequest = { pendingSwipeDeleteId = null },
+                    title = { Text("Delete conversation?") },
+                    text = {
+                        Text("This removes it and all its messages from this phone. This can’t be undone.")
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            pendingSwipeDeleteId = null
+                            viewModel.deleteThread(threadId)
+                        }) {
+                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingSwipeDeleteId = null }) { Text("Cancel") }
+                    }
+                )
+            }
+
+            // ── Swipe-to-delete "set default" gate ───────────────────────────────────
+            // Swiping to delete when Postmark isn't the default SMS app can't be gated by
+            // hiding a button the way the selection bar hides Delete — the swipe already
+            // happened — so it prompts to fix the role instead (mirrors ThreadScreen's
+            // "Set Postmark as default SMS app" dialog).
+            if (showSwipeSetDefaultDialog) {
+                AlertDialog(
+                    onDismissRequest = { showSwipeSetDefaultDialog = false },
+                    title = { Text("Set Postmark as default SMS app") },
+                    text = { Text("To delete conversations, Postmark needs to be your default SMS app.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showSwipeSetDefaultDialog = false
+                            launchRoleRequest()
+                        }) { Text("Set as default") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showSwipeSetDefaultDialog = false }) { Text("Not now") }
                     }
                 )
             }
@@ -574,6 +654,104 @@ private fun MultiSelectHintRow(onDismiss: () -> Unit) {
         }
     }
 }
+
+// ── Swipe actions ─────────────────────────────────────────────────────────────
+/** Wraps [ThreadRow] in a Material 3 [SwipeToDismissBox] for the standard swipe gestures:
+ *  swipe left (EndToStart) reveals a red Delete affordance, swipe right (StartToEnd)
+ *  reveals a read/unread toggle. Neither swipe actually dismisses the row —
+ *  `confirmValueChange` always returns `false`, so a completed swipe fires its action
+ *  once and then springs straight back to Settled. [resolveSwipeAction] is the pure
+ *  decision of what a completed swipe does; this composable only wires it to callbacks.
+ *  Only mounted when the row is NOT in selection mode — see the call site. */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun SwipeableThreadRow(
+    thread: Thread,
+    unreadCount: Int,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit,
+    onSwipeDeleteRequested: (Long) -> Unit,
+    onSwipeToggleRead: (Long, Boolean) -> Unit,
+) {
+    val isRead = unreadCount == 0
+    val dismissState = rememberSwipeToDismissBoxState(
+        // Never let the box actually settle into a dismissed state — every completed
+        // swipe just fires its action (delete confirm / read toggle) and snaps back.
+        confirmValueChange = { target ->
+            when (target) {
+                SwipeToDismissBoxValue.EndToStart ->
+                    if (resolveSwipeAction(SwipeDirection.EndToStart, isRead) == SwipeAction.Delete) {
+                        onSwipeDeleteRequested(thread.id)
+                    }
+                SwipeToDismissBoxValue.StartToEnd ->
+                    when (resolveSwipeAction(SwipeDirection.StartToEnd, isRead)) {
+                        SwipeAction.MarkRead -> onSwipeToggleRead(thread.id, true)
+                        SwipeAction.MarkUnread -> onSwipeToggleRead(thread.id, false)
+                        SwipeAction.Delete -> Unit
+                    }
+                SwipeToDismissBoxValue.Settled -> Unit
+            }
+            false
+        },
+        // Roughly 40% of the row's width — clears accidental micro-swipes (list scroll,
+        // stray touches) without requiring a near-full-width drag.
+        positionalThreshold = { totalDistance -> totalDistance * 0.4f }
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = { SwipeActionBackground(dismissState.dismissDirection, isRead) }
+    ) {
+        ThreadRow(
+            thread = thread,
+            unreadCount = unreadCount,
+            selectionMode = false,
+            selected = false,
+            onClick = onClick,
+            onToggleSelect = {},
+            onLongPress = onLongPress
+        )
+    }
+}
+
+/** Full-bleed color + icon revealed behind a conversation row as it's swiped. colorScheme
+ *  roles only (errorContainer for delete, primaryContainer for the read toggle) so both
+ *  light and dark theme stay legible. The read-toggle icon reflects what the swipe is
+ *  about to do — mirrors the current state rather than a static icon. */
+@Composable
+private fun SwipeActionBackground(direction: SwipeToDismissBoxValue, isRead: Boolean) {
+    val (color, contentColor, icon, alignment) = when (direction) {
+        SwipeToDismissBoxValue.EndToStart -> SwipeBackgroundSpec(
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            icon = Icons.Default.Delete,
+            alignment = Alignment.CenterEnd
+        )
+        SwipeToDismissBoxValue.StartToEnd -> SwipeBackgroundSpec(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            icon = if (isRead) Icons.Default.MarkEmailUnread else Icons.Default.MarkEmailRead,
+            alignment = Alignment.CenterStart
+        )
+        SwipeToDismissBoxValue.Settled -> return
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(color)
+            .padding(horizontal = 24.dp),
+        contentAlignment = alignment
+    ) {
+        Icon(imageVector = icon, contentDescription = null, tint = contentColor)
+    }
+}
+
+private data class SwipeBackgroundSpec(
+    val color: Color,
+    val contentColor: Color,
+    val icon: ImageVector,
+    val alignment: Alignment
+)
 
 /** A single conversation row. In normal mode a tap opens the thread and a long-press
  *  enters multi-select with this row selected. While selection mode is active a tap

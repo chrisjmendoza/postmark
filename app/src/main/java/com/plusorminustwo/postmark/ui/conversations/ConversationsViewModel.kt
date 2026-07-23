@@ -323,38 +323,78 @@ class ConversationsViewModel @Inject constructor(
     }
 
     /**
-     * Permanently deletes every selected conversation. For each thread, on [Dispatchers.IO],
-     * deletes the system telephony conversation first, then the Room thread (its messages
-     * cascade-delete). The CLAUDE.md rule permits ContentResolver.delete() on telephony
-     * providers ONLY as a direct result of an explicit user delete action — this is that path;
-     * callers MUST confirm with the user first. Guarded by the default-SMS check as well since
-     * non-default apps can't write the providers.
-     *
-     * A provider-delete failure leaves that thread's Room row intact (a resync would just
-     * re-import it anyway), counts it as failed, and is surfaced in the result Snackbar.
+     * Permanently deletes every selected conversation. Guarded by the default-SMS check
+     * since non-default apps can't write the providers; callers MUST confirm with the user
+     * first (the CLAUDE.md rule permits ContentResolver.delete() on telephony providers ONLY
+     * as a direct result of an explicit user delete action). The actual delete work is
+     * [deleteThreadsInternal] — see [deleteThread] for the single-conversation swipe path
+     * that shares it.
      */
     fun deleteSelected() {
         if (!context.isDefaultSmsApp()) return
         val ids = _selectedThreadIds.value.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            var deleted = 0
-            var failed = 0
-            withContext(Dispatchers.IO) {
-                ids.forEach { threadId ->
-                    val thread = threadRepository.getById(threadId) ?: return@forEach
-                    try {
-                        val uri = ContentUris.withAppendedId(Telephony.Threads.CONTENT_URI, threadId)
-                        context.contentResolver.delete(uri, null, null)
-                        threadRepository.delete(thread)
-                        deleted++
-                    } catch (_: Exception) {
-                        failed++
-                    }
-                }
-            }
+            val (deleted, failed) = deleteThreadsInternal(ids)
             clearSelection()
             _snackbarMessages.tryEmit(deleteResultMessage(deleted, failed))
+        }
+    }
+
+    /**
+     * Swipe-to-delete entry point (ConversationsScreen's SwipeToDismissBox EndToStart
+     * action) for a single conversation. Calls the exact same [deleteThreadsInternal] path
+     * as [deleteSelected] with a one-element id list — there is only one delete
+     * implementation, this just skips the selection-set bookkeeping bulk delete needs.
+     * The caller (ConversationsScreen) is responsible for confirming with the user and for
+     * the default-SMS-app gate before calling this; guarded here too as defense in depth.
+     */
+    fun deleteThread(threadId: Long) {
+        if (!context.isDefaultSmsApp()) return
+        viewModelScope.launch {
+            val (deleted, failed) = deleteThreadsInternal(listOf(threadId))
+            _snackbarMessages.tryEmit(deleteResultMessage(deleted, failed))
+        }
+    }
+
+    /**
+     * Deletes each thread in [ids]: on [Dispatchers.IO], the system telephony conversation
+     * first, then the Room thread (its messages cascade-delete). A provider-delete failure
+     * leaves that thread's Room row intact (a resync would just re-import it anyway) and
+     * counts it as failed. Shared by [deleteSelected] (bulk) and [deleteThread] (swipe) so
+     * there is exactly one delete implementation.
+     */
+    private suspend fun deleteThreadsInternal(ids: List<Long>): Pair<Int, Int> {
+        var deleted = 0
+        var failed = 0
+        withContext(Dispatchers.IO) {
+            ids.forEach { threadId ->
+                val thread = threadRepository.getById(threadId) ?: return@forEach
+                try {
+                    val uri = ContentUris.withAppendedId(Telephony.Threads.CONTENT_URI, threadId)
+                    context.contentResolver.delete(uri, null, null)
+                    threadRepository.delete(thread)
+                    deleted++
+                } catch (_: Exception) {
+                    failed++
+                }
+            }
+        }
+        return deleted to failed
+    }
+
+    /**
+     * Swipe-to-toggle-read entry point (ConversationsScreen's SwipeToDismissBox StartToEnd
+     * action). Flips just [threadId]'s read state using the same per-thread repository
+     * calls the multi-select Mark read / Mark unread actions use ([MessageRepository
+     * .markAllRead] / [MessageRepository.markLatestUnread]) — no parallel implementation.
+     * No confirmation needed; this isn't destructive.
+     */
+    fun toggleThreadRead(threadId: Long, markRead: Boolean) {
+        viewModelScope.launch {
+            if (markRead) messageRepository.markAllRead(threadId)
+            else messageRepository.markLatestUnread(threadId)
+            _snackbarMessages.tryEmit(if (markRead) "Marked read" else "Marked unread")
         }
     }
 

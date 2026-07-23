@@ -447,8 +447,41 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `isRead` landed with the 9→10 migration and `ConversationsScreen` renders the
       Badge; ticked July 18 2026 when the fable end-user review caught the stale
       checkbox.)*
-- [ ] **Swipe actions on conversation list** — swipe left: delete/archive with undo
-      snackbar. Swipe right: mark as read. Standard Android expectation.
+- [x] **Swipe actions on conversation list** (July 23 2026) — Material 3
+      `SwipeToDismissBox` around each row (disabled while selection mode is
+      active — the row isn't wrapped at all, so tap/long-press behave exactly
+      as before). Swipe left (EndToStart): delete. Swipe right (StartToEnd):
+      toggle read/unread. Neither swipe ever actually dismisses the row —
+      `confirmValueChange` always returns `false`, so a completed swipe fires
+      its action once and springs back (`positionalThreshold` at 40% of the
+      row width, so accidental micro-swipes don't fire). Pure decision logic
+      (`resolveSwipeAction(direction, isRead)`) extracted to
+      `domain/selection/SwipeAction.kt`, covered by `SwipeActionTest` (3
+      tests). errorContainer/onErrorContainer for the delete reveal,
+      primaryContainer/onPrimaryContainer for the read toggle — colorScheme
+      roles only, both themes read correctly.
+      **Deviation from the "undo snackbar" in the original TODO text:** delete
+      is a real telephony-provider + Room delete (irreversible), so a
+      swipe-to-dismiss-with-undo pattern doesn't fit — undoing would mean
+      re-inserting a real SMS/MMS conversation from a client-side buffer,
+      which risks silent data loss and doesn't match how the rest of the app
+      treats deletion. Reused the exact confirm-gated delete path the
+      long-press multi-select bulk delete already uses instead: swipe left
+      snaps back and opens the same confirm dialog / default-SMS-app gate,
+      then `ConversationsViewModel.deleteThread(id)` calls the same
+      `deleteThreadsInternal` the bulk path calls (refactored out of
+      `deleteSelected` so there's exactly one delete implementation, not two).
+      Since a swipe can't be gated by hiding a button the way the bulk
+      selection bar hides Delete when not the default SMS app, swiping to
+      delete in that state instead opens a "Set Postmark as default SMS app"
+      dialog mirroring ThreadScreen's existing one. The read/unread toggle has
+      no confirm — it isn't destructive — and shows a short snackbar
+      ("Marked read" / "Marked unread") instead of an undo affordance, since
+      the action itself is already a one-tap-reversible toggle.
+      **Needs on-device verification**: gesture feel and the 40% threshold,
+      no conflict with vertical list scroll or the existing long-press
+      selection gesture, and that the background reveal looks right across
+      light/dark and over a custom home-screen background image.
 - [x] **Swipe actions on message bubbles** — swipe right to reply (quote the
       message inline in the reply bar); quote strip shows sender label, 2-line
       preview, × to dismiss; springs back via Animatable; disabled in selection
