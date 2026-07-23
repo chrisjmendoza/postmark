@@ -24,12 +24,13 @@ with adjacent text (row-leading icons next to a title, chevrons in clickable
 rows, thumbnail previews with a text label beneath). No file needed a single
 line changed.
 
-**ThreadScreen.kt was deliberately skipped** — three concurrent PRs touch it
-tonight. Reviewed it anyway (read-only) to avoid missing anything for the
-follow-up: found one real gap, the per-day select-all toggle in `DateHeader`
-(`contentDescription = null` on a three-state select/partial/deselect icon).
-Logged as a follow-up bullet in `docs/TODO.md` with a suggested label
-matching the file's existing Pin/Unpin state-description pattern.
+**ThreadScreen.kt was mostly skipped** — three concurrent PRs touch it
+tonight. A read-only review found exactly one real gap, the per-day
+select-all toggle in `DateHeader` (`contentDescription = null` on a
+three-state select/partial/deselect icon). Since `DateHeader` sits in a
+region none of tonight's PRs touch, that one line was fixed here after all:
+the icon now announces "Select all messages on {day}" / "Deselect all
+messages on {day}". Nothing else in ThreadScreen needed changing.
 
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 

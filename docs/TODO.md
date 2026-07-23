@@ -1008,15 +1008,12 @@ instance, but flagged:
       three concurrent PRs touch that file tonight). Every other screen already
       had correct labels or deliberate `contentDescription = null` on genuinely
       decorative icons redundant with adjacent text — zero fixes needed.
-  - [ ] **Follow-up: ThreadScreen `DateHeader` select-day toggle** — the
-        per-day select-all `IconButton` (around `DateHeader`, the
-        `selectionIcon` `Icon` inside `if (selectionIcon != null) { IconButton(onClick = onToggleDay, ...) }`)
-        has `contentDescription = null` despite being a real three-state
-        toggle (none/partial/all selected for that day). Suggested label,
-        matching the existing Pin/Unpin state pattern in the same file
-        (`MessageActionTopBar`'s `ActionItem(Icons.Default.PushPin, if
-        (isPinned) "Unpin" else "Pin", ...)`):
-        `if (selectedCount == totalCount) "Deselect all messages on $label" else "Select all messages on $label"`.
+  - [x] **Follow-up: ThreadScreen `DateHeader` select-day toggle** — fixed on
+        the same branch (July 23 2026): the per-day select-all `IconButton`'s
+        three-state icon now announces "Select all messages on {day}" /
+        "Deselect all messages on {day}". This was the only gap in
+        ThreadScreen; the edit is in `DateHeader`, a region none of tonight's
+        concurrent ThreadScreen PRs touch.
 - [ ] **Dynamic text size support** — bubbles should reflow at large
       text sizes, not clip.
 - [ ] **RTL layout support** — mirror layout for Arabic/Hebrew users.

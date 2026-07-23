@@ -2574,7 +2574,10 @@ private fun DateHeader(
             ) {
                 Icon(
                     imageVector = selectionIcon,
-                    contentDescription = null,
+                    contentDescription = if (selectedCount == totalCount)
+                        "Deselect all messages on $label"
+                    else
+                        "Select all messages on $label",
                     tint = iconTint,
                     modifier = Modifier.size(20.dp)
                 )
