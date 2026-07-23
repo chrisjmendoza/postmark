@@ -79,10 +79,16 @@ fun ForwardPickerScreen(
     var pendingForward by remember { mutableStateOf<PendingForward?>(null) }
 
     pendingForward?.let { pending ->
+        val count = viewModel.messageCount
         AlertDialog(
             onDismissRequest = { pendingForward = null },
-            title = { Text("Forward message?") },
-            text = { Text("Send a copy to ${pending.label}?") },
+            title = { Text(if (count > 1) "Forward $count messages?" else "Forward message?") },
+            text = {
+                Text(
+                    if (count > 1) "Send copies of $count messages to ${pending.label}?"
+                    else "Send a copy to ${pending.label}?"
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     pendingForward = null

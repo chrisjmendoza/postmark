@@ -160,6 +160,7 @@ import androidx.compose.ui.graphics.isUnspecified
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -251,6 +252,8 @@ fun ThreadScreen(
     // layer (like onViewContact) rather than the ViewModel, since picking a destination
     // and sending there is itself a full screen, not in-ViewModel state.
     onForwardMessage: (Long) -> Unit = {},
+    // Bulk forward from the selection bar — same picker, seeded with a whole id selection.
+    onForwardMessages: (Collection<Long>) -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -348,6 +351,7 @@ fun ThreadScreen(
 
     val onHighlightMessage        = remember(viewModel) { { id: Long -> viewModel.highlightMessage(id) } }
     val onDeleteMessage           = remember(viewModel) { { id: Long -> viewModel.deleteMessage(id) } }
+    val onDeleteMessages          = remember(viewModel) { { ids: Collection<Long> -> viewModel.deleteMessages(ids) } }
     val onToggleStarred           = remember(viewModel) { { id: Long -> viewModel.toggleStarred(id) } }
     val onTogglePinnedMessage     = remember(viewModel) { { id: Long -> viewModel.togglePinnedMessage(id) } }
     val onDismissDefaultSmsDialog = remember(viewModel) { { viewModel.dismissDefaultSmsDialog() } }
@@ -355,6 +359,9 @@ fun ThreadScreen(
     val onDismissReactionPicker   = remember(viewModel) { { viewModel.dismissReactionPicker() } }
     val onForwardMessage_         = remember(viewModel, onForwardMessage) {
         { id: Long -> viewModel.exitSelectionMode(); onForwardMessage(id) }
+    }
+    val onForwardMessages_        = remember(viewModel, onForwardMessages) {
+        { ids: Collection<Long> -> viewModel.exitSelectionMode(); onForwardMessages(ids) }
     }
     val onExitSelectionMode       = remember(viewModel) { { viewModel.exitSelectionMode() } }
     val onSetSelectionScope       = remember(viewModel) { { scope: SelectionScope -> viewModel.setSelectionScope(scope) } }
@@ -368,9 +375,9 @@ fun ThreadScreen(
     val onSendMessage             = remember(viewModel) { { viewModel.sendMessage() } }
     val onToggleSelection         = remember(viewModel) { { id: Long -> viewModel.toggleSelection(id) } }
     val onShowReactionPicker      = remember(viewModel, haptics) {
-        { id: Long, y: Float ->
+        { id: Long, topY: Float, bottomY: Float ->
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            viewModel.showReactionPicker(id, y)
+            viewModel.showReactionPicker(id, topY, bottomY)
         }
     }
     val onToggleReaction          = remember(viewModel, view) {
@@ -423,6 +430,7 @@ fun ThreadScreen(
         onViewStats = onViewStats,
         onHighlightMessage = onHighlightMessage,
         onDeleteMessage = onDeleteMessage,
+        onDeleteMessages = onDeleteMessages,
         onToggleStarred = onToggleStarred,
         pinnedMessages = pinnedMessages,
         onTogglePinnedMessage = onTogglePinnedMessage,
@@ -430,6 +438,7 @@ fun ThreadScreen(
         onUpdateBackupPolicy = onUpdateBackupPolicy,
         onDismissReactionPicker = onDismissReactionPicker,
         onForwardMessage = onForwardMessage_,
+        onForwardMessages = onForwardMessages_,
         onExitSelectionMode = onExitSelectionMode,
         onSetSelectionScope = onSetSelectionScope,
         onToggleMute = onToggleMute,
@@ -536,6 +545,7 @@ private fun ThreadContent(
     onViewStats: () -> Unit,
     onHighlightMessage: (Long) -> Unit,
     onDeleteMessage: (Long) -> Unit = {},
+    onDeleteMessages: (Collection<Long>) -> Unit = {},
     onToggleStarred: (Long) -> Unit = {},
     // This thread's pinned messages (oldest first) + the per-message pin toggle — back
     // the Pinned messages panel (⋮ overflow) and the long-press Pin/Unpin action.
@@ -545,6 +555,7 @@ private fun ThreadContent(
     onUpdateBackupPolicy: (BackupPolicy) -> Unit,
     onDismissReactionPicker: () -> Unit,
     onForwardMessage: (Long) -> Unit,
+    onForwardMessages: (Collection<Long>) -> Unit = {},
     onExitSelectionMode: () -> Unit,
     onSetSelectionScope: (SelectionScope) -> Unit,
     onToggleMute: () -> Unit,
@@ -556,7 +567,7 @@ private fun ThreadContent(
     onReplyTextChanged: (String) -> Unit,
     onSendMessage: () -> Unit,
     onToggleSelection: (Long) -> Unit,
-    onShowReactionPicker: (Long, Float) -> Unit,
+    onShowReactionPicker: (Long, Float, Float) -> Unit,
     onToggleReaction: (Long, String) -> Unit,
     onToggleTimestamp: (Long) -> Unit,
     onToggleMessageIds: (List<Long>) -> Unit,
@@ -629,6 +640,10 @@ private fun ThreadContent(
     // the system content://sms/mms row too, see ThreadViewModel.deleteMessage), so both
     // entry points confirm through the same dialog rather than deleting on tap.
     var pendingDeleteMessageId by remember { mutableStateOf<Long?>(null) }
+
+    // Non-null shows a "Delete N messages?" confirm dialog for a whole selection. Set by the
+    // SelectionTopBar's Delete action; on confirm every id is deleted and selection exits.
+    var pendingBulkDeleteIds by remember { mutableStateOf<Set<Long>?>(null) }
 
     // Same nickname-falls-back-to-formatted-number resolution as the top app bar title —
     // hoisted here too since the image viewer's header needs it for the "You"/contact label.
@@ -741,6 +756,11 @@ private fun ThreadContent(
     // dismiss, etc.) are automatically corrected within a single frame.
     var liveBubbleY by remember(uiState.reactionPickerMessageId) {
         mutableFloatStateOf(uiState.reactionPickerBubbleY)
+    }
+    // Live top-edge Y of the same bubble — seeded from the VM snapshot, updated every layout
+    // pass. Lets EmojiReactionPopup flip above the bubble when below would be under the nav bar.
+    var liveBubbleTopY by remember(uiState.reactionPickerMessageId) {
+        mutableFloatStateOf(uiState.reactionPickerBubbleTopY)
     }
 
     // ── Scroll to message (search-jump / image-viewer "go to chat") ───────────
@@ -1112,6 +1132,21 @@ private fun ThreadContent(
                             snackbarHostState.showSnackbar("Copied", duration = SnackbarDuration.Short)
                         }
                         onExitSelectionMode()
+                    },
+                    onForward = {
+                        // Same exiting-bar guard as onCopy — the live selection is empty
+                        // while the bar slides out, so a tap here must be dropped.
+                        if (topBarMode != TopBarMode.SELECTION) return@SelectionTopBar
+                        val ids = uiState.selectedMessageIds
+                        if (ids.isEmpty()) return@SelectionTopBar
+                        // onForwardMessages already exits selection (see onForwardMessages_).
+                        onForwardMessages(ids)
+                    },
+                    onDelete = {
+                        if (topBarMode != TopBarMode.SELECTION) return@SelectionTopBar
+                        val ids = uiState.selectedMessageIds
+                        if (ids.isEmpty()) return@SelectionTopBar
+                        pendingBulkDeleteIds = ids
                     }
                 )
                 TopBarMode.NORMAL -> TopAppBar(
@@ -1329,9 +1364,9 @@ private fun ThreadContent(
                             onToggleSelect = { onToggleSelection(item.message.id) },
                             onImageTap = onImageTap,
                             onVideoTap = onVideoTap,
-                            onLongClick = { y -> onShowReactionPicker(item.message.id, y) },
+                            onLongClick = { top, bottom -> onShowReactionPicker(item.message.id, top, bottom) },
                             onReactionTargetYChanged = if (item.message.id == uiState.reactionPickerMessageId)
-                                { y -> liveBubbleY = y } else null,
+                                { top, bottom -> liveBubbleTopY = top; liveBubbleY = bottom } else null,
                             onReactionClick = { emoji -> onToggleReaction(item.message.id, emoji) },
                             timestampPref = timestampPref,
                             isTimestampExpanded = item.message.id in uiState.expandedTimestampIds,
@@ -1429,6 +1464,27 @@ private fun ThreadContent(
                 )
             }
 
+            // Bulk delete confirmation — from the SelectionTopBar's Delete button. Same real,
+            // permanent, system-provider delete as the single-message dialog above, just applied
+            // to every selected message; confirming exits selection mode.
+            pendingBulkDeleteIds?.let { ids ->
+                AlertDialog(
+                    onDismissRequest = { pendingBulkDeleteIds = null },
+                    title = { Text("Delete ${ids.size} messages?") },
+                    text = { Text("This removes them from this device's SMS/MMS history. This can't be undone.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            onDeleteMessages(ids)
+                            pendingBulkDeleteIds = null
+                            onExitSelectionMode()
+                        }) { Text("Delete") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingBulkDeleteIds = null }) { Text("Cancel") }
+                    }
+                )
+            }
+
             // Auto-hide the FAB 3 s after the user stops scrolling.
             // fabVisible is hoisted to the outer scope so the message-arrival
             // effect above can also trigger it when the user is reading history.
@@ -1476,6 +1532,7 @@ private fun ThreadContent(
             EmojiReactionPopup(
                 message        = msg,
                 quickEmojis    = quickReactionEmojis,
+                bubbleTopY     = liveBubbleTopY,
                 bubbleBottomY  = liveBubbleY,
                 isPinned       = msg.isPinned,
                 onReact     = { emoji -> onToggleReaction(msg.id, emoji) },
@@ -1517,7 +1574,9 @@ private fun SelectionTopBar(
     onClose: () -> Unit,
     onScopeChange: (SelectionScope) -> Unit,
     onShowDateRange: () -> Unit,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    onForward: () -> Unit,
+    onDelete: () -> Unit
 ) {
     // "All" chip doubles as a deselect-all affordance: when every message is
     // selected it shows "None" so the user has a clear way to clear the selection.
@@ -1533,6 +1592,16 @@ private fun SelectionTopBar(
             },
             actions = {
                 IconButton(onClick = onCopy) { Icon(Icons.Default.ContentCopy, "Copy") }
+                IconButton(onClick = onForward) {
+                    Icon(Icons.AutoMirrored.Filled.Send, "Forward selected")
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete selected",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         )
         Row(
@@ -1659,11 +1728,11 @@ private fun MessageBubble(
     isSelectionMode: Boolean,
     isHighlighted: Boolean,
     onToggleSelect: () -> Unit,
-    onLongClick: (bubbleTopY: Float) -> Unit,
-    // When non-null, fires on every layout pass with the bubble's current positionInRoot().y.
-    // Used by ThreadContent to keep liveBubbleY in sync so EmojiReactionPopup tracks the
+    onLongClick: (bubbleTopY: Float, bubbleBottomY: Float) -> Unit,
+    // When non-null, fires on every layout pass with the bubble's current top/bottom root-Y.
+    // Used by ThreadContent to keep the live bubble Y in sync so EmojiReactionPopup tracks the
     // bubble even after top-bar swaps or IME dismissals change the layout.
-    onReactionTargetYChanged: ((Float) -> Unit)? = null,
+    onReactionTargetYChanged: ((topY: Float, bottomY: Float) -> Unit)? = null,
     // Tapping an image attachment reports its URI up to ThreadContent, which owns the
     // single shared full-screen viewer and resolves the URI to a thread-wide page index.
     onImageTap: (String) -> Unit = {},
@@ -1737,7 +1806,9 @@ private fun MessageBubble(
     val bottomPadding = if (clusterPosition == ClusterPosition.TOP    ||
                             clusterPosition == ClusterPosition.MIDDLE) 1.dp else 2.dp
 
-    val bubbleRootY = remember { FloatArray(1) }
+    // [0] = bubble top-edge root-Y, [1] = bubble bottom-edge root-Y. Both are reported so
+    // the popup can flip above the bubble when placing it below would land under the nav bar.
+    val bubbleRootY = remember { FloatArray(2) }
     val density = LocalDensity.current
 
     // ── Swipe-to-reply gesture state ──────────────────────────────────────────
@@ -1751,12 +1822,15 @@ private fun MessageBubble(
         modifier = modifier
             .fillMaxWidth()
             .onGloballyPositioned { coords ->
-                // Track the bottom edge of the bubble — popup is placed just below it.
-                val y = coords.positionInRoot().y + coords.size.height.toFloat()
-                bubbleRootY[0] = y
-                // If this bubble is the current reaction target, notify ThreadContent
-                // so liveBubbleY stays in sync with the bubble's real screen position.
-                onReactionTargetYChanged?.invoke(y)
+                // Track both edges of the bubble — the popup prefers to sit just below it,
+                // but flips above (using the top edge) when below would land under the nav bar.
+                val top = coords.positionInRoot().y
+                val bottom = top + coords.size.height.toFloat()
+                bubbleRootY[0] = top
+                bubbleRootY[1] = bottom
+                // If this bubble is the current reaction target, notify ThreadContent so the
+                // live top/bottom Y stay in sync with the bubble's real screen position.
+                onReactionTargetYChanged?.invoke(top, bottom)
             }
             .combinedClickable(
                 onClick = {
@@ -1766,7 +1840,7 @@ private fun MessageBubble(
                     }
                 },
                 onLongClick = {
-                    if (!isSelectionMode) onLongClick(bubbleRootY[0])
+                    if (!isSelectionMode) onLongClick(bubbleRootY[0], bubbleRootY[1])
                 }
             )
             // Horizontal drag gesture for swipe-to-reply (only right direction).
@@ -4012,20 +4086,42 @@ internal fun bubbleShape(
 }
 
 /**
- * Calculates the top-Y offset (in pixels) for the emoji reaction pill.
- * Places the pill just below the bubble; clamps so it never goes off the bottom of the screen.
+ * Calculates the top-Y offset (root px) for the anchored emoji reaction popup.
  *
- * [bubbleBottomY] is the Y coordinate of the bubble's bottom edge in root coordinates.
- * [maxPillTopPx]  is the largest allowed top-Y for the pill (screen height − pill height − padding);
- *                 the pill height is already folded into this bound by the caller.
+ * Placement strategy, in order:
+ *  1. **Below** the bubble (`bubbleBottomY + gapPx`) — preferred, used whenever the whole
+ *     popup still fits above [maxBottomPx].
+ *  2. **Above** the bubble (`bubbleTopY − gapPx − popupHeightPx`) — used when below would push
+ *     the popup past [maxBottomPx] (e.g. a bubble near the screen bottom, where the popup would
+ *     otherwise land under the navigation/gesture area) and above fits within [minTopPx].
+ *  3. **Clamped** into the visible band `[minTopPx, maxBottomPx − popupHeightPx]` — last resort
+ *     for a popup taller than the space either way.
+ *
+ * @param bubbleTopY     root-Y of the bubble's top edge.
+ * @param bubbleBottomY  root-Y of the bubble's bottom edge.
+ * @param popupHeightPx  measured popup height. 0 on the first frame (before onSizeChanged), which
+ *                       naturally yields the below position and self-corrects once measured.
+ * @param gapPx          gap between the bubble edge and the popup.
+ * @param minTopPx       top viewport bound (status bar + top bar) the popup must stay below.
+ * @param maxBottomPx    bottom viewport bound (screen height − nav-bar inset − margin).
  *
  * Extracted as a pure function so it can be unit-tested without Compose.
  */
-internal fun reactionPillTopPx(
+internal fun reactionPopupTopPx(
+    bubbleTopY: Float,
     bubbleBottomY: Float,
+    popupHeightPx: Float,
     gapPx: Float,
-    maxPillTopPx: Float
-): Float = minOf(bubbleBottomY + gapPx, maxPillTopPx)
+    minTopPx: Float,
+    maxBottomPx: Float
+): Float {
+    val below = bubbleBottomY + gapPx
+    if (below + popupHeightPx <= maxBottomPx) return below
+    val above = bubbleTopY - gapPx - popupHeightPx
+    if (above >= minTopPx) return above
+    // Fits neither way — clamp into the visible band.
+    return below.coerceIn(minTopPx, (maxBottomPx - popupHeightPx).coerceAtLeast(minTopPx))
+}
 
 private fun smsCounter(length: Int): String? {
     if (length <= 120) return null
@@ -5072,6 +5168,7 @@ internal fun ReactionPills(
 private fun EmojiReactionPopup(
     message: Message,
     quickEmojis: List<String>,
+    bubbleTopY: Float,
     bubbleBottomY: Float,
     isPinned: Boolean,
     onReact: (String) -> Unit,
@@ -5088,17 +5185,36 @@ private fun EmojiReactionPopup(
     }
     var showMoreSheet by remember { mutableStateOf(false) }
 
-    // Pill geometry — 44dp button + 6dp × 2 vertical padding = 56dp
-    val pillHeightPx   = with(density) { 56.dp.toPx() }
     val gapPx          = with(density) { 8.dp.toPx() }
-    // Maximum Y for the pill top: screen height minus pill size and a small bottom margin.
     val screenHeightPx = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
-    val maxPillTopPx   = screenHeightPx - pillHeightPx - gapPx - with(density) { 16.dp.toPx() }
 
-    // bubbleBottomY is the live position fed from MessageBubble's onGloballyPositioned
-    // (via liveBubbleY in ThreadContent), so it is always up to date — no manual
-    // IME or top-bar offset compensation is needed here.
-    val pillTopPx = reactionPillTopPx(bubbleBottomY, gapPx, maxPillTopPx)
+    // Placement bounds — read the real nav-bar/status-bar insets in composition (NOT inside a
+    // Dialog; this overlay lives in the Activity window, so the insets report correctly here).
+    // Top bound: status bar + the 56dp top app bar the popup must stay clear of.
+    // Bottom bound: full screen height minus the nav-bar inset and a small margin, so the popup
+    // never lands under the navigation/gesture area where taps don't register.
+    val statusBarTopPx = with(density) { WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx() }
+    val navBarInsetPx  = with(density) { WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().toPx() }
+    val minTopPx       = statusBarTopPx + with(density) { 56.dp.toPx() }
+    val maxBottomPx    = screenHeightPx - navBarInsetPx - with(density) { 16.dp.toPx() }
+
+    // Measured popup height — 0 until the first onSizeChanged. At 0 the placement function yields
+    // the below position (self-correcting once measured), so the popup never visibly jumps out of
+    // a sane region on the first frame.
+    var popupHeightPx by remember { mutableFloatStateOf(0f) }
+
+    // bubbleTopY / bubbleBottomY are the live positions fed from MessageBubble's onGloballyPositioned
+    // (via liveBubbleTopY / liveBubbleY in ThreadContent), so they are always up to date — no manual
+    // IME or top-bar offset compensation is needed here. Prefer below the bubble; flip above when
+    // below would fall under the nav bar.
+    val pillTopPx = reactionPopupTopPx(
+        bubbleTopY    = bubbleTopY,
+        bubbleBottomY = bubbleBottomY,
+        popupHeightPx = popupHeightPx,
+        gapPx         = gapPx,
+        minTopPx      = minTopPx,
+        maxBottomPx   = maxBottomPx
+    )
 
     // Theme-driven so the pill matches the app theme instead of always rendering dark
     // (it previously used near-black literals that looked wrong on the Always-Light theme).
@@ -5125,7 +5241,8 @@ private fun EmojiReactionPopup(
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .offset { IntOffset(0, pillTopPx.toInt()) },
+                .offset { IntOffset(0, pillTopPx.toInt()) }
+                .onSizeChanged { popupHeightPx = it.height.toFloat() },
             shape = RoundedCornerShape(24.dp),
             color = pillBg,
             border = BorderStroke(0.5.dp, pillBorder),
@@ -5246,7 +5363,7 @@ private fun ThreadScreenPreview() {
             onReplyTextChanged = {},
             onSendMessage = {},
             onToggleSelection = {},
-            onShowReactionPicker = { _, _ -> },
+            onShowReactionPicker = { _, _, _ -> },
             onToggleReaction = { _, _ -> },
             onToggleTimestamp = {},
             onToggleMessageIds = {},

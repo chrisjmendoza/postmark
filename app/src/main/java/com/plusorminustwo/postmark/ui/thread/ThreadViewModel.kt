@@ -97,6 +97,9 @@ data class ThreadUiState(
     val expandedTimestampIds: Set<Long> = emptySet(),
     val reactionPickerMessageId: Long? = null,
     val reactionPickerBubbleY: Float = 0f,
+    // Root-Y of the long-pressed bubble's TOP edge — lets the popup flip above the bubble
+    // when placing it below would land under the navigation bar (see reactionPopupTopPx).
+    val reactionPickerBubbleTopY: Float = 0f,
     val highlightedMessageId: Long? = null,
     // Pending outgoing MMS attachments (URI + MIME type each). Empty when composing plain SMS.
     val pendingAttachments: List<MessageAttachment> = emptyList(),
@@ -206,7 +209,8 @@ class ThreadViewModel @Inject constructor(
     private val _showDefaultSmsDialog     = MutableStateFlow(false)
     private val _expandedTimestampIds     = MutableStateFlow(emptySet<Long>())
     private val _reactionPickerMessageId  = MutableStateFlow<Long?>(null)
-    private val _reactionPickerBubbleY    = MutableStateFlow(0f)
+    private val _reactionPickerBubbleY     = MutableStateFlow(0f)
+    private val _reactionPickerBubbleTopY  = MutableStateFlow(0f)
     private val _highlightedMessageId     = MutableStateFlow<Long?>(null)
     // Pending outgoing MMS attachments; empty when composing SMS. Persisted to
     // SavedStateHandle as the same JSON encoding used by the Room column.
@@ -340,6 +344,7 @@ class ThreadViewModel @Inject constructor(
         val selectionScope: SelectionScope,
         val reactionPickerMessageId: Long?,
         val reactionPickerBubbleY: Float,
+        val reactionPickerBubbleTopY: Float,
         val highlightedMessageId: Long?,
         val pendingAttachments: List<MessageAttachment>,
         // ID of the message being quoted via swipe-to-reply; null = no active quote.
@@ -360,21 +365,23 @@ class ThreadViewModel @Inject constructor(
             _selectionScope,
             _reactionPickerMessageId,
             _reactionPickerBubbleY,
+            _reactionPickerBubbleTopY,
             _highlightedMessageId,
             _pendingAttachments,
             _replyingToId
         ) { arr ->
             InnerState(
-                replyText               = arr[0] as String,
-                isSending               = arr[1] as Boolean,
-                showDefaultSmsDialog    = arr[2] as Boolean,
-                expandedTimestampIds    = arr[3] as Set<Long>,
-                selectionScope          = arr[4] as SelectionScope,
-                reactionPickerMessageId = arr[5] as Long?,
-                reactionPickerBubbleY   = arr[6] as Float,
-                highlightedMessageId    = arr[7] as Long?,
-                pendingAttachments      = arr[8] as List<MessageAttachment>,
-                replyingToId            = arr[9] as Long?
+                replyText                 = arr[0] as String,
+                isSending                 = arr[1] as Boolean,
+                showDefaultSmsDialog      = arr[2] as Boolean,
+                expandedTimestampIds      = arr[3] as Set<Long>,
+                selectionScope            = arr[4] as SelectionScope,
+                reactionPickerMessageId   = arr[5] as Long?,
+                reactionPickerBubbleY     = arr[6] as Float,
+                reactionPickerBubbleTopY  = arr[7] as Float,
+                highlightedMessageId      = arr[8] as Long?,
+                pendingAttachments        = arr[9] as List<MessageAttachment>,
+                replyingToId              = arr[10] as Long?
             )
         }
     ) { thread, payload, selected, selectionMode, inner ->
@@ -390,9 +397,10 @@ class ThreadViewModel @Inject constructor(
             isSending = inner.isSending,
             showDefaultSmsDialog = inner.showDefaultSmsDialog,
             expandedTimestampIds = inner.expandedTimestampIds,
-            reactionPickerMessageId = inner.reactionPickerMessageId,
-            reactionPickerBubbleY   = inner.reactionPickerBubbleY,
-            highlightedMessageId    = inner.highlightedMessageId,
+            reactionPickerMessageId  = inner.reactionPickerMessageId,
+            reactionPickerBubbleY    = inner.reactionPickerBubbleY,
+            reactionPickerBubbleTopY = inner.reactionPickerBubbleTopY,
+            highlightedMessageId     = inner.highlightedMessageId,
             pendingAttachments      = inner.pendingAttachments,
             replyingToId            = inner.replyingToId
         )
@@ -424,17 +432,19 @@ class ThreadViewModel @Inject constructor(
     private fun selectionSnapshot() = SelectionSnapshot(
         pickerMessageId = _reactionPickerMessageId.value,
         bubbleY         = _reactionPickerBubbleY.value,
+        bubbleTopY      = _reactionPickerBubbleTopY.value,
         isSelectionMode = _isSelectionMode.value,
         selection       = _selectionState.value,
         scope           = _selectionScope.value
     )
 
     private fun applySelectionSnapshot(s: SelectionSnapshot) {
-        _reactionPickerMessageId.value = s.pickerMessageId
-        _reactionPickerBubbleY.value   = s.bubbleY
-        _isSelectionMode.value         = s.isSelectionMode
-        _selectionState.value          = s.selection
-        _selectionScope.value          = s.scope
+        _reactionPickerMessageId.value  = s.pickerMessageId
+        _reactionPickerBubbleY.value    = s.bubbleY
+        _reactionPickerBubbleTopY.value = s.bubbleTopY
+        _isSelectionMode.value          = s.isSelectionMode
+        _selectionState.value           = s.selection
+        _selectionScope.value           = s.scope
     }
 
     fun exitSelectionMode() = applySelectionSnapshot(exitSelection())
@@ -488,8 +498,8 @@ class ThreadViewModel @Inject constructor(
      * selection mode is already live a long-press just toggles that message (like a tap),
      * without opening a popup or clobbering the running multi-selection.
      */
-    fun showReactionPicker(messageId: Long, bubbleY: Float) =
-        applySelectionSnapshot(longPress(selectionSnapshot(), messageId, bubbleY))
+    fun showReactionPicker(messageId: Long, bubbleTopY: Float, bubbleBottomY: Float) =
+        applySelectionSnapshot(longPress(selectionSnapshot(), messageId, bubbleTopY, bubbleBottomY))
 
     /** Dismisses the popup only — selection mode and the current selection are preserved. */
     fun dismissReactionPicker() =
@@ -526,33 +536,60 @@ class ThreadViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            val message = messageRepository.getById(messageId) ?: return@launch
-            // Negative IDs are optimistic (not-yet-synced) rows — no system row exists yet.
-            // Restored rows (id >= RESTORED_ID_OFFSET) exist only in Room by construction,
-            // so there is no provider row to delete for them either.
-            if (message.id in 1 until RESTORED_ID_OFFSET) {
-                val uri = if (message.isMms) {
-                    Uri.parse("content://mms/${message.id - MMS_ID_OFFSET}")
-                } else {
-                    Uri.parse("content://sms/${message.id}")
-                }
-                withContext(Dispatchers.IO) {
-                    try {
-                        context.contentResolver.delete(uri, null, null)
-                    } catch (_: Exception) {
-                        // System provider delete failed (e.g. race with sync) — still remove
-                        // the local row below so the UI doesn't show a message the user just
-                        // asked to delete; a future resync can't resurrect a row that no
-                        // longer exists in Room even if the system row somehow survived.
-                    }
-                }
+            deleteMessageRow(messageId)
+        }
+    }
+
+    /**
+     * Bulk delete for the selection bar — deletes every message in [ids] sequentially in one
+     * coroutine, reusing the same per-id logic as [deleteMessage]. The default-SMS-app guard is
+     * applied once up front. These provider deletes are legitimate: this is invoked only from an
+     * explicit user delete action (the sanctioned case in CLAUDE.md), never from sync/migration.
+     */
+    fun deleteMessages(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        if (!context.isDefaultSmsApp()) {
+            _showDefaultSmsDialog.value = true
+            return
+        }
+        viewModelScope.launch {
+            ids.forEach { deleteMessageRow(it) }
+        }
+    }
+
+    /**
+     * Deletes a single message — both the Room row and, for a real (non-optimistic, `id > 0`)
+     * row, the underlying system `content://sms`/`content://mms` row. Assumes the default-SMS-app
+     * check has already passed (callers guard once). Suspends; no scope of its own so it can be
+     * looped from [deleteMessages].
+     */
+    private suspend fun deleteMessageRow(messageId: Long) {
+        val message = messageRepository.getById(messageId) ?: return
+        // Negative IDs are optimistic (not-yet-synced) rows — no system row exists yet.
+        // Restored rows (id >= RESTORED_ID_OFFSET) exist only in Room by construction,
+        // so there is no provider row to delete for them either.
+        if (message.id in 1 until RESTORED_ID_OFFSET) {
+            val uri = if (message.isMms) {
+                Uri.parse("content://mms/${message.id - MMS_ID_OFFSET}")
+            } else {
+                Uri.parse("content://sms/${message.id}")
             }
-            messageRepository.deleteById(messageId)
-            // Remove the outgoing-MMS media this message cached in filesDir so it doesn't
-            // leak (no-op for SMS / received MMS — those carry no mms_attach_* cache files).
             withContext(Dispatchers.IO) {
-                MmsManagerWrapper.deleteAttachmentCacheFiles(context, message.attachments)
+                try {
+                    context.contentResolver.delete(uri, null, null)
+                } catch (_: Exception) {
+                    // System provider delete failed (e.g. race with sync) — still remove
+                    // the local row below so the UI doesn't show a message the user just
+                    // asked to delete; a future resync can't resurrect a row that no
+                    // longer exists in Room even if the system row somehow survived.
+                }
             }
+        }
+        messageRepository.deleteById(messageId)
+        // Remove the outgoing-MMS media this message cached in filesDir so it doesn't
+        // leak (no-op for SMS / received MMS — those carry no mms_attach_* cache files).
+        withContext(Dispatchers.IO) {
+            MmsManagerWrapper.deleteAttachmentCacheFiles(context, message.attachments)
         }
     }
 
@@ -1391,6 +1428,7 @@ class ThreadViewModel @Inject constructor(
         data class SelectionSnapshot(
             val pickerMessageId: Long? = null,
             val bubbleY: Float = 0f,
+            val bubbleTopY: Float = 0f,
             val isSelectionMode: Boolean = false,
             val selection: Set<Long> = emptySet(),
             val scope: SelectionScope = SelectionScope.MESSAGES
@@ -1402,7 +1440,12 @@ class ThreadViewModel @Inject constructor(
          * selection intact; otherwise it opens the anchored emoji popup AND enters selection
          * mode with that message as the sole selection.
          */
-        internal fun longPress(s: SelectionSnapshot, messageId: Long, bubbleY: Float): SelectionSnapshot =
+        internal fun longPress(
+            s: SelectionSnapshot,
+            messageId: Long,
+            bubbleTopY: Float,
+            bubbleBottomY: Float
+        ): SelectionSnapshot =
             if (s.isSelectionMode) {
                 s.copy(
                     selection = if (messageId in s.selection) s.selection - messageId
@@ -1411,7 +1454,8 @@ class ThreadViewModel @Inject constructor(
             } else {
                 SelectionSnapshot(
                     pickerMessageId = messageId,
-                    bubbleY         = bubbleY,
+                    bubbleY         = bubbleBottomY,
+                    bubbleTopY      = bubbleTopY,
                     isSelectionMode = true,
                     selection       = setOf(messageId),
                     scope           = SelectionScope.MESSAGES
@@ -1420,7 +1464,7 @@ class ThreadViewModel @Inject constructor(
 
         /** Tap-outside / back with the popup open: close the popup only, keep selection running. */
         internal fun dismissPicker(s: SelectionSnapshot): SelectionSnapshot =
-            s.copy(pickerMessageId = null, bubbleY = 0f)
+            s.copy(pickerMessageId = null, bubbleY = 0f, bubbleTopY = 0f)
 
         /** Leave selection entirely — also clears any open popup so nothing is orphaned. */
         internal fun exitSelection(): SelectionSnapshot = SelectionSnapshot()

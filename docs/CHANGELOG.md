@@ -39,6 +39,44 @@ with new `ThreadViewModelSelectionStateTest` coverage (7 tests). `dismissReactio
 no longer clears the selection; `exitSelectionMode()` now also clears the popup so
 nothing is orphaned.
 
+### Follow-up: bulk delete/forward from the selection bar; popup flips above near the screen bottom
+
+903 tests passing. **Not yet verified on device.** Two gaps from on-device feedback:
+
+**Bulk delete + forward once the popup is dismissed.** SelectionTopBar exposed only
+Copy, so multi-message delete/forward was impossible after tapping a second bubble
+closed the popup. It now carries **Forward** (AutoMirrored Send, "Forward selected")
+and **Delete** (error-tinted, "Delete selected") next to Copy, both guarded by the
+same exiting-bar `topBarMode != SELECTION` tap-drop as Copy (plus an empty-selection
+guard). Delete opens a "Delete N messages?" confirm reusing the single-message
+dialog's permanent/system-provider wording; confirming deletes every selected id and
+exits selection. New `ThreadViewModel.deleteMessages(ids)` applies the existing
+per-id delete logic (extracted to a private `deleteMessageRow` suspend helper) in one
+sequential coroutine, with the default-SMS-app guard applied once up front — these
+provider deletes are the sanctioned explicit-user-delete case.
+
+Forward from the selection bar took the **multi-message** path: the forward nav arg
+became a comma-joined id list (`forward/{messageIds}`, `NavType.StringType`),
+`ForwardPickerViewModel` parses the list and sends each source message to the chosen
+destination in timestamp order (distinct tempId/timestamp per optimistic row so
+rapid-fire inserts don't collide), and the confirm dialog pluralizes to
+"Forward N messages?". Single-message entry points (popup, image viewer) are
+unchanged via a `route(messageId)` convenience overload.
+
+**Popup flips above the bubble near the screen bottom.** The taller popup (emoji +
+action rows) could land under the nav/gesture area where taps don't register, because
+placement only clamped downward. The bubble now reports both its top and bottom root-Y
+(the `onReactionTargetYChanged` channel and the `SelectionSnapshot`/uiState plumbing
+carry both), the popup measures its own height via `onSizeChanged`, and a new pure
+`reactionPopupTopPx` (replacing `reactionPillTopPx`) prefers below, flips above when
+below would pass the bottom bound (screen height − nav-bar inset − margin), and clamps
+into the visible band as a last resort. The nav-bar/status-bar insets are read via
+`WindowInsets` in composition (the overlay lives in the Activity window, not a Dialog).
+Before the height is measured the popup renders at the below position (height 0 always
+fits) and self-corrects on the next frame — no visible jump. Placement test evolved to
+`ReactionPopupPositionTest` (fits below, flips above, clamps, nav-inset respected,
+first-frame); selection-state test extended for the top-Y plumbing.
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in

@@ -101,9 +101,11 @@ sealed class Screen(val route: String) {
     data object ContactDetail : Screen("contact/{threadId}") {
         fun route(threadId: Long) = "contact/$threadId"
     }
-    /** "Forward to..." destination picker for one message (text or image). */
-    data object ForwardMessage : Screen("forward/{messageId}") {
-        fun route(messageId: Long) = "forward/$messageId"
+    /** "Forward to..." destination picker for one or more messages (text or image). */
+    data object ForwardMessage : Screen("forward/{messageIds}") {
+        /** Comma-joined id list so the picker can forward a whole selection in one trip. */
+        fun route(messageIds: Collection<Long>) = "forward/${messageIds.joinToString(",")}"
+        fun route(messageId: Long) = route(listOf(messageId))
     }
     /** Global (cross-thread) gallery of every starred image — reached from Settings. */
     data object StarredImages : Screen("starred_images")
@@ -209,7 +211,8 @@ fun AppNavigation(
                 onViewContact     = { navController.navigate(Screen.ContactDetail.route(threadId)) },
                 onViewStats       = { navController.navigate(Screen.Stats.navRoute(threadId)) },
                 onSearchInThread  = { id -> navController.navigate(Screen.Search.navRoute(id)) },
-                onForwardMessage  = { messageId -> navController.navigate(Screen.ForwardMessage.route(messageId)) }
+                onForwardMessage  = { messageId -> navController.navigate(Screen.ForwardMessage.route(messageId)) },
+                onForwardMessages = { ids -> navController.navigate(Screen.ForwardMessage.route(ids)) }
             )
         }
 
@@ -295,7 +298,7 @@ fun AppNavigation(
 
         composable(
             route = Screen.ForwardMessage.route,
-            arguments = listOf(navArgument("messageId") { type = NavType.LongType })
+            arguments = listOf(navArgument("messageIds") { type = NavType.StringType })
         ) {
             ForwardPickerScreen(
                 onForwarded = { destThreadId ->
