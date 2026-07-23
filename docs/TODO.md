@@ -532,16 +532,17 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       paths can't drift). `ReactionPills` widened private→internal and reused
       display-only in `SearchResultRow`, wrapped in a `FlowRow`. 4 new
       plain-JUnit tests in `MessageReactionsTest`.
-- [ ] **"Reacted to" filter-message exclusion in results** — Apple reaction
-      fallback phrases ("Liked \"...\""  etc.) are stored as both a
-      `ReactionEntity` *and* left as a raw message in the `messages` table.
-      These raw reaction-phrase messages currently appear as search results.
-      Add a flag or filter to suppress them from the default result set
-      (they are already parsed into reactions; showing the raw phrase is
-      noise). Simplest approach: mark messages whose body matches the
-      reaction-phrase pattern with a `isReactionMessage BOOLEAN DEFAULT 0`
-      flag set during sync, then add `AND isReactionMessage = 0` to the
-      default search query. Opt-in toggle could expose them if needed.
+- [x] ~~**"Reacted to" filter-message exclusion in results**~~ — closed obsolete
+      July 23 2026: the premise (fallback stored as BOTH a `ReactionEntity` and
+      a raw message row) no longer holds — since the July 22 parser work,
+      `ReactionResolver` deletes resolved fallback rows outright. Remaining
+      fallback rows are *unresolvable* ones that render as normal bubbles in
+      the thread, so search showing them is consistent, not noise; excluding
+      them would hide content that's visible in the thread. No
+      `isReactionMessage` flag / schema change needed. One real leftover fixed
+      (`fix/reaction-duplicate-fallback-cleanup`): the duplicate branch
+      (reaction already exists) now deletes the redundant fallback row instead
+      of leaving a permanent stray bubble.
 - [x] **Search within thread** (July 22 2026) — ~95% already built (committed
       in b7e3685, checkbox never ticked): `search?threadId={threadId}` optional
       nav arg with a `navRoute(threadId)` helper in `AppNavigation.kt`,

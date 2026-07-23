@@ -184,7 +184,7 @@ class ReactionResolverTest {
     }
 
     @Test
-    fun `duplicate reaction is not inserted twice`() = runTest {
+    fun `duplicate reaction is not inserted twice and its redundant row is removed`() = runTest {
         messageDao.seed(
             msg(7, "Dinner at 7?", timestamp = 1_000),
             msg(9, "❤️ to \"Dinner at 7?\"", timestamp = 3_000)
@@ -196,8 +196,11 @@ class ReactionResolverTest {
 
         val result = resolver.resolveAll()
 
-        assertEquals(ReactionResolver.Result(inserted = 0, removed = 0), result)
+        // The reaction is not double-inserted, and the raw fallback bubble no longer
+        // lingers once its reaction is known to exist (pre-July-23 it stayed forever).
+        assertEquals(ReactionResolver.Result(inserted = 0, removed = 1), result)
         assertEquals(1, reactionDao.rows.size)
+        assertFalse(messageDao.rows.containsKey(9L))
     }
 
     @Test
