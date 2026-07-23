@@ -110,6 +110,7 @@ class IncomingNotifier @Inject constructor(
             Intent(context, MarkAsReadReceiver::class.java).apply {
                 putExtra(MarkAsReadReceiver.EXTRA_ADDRESS, address)
                 putExtra(MarkAsReadReceiver.EXTRA_NOTIF_ID, notifKey)
+                putExtra(MarkAsReadReceiver.EXTRA_THREAD_ID, threadId)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

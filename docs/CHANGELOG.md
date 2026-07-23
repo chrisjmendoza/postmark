@@ -4,6 +4,31 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (fix/markread-mms) — notification mark-as-read covers MMS
+
+901 tests passing (up from 887; +3 new + others merged since). **Not yet
+verified on device.**
+
+Notification "Mark as read" only updated `Telephony.Sms` rows filtered by
+sender address, so incoming MMS (group messages, media) never got
+`read = 1` in the provider — the thread re-synced back to unread. Traced
+`threadId` through both live-SMS (`SmsReceiver`) and MMS-sync
+(`SmsSyncHandler`) paths: it's read straight off the provider cursor
+(`Telephony.Sms.THREAD_ID` / `thread_id`) and used verbatim as
+`ThreadEntity.id` — Room thread ids ARE telephony thread ids in this
+codebase, so no id-space translation was needed. `IncomingNotifier` now
+passes `threadId` through the mark-read `PendingIntent`
+(`MarkAsReadReceiver.EXTRA_THREAD_ID`). New pure
+`ConversationReadMarker.buildUpdates()` (JVM-tested, no `android.*` imports)
+decides the selection: a positive thread id marks both `Telephony.Sms` and
+`Telephony.Mms` scoped to `thread_id = ?`; a missing one falls back to the
+historical address-scoped `Telephony.Sms`-only update. Each provider update
+in `MarkAsReadReceiver` is wrapped independently so one failing can't skip
+the other or the notification cancel. `DirectReplyReceiver` was checked and
+does not mark anything read (only sends + cancels notifications), so it was
+left alone — no shared helper needed since only one receiver touches the
+read state.
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in

@@ -282,8 +282,20 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       conversation" multi-select compose (P2), MMS notifications (none existed
       at all before) + m_type artifact filter/cleanup + roster staleness (P3).
       Carrier-disabled group MMS keeps a reworded banner + 1:1 send; no broadcast
-      mode. Remaining: on-device verification matrix (spec §5) and the flagged
-      `MarkAsReadReceiver` MMS read-state gap.
+      mode. Remaining: on-device verification matrix (spec §5).
+      - [x] **`MarkAsReadReceiver` MMS read-state gap — FIXED July 23 2026**
+            (`fix/markread-mms`): notification "Mark as read" only updated
+            `Telephony.Sms` filtered by sender address, so incoming MMS (group
+            messages, media) never got `read = 1` and re-synced back to unread.
+            `IncomingNotifier` now passes the telephony `threadId` (confirmed —
+            see below — to be the same id space as Room's `ThreadEntity.id`)
+            through to `MarkAsReadReceiver`, which uses new pure
+            `ConversationReadMarker.buildUpdates()` to mark both
+            `Telephony.Sms` and `Telephony.Mms` read, scoped to `thread_id`,
+            falling back to the old address-scoped Sms-only update when no
+            thread id is available. On-device verification still pending
+            (group MMS notification → Mark as read → thread shows read after
+            sync).
 - [x] **Voice memos — record + send** (July 16 2026) — mic button in the reply bar
       (replaces send while the composer is empty, WhatsApp/Google Messages pattern)
       with both capture gestures. **Hold to record** → release drops the memo into
