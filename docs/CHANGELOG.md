@@ -4,6 +4,33 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (chore/content-descriptions) — TalkBack labels for icon buttons across the app
+
+898 tests passing (unchanged from master — this is an audit, not a code change).
+
+Accessibility sweep of `docs/TODO.md`'s "Content descriptions on all icon
+buttons" item: checked every `Icon`/`IconButton`/`Image`/`AsyncImage`/
+`SubcomposeAsyncImage` in `ui/` — conversations, search, settings (all
+screens), stats, spam, backup, export, blocked numbers, notifications, dev
+options, starred images, onboarding, forward, new-conversation, contact
+detail, and the shared components (chat background / accent color / bubble
+placement dialogs) — against every icon button and image in each file.
+
+**Result: zero fixes needed.** Every screen already had either a real
+action-oriented label (e.g. "Delete conversation", "Mark read", "Attach
+media", the existing Pin/Unpin state pattern) or a deliberate
+`contentDescription = null` on genuinely decorative icons/images redundant
+with adjacent text (row-leading icons next to a title, chevrons in clickable
+rows, thumbnail previews with a text label beneath). No file needed a single
+line changed.
+
+**ThreadScreen.kt was deliberately skipped** — three concurrent PRs touch it
+tonight. Reviewed it anyway (read-only) to avoid missing anything for the
+follow-up: found one real gap, the per-day select-all toggle in `DateHeader`
+(`contentDescription = null` on a three-state select/partial/deselect icon).
+Logged as a follow-up bullet in `docs/TODO.md` with a suggested label
+matching the file's existing Pin/Unpin state-description pattern.
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in
