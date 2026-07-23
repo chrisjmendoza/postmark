@@ -4,6 +4,52 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (feat/spam-heuristics) — suspected-spam banner + notification report-spam action
+
+Stacks on `fix/markread-mms`. Delivers the deferred "spam auto-flag heuristics +
+notification action" TODO item (required for the Play Store messaging category) —
+conservatively, and without ever auto-hiding a conversation.
+
+**Pure heuristic.** New `domain/spam/SpamHeuristics.kt` — `looksLikeSpam(body,
+senderIsKnownContact, isGroupThread)` returns true only when ALL of: the sender is
+not a saved contact, the thread is not a group, the trimmed body is non-empty and
+short (< 200 chars), and it contains a URL. The URL regex is deliberately simple and
+documented: an explicit `http`/`https`/`www.` link, or a bare `domain.tld` (optionally
+`sub.domain.tld/path`). Biased toward false negatives — a known contact, a group, a
+long body, or a no-URL body all return false. It only ever SUSPECTS; it has no side
+effects and never moves a thread to Spam.
+
+**Banner (suspect, not auto-flag).** Suspicion is recomputed at display time from the
+thread's first INBOUND message (a thread the user opened by texting out first is judged
+on the other party's earliest reply, not the user's own text) — no schema change. A
+dismissable Material-3 banner ("Looks like spam?") sits in normal content flow at the
+top of the message area, above the list (mirrors `ThreadGestureTipsCard`; respects the
+same insets as the bubbles). "Report spam" marks spam via the existing
+`toggleSpam()`/`updateSpam` DAO path and leaves the thread (the banner is the prompt,
+so no confirm dialog). "Dismiss" persists the thread id in the new
+`SpamSuspicionRepository` (its own SharedPreferences file, pattern of `DraftRepository`)
+so the banner never returns for that thread. Banner visibility is the pure
+`shouldShowSpamBanner(suspect, isSpam, dismissed)`.
+
+**Notification action.** SMS/MMS notifications from an unknown (non-contact) 1:1 sender
+now carry a third "Report spam" action → new `ReportSpamReceiver` (`@AndroidEntryPoint`
++ field injection like `DirectReplyReceiver`; `goAsync` + summary-cancel like
+`MarkAsReadReceiver`) which sets `isSpam=1` via `ThreadRepository.updateSpam` and cancels
+the notification. Never touches `content://sms` — spam only hides + silences. Known-
+contact gating reuses `Context.lookupContactName` off the notifier's existing
+`Dispatchers.IO` call path (`IncomingNotifier.notify` gained a `senderIsKnownContact`
+flag, set by `SmsReceiver`/`SmsSyncHandler`). Action count stays ≤3: unknown 1:1 =
+Reply + Mark as read + Report spam; group threads drop Reply and never add Report spam.
+No confirm step from the shade and nothing new is posted — recovery for both the banner
+and the notification is one tap away: Settings › Privacy › Spam → "Not spam".
+
+Plain-JUnit tests for `looksLikeSpam` (positive + every guard, www/bare-domain/empty
+forms, abbreviation-dot false-positive guard) and `shouldShowSpamBanner`. No schema
+change, no Room/Mockito. Not yet verified on device (notification action rendering and
+contact-lookup gating).
+
+---
+
 ## 2026-07-23 (fix/markread-mms) — notification mark-as-read covers MMS
 
 901 tests passing (up from 887; +3 new + others merged since). **Not yet

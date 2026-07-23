@@ -55,6 +55,9 @@ class IncomingNotifier @Inject constructor(
      *                    for 1:1, "Sender — Group name" for group threads (caller composes it).
      * @param allowDirectReply false for group threads — the inline reply action is omitted
      *                    because a single-address reply can't reach the whole group.
+     * @param senderIsKnownContact whether [address] resolves to a saved contact. When false
+     *                    (and the thread is 1:1 with a real thread id), a "Report spam" action
+     *                    is offered — from a contact you know it would only be noise.
      */
     fun notify(
         notifKey: Int,
@@ -63,7 +66,8 @@ class IncomingNotifier @Inject constructor(
         title: String,
         body: String,
         privacyMode: Boolean,
-        allowDirectReply: Boolean
+        allowDirectReply: Boolean,
+        senderIsKnownContact: Boolean
     ) {
         val nm = context.getSystemService(NotificationManager::class.java)
 
@@ -140,6 +144,31 @@ class IncomingNotifier @Inject constructor(
             // Group threads omit the inline reply — it could only reach one participant.
             if (allowDirectReply) builder.addAction(replyAction)
             builder.addAction(markReadAction)
+
+            // ── Report spam action (unknown 1:1 senders only) ─────────────────────
+            // Offered only for a 1:1 thread (allowDirectReply == not-group) from a sender
+            // who is NOT a saved contact, and only when we have a real thread id to flag.
+            // Keeps the action count at ≤3: 1:1 unknown = Reply + Mark as read + Report
+            // spam; groups drop Reply and never add this, so also ≤3. No confirm step —
+            // the tap is itself deliberate; recovery is Settings › Privacy › Spam.
+            if (!senderIsKnownContact && allowDirectReply && threadId > 0L) {
+                val reportSpamPendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    notifKey xor 0x0400_0000,
+                    Intent(context, ReportSpamReceiver::class.java).apply {
+                        putExtra(ReportSpamReceiver.EXTRA_THREAD_ID, threadId)
+                        putExtra(ReportSpamReceiver.EXTRA_NOTIF_ID, notifKey)
+                    },
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                builder.addAction(
+                    NotificationCompat.Action.Builder(
+                        R.drawable.ic_notification,
+                        context.getString(R.string.report_spam),
+                        reportSpamPendingIntent
+                    ).build()
+                )
+            }
 
             // ── Conversation (MessagingStyle) rendering ───────────────────────────
             // A MessagingStyle notification tied to a long-lived conversation shortcut is

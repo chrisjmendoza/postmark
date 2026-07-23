@@ -481,11 +481,21 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       migration test extended to v20, codec/merge tests extended, new
       `PostmarkDatabaseTest` cases for the DAO partition/update. 885 tests,
       0 failures. Needs on-device verification.
-- [ ] **Spam auto-flag heuristics + notification action** — deferred out of
-      the item above: basic heuristics (unknown sender, contains URL + short
-      body) to auto-flag obvious spam with a dismissable banner, plus an
-      inline "Report spam" action on notifications from unknown numbers.
-      Required for Play Store messaging category approval.
+- [x] **Spam auto-flag heuristics + notification action** (July 23 2026) —
+      conservative, pure heuristic (`domain/spam/looksLikeSpam`): SUSPECTS spam
+      only when the sender is not a saved contact, the thread is not a group, the
+      body is short (< 200 chars) and contains a URL (http/https/www or a bare
+      `domain.tld`). It never auto-moves a thread to the Spam folder — it only
+      drives a dismissable "Looks like spam?" banner at the top of the thread
+      (recomputed live from the first inbound message; no schema change).
+      "Report spam" on the banner marks spam via the existing DAO path and leaves;
+      "Dismiss" persists per-thread in `SpamSuspicionRepository`'s own prefs file
+      (dismissed banner never returns). Notifications from unknown 1:1 senders now
+      carry a third "Report spam" action → `ReportSpamReceiver` (goAsync, mirrors
+      `MarkAsReadReceiver`) sets `isSpam=1` and cancels the notification (+ summary
+      if last); group threads drop Reply so the action count stays ≤3. Recovery for
+      both paths: Settings › Privacy › Spam → "Not spam". Needs on-device
+      verification (notification action rendering, contact-lookup gating).
 
 ### Search — remaining items
 - [x] **Thread filter chip** — done.

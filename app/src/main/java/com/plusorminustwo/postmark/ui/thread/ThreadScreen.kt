@@ -273,6 +273,8 @@ fun ThreadScreen(
     val threadTipsDismissed by viewModel.threadTipsDismissed.collectAsState()
     // This thread's pinned messages (oldest first) for the Pinned messages panel.
     val pinnedMessages by viewModel.pinnedMessages.collectAsState()
+    // Whether the conservative "Looks like spam?" banner should show for this thread.
+    val spamBannerVisible by viewModel.spamBannerVisible.collectAsState()
 
     // ── Stable lambdas ────────────────────────────────────────────────────────
     // Wrapped in remember(viewModel) so the same function reference is reused
@@ -383,6 +385,10 @@ fun ThreadScreen(
     val onAdjustFontScale         = remember(viewModel) { { delta: Float -> viewModel.adjustFontScale(delta) } }
     val onResetFontScale          = remember(viewModel) { { viewModel.resetFontScale() } }
     val onDismissThreadTips       = remember(viewModel) { { viewModel.dismissThreadTips() } }
+    val onDismissSpamSuspicion    = remember(viewModel) { { viewModel.dismissSpamSuspicion() } }
+    // Banner "Report spam": mark spam via the existing DAO path (thread hides + silences),
+    // then leave the thread — the banner is itself the prompt, so no confirm dialog.
+    val onReportSpamFromBanner    = remember(viewModel, onBack) { { viewModel.toggleSpam(); onBack() } }
     val onVoiceMemoEvent          = remember(viewModel) { { event: VoiceMemoEvent -> viewModel.onVoiceMemoEvent(event) } }
     val onAudioPlayPause          = remember(viewModel) { { uri: String -> viewModel.playPauseAudio(uri) } }
     val onAudioSeek               = remember(viewModel) { { uri: String, fraction: Float -> viewModel.seekAudio(uri, fraction) } }
@@ -410,6 +416,9 @@ fun ThreadScreen(
         reactionsLocalNoticeEvent = viewModel.reactionsLocalNoticeEvent,
         threadTipsDismissed = threadTipsDismissed,
         onDismissThreadTips = onDismissThreadTips,
+        spamBannerVisible = spamBannerVisible,
+        onReportSpamSuspicion = onReportSpamFromBanner,
+        onDismissSpamSuspicion = onDismissSpamSuspicion,
         onBack = onBack,
         onViewContact = onViewContact,
         onViewStats = onViewStats,
@@ -524,6 +533,11 @@ private fun ThreadContent(
     // message count (see shouldShowThreadTips) so it never shows on an empty thread.
     threadTipsDismissed: Boolean = true,
     onDismissThreadTips: () -> Unit = {},
+    // Conservative "Looks like spam?" banner at the top of the message area (unknown sender +
+    // short body + URL, recomputed live). Report → mark spam + leave; Dismiss → persist.
+    spamBannerVisible: Boolean = false,
+    onReportSpamSuspicion: () -> Unit = {},
+    onDismissSpamSuspicion: () -> Unit = {},
     onBack: () -> Unit,
     onViewContact: () -> Unit = {},
     onViewStats: () -> Unit,
@@ -1319,8 +1333,20 @@ private fun ThreadContent(
                         )
                 )
             }
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Suspected-spam banner in normal content flow at the top of the message area:
+                // below the top bar (scaffold inner padding) and above the list, so it never
+                // overlaps a message and respects the same insets as the bubbles below it.
+                if (spamBannerVisible) {
+                    SpamSuspicionBanner(
+                        onReportSpam = onReportSpamSuspicion,
+                        onDismiss = onDismissSpamSuspicion
+                    )
+                }
+                LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
                 state = listState,
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
@@ -1386,6 +1412,7 @@ private fun ThreadContent(
                         )
                     }
                 }
+            }
             }
 
             // Full-screen image viewer — pages across every image in the thread, not just
@@ -2759,6 +2786,57 @@ private fun DeliveryStatusIndicator(
  * default 48dp min-size satisfies the touch-target floor). Uses only colorScheme roles
  * so it reads correctly in both light and dark themes.
  */
+/**
+ * Conservative suspected-spam banner shown at the top of the message area when the thread's
+ * first inbound message trips the heuristic (unknown sender + short body + URL) and the user
+ * hasn't dismissed it. Mirrors [ThreadGestureTipsCard]'s Material 3 surface and uses only
+ * colorScheme roles, so it reads in light and dark. NOT a Dialog — it sits in normal content
+ * flow, so it respects the four-edge inset contract like the message list around it.
+ *
+ * "Report spam" marks the thread spam (hides into the Spam folder + silences it) and leaves —
+ * the banner is itself the prompt, so there is no confirm step; recovery is Settings › Privacy
+ * › Spam → "Not spam". "Dismiss" persists so the banner never returns for this thread.
+ */
+@Composable
+private fun SpamSuspicionBanner(
+    onReportSpam: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "Looks like spam?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "This message is from an unknown number and contains a link.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(onClick = onDismiss) { Text("Dismiss") }
+            TextButton(onClick = onReportSpam) { Text("Report spam") }
+        }
+    }
+}
+
 @Composable
 private fun ThreadGestureTipsCard(onDismiss: () -> Unit) {
     Surface(

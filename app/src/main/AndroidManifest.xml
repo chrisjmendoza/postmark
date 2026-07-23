@@ -144,6 +144,11 @@
             android:name=".service.sms.MarkAsReadReceiver"
             android:exported="false" />
 
+        <!-- Handles the "Report spam" action on notifications from unknown senders -->
+        <receiver
+            android:name=".service.sms.ReportSpamReceiver"
+            android:exported="false" />
+
         <!-- Receives the PendingIntent from SmsManager.sendMultimediaMessage() -->
         <receiver
             android:name=".service.sms.MmsSentReceiver"

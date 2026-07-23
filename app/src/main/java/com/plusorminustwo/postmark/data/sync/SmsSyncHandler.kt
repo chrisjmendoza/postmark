@@ -900,7 +900,8 @@ class SmsSyncHandler @Inject constructor(
         if (activeThreadTracker.activeThreadId == threadId) return
         if (!thread.notificationsEnabled || thread.isMuted || thread.isSpam) return
         val isGroup = thread.participants.size > 1
-        val senderName = context.lookupContactName(message.address)
+        val contactName = context.lookupContactName(message.address)
+        val senderName = contactName
             ?: threadRepository.getDisplayNameByAddress(message.address)
             ?: message.address.ifEmpty { "Unknown" }
         val title = if (isGroup) {
@@ -918,7 +919,10 @@ class SmsSyncHandler @Inject constructor(
             title = title,
             body = message.previewText,
             privacyMode = privacyModeRepository.isEnabled(),
-            allowDirectReply = !isGroup
+            allowDirectReply = !isGroup,
+            // Blank/null contact lookup = unsaved number → offer Report spam (1:1 only; the
+            // notifier itself also gates on not-group and a real thread id).
+            senderIsKnownContact = !contactName.isNullOrBlank()
         )
     }
 

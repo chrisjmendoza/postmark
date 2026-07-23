@@ -24,6 +24,7 @@ import com.plusorminustwo.postmark.data.preferences.BubbleStylePreferenceReposit
 import com.plusorminustwo.postmark.data.preferences.ChatBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.DraftRepository
 import com.plusorminustwo.postmark.data.preferences.GestureHintsRepository
+import com.plusorminustwo.postmark.data.preferences.SpamSuspicionRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -37,6 +38,8 @@ import com.plusorminustwo.postmark.domain.model.recipientsFor
 import com.plusorminustwo.postmark.domain.model.decodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
+import com.plusorminustwo.postmark.domain.spam.looksLikeSpam
+import com.plusorminustwo.postmark.domain.spam.shouldShowSpamBanner
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEffect
@@ -136,6 +139,7 @@ class ThreadViewModel @Inject constructor(
     private val chatBackgroundImageStore: ChatBackgroundImageStore,
     private val appAccentPrefRepo: AppAccentPreferenceRepository,
     private val draftRepository: DraftRepository,
+    private val spamSuspicionRepository: SpamSuspicionRepository,
     private val gestureHintsRepo: GestureHintsRepository,
     private val voiceMemoRecorder: VoiceMemoRecorder,
     private val activeThreadTracker: ActiveThreadTracker
@@ -330,6 +334,44 @@ class ThreadViewModel @Inject constructor(
         }
         .flowOn(Dispatchers.IO)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    // ── Suspected-spam banner ───────────────────────────────────────────────────
+    // Conservative and display-time only: suspicion is recomputed from the thread's first
+    // inbound message and NEVER auto-moves the thread to the Spam folder (see domain/spam).
+    // No schema change — only the user's per-thread dismissal is persisted.
+
+    /** True once the user dismisses the banner for this thread; seeded from prefs. */
+    private val _spamSuspicionDismissed = MutableStateFlow(spamSuspicionRepository.isDismissed(threadId))
+
+    /** Whether this thread's address resolves to a saved contact — looked up off-main on each
+     *  address change. A known contact suppresses the banner outright. */
+    private val senderIsKnownContact: StateFlow<Boolean> = threadRepository
+        .observeById(threadId)
+        .map { it?.address.orEmpty() }
+        .distinctUntilChanged()
+        .map { address -> address.isNotEmpty() && !context.lookupContactName(address).isNullOrBlank() }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /**
+     * Whether to show the "Looks like spam?" banner. Suspect when [looksLikeSpam] holds for
+     * the thread's FIRST RECEIVED message — the cold inbound that would define spam; a thread
+     * the user opened by texting out first is judged on the other party's earliest reply, not
+     * the user's own outgoing text. Hidden once the thread is actually marked spam or the
+     * banner has been dismissed.
+     */
+    val spamBannerVisible: StateFlow<Boolean> = combine(
+        threadRepository.observeById(threadId),
+        renderPayload,
+        senderIsKnownContact,
+        _spamSuspicionDismissed
+    ) { thread, payload, known, dismissed ->
+        val isSpam  = thread?.isSpam ?: false
+        val isGroup = (thread?.participants?.size ?: 0) > 1
+        val firstInbound = payload.messages.firstOrNull { !it.isSent }?.body
+        val suspect = firstInbound != null && looksLikeSpam(firstInbound, known, isGroup)
+        shouldShowSpamBanner(suspect, isSpam, dismissed)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     // Named holder for the action-related sub-state to stay within combine's 5-arg limit.
     private data class InnerState(
@@ -1303,6 +1345,13 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             threadRepository.updateSpam(threadId, !current)
         }
+    }
+
+    /** Permanently dismisses this thread's suspected-spam banner (persists to prefs). The
+     *  banner recomputes suspicion live, so without this it would return every time. */
+    fun dismissSpamSuspicion() {
+        spamSuspicionRepository.dismiss(threadId)
+        _spamSuspicionDismissed.value = true
     }
 
     // ── Block number ──────────────────────────────────────────────────────────
