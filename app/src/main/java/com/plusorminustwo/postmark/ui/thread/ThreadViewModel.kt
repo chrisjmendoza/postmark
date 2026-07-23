@@ -27,6 +27,7 @@ import com.plusorminustwo.postmark.data.preferences.DraftRepository
 import com.plusorminustwo.postmark.data.preferences.GestureHintsRepository
 import com.plusorminustwo.postmark.data.preferences.SpamSuspicionRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
+import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
@@ -36,6 +37,8 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.recipientsFor
+import com.plusorminustwo.postmark.domain.reaction.composeReactionFallback
+import com.plusorminustwo.postmark.domain.reaction.reactionFallbackRoundTrips
 import com.plusorminustwo.postmark.domain.model.decodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.model.encodeAttachmentsJson
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
@@ -137,6 +140,7 @@ class ThreadViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val smsManagerWrapper: SmsManagerWrapper,
     private val mmsManagerWrapper: MmsManagerWrapper,
+    private val reactionParser: ReactionFallbackParser,
     private val timestampPrefRepo: TimestampPreferenceRepository,
     private val fontScaleRepo: BubbleFontScaleRepository,
     private val bubbleStyleRepo: BubbleStylePreferenceRepository,
@@ -643,7 +647,11 @@ class ThreadViewModel @Inject constructor(
             val myReaction = message.reactions.find {
                 it.senderAddress == SELF_ADDRESS && it.emoji == emoji
             }
-            if (myReaction != null) {
+            val isRemoval = myReaction != null
+            // The local pill toggles immediately and unconditionally — sending the fallback
+            // is a best-effort side channel, never a precondition for the on-device state.
+            // Sync's reactionExists dedupe stops the re-imported sent fallback double-inserting.
+            if (isRemoval) {
                 messageRepository.deleteReaction(messageId, SELF_ADDRESS, emoji)
             } else {
                 messageRepository.insertReaction(
@@ -659,14 +667,63 @@ class ThreadViewModel @Inject constructor(
             }
             // Reacting completes the user's intent: close the popup AND leave selection mode.
             exitSelectionMode()
-            // First-ever reaction (add OR remove): reactions live only on this device and
-            // are never sent, so a private note doesn't silently masquerade as a two-way
-            // reaction. Show the notice once, then mark it shown forever.
-            if (!gestureHintsRepo.reactionsLocalNoticeShown.value) {
+
+            // Also SEND the Android-style fallback SMS so the recipient's app shows it
+            // (v1: 1:1 text targets only). Removal toggles send the "removed" variant.
+            val sent = maybeSendReactionFallback(uiState.value.thread, message, emoji, isRemoval)
+
+            /* The "reactions stay on your phone" notice now fires ONLY when a toggle-ON stays
+             * local-only (media/group/round-trip-unsafe target) — a sent reaction reaches the
+             * other person, and a removal is never a surprise. Shown once, then never again;
+             * the pref key was bumped so the reworded copy surfaces once for existing users. */
+            if (!isRemoval && !sent && !gestureHintsRepo.reactionsLocalNoticeShown.value) {
                 gestureHintsRepo.markReactionsLocalNoticeShown()
                 _reactionsLocalNoticeEvent.tryEmit(REACTIONS_LOCAL_NOTICE)
             }
         }
+    }
+
+    /**
+     * Best-effort send of the Android-Messages-style reaction fallback SMS for reacting
+     * [emoji] to [target] in [thread]. Returns true only when a fallback was actually
+     * dispatched; false (local-only) for every unsupported or unsafe case.
+     *
+     * v1 scope (decisions in docs/CHANGELOG.md): 1:1 threads with a non-blank text target
+     * only — media-only targets and group threads stay local-only. Every candidate send is
+     * gated through OUR OWN parser+matcher ([reactionFallbackRoundTrips]): unless the
+     * composed string parses back and resolves to exactly [target], it is left local-only
+     * rather than risk landing a reaction on the wrong message on the recipient's phone.
+     */
+    private suspend fun maybeSendReactionFallback(
+        thread: Thread?,
+        target: Message,
+        emoji: String,
+        isRemoval: Boolean,
+    ): Boolean {
+        if (thread == null) return false
+        // 1:1 only, and only against a real text body (never media-only).
+        if (recipientsFor(thread).size != 1) return false
+        if (target.body.isBlank()) return false
+        // Sending writes to content://sms — only the default SMS app may do that.
+        if (!context.isDefaultSmsApp()) return false
+
+        val composed = composeReactionFallback(emoji, target.body, isRemoval) ?: return false
+
+        // Belt-and-braces: match the quote against the thread's real message bubbles (the
+        // target INCLUDED — it is what the quote must resolve to). Only reaction fallbacks are
+        // excluded, mirroring sync's pool, so the quote can't latch onto another fallback.
+        val candidates = uiState.value.messages.filter { !reactionParser.isReactionFallback(it.body) }
+        val safe = reactionFallbackRoundTrips(
+            composed = composed,
+            targetMessageId = target.id,
+            quoteOf = { reactionParser.parse(it)?.quotedText },
+            findOriginalId = { reactionParser.findOriginalMessage(it, candidates)?.id },
+        )
+        if (!safe) return false
+
+        val now = System.currentTimeMillis()
+        dispatchSmsSend(thread.address, composed, -now, now, notifyScroll = false)
+        return true
     }
 
     // ── Timestamps ────────────────────────────────────────────────────────────
@@ -1281,36 +1338,52 @@ class ThreadViewModel @Inject constructor(
                 }
             } else {
                 // ── SMS path (existing behaviour) ─────────────────────────────
-                /* Ordering rule: if this thread already has queued (unsent) messages waiting
-                 * for service, a new send must NOT go out immediately — it would overtake the
-                 * earlier ones. Instead it joins the back of the queue as a QUEUED row and the
-                 * SendQueueWorker flushes the whole thread in timestamp order once service is
-                 * back. With an empty queue, send immediately as before. */
-                val joinQueue = messageRepository.hasQueuedInThread(threadId)
-                val optimistic = Message(
-                    id             = tempId,
-                    threadId       = threadId,
-                    address        = thread.address,
-                    body           = text,
-                    timestamp      = now,
-                    isSent         = true,
-                    type           = Telephony.Sms.MESSAGE_TYPE_SENT,
-                    deliveryStatus = if (joinQueue) DELIVERY_STATUS_QUEUED else DELIVERY_STATUS_PENDING
-                )
-                messageRepository.insert(optimistic)
-                /* Emit the optimistic row's id so the UI waits for it — same rationale
-                 * as the MMS path above. */
-                _scrollToBottomEvent.tryEmit(tempId)
-                if (joinQueue) {
-                    SendQueueWorker.enqueue(context)
-                } else {
-                    smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
-                }
+                // Shared with the outbound-reaction path (dispatchSmsSend); notifyScroll=true
+                // keeps the send auto-scroll that a user-composed message expects.
+                dispatchSmsSend(thread.address, text, tempId, now, notifyScroll = true)
             }
             _isSending.value = false
             } finally {
                 android.os.Trace.endSection()
             }
+        }
+    }
+
+    /**
+     * The queue-aware 1:1 SMS dispatch shared by [sendMessage]'s SMS branch and the
+     * outbound-reaction path ([maybeSendReactionFallback]).
+     *
+     * Inserts an optimistic negative-id row carrying [body], then either parks it as
+     * [DELIVERY_STATUS_QUEUED] and kicks [SendQueueWorker] (when the thread already has
+     * queued sends waiting for service, so this one can't overtake them) or sends it
+     * immediately as [DELIVERY_STATUS_PENDING]. [notifyScroll] emits the scroll-to-bottom
+     * event a user-composed send wants, but a reaction fallback suppresses (its transient
+     * bubble shouldn't yank the list).
+     */
+    private suspend fun dispatchSmsSend(
+        address: String,
+        body: String,
+        tempId: Long,
+        now: Long,
+        notifyScroll: Boolean,
+    ) {
+        val joinQueue = messageRepository.hasQueuedInThread(threadId)
+        val optimistic = Message(
+            id             = tempId,
+            threadId       = threadId,
+            address        = address,
+            body           = body,
+            timestamp      = now,
+            isSent         = true,
+            type           = Telephony.Sms.MESSAGE_TYPE_SENT,
+            deliveryStatus = if (joinQueue) DELIVERY_STATUS_QUEUED else DELIVERY_STATUS_PENDING
+        )
+        messageRepository.insert(optimistic)
+        if (notifyScroll) _scrollToBottomEvent.tryEmit(tempId)
+        if (joinQueue) {
+            SendQueueWorker.enqueue(context)
+        } else {
+            smsManagerWrapper.sendTextMessage(address, body, tempId)
         }
     }
 
@@ -1475,10 +1548,13 @@ class ThreadViewModel @Inject constructor(
 
         val DEFAULT_QUICK_EMOJIS = listOf("❤️", "👍", "😂", "😮", "🔥")
 
-        /** One-time Snackbar shown after the user's first reaction toggle — reactions are
-         *  local annotations, never transmitted, so the pill UI's two-way look is set straight. */
+        /** One-time Snackbar shown the first time a toggle-ON stays local-only (media or
+         *  group target, or a round-trip-unsafe quote). Reactions to 1:1 text messages now
+         *  DO send as Android-style fallback texts — this notice sets expectations only for
+         *  the cases that still can't. */
         const val REACTIONS_LOCAL_NOTICE =
-            "Reactions stay on your phone — the other person doesn't see them."
+            "This reaction stays on your phone — reactions to media and group messages " +
+                "aren't sent as texts yet."
 
         /**
          * Immutable snapshot of the long-press / selection state. The ViewModel keeps these

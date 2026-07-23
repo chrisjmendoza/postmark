@@ -11,10 +11,13 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_DELIVERED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_QUEUED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
+import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.data.sync.SyncLogger
 import com.plusorminustwo.postmark.domain.logging.redactPhone
+import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.reaction.shouldRequeueOrphanedReactionFallback
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +46,7 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
     @Inject lateinit var syncLogger: SyncLogger
     @Inject lateinit var smsSyncHandler: SmsSyncHandler
     @Inject lateinit var multipartSendTracker: MultipartSendTracker
+    @Inject lateinit var reactionParser: ReactionFallbackParser
 
     override fun onReceive(context: Context, intent: Intent) {
         val messageId  = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
@@ -115,8 +119,13 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                                 is MultipartSendTracker.Decision.MarkFailed -> {
                                     /* A no-service / radio-off failure isn't a real failure — the
                                      * message can go out unchanged when service returns. Park it in
-                                     * the send queue instead of marking it FAILED. */
-                                    applyFailedOutcome(context, roomId, smsRowId, isQueueWorthyFailure(resultCode))
+                                     * the send queue instead of marking it FAILED. address/body ride
+                                     * the last part (present for single-part reaction fallbacks) and
+                                     * seed the orphaned-fallback requeue below. */
+                                    applyFailedOutcome(
+                                        context, roomId, smsRowId, isQueueWorthyFailure(resultCode),
+                                        address, intent.getStringExtra(EXTRA_BODY)
+                                    )
                                 }
                                 is MultipartSendTracker.Decision.None -> {
                                     /* Still awaiting parts, an ambiguous part, or already decided —
@@ -175,7 +184,10 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                 }
             }
             isKnownFailure -> {
-                applyFailedOutcome(context, roomId, smsRowId, isQueueWorthyFailure(resultCode))
+                applyFailedOutcome(
+                    context, roomId, smsRowId, isQueueWorthyFailure(resultCode),
+                    address, intent.getStringExtra(EXTRA_BODY)
+                )
             }
             // resultCode == 0: ambiguous — leave as PENDING.
         }
@@ -193,9 +205,26 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
         roomId: Long,
         smsRowId: Long,
         queueWorthy: Boolean,
+        recoveryAddress: String? = null,
+        recoveryBody: String? = null,
     ) {
         if (queueWorthy) {
             messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_QUEUED)
+            /* Orphaned reaction-fallback guard: a sent reaction fallback is resolved out of
+             * Room by incremental sync (never a bubble), so the update above finds no row at
+             * roomId and the QUEUED park is a silent no-op — the transmission would be dropped
+             * when service returns. When the failed body is a fallback and no row exists, park
+             * a fresh QUEUED optimistic row so SendQueueWorker resends it (it then syncs and
+             * resolves normally, deduped against the local pill). */
+            if (shouldRequeueOrphanedReactionFallback(
+                    roomRowExists = messageRepository.getById(roomId) != null,
+                    isReactionFallback = recoveryBody?.let { reactionParser.isReactionFallback(it) } == true,
+                    address = recoveryAddress,
+                    body = recoveryBody,
+                )
+            ) {
+                requeueOrphanedReactionFallback(context, recoveryAddress!!, recoveryBody!!)
+            }
             SendQueueWorker.enqueue(context)
         } else {
             messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
@@ -203,6 +232,37 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
              * (e.g. Google Messages) don't keep showing it as pending. */
             mirrorProviderStatus(context, smsRowId, Telephony.Sms.STATUS_FAILED)
         }
+    }
+
+    /**
+     * Parks a fresh QUEUED optimistic row for a reaction fallback whose real send failed
+     * for want of service but whose Room row was already resolved away by sync. [SendQueueWorker]
+     * flushes it (negative id → fresh provider insert) once service returns; the resulting
+     * provider row syncs and resolves as a reaction like any other, deduped against the local
+     * pill by reactionExists. Never deletes anything — a duplicate provider row (both resolve
+     * to one Reaction) is the accepted cost of not dropping the send.
+     */
+    private suspend fun requeueOrphanedReactionFallback(context: Context, address: String, body: String) {
+        val threadId = try {
+            Telephony.Threads.getOrCreateThreadId(context, address)
+        } catch (e: Exception) {
+            syncLogger.logError("SmsSentDelivery", "requeue: getOrCreateThreadId failed for ${address.redactPhone()} — fallback not requeued", e)
+            return
+        }
+        val now = System.currentTimeMillis()
+        messageRepository.insert(
+            Message(
+                id = -now,
+                threadId = threadId,
+                address = address,
+                body = body,
+                timestamp = now,
+                isSent = true,
+                type = Telephony.Sms.MESSAGE_TYPE_SENT,
+                deliveryStatus = DELIVERY_STATUS_QUEUED,
+            )
+        )
+        syncLogger.log("SmsSentDelivery", "requeued orphaned reaction fallback for ${address.redactPhone()} (no Room row at roomId)")
     }
 
     /** Mirrors a send outcome into `content://sms` so other apps see it (no-op if smsRowId absent). */
