@@ -32,13 +32,16 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       fallback look like for a reaction to a caption-less image / voice memo
       (placeholder quote? no text part?) — capture via SyncLogger before
       deciding whether media-placeholder matching is worth building.
-- [x] **Reaction chip position** (reworked July 16 2026) — pills are a layout
-      child of the bubble Column with a custom `layout` modifier reporting
-      only their bottom half: they straddle the bubble's bottom-end corner
-      (Google Messages look, same half-out treatment as the top-bar date
-      pill) and the overhang space is reserved, so the timestamp and next
-      message are pushed down instead of collided with. Replaces two earlier
-      offset-badge attempts that painted outside layout and collided.
+- [x] **Reaction chip position** (moved below the bubble July 22 2026) — pills
+      are a plain layout child of the bubble Column, sitting in their own row
+      just below the bubble (Google Messages look, but below rather than
+      overlapping the corner). They hug the bubble's inner / center-facing
+      bottom corner via `ColumnScope.align` — Start for sent, End for received —
+      which overrides the Column's outer-edge alignment so the bubble still hugs
+      the screen edge. Full height is reserved by normal Column layout, so the
+      timestamp and next message are pushed down instead of collided with.
+      Replaces the earlier corner-straddle `layout` modifier (and, before that,
+      two offset-badge attempts that painted outside layout and collided).
 - [x] **Reaction pill overflow** — FlowRow replaces Row in `ReactionPills`;
       bubble width captured via `onSizeChanged` constrains pills so they
       wrap to a second line instead of overflowing on short messages.
@@ -675,10 +678,11 @@ instance, but flagged:
 - [x] **Reaction chip theming** — ReactionPills uses
       MaterialTheme.colorScheme.primaryContainer / surfaceContainer /
       primary / outlineVariant; no hardcoded hex values.
-- [x] **Reaction chip overflow handling** (July 16 2026) — pills are
-      End-anchored in the bubble Column: a row wider than a short bubble
-      grows leftward past the bubble edge, and FlowRow wraps at the
-      280 dp bubble max width instead of overflowing right.
+- [x] **Reaction chip overflow handling** (July 16 2026; realigned July 22
+      2026) — pills anchor to the bubble's inner bottom corner in the bubble
+      Column: a row wider than a short bubble grows inward past the bubble
+      edge (toward center), and FlowRow wraps at the 280 dp bubble max width
+      instead of overflowing off-screen.
 - [x] **Haptic feedback on reaction toggle** (July 22 2026) — `HapticFeedbackType.
       LongPress` via `LocalHapticFeedback` now fires at all three real
       reaction-toggle tap sites in `ThreadScreen.kt`: the reaction pill tap
