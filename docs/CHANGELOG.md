@@ -4,6 +4,45 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (fix/dynamic-text-reflow) — bubbles and chrome reflow at large text sizes instead of clipping
+
+Closed the Tier 4 accessibility TODO with five fixes an audit found:
+**Bubble/preview text overlap** — pinch-scale (ThreadScreen) and the Appearance
+screen's preview bubble both scaled `fontSize` by the user's chosen factor but
+left `bodyMedium`'s fixed 20sp `lineHeight` alone, so at 1.6× pinch (compounded
+by a large system font size) multi-line captions and message bodies overlapped
+line-to-line. Extracted `TextStyle.withBubbleScale(scale)`
+(`ui/theme/BubbleTextScale.kt`) that scales both dimensions together, guarding
+`TextUnit.Unspecified` so it never produces a NaN-based unit — all four call
+sites now go through it, with a small unit-test suite (compose-ui's `TextStyle`
+compiles fine on the plain JUnit classpath already, no Robolectric needed).
+**LetterAvatar clipping** — the initial's `fontSize` was computed from the dp
+diameter via `.sp` (which re-applies system fontScale), while the surrounding
+`Box` stayed a fixed dp size — at 2× fontScale the letter outgrew its circle.
+Now converts dp→sp through `LocalDensity` only, so the letter's rendered size
+tracks the (fontScale-neutral) circle it sits in. **Top-bar title
+wrap/clip** — ThreadScreen's contact-name title and the selection bar's "N
+selected" title had no `maxLines`, so a long name could wrap and clip inside
+the 64dp bar; both now get `maxLines = 1` + `TextOverflow.Ellipsis`.
+**OnboardingScreen unreachable content** — a fixed `fillMaxSize` +
+`Arrangement.Center` column with no scroll meant that at max font/display
+size the primary "Set as Default SMS App" button could be pushed off-screen
+with no way to reach it; the column is now `verticalScroll`-able and wrapped
+in `safeDrawingPadding()` (this also closes the Tier 3 "OnboardingScreen
+bottom clipping on short screens" follow-up), and its button uses
+`heightIn(min = 52.dp)` instead of a fixed `height` so it can grow for a
+scaled-up label (house idiom, cf. the reply bar's `heightIn(min = 48.dp)`
+rows). **Chip label wrapping** — FilterChip/InputChip labels across
+ThreadScreen's selection scope chips, SearchScreen's filter cluster,
+ConversationsScreen's unread chip, and NewConversationScreen's recipient
+chips now cap at `maxLines = 1`; M3's chip height is spec-fixed so a slightly
+cropped tall glyph at extreme scale is accepted, not fought. Explicitly left
+alone as cosmetic: StatsScreen's fixed-width row labels, SpamSuspicionBanner
+button crowding, BarChart canvas labels. 954 tests total (5 new
+`BubbleTextScaleTest` cases), all passing. **Needs on-device verification
+with system font size at max**: bubble multi-line text at pinch 1.6× + font
+max, avatar letters, onboarding scroll reaching the button, top-bar title
+ellipsis.
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 
 **Phantom gap between bubble and reaction pills** (found on-device right after

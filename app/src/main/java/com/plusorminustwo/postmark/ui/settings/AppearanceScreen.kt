@@ -41,6 +41,7 @@ import com.plusorminustwo.postmark.ui.components.accentSubtitle
 import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.ThemePreference
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
+import com.plusorminustwo.postmark.ui.theme.withBubbleScale
 import java.io.File
 
 /** Postmark's default sent-bubble/primary accent (matches ContactPalette's "Blue"
@@ -412,16 +413,12 @@ private fun FontScaleSettingRow(
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Text(
                     text = "Hey, are you free this weekend?",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = MaterialTheme.typography.bodyMedium.fontSize * scale
-                    )
+                    style = MaterialTheme.typography.bodyMedium.withBubbleScale(scale)
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = "Preview",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = MaterialTheme.typography.labelSmall.fontSize * scale
-                    ),
+                    style = MaterialTheme.typography.labelSmall.withBubbleScale(scale),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

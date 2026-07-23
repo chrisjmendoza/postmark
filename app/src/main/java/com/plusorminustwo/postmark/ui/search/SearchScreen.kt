@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -245,7 +246,7 @@ private fun FilterChips(
             FilterChip(
                 selected = byContact,
                 onClick  = { onSortChange(if (byContact) SortOrder.MOST_RECENT else SortOrder.BY_CONTACT) },
-                label    = { Text("By contact") },
+                label    = { Text("By contact", maxLines = 1) },
                 leadingIcon = {
                     Icon(
                         Icons.Default.SortByAlpha,
@@ -261,7 +262,7 @@ private fun FilterChips(
             FilterChip(
                 selected = oldestFirst,
                 onClick  = { onOldestFirstChange(!oldestFirst) },
-                label    = { Text("Oldest first") },
+                label    = { Text("Oldest first", maxLines = 1) },
                 leadingIcon = if (oldestFirst) {
                     {
                         Icon(
@@ -277,14 +278,14 @@ private fun FilterChips(
             FilterChip(
                 selected = filters.isMms == false,
                 onClick  = { onProtocolFilter(if (filters.isMms == false) null else false) },
-                label    = { Text("SMS") }
+                label    = { Text("SMS", maxLines = 1) }
             )
         }
         item {
             FilterChip(
                 selected = filters.isMms == true,
                 onClick  = { onProtocolFilter(if (filters.isMms == true) null else true) },
-                label    = { Text("MMS") }
+                label    = { Text("MMS", maxLines = 1) }
             )
         }
         item {
@@ -293,7 +294,7 @@ private fun FilterChips(
                 onClick = {
                     onFiltersChange(filters.copy(isSentOnly = if (filters.isSentOnly == true) null else true))
                 },
-                label = { Text("Sent") }
+                label = { Text("Sent", maxLines = 1) }
             )
         }
         item {
@@ -302,7 +303,7 @@ private fun FilterChips(
                 onClick = {
                     onFiltersChange(filters.copy(isSentOnly = if (filters.isSentOnly == false) null else false))
                 },
-                label = { Text("Received") }
+                label = { Text("Received", maxLines = 1) }
             )
         }
         item {
@@ -310,7 +311,7 @@ private fun FilterChips(
             FilterChip(
                 selected = rangeSelected,
                 onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.TODAY) },
-                label = { Text("Today") }
+                label = { Text("Today", maxLines = 1) }
             )
         }
         item {
@@ -318,7 +319,7 @@ private fun FilterChips(
             FilterChip(
                 selected = rangeSelected,
                 onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.LAST_7_DAYS) },
-                label = { Text("7 days") }
+                label = { Text("7 days", maxLines = 1) }
             )
         }
         item {
@@ -326,7 +327,7 @@ private fun FilterChips(
             FilterChip(
                 selected = rangeSelected,
                 onClick = { onDateRangeChange(if (rangeSelected) SearchDateRange.ALL_TIME else SearchDateRange.LAST_30_DAYS) },
-                label = { Text("30 days") }
+                label = { Text("30 days", maxLines = 1) }
             )
         }
         item {
@@ -336,7 +337,7 @@ private fun FilterChips(
                 onClick = {
                     if (reactionActive) onClearReactionFilter() else onReactionChipClick()
                 },
-                label = { Text(filters.reactionEmoji ?: "Reaction") },
+                label = { Text(filters.reactionEmoji ?: "Reaction", maxLines = 1) },
                 trailingIcon = if (reactionActive) {
                     { Icon(Icons.Default.Clear, contentDescription = "Clear reaction filter",
                         modifier = Modifier.size(FilterChipDefaults.IconSize)) }
@@ -350,7 +351,7 @@ private fun FilterChips(
                     if (selectedThread != null) onClearThreadFilter()
                     else onThreadChipClick()
                 },
-                label = { Text(selectedThread?.displayName ?: "Thread") },
+                label = { Text(selectedThread?.displayName ?: "Thread", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 trailingIcon = if (selectedThread != null) {
                     { Icon(Icons.Default.Clear, contentDescription = "Clear thread filter",
                         modifier = Modifier.size(FilterChipDefaults.IconSize)) }

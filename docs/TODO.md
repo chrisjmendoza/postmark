@@ -696,9 +696,11 @@ instance, but flagged:
       alone, while `EmojiPickerBottomSheet` explicitly adds
       `navigationBarsPadding()` — inconsistent; if any clips on-device,
       it's a one-line fix.
-- [ ] **OnboardingScreen bottom clipping on short screens** — content is
-      vertically centered with no `safeDrawingPadding()`; "Skip for now"
-      could clip under the nav bar if content overflows. Low priority.
+- [x] **OnboardingScreen bottom clipping on short screens** (July 23 2026,
+      `fix/dynamic-text-reflow`) Closed as part of the dynamic-text-size fix
+      below — the column is now `verticalScroll`-able and wrapped in
+      `safeDrawingPadding()`, so content that overflows a short screen scrolls
+      instead of clipping under the nav bar. Needs on-device verification.
 
 ### Delivery timestamps + read receipts
 - [ ] **Store sentAt + deliveredAt** — add `sentAt: Long?` and
@@ -1120,8 +1122,31 @@ instance, but flagged:
         "Deselect all messages on {day}". This was the only gap in
         ThreadScreen; the edit is in `DateHeader`, a region none of tonight's
         concurrent ThreadScreen PRs touch.
-- [ ] **Dynamic text size support** — bubbles should reflow at large
-      text sizes, not clip.
+- [x] **Dynamic text size support** — bubbles should reflow at large
+      text sizes, not clip. (July 23 2026, `fix/dynamic-text-reflow`)
+      Fixed five defects found by audit: (1) bubble pinch-scale and the
+      Appearance preview scaled `fontSize` but not `lineHeight`, so at high
+      scale multi-line text overlapped — extracted `TextStyle.withBubbleScale`
+      (`ui/theme/BubbleTextScale.kt`, unit-tested) so all four sites scale both
+      by the same factor; (2) `LetterAvatar`'s letter re-applied system
+      fontScale on top of a fixed-dp circle and clipped at 2× — now converts
+      dp→sp through density only; (3) ThreadScreen top-bar titles (contact
+      name, "N selected") had no `maxLines`, so long names wrapped/clipped in
+      the 64dp bar — added `maxLines = 1` + ellipsis; (4) OnboardingScreen
+      wasn't scrollable, pushing "Set as Default SMS App" off-screen at max
+      display size — now `verticalScroll` + `safeDrawingPadding()` (also
+      closes the Tier 3 follow-up above), and its button is `heightIn(min =
+      52.dp)` instead of a fixed `height` (house idiom, cf. reply bar); (5)
+      FilterChip/InputChip labels across ThreadScreen, SearchScreen,
+      ConversationsScreen, NewConversationScreen now cap at `maxLines = 1` so
+      long labels never wrap into a clipped second line — M3's chip height is
+      spec-fixed, so a cropped tall glyph at extreme scale is an accepted
+      framework limitation, not something worth fighting. Skipped as cosmetic
+      per the audit: StatsScreen fixed-width row labels, SpamSuspicionBanner
+      button crowding, BarChart canvas labels. **Needs on-device verification
+      with system font size at max**: bubble multi-line text at pinch 1.6× +
+      font max (no overlap), avatar letters (no clipping), onboarding scroll
+      reaches the button, top-bar titles ellipsize instead of wrapping.
 - [ ] **RTL layout support** — mirror layout for Arabic/Hebrew users.
       Test with device set to Arabic locale.
 

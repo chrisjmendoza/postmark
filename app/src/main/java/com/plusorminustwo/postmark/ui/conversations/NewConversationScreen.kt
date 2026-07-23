@@ -57,6 +57,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -339,7 +340,7 @@ private fun RecipientChipStrip(
             InputChip(
                 selected = false,
                 onClick  = { onRemove(chip.address) },
-                label    = { Text(chip.displayName) },
+                label    = { Text(chip.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 trailingIcon = {
                     Icon(
                         Icons.Filled.Close,

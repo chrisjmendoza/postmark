@@ -9,10 +9,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 private val AVATAR_COLORS = listOf(
     Color(0xFF5C6BC0), // indigo
@@ -39,6 +39,11 @@ fun avatarColor(seed: String): Color {
 fun LetterAvatar(name: String, colorSeed: String = name, size: Dp = 44.dp, overrideColor: Color? = null) {
     val letter = name.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
     val bg = overrideColor ?: avatarColor(colorSeed)
+    // Convert dp → sp through density only (no fontScale) so the letter's visual
+    // size stays tied to the fixed-dp circle instead of growing with system font
+    // size and clipping — the circle itself doesn't grow with fontScale, so the
+    // text inside it can't either.
+    val letterFontSize = with(LocalDensity.current) { (size * 0.4f).toSp() }
     Box(
         modifier = Modifier
             .size(size)
@@ -47,7 +52,7 @@ fun LetterAvatar(name: String, colorSeed: String = name, size: Dp = 44.dp, overr
     ) {
         Text(
             text = letter,
-            fontSize = (size.value * 0.4f).sp,
+            fontSize = letterFontSize,
             fontWeight = FontWeight.Medium,
             color = Color.White
         )

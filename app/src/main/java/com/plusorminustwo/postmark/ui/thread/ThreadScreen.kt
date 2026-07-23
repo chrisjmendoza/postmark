@@ -120,6 +120,7 @@ import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
 import com.plusorminustwo.postmark.ui.theme.TimestampPreference
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
+import com.plusorminustwo.postmark.ui.theme.withBubbleScale
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -1186,7 +1187,7 @@ private fun ThreadContent(
                                 size = 36.dp,
                                 overrideColor = uiState.thread?.accentColorArgb?.let { Color(it) }
                             )
-                            Text(name)
+                            Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     },
                     navigationIcon = {
@@ -1634,7 +1635,7 @@ private fun SelectionTopBar(
 
     Column {
         TopAppBar(
-            title = { Text("$selectedCount selected") },
+            title = { Text("$selectedCount selected", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             navigationIcon = {
                 IconButton(onClick = onClose) {
                     Icon(Icons.Default.Close, "Cancel selection")
@@ -1661,20 +1662,23 @@ private fun SelectionTopBar(
                 .padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // maxLines = 1 on chip labels: M3's FilterChip has a spec-fixed height,
+            // so a wrapped second line would clip rather than grow the chip — this
+            // just keeps the label to its single intended line at large fontScale.
             FilterChip(
                 selected = scope == SelectionScope.MESSAGES,
                 onClick  = { onScopeChange(SelectionScope.MESSAGES) },
-                label    = { Text("Messages") }
+                label    = { Text("Messages", maxLines = 1) }
             )
             FilterChip(
                 selected = allSelected,
                 onClick  = { onScopeChange(SelectionScope.ALL) },
-                label    = { Text("All") }
+                label    = { Text("All", maxLines = 1) }
             )
             FilterChip(
                 selected = false,
                 onClick  = { onShowDateRange() },
-                label    = { Text("Date range") }
+                label    = { Text("Date range", maxLines = 1) }
             )
         }
     }
@@ -2079,8 +2083,7 @@ private fun MessageBubble(
                             }
                             Text(
                                 text = annotated,
-                                style = baseStyle.copy(
-                                    fontSize = baseStyle.fontSize * fontScale,
+                                style = baseStyle.withBubbleScale(fontScale).copy(
                                     color = textColor
                                 ),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
@@ -2103,8 +2106,7 @@ private fun MessageBubble(
                     }
                     Text(
                         text = annotated,
-                        style = baseStyle.copy(
-                            fontSize = baseStyle.fontSize * fontScale,
+                        style = baseStyle.withBubbleScale(fontScale).copy(
                             color = textColor
                         )
                     )

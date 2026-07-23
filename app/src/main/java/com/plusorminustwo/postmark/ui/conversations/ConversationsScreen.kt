@@ -265,7 +265,8 @@ fun ConversationsScreen(
                             label    = {
                                 Text(
                                     if (unreadThreadCount > 0) "Unread ($unreadThreadCount)"
-                                    else "Unread"
+                                    else "Unread",
+                                    maxLines = 1
                                 )
                             },
                             leadingIcon = if (showUnreadOnly) {
