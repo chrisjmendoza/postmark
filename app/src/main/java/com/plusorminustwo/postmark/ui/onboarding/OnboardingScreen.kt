@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -50,12 +51,22 @@ fun OnboardingScreen(onComplete: () -> Unit) {
         onComplete()
     }
 
-    Column(
+    // BoxWithConstraints + heightIn(min = viewport): inside a verticalScroll the Column
+    // wraps its content, which would strand Arrangement.Center at the top on screens
+    // where everything fits. Pinning the scrolled content's MIN height to the viewport
+    // keeps the fits-case centered exactly as before, while overflow (large system font
+    // size / short screens) scrolls instead of clipping.
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .safeDrawingPadding()
+    ) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
             .verticalScroll(rememberScrollState())
+            .heightIn(min = this@BoxWithConstraints.maxHeight)
             .padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -143,6 +154,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
     }
 }
 
