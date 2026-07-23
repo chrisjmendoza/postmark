@@ -15,6 +15,10 @@ const val DELIVERY_STATUS_PENDING = 1   // sent to telephony, awaiting confirmat
 const val DELIVERY_STATUS_SENT = 2      // telephony confirmed send
 const val DELIVERY_STATUS_DELIVERED = 3 // recipient device acknowledged delivery
 const val DELIVERY_STATUS_FAILED = 4    // delivery failed; shown with error indicator
+const val DELIVERY_STATUS_QUEUED = 5    // send deferred (no service / radio off); the offline
+                                        // send queue flushes these in timestamp order when
+                                        // service returns. A VALUE in this Int column — no schema
+                                        // change; the QUEUED rows themselves ARE the queue.
 
 /**
  * Room entity for a single SMS/MMS message.

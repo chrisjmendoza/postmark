@@ -8,6 +8,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.plusorminustwo.postmark.data.sync.SmsContentObserver
 import com.plusorminustwo.postmark.service.backup.BackupScheduler
+import com.plusorminustwo.postmark.service.sms.SendQueueWorker
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +63,14 @@ class PostmarkApplication : Application(), Configuration.Provider {
         // Off the main thread: this call blocks on the backup_prefs disk load and
         // forces WorkManager's on-demand init (WorkDatabase open) — cold-start tax
         // with no first-frame dependency.
-        CoroutineScope(Dispatchers.Default).launch { backupScheduler.syncWithPrefs() }
+        CoroutineScope(Dispatchers.Default).launch {
+            backupScheduler.syncWithPrefs()
+            // Flush any offline send queue left over from a previous run so queued sends
+            // survive reboot / process death. Unique-work KEEP means this coalesces with a
+            // flush the SmsSentDeliveryReceiver may already have enqueued; the
+            // NetworkType.CONNECTED constraint holds it until service is back.
+            SendQueueWorker.enqueue(this@PostmarkApplication)
+        }
     }
 
     private fun createNotificationChannels() {

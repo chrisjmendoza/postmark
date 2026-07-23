@@ -500,6 +500,8 @@ private class ActionsRangeFakeMessageDao(
         allMessages.firstOrNull { it.id == messageId }
 
     override suspend fun getAll(): List<MessageEntity> = allMessages
+    override suspend fun getQueuedMessages(): List<MessageEntity> = emptyList()
+    override suspend fun hasQueuedInThread(threadId: Long): Boolean = false
     override suspend fun getAllThreadIds(): List<Long> = allMessages.map { it.threadId }.distinct()
 
     override suspend fun insert(message: MessageEntity): Long = 0L

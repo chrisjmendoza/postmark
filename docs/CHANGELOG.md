@@ -203,6 +203,111 @@ Messages with **no reactions** are byte-identical to before (timestamp stays a s
 below the bubble at the outer edge). The four-branch decision (COMBINED / PILLS_ONLY /
 TIMESTAMP_ONLY / NONE) is extracted as a pure `belowBubbleLayout(...)` function, plain-JUnit
 tested (`BelowBubbleLayoutTest`, +4 tests). No window-inset change (mid-list content).
+## 2026-07-23 (feat/send-queue) — offline sends queue and flush in order
+
+Stacks on fix/multipart-sent-status. **Not yet verified on device** (needs an
+airplane-mode send).
+
+**With no signal, an outgoing SMS just failed with a red `!`.** The radio returns
+`RESULT_ERROR_NO_SERVICE` / `RESULT_ERROR_RADIO_OFF`, `SmsSentDeliveryReceiver`
+marked the message FAILED, and the only recourse was tapping retry by hand once
+service came back. Those two result codes aren't real failures — the message can
+go out unchanged as soon as service returns.
+
+**Such sends now queue automatically and flush in order.**
+- New `DELIVERY_STATUS_QUEUED = 5` — a VALUE in the existing `deliveryStatus` Int
+  column, no schema change, no migration. The Room rows carrying this status *are*
+  the queue.
+- Pure `isQueueWorthyFailure(resultCode)` classifier: true only for
+  `RESULT_ERROR_NO_SERVICE` and `RESULT_ERROR_RADIO_OFF`; every other code stays a
+  real FAILED. `SmsSentDeliveryReceiver` (both the `MultipartSendTracker.MarkFailed`
+  arm and the legacy fallback) consults the current intent's result code: queue-worthy
+  → status QUEUED, provider status left PENDING (not mirrored to STATUS_FAILED), and a
+  flush enqueued; otherwise the existing FAILED behaviour is untouched.
+- `SendQueueWorker` (@HiltWorker) — unique work "send-queue-flush", ExistingWorkPolicy
+  .KEEP, `NetworkType.CONNECTED` constraint (a heuristic for "radio likely back";
+  backoff retries cover the gap), exponential backoff. Loads all QUEUED messages
+  oldest-first, and for each SMS row (MMS ignored — never queued) sets PENDING then
+  re-sends via `SmsManagerWrapper`. Sequential, so order is preserved.
+- Flush is enqueued from three places: the receiver on a queue-worthy failure, app
+  start (`PostmarkApplication`, so queued sends survive reboot / process death), and a
+  new send that joins a non-empty queue.
+- Ordering with new sends: `ThreadViewModel.sendMessage`'s SMS path checks
+  `hasQueuedInThread` — if the thread already has queued messages the new one is
+  inserted as QUEUED (joining the back of the queue) and a flush enqueued, rather than
+  sending immediately and overtaking earlier queued sends.
+- UI: `DeliveryStatusIndicator` gains a QUEUED case — `Icons.Default.Schedule`,
+  `onSurfaceVariant` tint, contentDescription "Queued", non-interactive (FAILED's
+  tap-to-retry is unchanged). The conversations list renders no delivery status, so it
+  needed nothing.
+
+**Queued flush reuses the existing provider row (no duplicates) and resets part
+tracking.** The receiver-requeued path (the common airplane-mode case) parks a *real*
+provider-backed row: the pre-send `content://sms/sent` insert already succeeded (it's
+local, doesn't need the radio), so the row exists at STATUS_PENDING. `SmsManagerWrapper
+.sendTextMessage` gains an `existingSmsRowId` parameter — when set (positive-id rows
+only), it skips the insert and reuses that row, so a queued re-send can't duplicate the
+message for every provider reader; deleting/replacing the old row isn't an option
+(forbidden by the content://sms delete rule). Negative-id optimistic rows (the
+ThreadViewModel-queued path) keep the default insert — they have no provider row yet.
+The re-send reuses the same tracker key (the Room id), and the first failed attempt left
+a *terminal* FAILED marker there, so without intervention every part of the retry would
+return `Decision.None` and the message would sit PENDING forever — a real bug.
+`MultipartSendTracker` gains `reset(key)`, which `SendQueueWorker` calls before each
+reused-row re-dispatch so the retry aggregates as a fresh send.
+
+Tests: `SendQueueClassifierTest` (+6) covers both queue-worthy codes, three non-worthy
+codes, and RESULT_OK; `MultipartSendTrackerTest` (+2) covers re-send-after-reset and a
+no-op reset of an unknown key. Full suite: 918 passing. The ordering decision is a
+trivial `hasQueuedInThread` guard (inlined, documented) rather than a manufactured helper.
+
+---
+
+## 2026-07-23 (fix/multipart-sent-status) — aggregate per-part sent results so multipart status is all-or-failed
+
+910 tests passing (up from 898). **Not yet verified on device** (needs a real
+multipart send >160 chars).
+
+**A multipart SMS could report the wrong final status.** A message over 160 chars
+is split by the carrier into N PDUs, each with its own sent `PendingIntent`
+carrying the same message identity, and `SmsSentDeliveryReceiver` applied each
+result directly. Two failure modes: the first part reporting `RESULT_OK` marked
+the whole message SENT while the rest were still in flight (premature); and worse,
+if a part failed (correctly marking FAILED) a *later* part's OK overwrote it back
+to SENT — but a failed part means the recipient got a truncated/broken message, so
+the final status must stay FAILED.
+
+**Fix — a pure aggregator.** New `MultipartSendTracker` (`service/sms/`, `@Singleton`,
+no Android deps, 12 plain-JUnit tests) collapses the per-part callback stream into
+one decision per message: `MarkSent` only once ALL parts report Ok (out-of-order
+safe; Ok parts held in a Set so a duplicate PendingIntent re-fire can't
+double-count), `MarkFailed` exactly once on the first known failure and terminal
+thereafter (subsequent parts → `None`, so a straggler Ok can't resurrect SENT), and
+an ambiguous part (resultCode 0, a cancelled PendingIntent — not a real failure)
+never contributes to the all-Ok condition, leaving the message PENDING exactly as a
+single ambiguous send does today. `SmsManagerWrapper` now tags every sent intent
+with `part_index`/`part_count`; single-part sends use index 0 / count 1 and take the
+identical code path so behaviour stays uniform. Legacy in-flight intents from before
+the update (no part extras) fall back to the old direct per-result handling.
+
+**Recovery-payload interaction.** The sent-row recovery (re-creating a missing
+`content://sms/sent` row after a radio-confirmed send whose pre-send insert failed)
+needs the address/body, which `SmsManagerWrapper` puts only on the *last* part's
+intent. But the part that finally completes the message — producing `MarkSent` — can
+be a different, earlier part that reported out of order. So the tracker stashes the
+recovery payload from whichever part carries it and hands it back on `MarkSent`
+regardless of which part triggered completion; the receiver then runs recovery only
+if `smsRowId == -1`, exactly as before.
+
+**Process-death caveat.** The tracker is in-memory only. If the process dies
+mid-send, the not-yet-reported parts produce no callback into a fresh process and the
+message stays PENDING (rescued later by a sync catch-up or the delivery receipt) —
+accepted, and strictly better than the old premature/overwritten SENT. Documented in
+`MultipartSendTracker`'s class comment.
+
+Files: `MultipartSendTracker.kt` (new), `MultipartSendTrackerTest.kt` (new),
+`SmsManagerWrapper.kt`, `SmsSentDeliveryReceiver.kt`. No schema changes; no
+`ContentResolver.delete`; MMS/send-queue/ThreadViewModel untouched.
 
 ---
 

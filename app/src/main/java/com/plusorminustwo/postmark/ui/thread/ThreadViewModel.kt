@@ -18,6 +18,7 @@ import com.plusorminustwo.postmark.data.contacts.lookupContactName
 import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_FAILED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
+import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_QUEUED
 import com.plusorminustwo.postmark.data.preferences.AppAccentPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.BubbleFontScaleRepository
 import com.plusorminustwo.postmark.data.preferences.BubbleStylePreferenceRepository
@@ -54,6 +55,7 @@ import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStor
 import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
+import com.plusorminustwo.postmark.service.sms.SendQueueWorker
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -1237,6 +1239,12 @@ class ThreadViewModel @Inject constructor(
                 }
             } else {
                 // ── SMS path (existing behaviour) ─────────────────────────────
+                /* Ordering rule: if this thread already has queued (unsent) messages waiting
+                 * for service, a new send must NOT go out immediately — it would overtake the
+                 * earlier ones. Instead it joins the back of the queue as a QUEUED row and the
+                 * SendQueueWorker flushes the whole thread in timestamp order once service is
+                 * back. With an empty queue, send immediately as before. */
+                val joinQueue = messageRepository.hasQueuedInThread(threadId)
                 val optimistic = Message(
                     id             = tempId,
                     threadId       = threadId,
@@ -1245,13 +1253,17 @@ class ThreadViewModel @Inject constructor(
                     timestamp      = now,
                     isSent         = true,
                     type           = Telephony.Sms.MESSAGE_TYPE_SENT,
-                    deliveryStatus = DELIVERY_STATUS_PENDING
+                    deliveryStatus = if (joinQueue) DELIVERY_STATUS_QUEUED else DELIVERY_STATUS_PENDING
                 )
                 messageRepository.insert(optimistic)
                 /* Emit the optimistic row's id so the UI waits for it — same rationale
                  * as the MMS path above. */
                 _scrollToBottomEvent.tryEmit(tempId)
-                smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
+                if (joinQueue) {
+                    SendQueueWorker.enqueue(context)
+                } else {
+                    smsManagerWrapper.sendTextMessage(thread.address, text, tempId)
+                }
             }
             _isSending.value = false
             } finally {
