@@ -152,15 +152,23 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **SMS send** — basic send wired up with optimistic insert.
 - [x] **Failed send state** — bubble shows a red ✕ or "!" indicator
       with a tap-to-retry affordance when FAILED status received.
-- [ ] **Multipart message handling** — verify all parts arrive before
-      marking delivered; handle out-of-order part delivery. *(Partially
-      done, checked July 22 2026 during the stale-checkbox audit:
-      `SmsReceiver` already reassembles a multi-part SMS body before
-      posting the notification/insert (`BRIEFING.md` "SmsReceiver posts
-      heads-up" entry) and triggers sync once, not once-per-part. Not
-      found anywhere: any per-part delivery-status tracking or explicit
-      out-of-order-arrival handling — `deliveryStatus` is set once per
-      whole message, not per PDU part. Remains open for that half.)*
+- [x] **Multipart message handling** (July 23 2026, `fix/multipart-sent-status`)
+      — incoming reassembly was already done (`SmsReceiver` reassembles the body
+      and syncs once, not once-per-part); the remaining open half was outgoing
+      per-part status. Fixed: `SmsManagerWrapper` now tags every sent
+      PendingIntent with `part_index`/`part_count`, and `SmsSentDeliveryReceiver`
+      routes each result through a new pure `@Singleton MultipartSendTracker`
+      (12 plain-JUnit tests). The whole message goes SENT only once ALL parts
+      report Ok (out-of-order safe, duplicate re-fires deduped); the first failed
+      part is terminal, so a later part's Ok can no longer overwrite FAILED back
+      to SENT (the core bug); an ambiguous part (resultCode 0) still leaves it
+      PENDING. Single-part sends take the same path (index 0 / count 1). Legacy
+      in-flight intents without the extras fall back to the old direct behaviour.
+      Process-death caveat: the tracker is in-memory, so a send interrupted by
+      process death stays PENDING (rescued by sync/delivery receipt) rather than
+      wrongly SENT. **Needs on-device verification** for a real multipart send
+      (>160 chars): confirm all-parts-OK → SENT, an induced part failure → FAILED
+      that stays FAILED, and the sent-row recovery still fires.
 - [ ] **Send queue** — if no signal, queue outgoing messages and
       send when connectivity restored. Show "Queued" status on bubble.
 

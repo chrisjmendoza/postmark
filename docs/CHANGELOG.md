@@ -4,6 +4,54 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (fix/multipart-sent-status) — aggregate per-part sent results so multipart status is all-or-failed
+
+910 tests passing (up from 898). **Not yet verified on device** (needs a real
+multipart send >160 chars).
+
+**A multipart SMS could report the wrong final status.** A message over 160 chars
+is split by the carrier into N PDUs, each with its own sent `PendingIntent`
+carrying the same message identity, and `SmsSentDeliveryReceiver` applied each
+result directly. Two failure modes: the first part reporting `RESULT_OK` marked
+the whole message SENT while the rest were still in flight (premature); and worse,
+if a part failed (correctly marking FAILED) a *later* part's OK overwrote it back
+to SENT — but a failed part means the recipient got a truncated/broken message, so
+the final status must stay FAILED.
+
+**Fix — a pure aggregator.** New `MultipartSendTracker` (`service/sms/`, `@Singleton`,
+no Android deps, 12 plain-JUnit tests) collapses the per-part callback stream into
+one decision per message: `MarkSent` only once ALL parts report Ok (out-of-order
+safe; Ok parts held in a Set so a duplicate PendingIntent re-fire can't
+double-count), `MarkFailed` exactly once on the first known failure and terminal
+thereafter (subsequent parts → `None`, so a straggler Ok can't resurrect SENT), and
+an ambiguous part (resultCode 0, a cancelled PendingIntent — not a real failure)
+never contributes to the all-Ok condition, leaving the message PENDING exactly as a
+single ambiguous send does today. `SmsManagerWrapper` now tags every sent intent
+with `part_index`/`part_count`; single-part sends use index 0 / count 1 and take the
+identical code path so behaviour stays uniform. Legacy in-flight intents from before
+the update (no part extras) fall back to the old direct per-result handling.
+
+**Recovery-payload interaction.** The sent-row recovery (re-creating a missing
+`content://sms/sent` row after a radio-confirmed send whose pre-send insert failed)
+needs the address/body, which `SmsManagerWrapper` puts only on the *last* part's
+intent. But the part that finally completes the message — producing `MarkSent` — can
+be a different, earlier part that reported out of order. So the tracker stashes the
+recovery payload from whichever part carries it and hands it back on `MarkSent`
+regardless of which part triggered completion; the receiver then runs recovery only
+if `smsRowId == -1`, exactly as before.
+
+**Process-death caveat.** The tracker is in-memory only. If the process dies
+mid-send, the not-yet-reported parts produce no callback into a fresh process and the
+message stays PENDING (rescued later by a sync catch-up or the delivery receipt) —
+accepted, and strictly better than the old premature/overwritten SENT. Documented in
+`MultipartSendTracker`'s class comment.
+
+Files: `MultipartSendTracker.kt` (new), `MultipartSendTrackerTest.kt` (new),
+`SmsManagerWrapper.kt`, `SmsSentDeliveryReceiver.kt`. No schema changes; no
+`ContentResolver.delete`; MMS/send-queue/ThreadViewModel untouched.
+
+---
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in

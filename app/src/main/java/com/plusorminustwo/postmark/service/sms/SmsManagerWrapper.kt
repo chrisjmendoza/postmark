@@ -85,7 +85,7 @@ class SmsManagerWrapper @Inject constructor(
         // Capture in a local val so the lambdas below can close over it.
         val capturedSmsRowId = smsRowId
 
-        fun sentIntent(offset: Int = 0, isLastPart: Boolean = true) = PendingIntent.getBroadcast(
+        fun sentIntent(offset: Int = 0, isLastPart: Boolean = true, partCount: Int = 1) = PendingIntent.getBroadcast(
             context,
             reqBase + offset,
             Intent(context, SmsSentDeliveryReceiver::class.java).apply {
@@ -94,6 +94,11 @@ class SmsManagerWrapper @Inject constructor(
                 // Pass the real content-provider row ID so the receiver can update
                 // the correct Room row (the optimistic row is deleted before it fires).
                 putExtra(SmsSentDeliveryReceiver.EXTRA_SMS_ROW_ID, capturedSmsRowId)
+                /* Per-part identity so SmsSentDeliveryReceiver can aggregate all parts
+                 * through MultipartSendTracker (single-part sends use index 0 / count 1,
+                 * taking the exact same code path so behaviour stays uniform). */
+                putExtra(SmsSentDeliveryReceiver.EXTRA_PART_INDEX, offset)
+                putExtra(SmsSentDeliveryReceiver.EXTRA_PART_COUNT, partCount)
                 /* Recovery payload: if the provider insert above threw (smsRowId == -1),
                  * the receiver re-creates the missing content://sms/sent row once the
                  * radio confirms the send — otherwise the message is delivered but
@@ -128,7 +133,7 @@ class SmsManagerWrapper @Inject constructor(
             val sentIntents = ArrayList<PendingIntent>(parts.size)
             val deliveredIntents = ArrayList<PendingIntent?>(parts.size)
             parts.forEachIndexed { i, _ ->
-                sentIntents.add(sentIntent(i, isLastPart = i == parts.lastIndex))
+                sentIntents.add(sentIntent(i, isLastPart = i == parts.lastIndex, partCount = parts.size))
                 deliveredIntents.add(if (i == parts.lastIndex) deliveredIntent() else null)
             }
             smsManager.sendMultipartTextMessage(

@@ -41,6 +41,7 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
     @Inject lateinit var messageRepository: MessageRepository
     @Inject lateinit var syncLogger: SyncLogger
     @Inject lateinit var smsSyncHandler: SmsSyncHandler
+    @Inject lateinit var multipartSendTracker: MultipartSendTracker
 
     override fun onReceive(context: Context, intent: Intent) {
         val messageId  = intent.getLongExtra(EXTRA_MESSAGE_ID, -1L)
@@ -57,7 +58,6 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
             try {
                 when (intent.action) {
                     ACTION_SMS_SENT -> {
-                        val isSendOk = resultCode == Activity.RESULT_OK   // -1 = success
                         /*
                          * RESULT_CANCELED (0) is ambiguous — it fires when the PendingIntent
                          * is cancelled by the OS (e.g. process restart) rather than being a
@@ -65,48 +65,63 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                          * Treating 0 as FAILED would cause a red-! flash even when the
                          * message goes through successfully.
                          */
+                        val isSendOk = resultCode == Activity.RESULT_OK   // -1 = success
                         val isKnownFailure = resultCode > 0
-                        val label = when {
-                            isSendOk      -> "SENT"
-                            isKnownFailure -> "FAILED (resultCode=$resultCode)"
-                            else           -> "AMBIGUOUS (resultCode=$resultCode) — leaving as PENDING"
-                        }
-                        syncLogger.log("SmsSentDelivery", "SMS_SENT roomId=$roomId smsRowId=$smsRowId result=$label")
 
-                        when {
-                            isSendOk -> {
-                                messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_SENT)
-                                /* Recovery: the radio confirmed this send, but the pre-send
-                                 * insert into content://sms/sent never produced a row
-                                 * (smsRowId == -1, e.g. a transient RemoteException or a
-                                 * silently-revoked default-SMS-app role after an OS update).
-                                 * Without this, the message is delivered to the recipient
-                                 * but invisible to every reader of the system provider —
-                                 * Postmark's own sync and companion apps like Phone Link. */
-                                val address = intent.getStringExtra(EXTRA_ADDRESS)
-                                if (shouldRecoverSentRow(isSendOk, smsRowId, address)) {
-                                    recoverMissingSentRow(
-                                        context, address!!,
-                                        intent.getStringExtra(EXTRA_BODY) ?: ""
-                                    )
-                                }
+                        val partIndex = intent.getIntExtra(EXTRA_PART_INDEX, -1)
+                        val partCount = intent.getIntExtra(EXTRA_PART_COUNT, -1)
+                        val address = intent.getStringExtra(EXTRA_ADDRESS)
+
+                        if (partIndex < 0 || partCount < 1) {
+                            /* Legacy PendingIntent from before this app update carried no
+                             * part extras — fall back to the old direct per-result behaviour
+                             * so an in-flight send from the previous version still resolves. */
+                            handleLegacySentResult(context, intent, roomId, smsRowId, isSendOk, isKnownFailure, address)
+                        } else {
+                            /* Aggregate every part through the tracker so a multipart send only
+                             * goes SENT when ALL parts succeed, and a single failed part is
+                             * terminal (a later part's Ok can't overwrite FAILED back to SENT). */
+                            val outcome = when {
+                                isSendOk       -> MultipartSendTracker.Outcome.Ok
+                                isKnownFailure -> MultipartSendTracker.Outcome.KnownFailure
+                                else           -> MultipartSendTracker.Outcome.Ambiguous
                             }
-                            isKnownFailure -> {
-                                messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
-                                /* Mirror failure status into content://sms so third-party apps
-                                 * (e.g. Google Messages) don't keep showing the message as pending. */
-                                if (smsRowId > 0L) {
-                                    val cv = ContentValues().apply {
-                                        put(Telephony.Sms.STATUS, Telephony.Sms.STATUS_FAILED)
+                            /* The recovery payload rides only the last part's intent; the tracker
+                             * stashes it until the (possibly out-of-order) completing part arrives. */
+                            val recovery = if (!address.isNullOrEmpty()) {
+                                MultipartSendTracker.RecoveryPayload(address, intent.getStringExtra(EXTRA_BODY) ?: "")
+                            } else null
+
+                            val decision = multipartSendTracker.record(roomId, partIndex, partCount, outcome, recovery)
+                            syncLogger.log(
+                                "SmsSentDelivery",
+                                "SMS_SENT roomId=$roomId smsRowId=$smsRowId part=${partIndex + 1}/$partCount " +
+                                    "outcome=$outcome decision=${decision::class.simpleName}"
+                            )
+
+                            when (decision) {
+                                is MultipartSendTracker.Decision.MarkSent -> {
+                                    messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_SENT)
+                                    /* Recovery: the radio confirmed the send but the pre-send
+                                     * insert into content://sms/sent never produced a row
+                                     * (smsRowId == -1). Use the stashed payload — it may have
+                                     * ridden a different part than the one that completed here. */
+                                    val recoveryAddress = decision.recovery?.address
+                                    if (shouldRecoverSentRow(true, smsRowId, recoveryAddress)) {
+                                        recoverMissingSentRow(context, recoveryAddress!!, decision.recovery.body)
                                     }
-                                    context.contentResolver.update(
-                                        ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, smsRowId),
-                                        cv, null, null
-                                    )
+                                }
+                                is MultipartSendTracker.Decision.MarkFailed -> {
+                                    messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
+                                    /* Mirror failure status into content://sms so third-party apps
+                                     * (e.g. Google Messages) don't keep showing it as pending. */
+                                    mirrorProviderStatus(context, smsRowId, Telephony.Sms.STATUS_FAILED)
+                                }
+                                is MultipartSendTracker.Decision.None -> {
+                                    /* Still awaiting parts, an ambiguous part, or already decided —
+                                     * leave the current status (PENDING) untouched. */
                                 }
                             }
-                            /* resultCode == 0: ambiguous — leave as PENDING so the delivery
-                             * receipt or a future sync can confirm whether it went through. */
                         }
                     }
                     ACTION_SMS_DELIVERED -> {
@@ -129,6 +144,51 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                 pendingResult.finish()
             }
         }
+    }
+
+    /**
+     * Pre-update-legacy path: a PendingIntent registered by an older app version that
+     * lacks the per-part extras. Applies the result directly (the pre-aggregation
+     * behaviour) so an in-flight send from before the update still resolves.
+     */
+    private suspend fun handleLegacySentResult(
+        context: Context,
+        intent: Intent,
+        roomId: Long,
+        smsRowId: Long,
+        isSendOk: Boolean,
+        isKnownFailure: Boolean,
+        address: String?,
+    ) {
+        val label = when {
+            isSendOk       -> "SENT"
+            isKnownFailure -> "FAILED (resultCode=$resultCode)"
+            else           -> "AMBIGUOUS (resultCode=$resultCode) — leaving as PENDING"
+        }
+        syncLogger.log("SmsSentDelivery", "SMS_SENT (legacy, no part extras) roomId=$roomId smsRowId=$smsRowId result=$label")
+        when {
+            isSendOk -> {
+                messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_SENT)
+                if (shouldRecoverSentRow(true, smsRowId, address)) {
+                    recoverMissingSentRow(context, address!!, intent.getStringExtra(EXTRA_BODY) ?: "")
+                }
+            }
+            isKnownFailure -> {
+                messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_FAILED)
+                mirrorProviderStatus(context, smsRowId, Telephony.Sms.STATUS_FAILED)
+            }
+            // resultCode == 0: ambiguous — leave as PENDING.
+        }
+    }
+
+    /** Mirrors a send outcome into `content://sms` so other apps see it (no-op if smsRowId absent). */
+    private fun mirrorProviderStatus(context: Context, smsRowId: Long, status: Int) {
+        if (smsRowId <= 0L) return
+        val cv = ContentValues().apply { put(Telephony.Sms.STATUS, status) }
+        context.contentResolver.update(
+            ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, smsRowId),
+            cv, null, null
+        )
     }
 
     /**
@@ -181,6 +241,10 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
         const val EXTRA_MESSAGE_ID     = "message_id"
         // Real content-provider _id written to content://sms/sent at send time.
         const val EXTRA_SMS_ROW_ID     = "sms_row_id"
+        /* Per-part identity for MultipartSendTracker aggregation. Absent on legacy
+         * (pre-update) PendingIntents, which fall back to direct per-result handling. */
+        const val EXTRA_PART_INDEX     = "part_index"
+        const val EXTRA_PART_COUNT     = "part_count"
         /* Recovery payload (final part only): lets this receiver re-create the sent
          * row when the pre-send insert failed but the radio send succeeded. */
         const val EXTRA_ADDRESS        = "address"
