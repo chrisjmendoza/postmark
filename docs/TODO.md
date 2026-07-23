@@ -1041,7 +1041,18 @@ instance, but flagged:
       AGP 10 / built-in-Kotlin compatibility first.
 
 ### Accessibility
-- [ ] **Content descriptions** on all icon buttons for screen readers.
+- [x] **Content descriptions** on all icon buttons for screen readers.
+      (July 23 2026, `chore/content-descriptions`) Swept every Icon/IconButton/
+      Image/AsyncImage in `ui/` except ThreadScreen.kt (deliberately skipped —
+      three concurrent PRs touch that file tonight). Every other screen already
+      had correct labels or deliberate `contentDescription = null` on genuinely
+      decorative icons redundant with adjacent text — zero fixes needed.
+  - [x] **Follow-up: ThreadScreen `DateHeader` select-day toggle** — fixed on
+        the same branch (July 23 2026): the per-day select-all `IconButton`'s
+        three-state icon now announces "Select all messages on {day}" /
+        "Deselect all messages on {day}". This was the only gap in
+        ThreadScreen; the edit is in `DateHeader`, a region none of tonight's
+        concurrent ThreadScreen PRs touch.
 - [ ] **Dynamic text size support** — bubbles should reflow at large
       text sizes, not clip.
 - [ ] **RTL layout support** — mirror layout for Arabic/Hebrew users.

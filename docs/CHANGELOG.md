@@ -144,6 +144,33 @@ Also fixed three trivial compiler warnings while in the file: `@param:`
 annotation-target disambiguation on the `@ApplicationContext` constructor
 parameters in `SmsSyncHandler` and `SyncLogger`, and swapped
 `SettingsScreen`'s default-SMS-app row icon to `Icons.AutoMirrored.Filled.Message`.
+## 2026-07-23 (chore/content-descriptions) — TalkBack labels for icon buttons across the app
+
+898 tests passing (unchanged from master — this is an audit, not a code change).
+
+Accessibility sweep of `docs/TODO.md`'s "Content descriptions on all icon
+buttons" item: checked every `Icon`/`IconButton`/`Image`/`AsyncImage`/
+`SubcomposeAsyncImage` in `ui/` — conversations, search, settings (all
+screens), stats, spam, backup, export, blocked numbers, notifications, dev
+options, starred images, onboarding, forward, new-conversation, contact
+detail, and the shared components (chat background / accent color / bubble
+placement dialogs) — against every icon button and image in each file.
+
+**Result: zero fixes needed.** Every screen already had either a real
+action-oriented label (e.g. "Delete conversation", "Mark read", "Attach
+media", the existing Pin/Unpin state pattern) or a deliberate
+`contentDescription = null` on genuinely decorative icons/images redundant
+with adjacent text (row-leading icons next to a title, chevrons in clickable
+rows, thumbnail previews with a text label beneath). No file needed a single
+line changed.
+
+**ThreadScreen.kt was mostly skipped** — three concurrent PRs touch it
+tonight. A read-only review found exactly one real gap, the per-day
+select-all toggle in `DateHeader` (`contentDescription = null` on a
+three-state select/partial/deselect icon). Since `DateHeader` sits in a
+region none of tonight's PRs touch, that one line was fixed here after all:
+the icon now announces "Select all messages on {day}" / "Deselect all
+messages on {day}". Nothing else in ThreadScreen needed changing.
 
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
