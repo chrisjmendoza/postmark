@@ -97,7 +97,12 @@ class ReactionResolver @Inject constructor(
                     removed++
                     log("matched: id=${msg.id} emoji=${parsed.emoji} → targetId=${reaction.messageId}")
                 } else {
-                    log("duplicate: id=${msg.id} emoji=${parsed.emoji} already exists")
+                    // The reaction is already recorded (an earlier pass resolved another
+                    // copy), so this raw fallback row is redundant — delete it like the
+                    // resolved case instead of leaving a permanent stray bubble.
+                    toDelete += msg.id
+                    removed++
+                    log("duplicate: id=${msg.id} emoji=${parsed.emoji} already exists — redundant row removed")
                 }
             } else {
                 // Original not found within the 100-message window — leave as visible bubble.

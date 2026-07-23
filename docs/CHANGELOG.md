@@ -4,6 +4,20 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (fix/reaction-duplicate-fallback-cleanup) — duplicate reaction fallbacks no longer linger as bubbles
+
+Re-verified the "Reacted-to search exclusion" TODO and closed it as obsolete:
+resolved fallbacks are deleted since July 22, and the remaining unresolvable
+rows render as normal thread bubbles, so search showing them is consistent —
+no `isReactionMessage` schema flag needed. The one real leftover was
+`ReactionResolver`'s duplicate branch: when the reaction already existed
+(an earlier pass resolved another copy), the raw fallback row was left as a
+permanent stray bubble. It's now deleted like the resolved case (Room-side
+only — never the telephony provider). Existing duplicate-semantics test
+updated to assert the row is removed.
+
+---
+
 ## 2026-07-22 (feat/reaction-parsing-fixes) — reaction fallbacks: file-backed MMS text, truncated quotes, self-healing repair
 
 898 tests passing (up from 887). **Not yet verified on device.** Full analysis in
