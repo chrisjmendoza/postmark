@@ -988,7 +988,19 @@ instance, but flagged:
       cluster position; the compensation Spacer is deleted.
 - [x] **Reaction chip theming** — ReactionPills uses
       MaterialTheme.colorScheme.primaryContainer / surfaceContainer /
-      primary / outlineVariant; no hardcoded hex values.
+      primary / outlineVariant; no hardcoded hex values. Deeper polish
+      (July 24 2026, `fix/reaction-pill-sender-colors`): owner on-device
+      feedback — chips were still colored from the app theme, not the
+      thread's actual bubble colors (his sent bubbles were blue-ish,
+      contact's green, but pills stayed purple/neutral). New rule: a
+      chip's background identifies WHO reacted, resolved via
+      `LocalBubbleAccentColors` same as `MessageBubble` — mine-inclusive
+      chips take the thread's sent-bubble color, theirs-only chips take
+      the received-bubble color (falling back to primaryContainer /
+      surfaceVariant, same as an un-customized bubble). Needs on-device
+      verification: chip colors match sent/received bubble colors in a
+      thread with custom colors; legibility over photo backgrounds;
+      search-result pills unchanged/neutral.
 - [x] **Reaction chip overflow handling** (July 16 2026; realigned July 22
       2026) — pills anchor to the bubble's inner bottom corner in the bubble
       Column: a row wider than a short bubble grows inward past the bubble

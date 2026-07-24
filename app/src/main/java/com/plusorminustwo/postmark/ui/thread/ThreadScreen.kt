@@ -5493,6 +5493,14 @@ private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
  * Reactions are grouped by emoji; each group shows the emoji + a count when > 1 reactor.
  * Chips the local user has added (senderAddress == [SELF_ADDRESS]) use a highlighted style.
  *
+ * A chip's background identifies *who* reacted, using the thread's resolved bubble colors
+ * ([LocalBubbleAccentColors]) rather than a fixed theme color — a mine-inclusive chip takes
+ * the sent-bubble color/content, a theirs-only chip takes the received-bubble color/content.
+ * Read from the CompositionLocal (thread-wide render input, same pattern as [MessageBubble])
+ * rather than threaded as a parameter; outside a thread (e.g. [SearchScreen]'s display-only
+ * reuse) it resolves to the default all-null [BubbleAccentColors], so chips fall back to the
+ * previous theme-derived look.
+ *
  * Uses [FlowRow] so that chips wrap to a second line instead of overflowing the bubble width.
  *
  * @param reactions      Full list of [Reaction] objects on the message.
@@ -5509,6 +5517,7 @@ internal fun ReactionPills(
     modifier: Modifier = Modifier
 ) {
     val grouped = remember(reactions) { reactions.groupBy { it.emoji } }
+    val accentColors = LocalBubbleAccentColors.current
     // M3's clickable Surface silently pads itself out to the 48dp minimum touch
     // target, so each ~24dp chip occupied a 48dp-tall slot with the visual centered
     // — read as a big phantom gap between the bubble and its pills once they moved
@@ -5526,10 +5535,22 @@ internal fun ReactionPills(
                 val iMine = reactors.any { it.senderAddress == SELF_ADDRESS }
                 val count = reactors.size
                 val label = if (count > 1) "$emoji $count" else emoji
+                // Same resolution MessageBubble uses for baseBubbleColor (~line 1910) — a
+                // chip's background identifies who reacted using the thread's actual bubble
+                // colors, not a fixed chip-specific theme shade.
+                val chipContainer = if (iMine)
+                    accentColors.sentContainer ?: MaterialTheme.colorScheme.primaryContainer
+                else
+                    accentColors.receivedContainer ?: MaterialTheme.colorScheme.surfaceVariant
+                // Same resolution MessageBubble uses for bubbleContentColor (~line 1916):
+                // a custom bubble color's paired content override keeps text legible; null
+                // falls back to the ambient content color, same as the un-tinted look before.
+                val chipContent = if (iMine) accentColors.sentContent else accentColors.receivedContent
                 Surface(
                     onClick = { onReactionClick(emoji) },
                     shape = RoundedCornerShape(10.dp),
-                    color = if (iMine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                    color = chipContainer,
+                    contentColor = chipContent ?: LocalContentColor.current,
                     border = BorderStroke(
                         width = if (iMine) 1.dp else 0.5.dp,
                         color = if (iMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
