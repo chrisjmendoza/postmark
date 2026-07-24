@@ -102,6 +102,7 @@ import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
 import com.plusorminustwo.postmark.ui.contact.addContactIntent
 import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
+import com.plusorminustwo.postmark.domain.links.findUrls
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
@@ -2377,30 +2378,9 @@ private fun AttachmentThumbnail(
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            // Video cell — cached first frame (see rememberVideoThumbnail) with a play badge.
-            val videoThumb = rememberVideoThumbnail(attachment.uri)
-            videoThumb?.let {
-                Image(
-                    bitmap             = it.asImageBitmap(),
-                    contentDescription = "Video preview",
-                    contentScale       = ContentScale.Crop,
-                    modifier           = Modifier.fillMaxSize()
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.35f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Video",
-                    modifier = Modifier.size(28.dp),
-                    tint = Color.White
-                )
-            }
+            // Video cell — shared first-frame-still + play-badge tile (see VideoThumbnailTile);
+            // also used by the contact profile's Photos/Videos gallery grids.
+            VideoThumbnailTile(uri = attachment.uri, modifier = Modifier.fillMaxSize())
         }
     }
 }
@@ -2496,9 +2476,8 @@ private fun MmsAttachment(
 
         // ── Video ──────────────────────────────────────────────────────────────
         mimeType?.startsWith("video/") == true -> {
-            // Cached first frame (see rememberVideoThumbnail) so the bubble shows a real
-            // still; falls back to the play-icon placeholder while loading or on failure.
-            val videoThumb = rememberVideoThumbnail(uri)
+            // Shared first-frame-still + play-badge tile (see VideoThumbnailTile); falls
+            // back to just the badge while the thumbnail loads or on failure.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2508,33 +2487,14 @@ private fun MmsAttachment(
                     .then(
                         if (onVideoClick != null) Modifier.clickable(onClick = onVideoClick)
                         else Modifier
-                    ),
-                contentAlignment = Alignment.Center
+                    )
             ) {
-                videoThumb?.let {
-                    Image(
-                        bitmap             = it.asImageBitmap(),
-                        contentDescription = "Video preview",
-                        contentScale       = ContentScale.Crop,
-                        modifier           = Modifier.fillMaxSize()
-                    )
-                }
-                // Play badge overlaid at centre — signals it's a video and gives a clear
-                // tap target even before (or if) the thumbnail resolves.
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.35f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Video",
-                        modifier = Modifier.size(32.dp),
-                        tint = Color.White
-                    )
-                }
+                VideoThumbnailTile(
+                    uri = uri,
+                    modifier = Modifier.fillMaxSize(),
+                    badgeSize = 48.dp,
+                    iconSize = 32.dp
+                )
             }
         }
 
@@ -4543,16 +4503,13 @@ private fun linkifyText(
         append(text)
 
         // ── URLs ──────────────────────────────────────────────────────────────
-        val urlMatcher = android.util.Patterns.WEB_URL.matcher(text)
-        val urlRanges  = mutableListOf<IntRange>()
-        while (urlMatcher.find()) {
-            val start = urlMatcher.start()
-            val end   = urlMatcher.end()
-            urlRanges += start until end
-            // WEB_URL matches schemeless hosts (e.g. "example.com"); ACTION_VIEW needs a scheme.
-            val raw = urlMatcher.group()
-            val url = if (raw.startsWith("http", ignoreCase = true)) raw else "http://$raw"
-            addLink(LinkAnnotation.Url(url, linkStyles), start, end)
+        // findUrls (domain/links/LinkExtraction.kt) is the one place the WEB_URL matcher +
+        // scheme-normalization loop lives — the contact profile's Links section (extractLinks)
+        // calls the same function, so a link tappable in a bubble always appears there too.
+        val urlMatches = findUrls(text)
+        val urlRanges  = urlMatches.map { it.start until it.end }
+        urlMatches.forEach { match ->
+            addLink(LinkAnnotation.Url(match.url, linkStyles), match.start, match.end)
         }
 
         // ── Phone numbers ─────────────────────────────────────────────────────
@@ -5254,7 +5211,7 @@ private fun AllowScreenRotationWhileVisible() {
  * @param onDismiss Called when the user closes the player.
  */
 @Composable
-private fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
+internal fun VideoPlayerDialog(uri: String, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     // Allow the device to rotate while the player is open (portrait clips can then be
     // watched full-screen in landscape); reverts to the app-wide portrait lock on close.

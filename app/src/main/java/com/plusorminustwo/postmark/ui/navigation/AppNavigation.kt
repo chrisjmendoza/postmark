@@ -28,6 +28,8 @@ import androidx.navigation.navArgument
 import com.plusorminustwo.postmark.ui.conversations.ConversationsScreen
 import com.plusorminustwo.postmark.ui.conversations.NewConversationScreen
 import com.plusorminustwo.postmark.ui.contact.ContactDetailScreen
+import com.plusorminustwo.postmark.ui.contact.PhotoGalleryScreen
+import com.plusorminustwo.postmark.ui.contact.VideoGalleryScreen
 import com.plusorminustwo.postmark.ui.forward.ForwardPickerScreen
 import com.plusorminustwo.postmark.ui.onboarding.OnboardingScreen
 import com.plusorminustwo.postmark.ui.search.SearchScreen
@@ -103,6 +105,16 @@ sealed class Screen(val route: String) {
     /** Contact detail page — opened by tapping the name/avatar in the thread TopAppBar. */
     data object ContactDetail : Screen("contact/{threadId}") {
         fun route(threadId: Long) = "contact/$threadId"
+    }
+    /** Full photo gallery — every image attachment in the thread, newest first.
+     *  Opened by tapping the Photos section on [ContactDetail]. */
+    data object PhotoGallery : Screen("contact/{threadId}/photos") {
+        fun route(threadId: Long) = "contact/$threadId/photos"
+    }
+    /** Full video gallery — every video attachment in the thread, newest first.
+     *  Opened by tapping the Videos section on [ContactDetail]. */
+    data object VideoGallery : Screen("contact/{threadId}/videos") {
+        fun route(threadId: Long) = "contact/$threadId/videos"
     }
     /** "Forward to..." destination picker for one or more messages (text or image). */
     data object ForwardMessage : Screen("forward/{messageIds}") {
@@ -366,8 +378,24 @@ fun AppNavigation(
             val threadId = backStackEntry.arguments!!.getLong("threadId")
             ContactDetailScreen(
                 threadId = threadId,
-                onBack   = { navController.popBackStack() }
+                onBack   = { navController.popBackStack() },
+                onOpenPhotos = { navController.navigate(Screen.PhotoGallery.route(threadId)) },
+                onOpenVideos = { navController.navigate(Screen.VideoGallery.route(threadId)) }
             )
+        }
+
+        composable(
+            route = Screen.PhotoGallery.route,
+            arguments = listOf(navArgument("threadId") { type = NavType.LongType })
+        ) {
+            PhotoGalleryScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(
+            route = Screen.VideoGallery.route,
+            arguments = listOf(navArgument("threadId") { type = NavType.LongType })
+        ) {
+            VideoGalleryScreen(onBack = { navController.popBackStack() })
         }
     }
 }

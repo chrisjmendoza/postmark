@@ -500,6 +500,69 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       (`ACTION_VIEW` for known contacts, `ACTION_INSERT_OR_EDIT` for unknown);
       Mute / Pin / Notifications toggles; shared media grid (Coil thumbnails);
       full-screen image viewer.
+- [x] **Contact profile: Google Messages-style Photos/Videos/Links sections**
+      (owner request, July 24 2026, `feat/contact-media-gallery`) — the flat
+      "Shared media" grid on `ContactDetailScreen` is now three sections, all
+      newest → oldest, hidden entirely when empty, headers read "Photos · N" /
+      "Videos · N" / "Links · N":
+      - **Photos** — 6-item preview grid; tapping ANYWHERE in the section
+        (whole box, not just the header — trailing chevron signals it) opens
+        a new `contact/{threadId}/photos` route: a `LazyVerticalGrid` (3
+        columns) of every image attachment in the thread. Tapping an image
+        there reuses `ContactDetailScreen`'s own `ContactFullScreenViewer`
+        (made `internal` so the new route can call it) rather than a second
+        viewer implementation.
+      - **Videos** — same preview(6) → full-grid pattern, in a fully separate
+        section — **never mixed with Photos**, even on the preview or the
+        gallery route. Thumbnails use the same first-frame-still + play-badge
+        treatment as the thread bubbles/grid; that tile was extracted out of
+        `ThreadScreen`'s `AttachmentThumbnail`/`MmsAttachment` into a shared
+        `VideoThumbnailTile` (`ui/thread/VideoThumbnails.kt`) so all three
+        call sites (bubble, thread grid, contact gallery) render identically
+        instead of keeping three copies in sync by hand. Tap → the existing
+        `VideoPlayerDialog` (also widened from `private` to `internal`).
+      - **Links** — every URL found in the thread's message bodies, newest
+        first; each row is the URL (single line, ellipsized) + a sender label
+        ("You" / contact name) and `friendlyTimestamp` date, tap → opens the
+        browser. **Decision: rendered inline in the section, no third
+        route/ViewModel/nav-entry** — the owner only asked for "a section for
+        links," full grid parity was scoped to Photos/Videos only, and a link
+        list has no grid layout that would make a dedicated gallery screen
+        worth standing up. Extraction is a pure function,
+        `domain/links/LinkExtraction.kt` (`extractLinks`/`findUrls`): given
+        messages, returns `(url, messageId, timestamp, isSent)` newest first;
+        the SAME url sent twice is two entries (a timeline, not a deduped
+        destination list). Reuses the exact `android.util.Patterns.WEB_URL`
+        matcher ThreadScreen's bubble-linkify pass (`linkifyText`) already
+        used — `linkifyText` was refactored to call the new shared `findUrls`
+        helper instead of keeping its own copy of the matcher-plus-normalize
+        loop, so a URL tappable in a bubble is guaranteed to also show up
+        here. 9 new plain-JUnit tests (`LinkExtractionTest`); since
+        `Patterns.WEB_URL`'s field is stubbed to null outside
+        Robolectric/an instrumented run, `extractLinks`/`findUrls` take an
+        optional `Pattern` parameter defaulting to `Patterns.WEB_URL` — tests
+        inject an equivalent plain-Java fixture pattern, production call
+        sites never pass it.
+      - `Context.openUrl()` (`util/OpenUrl.kt`) is a new tiny helper — it
+        also exists on the unmerged `feat/about-licenses` branch (PR #30,
+        added there for the Licenses screen), same signature and behavior. If
+        both branches merge, this is a trivial duplicate-file conflict; keep
+        either copy.
+      - No new DAO query: Photos/Videos reuse the same
+        `MessageRepository.observeMediaMessages(threadId)` flow the old
+        shared-media grid used (flattened per-attachment via a new
+        `List<Message>.toGalleryAttachments(mimePrefix)` in
+        `domain/model/GalleryAttachment.kt`, keyed by `messageId` +
+        `attachmentIndex` for stable grid keys); Links reuses
+        `MessageRepository.observeByThread(threadId)`, the same read-only
+        query `ThreadViewModel` already drives the conversation view with.
+      - 1091 tests (1082 baseline + 9), `assembleDebug` clean. **Needs
+        on-device verification:** 6-item preview caps and photo/video
+        never-mixed rendering; both full grids scroll clear of the nav bar
+        (contentPadding, not an outer `Modifier.padding`, per the
+        BlockedNumbersScreen convention); viewer/player open correctly from
+        the new routes; link rows open the browser; section counts match;
+        empty sections are fully hidden (no dangling header).
 
 ### Conversation list polish
 - [x] **Unread filter button** — `FilterChip` below the conversation list top
