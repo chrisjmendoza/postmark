@@ -73,6 +73,39 @@ decision gate through the real parser — short body, the Tonya ~70-char https U
 first line, family vs. over-long ZWJ emoji, duplicate-id, removal, and the
 requeue gate. `./gradlew test`: 970 passing, 0 failed; `assembleDebug` clean.
 **On-device verification pending** (see TODO.md for the checklist).
+
+## 2026-07-23 (feat/save-number-prompt) — "Add to contacts?" banner for unknown 1:1 senders
+
+961 tests (up from 898). **Needs on-device verification.**
+
+New dismissable banner at the top of a 1:1 thread when the address has no matching
+contact and looks like a real phone number (>=7 digits after stripping punctuation —
+short codes and alphanumeric sender IDs like "AMAZON" get no banner). Mirrors the
+`feat/spam-heuristics` wiring exactly: pure `shouldShowSaveNumberPrompt`/
+`isSaveablePhoneNumber` in `domain/contacts/SaveNumberPrompt.kt`, dismissal persisted
+per-thread in a new `SaveNumberPromptRepository` (own SharedPreferences file, same
+shape as `SpamSuspicionRepository`), banner rendered in normal content flow above the
+message list (`SaveNumberPromptBanner` in ThreadScreen.kt) so it inherits the same
+four-edge inset behavior as the spam banner beside it — no schema change.
+
+The spam-suspicion banner always wins when both would otherwise apply — `ThreadViewModel.
+saveNumberPromptVisible` takes `spamBannerVisible` as an input and never shows both at
+once. `senderIsKnownContact` (a plain boolean) became `senderContactName` (the resolved
+name or null) so both banners can share the one Contacts lookup instead of querying twice.
+
+"Add to contacts" fires the same `ACTION_INSERT_OR_EDIT` intent ContactDetailScreen's
+"Open in Contacts" uses for an unknown number — extracted to `addContactIntent()` in
+that file rather than duplicated. Deliberately does NOT persist dismissal (the system
+UI can be cancelled); once the contact actually exists, the existing contact-name
+lookup + `ContactCaches` ContentObserver invalidation hide the banner on their own.
+"Dismiss" (X) persists forever via the repository, matching the spam banner's contract.
+
+New `SaveNumberPromptTest` (pure JUnit, no Mockito/MockK/Turbine): known contact, group
+thread, 5-digit shortcode, alphanumeric sender, dismissed, spam-banner-visible, normal
+unknown 10-digit number, and a formatted "+1 (555) 123-4567" number. Needs on-device
+verification: banner rendering in both themes, the Contacts intent flow, and that
+adding the contact makes the banner disappear on return to the thread.
+
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 
 **Phantom gap between bubble and reaction pills** (found on-device right after

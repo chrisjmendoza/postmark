@@ -425,8 +425,22 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       wired in Conversations, Thread, and Search screens.
 - [ ] **Multiple numbers per contact** — handle correctly during
       sync and display.
-- [ ] **Save number prompt** — when receiving from unknown number,
-      show "Add to contacts" banner above conversation.
+- [x] **Save number prompt** (July 23 2026) — "Add to contacts?" banner at the top
+      of a 1:1 thread, mirroring `feat/spam-heuristics`'s wiring exactly: pure
+      `shouldShowSaveNumberPrompt`/`isSaveablePhoneNumber` (`domain/contacts/
+      SaveNumberPrompt.kt`), dismissal persisted per-thread in a new
+      `SaveNumberPromptRepository` (own prefs file), banner in normal content
+      flow above the message list. Shows only when not a group, the address has
+      no matching contact, the address is a plausible phone number (>=7 digits
+      after stripping punctuation — short codes and alphanumeric sender IDs get
+      no banner), not dismissed, and the spam-suspicion banner isn't showing (it
+      always wins — never both at once). "Add to contacts" reuses
+      ContactDetailScreen's `ACTION_INSERT_OR_EDIT` intent construction
+      (extracted to `addContactIntent()`) and does not persist dismissal — the
+      contact-name lookup + `ContactCaches` invalidation hide the banner once the
+      contact actually exists. "Dismiss" (X) persists forever. 961 tests. Needs
+      on-device verification: banner rendering, the Contacts intent flow, and
+      post-add banner disappearance.
 - [x] **Contact name refresh** (July 22 2026) — `Thread.displayName` was only
       ever resolved from Contacts at thread-creation time (`SmsSyncHandler.
       ensureThread`, `SmsHistoryImportWorker`) and never re-checked, so a
