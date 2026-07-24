@@ -134,7 +134,9 @@ class SmsSyncHandler @Inject constructor(
         // v1: original import-time pass. v2: truncated-quote matching (ellipsized long URLs).
         // v3: bare-emoji MMS reactions (a lone-emoji media reaction archived without any
         // quoted structure) — heals the owner's existing stray ❤️ onto the cat photo.
-        private const val KEY_REACTION_REPROCESS_DONE = "reaction_reprocess_v3_done"
+        // v4: removal-PREFIX shape ("Removed <emoji> from "<quote>"") — heals the owner's
+        // existing stray "Removed 👍 from …" bubble and clears the stale pill it never removed.
+        private const val KEY_REACTION_REPROCESS_DONE = "reaction_reprocess_v4_done"
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -205,7 +207,7 @@ class SmsSyncHandler @Inject constructor(
         if (prefs.getBoolean(KEY_REACTION_REPROCESS_DONE, false)) return
         try {
             val result = reactionResolver.resolveAll()
-            syncLogger.log(TAG, "reaction reprocess v3: inserted=${result.inserted} removed=${result.removed}")
+            syncLogger.log(TAG, "reaction reprocess v4: inserted=${result.inserted} removed=${result.removed}")
             prefs.edit().putBoolean(KEY_REACTION_REPROCESS_DONE, true).apply()
         } catch (e: CancellationException) {
             throw e

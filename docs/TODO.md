@@ -89,10 +89,25 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       the immediately-preceding media message; SMS is never converted. Verify:
       after one catch-up the owner's stray ❤️ becomes a pill on the cat photo and
       the bubble is gone; a fresh sent/received media reaction attaches; a lone
-      emoji typed as a real SMS reply stays a normal message. Still-open device
-      question: the archival **removal** shape for a bare-emoji reaction is
-      unknown (add-only for now) — capture an unreact-from-the-other-phone over
-      RCS via SyncLogger before building removal detection.
+      emoji typed as a real SMS reply stays a normal message.
+      **Removal shape also captured on-device (July 24 2026):** unreacting a
+      quoted-text-target reaction archives as a `Removed <emoji> from "<quote>"`
+      PREFIX — not the guessed `<emoji> to "<quote>" removed` suffix — e.g.
+      `Removed 👍 from "In the column of "I don't have kids because of this,
+      but here we are," Frankie is kind of like…"` (embedded quotes and all,
+      closing quote is the body's last character). `fix/reaction-removal-prefix`
+      adds a second regex to `AndroidReactionParser` recognising this shape
+      (`ParsedReaction(emoji, quote, isRemoval = true)`); the existing
+      `isRemoval` machinery in `ReactionResolver` / `SmsSyncHandler` needed no
+      changes. One-shot reprocess bumped to `reaction_reprocess_v4_done` so
+      existing installs re-scan once. On-device verification: after one
+      catch-up the owner's stray "Removed 👍 from …" bubble should disappear
+      and the 👍 pill should clear from the original message; a fresh live
+      un-react from the other phone should also clear the pill without leaving
+      a bubble. Still-open device question: the archival **removal** shape for
+      a **bare-emoji** media reaction (no quoted structure) is still unknown —
+      capture an unreact-from-the-other-phone on a media message over RCS via
+      SyncLogger before building that case.
 - [x] **Reaction chip position** (moved below the bubble July 22 2026) — pills
       are a plain layout child of the bubble Column, sitting in their own row
       just below the bubble (Google Messages look, but below rather than
