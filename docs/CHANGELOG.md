@@ -4,6 +4,55 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (fix/thread-scrollcapture-selection) — host the scroll-capture callback on a child View so the platform actually selects it
+
+1082 tests passing (unchanged; no new pure logic — this is a view-hosting fix).
+`assembleDebug` green. **Not yet verified on device** (needs a fresh capture loop).
+
+**Device finding (Samsung S24 Ultra, Android 15/OneUI, July 24):** taking a
+screenshot in a thread and tapping capture-more produced the toast **"Scroll
+capture isn't supported, so we captured as much of the page as possible"** and a
+flat ~551×4592 long-screenshot — NOT our tiled scroll capture. Our
+`ThreadScrollCaptureEffect` registered its callback but the system never drove it.
+
+**Root cause (source-confirmed):** the previous implementation called
+`view.setScrollCaptureCallback(...)` on the host **`AndroidComposeView`**.
+`AndroidComposeView` **overrides `View.onScrollCaptureSearch(...)`** and delegates
+only to its own `ScrollCapture.onScrollCaptureSearch(...)` — it **never calls
+`super`**. The framework's *default* `View.onScrollCaptureSearch` is the ONLY place
+that reads the callback set by `setScrollCaptureCallback` (`mScrollCaptureCallback`)
+and hands the platform a target for it. Because Compose's override bypasses super,
+our callback on the ComposeView was stored but **never consulted** — dead. On the
+reversed thread list Compose's own search yields no target either, so the whole
+ComposeView produces zero targets and the platform falls back to a flat
+long-screenshot. Sources: androidx `AndroidComposeView.android.kt`
+(`onScrollCaptureSearch` override → `scrollCapture?.onScrollCaptureSearch(...)`, no
+`super`); `ScrollCapture.android.kt` (`targets.accept(ScrollCaptureTarget)` only
+when a candidate is found); AOSP `View.setScrollCaptureCallback` docs (a custom
+callback "takes precedence over a system version"; recommend
+`SCROLL_CAPTURE_HINT_INCLUDE`) — both operate through the default path Compose skips.
+
+**Fix:** host the callback on a **dedicated child View** instead of the shared
+ComposeView. `ThreadScrollCapture.kt` now exposes `ThreadScrollCaptureOverlay`, an
+`AndroidView` emitting a transparent, non-interactive `ScrollCaptureHostView` sized
+to exactly cover the list (`Modifier.matchParentSize()`), placed **behind** the
+`LazyColumn` in a wrapping `Box` so it never intercepts touches. A plain child View
+keeps the framework's default (non-overridden) `onScrollCaptureSearch`, which DOES
+read our `mScrollCaptureCallback`; `ViewGroup.dispatchScrollCaptureSearch` recurses
+into children so the child is visited during the platform's target search. We set
+`scrollCaptureHint = SCROLL_CAPTURE_HINT_INCLUDE` so the resolver reliably picks it.
+Scoped to the thread screen only — the conversations list's working Compose-native
+long-screenshot is untouched.
+
+Because the overlay's bounds now equal the capturable region, the old
+`onGloballyPositioned { boundsInRoot() }` plumbing and the `listBoundsInRoot` state
+in `ThreadScreen` are **deleted**; the callback uses the host View's own
+width/height and `getLocationInWindow`. `ScrollCaptureMath` (the reversed-list
+sign-flip, unit-tested) is unchanged. API 31+ gated as before; the LazyColumn's
+gesture handling and bubble internals are untouched.
+
+---
+
 ## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
 
 1073 tests passing (up from ~1044). **Not yet verified on device.**
