@@ -247,6 +247,43 @@ Received MMS media lives in the OS's own content provider, not app storage
 — the screen's footer says so. Attribution/breakdown logic extracted to
 `domain/storage/StorageUsage.kt`, unit tested. 959 tests. Needs on-device
 verification (plausible sizes, SAF folder size/label, cleanup actions).
+## 2026-07-23 (feat/conversation-swipe-actions) — swipe left to delete, swipe right to toggle read
+
+Standard Android conversation-list swipe gestures via Material 3
+`SwipeToDismissBox`: swipe left (EndToStart) reveals a red Delete affordance,
+swipe right (StartToEnd) reveals a primaryContainer read/unread toggle whose
+icon reflects the thread's current state. Neither swipe actually dismisses
+the row — `confirmValueChange` always returns `false`, so a completed swipe
+(past a 40%-of-width `positionalThreshold`, to reject accidental micro-swipes)
+fires its action once and springs back. Rows aren't wrapped in the swipe box
+at all while selection mode is active, so long-press multi-select is
+untouched and swipes can't fire mid-selection.
+
+Delete reuses the long-press multi-select bulk-delete path exactly:
+`ConversationsViewModel.deleteSelected()` was split so its provider-plus-Room
+delete loop lives in a private `deleteThreadsInternal(ids)`; the new
+`deleteThread(id)` (swipe path) calls the same function with a one-element
+list, so there is still only one delete implementation. Swiping left snaps
+back and opens the same confirm dialog the bulk Delete button uses; if
+Postmark isn't the default SMS app (swipes can't be gated by hiding a button
+the way the selection bar hides Delete), it opens a "Set Postmark as default
+SMS app" dialog instead, mirroring the one ThreadScreen already has. The
+read/unread toggle calls the same `markAllRead` / `markLatestUnread` repository
+methods the bulk actions use, with a short "Marked read"/"Marked unread"
+snackbar and no confirm dialog (not destructive).
+
+The direction → action decision is a pure `resolveSwipeAction(direction,
+isRead)` in new `domain/selection/SwipeAction.kt`, covered by 3 tests in
+`SwipeActionTest`. 952 tests total, all green.
+
+Deliberate deviation from the original TODO wording's "undo snackbar": a real
+telephony-provider delete can't honestly be undone from a client-side buffer,
+so the confirm-then-delete pattern the rest of the app already uses for
+destructive actions applies here instead — see the TODO.md annotation for the
+full reasoning. Needs on-device verification (gesture feel, the 40% threshold,
+no conflict with list scroll or long-press, and the background reveal over a
+custom home-screen background image).
+
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 
 **Phantom gap between bubble and reaction pills** (found on-device right after
