@@ -205,6 +205,15 @@ class MessageRepository @Inject constructor(
     fun observePinnedMessages(threadId: Long): Flow<List<Message>> =
         messageDao.observePinnedByThread(threadId).map { list -> list.map { it.toDomain() } }
 
+    /** Sets (or clears, when null) a message's reply-reminder time. Non-null == flagged. */
+    suspend fun updateRemindAt(messageId: Long, remindAt: Long?) =
+        messageDao.updateRemindAt(messageId, remindAt)
+
+    /** Live list of this thread's flagged (reminder-set) messages, soonest reminder first —
+     *  backs the per-thread Reminders panel. */
+    fun observeFlaggedMessages(threadId: Long): Flow<List<Message>> =
+        messageDao.observeFlaggedByThread(threadId).map { list -> list.map { it.toDomain() } }
+
     /** Live list of starred messages that carry at least one image attachment, newest
      *  first — backs the global Starred Images gallery. Filters to images specifically
      *  (not video/audio) since that's what the gallery displays; a starred message with

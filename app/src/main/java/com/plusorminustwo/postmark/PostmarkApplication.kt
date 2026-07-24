@@ -98,11 +98,27 @@ class PostmarkApplication : Application(), Configuration.Provider {
                 setShowBadge(false)
             }
         )
+
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_REMINDERS,
+                "Reply reminders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Reminders you set to reply to a message later"
+                enableLights(true)
+                enableVibration(true)
+            }
+        )
     }
 
     companion object {
         const val CHANNEL_INCOMING_SMS = "incoming_sms"
         const val CHANNEL_SYNC         = "sync_service"
+        // User-set reply reminders ("Remind me" on a message). IMPORTANCE_HIGH: an explicitly
+        // requested reminder should surface prominently. These fire even for muted threads —
+        // an explicit user request beats a thread-level mute (see MessageReminderWorker).
+        const val CHANNEL_REMINDERS    = "reminders"
 
         // ── Notification grouping ─────────────────────────────────────────────────
         // GROUP_KEY_SMS is the Android notification group key that bundles all

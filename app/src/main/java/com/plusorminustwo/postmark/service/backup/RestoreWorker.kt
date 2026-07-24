@@ -374,7 +374,8 @@ class RestoreWorker @AssistedInject constructor(
                 isStarred = record.isStarred,
                 isPinned = record.isPinned,
                 sentAt = record.sentAt,
-                deliveredAt = record.deliveredAt
+                deliveredAt = record.deliveredAt,
+                remindAt = record.remindAt
             )
             pendingMessages += message
             val newest = ctx.newestInserted

@@ -34,6 +34,7 @@ class BackupRecordCodecTest {
         isPinned = true,
         sentAt = 1_752_000_000_050L,
         deliveredAt = 1_752_000_000_200L,
+        remindAt = 1_752_000_500_000L,
         attachments = listOf(AttachmentRef("ab12cd", "image/jpeg")),
         reactions = listOf(
             ReactionRecord("self", "❤️", 1_752_000_100_000L, ""),
@@ -98,6 +99,7 @@ class BackupRecordCodecTest {
         assertEquals(false, msg.isPinned)
         assertNull(msg.sentAt)
         assertNull(msg.deliveredAt)
+        assertNull(msg.remindAt)
         assertTrue(msg.attachments.isEmpty())
         assertTrue(msg.reactions.isEmpty())
     }

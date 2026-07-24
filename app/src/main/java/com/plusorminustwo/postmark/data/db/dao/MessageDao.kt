@@ -269,6 +269,19 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE threadId = :threadId AND isPinned = 1 ORDER BY timestamp ASC")
     fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>>
 
+    /** Sets (or clears, when null) a message's reply-reminder time. Non-null == flagged.
+     *  Written by ThreadViewModel.setReminder alongside scheduling/cancelling the
+     *  message_reminder_<id> WorkManager job. */
+    @Query("UPDATE messages SET remindAt = :remindAt WHERE id = :messageId")
+    suspend fun updateRemindAt(messageId: Long, remindAt: Long?)
+
+    /** This thread's flagged (reminder-set) messages, soonest reminder first — backs the
+     *  per-thread Reminders panel. threadId is index-covered; the small flagged subset is
+     *  filtered in-row, so no dedicated remindAt index is needed. A past remindAt still
+     *  qualifies (the flag persists after the reminder fires). */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND remindAt IS NOT NULL ORDER BY remindAt ASC")
+    fun observeFlaggedByThread(threadId: Long): Flow<List<MessageEntity>>
+
     /** Every starred message with a media attachment, newest first — backs the global
      *  Starred Images gallery (Settings → Starred images). Image-vs-video/audio filtering
      *  happens in the repository layer after decoding attachmentsJson, since a single

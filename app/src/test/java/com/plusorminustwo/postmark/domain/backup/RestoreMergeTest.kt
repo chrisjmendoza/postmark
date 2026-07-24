@@ -206,6 +206,15 @@ class RestoreMergeTest {
         assertNull(withoutTimes.deliveredAt)
     }
 
+    @Test
+    fun `restore preserves the reply-reminder flag verbatim`() {
+        // remindAt is a user-set flag — sanitizeForRestore only touches deliveryStatus and
+        // isRead, so it passes through unchanged (including null). WorkManager re-scheduling
+        // of a restored future reminder is out of scope for v1 (documented deferral).
+        assertEquals(333L, sanitizeForRestore(record.copy(remindAt = 333L)).remindAt)
+        assertNull(sanitizeForRestore(record.copy(remindAt = null)).remindAt)
+    }
+
     // ---- restored id allocation ----
 
     @Test

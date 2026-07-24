@@ -63,6 +63,7 @@ import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStor
 import com.plusorminustwo.postmark.service.export.ImageExportRenderer
 import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
+import com.plusorminustwo.postmark.service.reminder.MessageReminderWorker
 import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
 import com.plusorminustwo.postmark.service.sms.SendQueueWorker
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
@@ -354,6 +355,13 @@ class ThreadViewModel @Inject constructor(
         .observePinnedMessages(threadId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** This thread's flagged (reminder-set) messages, soonest reminder first — backs the
+     *  Reminders panel opened from the ⋮ overflow menu. Mirrors [pinnedMessages]; collected
+     *  independently of the big uiState combine (which is at its argument limit). */
+    val flaggedMessages: StateFlow<List<Message>> = messageRepository
+        .observeFlaggedMessages(threadId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     /**
      * address → contact display name for this thread's roster, resolved once per
      * roster change on IO (each entry is a ContactsContract query). Empty for 1:1
@@ -612,6 +620,23 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             val message = messageRepository.getById(messageId) ?: return@launch
             messageRepository.updatePinned(messageId, !message.isPinned)
+        }
+    }
+
+    /**
+     * Sets or clears a message's reply reminder. [remindAt] non-null flags the message and
+     * schedules a WorkManager job to fire at that time; null unflags it and cancels the job.
+     * The DB write is the source of truth (drives the 🔖 indicator and the Reminders list);
+     * the worker re-checks remindAt on fire, so an unflag that races a firing job is safe.
+     */
+    fun setReminder(messageId: Long, remindAt: Long?) {
+        viewModelScope.launch {
+            messageRepository.updateRemindAt(messageId, remindAt)
+            if (remindAt != null) {
+                MessageReminderWorker.schedule(context, messageId, remindAt)
+            } else {
+                MessageReminderWorker.cancel(context, messageId)
+            }
         }
     }
 

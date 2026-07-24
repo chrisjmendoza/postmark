@@ -174,6 +174,7 @@ private fun Message.toRecord(
     isPinned = isPinned,
     sentAt = sentAt,
     deliveredAt = deliveredAt,
+    remindAt = remindAt,
     // An attachment whose bytes couldn't be read is dropped from the record rather
     // than pointing at a blob that isn't in the archive.
     attachments = attachments.mapNotNull { att ->

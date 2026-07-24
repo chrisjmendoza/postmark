@@ -151,6 +151,71 @@ Play-submission requirement (deadline May 31 2026); must be checked on the built
 AAB and may need a media3 bump. Neither gap was a trivial zero-risk source edit,
 so no code was touched. TODO item annotated; sources: developer.android.com FGS
 timeout + Google Play 16 KB pages, plus auditor knowledge for predictive-back.
+## 2026-07-24 (feat/message-reminders) — flag a message for later ("Remind me")
+
+**Not yet verified on device** (unit + androidTest-compile only; no device to run
+the instrumented migration suite or watch a reminder actually fire).
+
+Based on `feat/delivery-timestamps` (owns schema v21); this branch owns **v22**.
+
+**Long-press a message → Remind: pick a time, get a notification then that
+deep-links back to the message.** Flagged bubbles show a small 🔖; a per-thread
+Reminders list shows all flagged messages.
+
+*Schema + data (Room v21 → v22).* One nullable `remindAt: Long?` on `messages`
+("flagged" == `remindAt != null`) added to `MessageEntity` and domain `Message`.
+`MIGRATION_21_22` mirrors `MIGRATION_20_21` — a single
+`ALTER TABLE messages ADD COLUMN remindAt INTEGER`, no default, so existing rows
+read NULL; registered in `DatabaseModule`. `22.json` exported and committed. New
+`MessageDao.updateRemindAt` (set/clear) + `observeFlaggedByThread`
+(`WHERE remindAt IS NOT NULL ORDER BY remindAt ASC`) with repository passthroughs.
+Backup/restore carry `remindAt` additively (`MessageRecord`, tolerant decode).
+
+*Scheduling — WorkManager, not exact alarms.* `MessageReminderWorker` (HiltWorker)
+is a `OneTimeWorkRequest` with `initialDelay`, unique name
+`message_reminder_<messageId>`, `REPLACE` policy; cancelled on unflag. Deliberately
+**no AlarmManager / `SCHEDULE_EXACT_ALARM`** — the app keeps zero exact-alarm
+surface (see `docs/TARGET_SDK_REVIEW.md`); minute-level inexactness is acceptable
+for reply reminders, and WorkManager persists across reboots. On fire the worker
+re-checks `remindAt != null` (unflag race), posts, and **leaves `remindAt` set** —
+the flag persists (a past `remindAt` still renders the 🔖 and lists) until the user
+clears it.
+
+*Notification.* New `reminders` channel (IMPORTANCE_HIGH, "Reply reminders") in
+`PostmarkApplication`. Title = thread/contact display name, text =
+"Reply to: <preview>". Tap → `MainActivity` carrying `EXTRA_OPEN_THREAD_ID` **plus**
+new `EXTRA_SCROLL_TO_MESSAGE_ID`, so `AppNavigation` lands via
+`Screen.Thread.route(threadId, scrollToMessageId)` — the existing jump/highlight
+mechanism. `FLAG_IMMUTABLE`, auto-cancel. **Reminders fire even for muted threads**
+by design — an explicit user request beats a thread-level mute.
+
+*UI.* Reaction popup gains a 6th action — `Icons.Default.Bookmark`, label
+**Remind** / **Unflag** when already flagged. Unflagged: dismiss popup, open a small
+`ModalBottomSheet` time picker (presets "In 1 hour", "This evening (6 PM)" →
+"Tomorrow evening" past 5 PM, "Tomorrow morning (9 AM)", plus "Pick date & time…" →
+M3 `DatePickerDialog` then `TimePicker`; past custom time → "That time is in the
+past" snackbar). Flagged: clear `remindAt` + cancel the work immediately. Preset math
+is pure (`domain/reminder/ReminderTimes.kt`, injected clock/zone, DST-safe). The 🔖
+indicator mirrors the pinned `PushPin` (12dp, same alpha, row-guard widened for
+`remindAt`). A `FlaggedMessagesSheet` (thread ⋮ → **Reminders**) mirrors
+`PinnedMessagesSheet`, backed by a new `flaggedMessages` StateFlow in
+`ThreadViewModel`; rows show sender, preview, the reminder time (absolute), and a
+per-row unflag.
+
+*Deferred / not done:* global cross-thread reminders list (v1 is per-thread only);
+re-arming a restored future reminder's WorkManager job after backup restore.
+
+*Tests.* `ReminderTimesTest` (+9), `RestoreMergeTest` reminder-preserved (+1),
+`BackupRecordCodecTest` extended for `remindAt`, androidTest
+`migration21To22_addsNullableRemindAt` + full chain to v22. Unit suite 1091 →
+**1101**, 0 failures; `assembleDebug` + `compileDebugAndroidTestKotlin` clean.
+
+*On-device checklist:* reminder fires + deep-link lands centered/highlighted;
+reboot survival; unflag cancels; 6-action popup row at large font scale; sheet
+insets on all edges.
+
+---
+
 ## 2026-07-24 (feat/delivery-timestamps) — per-message delivery timestamps + Message info sheet
 
 **Not yet verified on device** (unit + androidTest-compile only; no device to run

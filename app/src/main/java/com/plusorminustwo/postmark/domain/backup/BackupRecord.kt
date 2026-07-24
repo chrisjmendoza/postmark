@@ -84,7 +84,11 @@ data class MessageRecord(
     // keep compiling without naming them, and archives written before these fields tolerate
     // their absence on decode.
     val sentAt: Long? = null,
-    val deliveredAt: Long? = null
+    val deliveredAt: Long? = null,
+    // Additive field (reply reminder / flag-for-later, v22) — default null so older callers
+    // and the v1 reader keep compiling without naming it, and archives written before this
+    // field tolerate its absence on decode.
+    val remindAt: Long? = null
 )
 
 /** A decoded data.jsonl line. */
@@ -145,6 +149,7 @@ fun encodeMessageLine(message: MessageRecord): String = encodeJson(
         // ThreadRecord accentColorArgb style; decode reads them back tolerantly.
         "sentAt" to message.sentAt,
         "deliveredAt" to message.deliveredAt,
+        "remindAt" to message.remindAt,
         "attachments" to message.attachments.map {
             linkedMapOf("sha256" to it.sha256, "mimeType" to it.mimeType)
         },
@@ -229,6 +234,7 @@ private fun decodeMessageRecord(map: Map<*, *>): MessageRecord = MessageRecord(
     // Absent (or explicitly null) in older archives — tolerate both; long() returns null.
     sentAt = map.long("sentAt"),
     deliveredAt = map.long("deliveredAt"),
+    remindAt = map.long("remindAt"),
     attachments = (map["attachments"] as? List<*>).orEmpty().mapNotNull { att ->
         (att as? Map<*, *>)?.let { a ->
             val sha = a.str("sha256") ?: return@let null

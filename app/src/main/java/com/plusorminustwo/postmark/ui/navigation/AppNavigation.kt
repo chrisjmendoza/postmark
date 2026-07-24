@@ -132,6 +132,9 @@ private val FADE_OUT  = tween<Float>(220)
 fun AppNavigation(
     showOnboarding: Boolean,
     pendingOpenThreadId: StateFlow<Long?> = MutableStateFlow(null),
+    // Optional message id a reminder notification wants scrolled to within the opened thread
+    // (-1L = none). Read on the same deep-link navigation as [pendingOpenThreadId].
+    pendingScrollToMessageId: StateFlow<Long> = MutableStateFlow(-1L),
     onThreadOpened: () -> Unit = {}
 ) {
     val navController = rememberNavController()
@@ -143,7 +146,9 @@ fun AppNavigation(
     LaunchedEffect(openThreadId) {
         val id = openThreadId ?: return@LaunchedEffect
         if (!showOnboarding) {
-            navController.navigate(Screen.Thread.route(id))
+            // A reminder notification also carries the message id to land on; -1L (the
+            // incoming-message path) just opens the thread at the bottom as before.
+            navController.navigate(Screen.Thread.route(id, pendingScrollToMessageId.value))
         }
         onThreadOpened()
     }
