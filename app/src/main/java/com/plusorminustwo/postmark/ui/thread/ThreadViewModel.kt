@@ -30,6 +30,7 @@ import com.plusorminustwo.postmark.data.preferences.SpamSuspicionRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import com.plusorminustwo.postmark.data.repository.MessageRepository
+import com.plusorminustwo.postmark.data.repository.ScheduledMessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.MMS_ID_OFFSET
@@ -64,9 +65,14 @@ import com.plusorminustwo.postmark.service.export.ImageExportRenderer
 import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.service.reminder.MessageReminderWorker
+import com.plusorminustwo.postmark.service.scheduled.ScheduledSendWorker
 import com.plusorminustwo.postmark.service.sms.MmsSentReceiver
 import com.plusorminustwo.postmark.service.sms.SendQueueWorker
 import com.plusorminustwo.postmark.service.sms.SmsManagerWrapper
+import com.plusorminustwo.postmark.service.sms.SmsSendDispatcher
+import com.plusorminustwo.postmark.domain.scheduled.ScheduledMessage
+import com.plusorminustwo.postmark.domain.scheduled.ScheduleValidation
+import com.plusorminustwo.postmark.domain.scheduled.validateScheduledSend
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -142,7 +148,9 @@ class ThreadViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
+    private val scheduledMessageRepository: ScheduledMessageRepository,
     private val smsManagerWrapper: SmsManagerWrapper,
+    private val smsSendDispatcher: SmsSendDispatcher,
     private val mmsManagerWrapper: MmsManagerWrapper,
     private val reactionParser: ReactionFallbackParser,
     private val timestampPrefRepo: TimestampPreferenceRepository,
@@ -360,6 +368,15 @@ class ThreadViewModel @Inject constructor(
      *  independently of the big uiState combine (which is at its argument limit). */
     val flaggedMessages: StateFlow<List<Message>> = messageRepository
         .observeFlaggedMessages(threadId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** This thread's parked "Schedule send" texts, soonest first — backs the scheduled bubble
+     *  section rendered at the bottom of the thread. Observed off the separate scheduled_messages
+     *  table so a bubble appears the moment one is created and vanishes the moment its worker
+     *  fires (or the user cancels/sends-now/edits). Collected independently of the big uiState
+     *  combine (which is at its argument limit). */
+    val scheduledMessages: StateFlow<List<ScheduledMessage>> = scheduledMessageRepository
+        .observeByThread(threadId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
@@ -1492,12 +1509,11 @@ class ThreadViewModel @Inject constructor(
      * The queue-aware 1:1 SMS dispatch shared by [sendMessage]'s SMS branch and the
      * outbound-reaction path ([maybeSendReactionFallback]).
      *
-     * Inserts an optimistic negative-id row carrying [body], then either parks it as
-     * [DELIVERY_STATUS_QUEUED] and kicks [SendQueueWorker] (when the thread already has
-     * queued sends waiting for service, so this one can't overtake them) or sends it
-     * immediately as [DELIVERY_STATUS_PENDING]. [notifyScroll] emits the scroll-to-bottom
-     * event a user-composed send wants, but a reaction fallback suppresses (its transient
-     * bubble shouldn't yank the list).
+     * Delegates the actual send to the shared [SmsSendDispatcher] (the same seam
+     * [ScheduledSendWorker] uses when a scheduled send fires), then emits the scroll-to-bottom
+     * event a user-composed send wants — [notifyScroll] is suppressed by a reaction fallback
+     * (its transient bubble shouldn't yank the list). The dispatcher inserts the optimistic row
+     * before returning, so emitting the scroll cue afterwards still resolves against a real row.
      */
     private suspend fun dispatchSmsSend(
         address: String,
@@ -1506,23 +1522,88 @@ class ThreadViewModel @Inject constructor(
         now: Long,
         notifyScroll: Boolean,
     ) {
-        val joinQueue = messageRepository.hasQueuedInThread(threadId)
-        val optimistic = Message(
-            id             = tempId,
-            threadId       = threadId,
-            address        = address,
-            body           = body,
-            timestamp      = now,
-            isSent         = true,
-            type           = Telephony.Sms.MESSAGE_TYPE_SENT,
-            deliveryStatus = if (joinQueue) DELIVERY_STATUS_QUEUED else DELIVERY_STATUS_PENDING
-        )
-        messageRepository.insert(optimistic)
+        smsSendDispatcher.dispatchSmsSend(threadId, address, body, tempId, now)
         if (notifyScroll) _scrollToBottomEvent.tryEmit(tempId)
-        if (joinQueue) {
-            SendQueueWorker.enqueue(context)
-        } else {
-            smsManagerWrapper.sendTextMessage(address, body, tempId)
+    }
+
+    // ── Scheduled send ("Schedule send" — long-press the send button) ───────────
+
+    /**
+     * Parks the current composer text as a scheduled send at [scheduledAt].
+     *
+     * v1 is text-only SMS: the long-press affordance is offered only when the composer holds
+     * non-blank text and no pending attachments, so this only ever runs for a plain text send.
+     * Validates (non-blank body, strictly-future time) through the pure [validateScheduledSend];
+     * an invalid request is a no-op (the picker sheet already rejects past times, so this is the
+     * belt-and-braces guard). On success the row is inserted into the separate scheduled table,
+     * its [ScheduledSendWorker] is scheduled, and the composer/draft is cleared. Requires being
+     * the default SMS app (the same guard [sendMessage] uses), since the parked message WILL send.
+     */
+    fun scheduleSend(scheduledAt: Long) {
+        val text = _replyText.value.trim()
+        if (validateScheduledSend(text, scheduledAt, System.currentTimeMillis()) != ScheduleValidation.VALID) return
+        if (!context.isDefaultSmsApp()) {
+            _showDefaultSmsDialog.value = true
+            return
+        }
+        val thread = uiState.value.thread ?: return
+        _replyText.value = ""
+        savedStateHandle.remove<String>(DRAFT_TEXT_KEY)
+        clearReplyingTo()
+        viewModelScope.launch {
+            val id = scheduledMessageRepository.insert(
+                ScheduledMessage(
+                    id = 0,
+                    threadId = threadId,
+                    address = thread.address,
+                    body = text,
+                    scheduledAt = scheduledAt,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            ScheduledSendWorker.schedule(context, id, scheduledAt)
+        }
+    }
+
+    /**
+     * Sends a scheduled message immediately (bubble dialog → "Send now"): cancels its pending
+     * worker, deletes the row, and hands the text to the normal send path right now — so it takes
+     * the identical queue-aware/optimistic-insert route a live send does.
+     */
+    fun sendScheduledNow(id: Long) {
+        if (!context.isDefaultSmsApp()) {
+            _showDefaultSmsDialog.value = true
+            return
+        }
+        viewModelScope.launch {
+            val row = scheduledMessageRepository.getById(id) ?: return@launch
+            ScheduledSendWorker.cancel(context, id)
+            scheduledMessageRepository.deleteById(id)
+            val now = System.currentTimeMillis()
+            dispatchSmsSend(row.address, row.body, -now, now, notifyScroll = true)
+        }
+    }
+
+    /**
+     * Edit (bubble dialog → "Edit"): the simplest correct edit — cancel the schedule, delete the
+     * row, and drop the text back into the composer draft. The user re-composes (and re-schedules
+     * if they still want to) from the reply bar.
+     */
+    fun editScheduled(id: Long) {
+        viewModelScope.launch {
+            val row = scheduledMessageRepository.getById(id) ?: return@launch
+            ScheduledSendWorker.cancel(context, id)
+            scheduledMessageRepository.deleteById(id)
+            _replyText.value = row.body
+            savedStateHandle[DRAFT_TEXT_KEY] = row.body
+        }
+    }
+
+    /** Cancel schedule (bubble dialog → confirm): cancels the pending worker and deletes the row. */
+    fun cancelScheduled(id: Long) {
+        viewModelScope.launch {
+            ScheduledSendWorker.cancel(context, id)
+            scheduledMessageRepository.deleteById(id)
         }
     }
 
