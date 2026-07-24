@@ -70,10 +70,13 @@ class ReactionResolverTest {
         isSent: Boolean = false,
         isMms: Boolean = false,
         address: String = "+15551234567",
-        threadId: Long = 1L
+        threadId: Long = 1L,
+        attachmentUri: String? = null
     ) = MessageEntity(
         id = id, threadId = threadId, address = address, body = body,
-        timestamp = timestamp, isSent = isSent, isMms = isMms
+        timestamp = timestamp, isSent = isSent, isMms = isMms,
+        attachmentUri = attachmentUri,
+        mimeType = attachmentUri?.let { "image/jpeg" }
     )
 
     // ── cross-transport resolution (the first-launch import bug) ─────────────
@@ -201,6 +204,67 @@ class ReactionResolverTest {
         assertEquals(ReactionResolver.Result(inserted = 0, removed = 1), result)
         assertEquals(1, reactionDao.rows.size)
         assertFalse(messageDao.rows.containsKey(9L))
+    }
+
+    // ── bare-emoji MMS reactions (media reactions archived as a lone emoji) ──────
+
+    @Test
+    fun `bare-emoji mms attaches to the preceding photo and its bubble is removed`() = runTest {
+        val photoId = MMS_ID_OFFSET + 4
+        val heartId = MMS_ID_OFFSET + 5
+        messageDao.seed(
+            msg(photoId, "", timestamp = 1_000, isSent = true, isMms = true, attachmentUri = "content://mms/part/40"),
+            // Sent reaction archived as a lone-emoji MMS at the same minute (owner reacted over RCS).
+            msg(heartId, "❤️", timestamp = 2_000, isSent = true, isMms = true)
+        )
+
+        val result = resolver.resolveAll()
+
+        assertEquals(ReactionResolver.Result(inserted = 1, removed = 1), result)
+        val reaction = reactionDao.rows.single()
+        assertEquals(photoId, reaction.messageId)
+        assertEquals("❤️", reaction.emoji)
+        assertEquals(SELF_ADDRESS, reaction.senderAddress)
+        assertFalse(messageDao.rows.containsKey(heartId))
+        assertTrue(messageDao.rows.containsKey(photoId))
+    }
+
+    @Test
+    fun `bare-emoji mms after a text message stays a visible bubble`() = runTest {
+        val heartId = MMS_ID_OFFSET + 6
+        messageDao.seed(
+            msg(7, "see you at 8", timestamp = 1_000),
+            msg(heartId, "❤️", timestamp = 2_000, isSent = true, isMms = true)
+        )
+
+        val result = resolver.resolveAll()
+
+        // A lone emoji after plain text is a reply, not a reaction — no media predecessor.
+        assertEquals(ReactionResolver.Result(inserted = 0, removed = 0), result)
+        assertTrue(reactionDao.rows.isEmpty())
+        assertTrue(messageDao.rows.containsKey(heartId))
+    }
+
+    @Test
+    fun `bare-emoji mms dedupes against an existing self pill and still removes the bubble`() = runTest {
+        val photoId = MMS_ID_OFFSET + 7
+        val heartId = MMS_ID_OFFSET + 8
+        messageDao.seed(
+            msg(photoId, "", timestamp = 1_000, isSent = true, isMms = true, attachmentUri = "content://mms/part/41"),
+            msg(heartId, "❤️", timestamp = 2_000, isSent = true, isMms = true)
+        )
+        // The local pill already exists (e.g. the user tapped the reaction in-app first).
+        reactionDao.rows += ReactionEntity(
+            id = 1, messageId = photoId, senderAddress = SELF_ADDRESS,
+            emoji = "❤️", timestamp = 1_500, rawText = ""
+        )
+
+        val result = resolver.resolveAll()
+
+        // No second pill inserted, but the redundant stray bubble is still cleaned up.
+        assertEquals(ReactionResolver.Result(inserted = 0, removed = 1), result)
+        assertEquals(1, reactionDao.rows.size)
+        assertFalse(messageDao.rows.containsKey(heartId))
     }
 
     @Test

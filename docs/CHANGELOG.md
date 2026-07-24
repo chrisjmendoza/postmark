@@ -4,6 +4,60 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
+
+1073 tests passing (up from ~1044). **Not yet verified on device.**
+
+**A reaction to a media message archived as a stray ❤️ bubble forever.** Fresh
+device evidence (owner's phone): reacting to an IMAGE over RCS archives into the
+telephony MMS store as a message whose ENTIRE body is the bare emoji — just `❤️`,
+with none of the `❤️ to "quote"` structure every parser strategy needs — even
+when the image had a caption. Observed on a SENT reaction (owner reacted from the
+RCS side; archived as a sent MMS bubble at the same minute); inbound media
+reactions are predicted to look identical. Until now these rendered as permanent
+stray bubbles.
+
+New pure file `data/reaction/BareEmojiReaction.kt` (no DI, table-testable):
+- `isSingleEmojiGrapheme(text)` — trims, requires the first code point > 127, then
+  counts grapheme clusters via `BreakIterator.getCharacterInstance()` (UAX #29) and
+  demands exactly one. So `❤️` (VS16), a skin-toned `👍🏽`, and a `👨‍👩‍👧‍👦` ZWJ
+  sequence each count as one; `❤️❤️`, `ok 👍`, `👍!`, a plain `k`, and empty all reject.
+- `isBareEmojiReactionCandidate(message, participantCount)` — MMS only (a typed emoji
+  SMS is genuine content and is NEVER converted), no attachments, 1:1 thread
+  (`participantCount <= 1`), single-emoji body.
+- `findBareEmojiReactionTarget(candidate, threadMessages, participantCount, isQuotedFallback)`
+  — attaches to the message immediately preceding by timestamp, but ONLY if that
+  predecessor is a media message (has an attachment). The media-predecessor rule is
+  the entire false-positive guard (no time window): a lone emoji after a photo is a
+  reaction; after plain text it's a genuine one-word reply, so it stays a bubble.
+  Other reaction rows (quoted fallbacks and other bare candidates) are excluded from
+  the predecessor pool, so two hearts fired at one photo both resolve to the photo.
+
+Wired into BOTH consumers so behavior can't drift: `SmsSyncHandler.syncLatestMms`
+(candidates join the fallback partition — a resolved one is never inserted as a
+bubble; an unmatched one falls through to a normal bubble exactly like an
+unmatched quoted fallback) and `ReactionResolver.resolveThread` (historical stray
+hearts heal, their Room rows are deleted, thread previews repaired). `syncLatestSms`
+is deliberately untouched — SMS is never converted. Sent candidates resolve with
+`senderAddress = SELF_ADDRESS` so the existing `reactionExists` check dedupes
+against an in-app pill; received use the sender address. Removal of a bare-emoji
+reaction is out of scope (no device evidence yet of the archival removal shape —
+TODO at the definition site).
+
+The one-shot historical reprocess flag was bumped `reaction_reprocess_v2_done` →
+`reaction_reprocess_v3_done`, so `ReactionResolver.resolveAll()` runs once more on
+existing installs — the owner's current stray ❤️ should convert to a pill on the
+cat photo after one catch-up. Room-side only; the telephony provider is never
+written (CLAUDE.md CRITICAL). No schema change.
+
+**On-device verification:** open Postmark, wait ~1 min (or background/foreground)
+for a catch-up; the existing stray ❤️ bubble should become a ❤️ pill on the cat
+photo, and the bubble should no longer appear as a message row. Confirm a fresh
+media reaction (sent and received) attaches, and a lone emoji sent as a real SMS
+reply still shows as a normal message.
+
+---
+
 ## 2026-07-24 (feat/search-group-collapse) — collapsible by-contact search groups
 
 1054 tests passing (up from 1045). **Not yet verified on device.**

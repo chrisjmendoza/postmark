@@ -2,9 +2,12 @@ package com.plusorminustwo.postmark.data.sync
 
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
+import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
+import com.plusorminustwo.postmark.data.reaction.findBareEmojiReactionTarget
+import com.plusorminustwo.postmark.data.reaction.isBareEmojiReactionCandidate
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -67,19 +70,67 @@ class ReactionResolver @Inject constructor(
     suspend fun resolveThread(threadId: Long, log: (String) -> Unit = {}): Result {
         val msgs = messageRepository.getByThread(threadId)
 
-        // Pre-partition: reaction fallbacks must never be candidates for matching.
-        val reactionMsgs = msgs.filter { reactionParser.isReactionFallback(it.body) }
-        if (reactionMsgs.isEmpty()) return Result(0, 0)
-        val normalMsgs = msgs.filter { !reactionParser.isReactionFallback(it.body) }
+        // A 1:1 thread stores an empty roster, so participantCount 0/1 both mean 1:1 —
+        // the gate for bare-emoji candidacy. Resolved once per thread (cheap Room read).
+        val participantCount = threadRepository.getById(threadId)?.participants?.size ?: 0
 
-        log("thread=$threadId: ${msgs.size} msgs, ${reactionMsgs.size} reaction fallbacks")
+        // Pre-partition: reaction rows must never be candidates for matching. This spans
+        // both quoted fallbacks and bare-emoji reaction candidates (lone-emoji media
+        // reactions archived without any quoted structure — BareEmojiReaction.kt).
+        val quotedFallbacks = msgs.filter { reactionParser.isReactionFallback(it.body) }
+        val bareEmojiCandidates = msgs.filter {
+            !reactionParser.isReactionFallback(it.body) && isBareEmojiReactionCandidate(it, participantCount)
+        }
+        val reactionMsgs = quotedFallbacks + bareEmojiCandidates
+        if (reactionMsgs.isEmpty()) return Result(0, 0)
+        val normalMsgs = msgs.filter {
+            !reactionParser.isReactionFallback(it.body) && !isBareEmojiReactionCandidate(it, participantCount)
+        }
+
+        log("thread=$threadId: ${msgs.size} msgs, ${quotedFallbacks.size} quoted fallbacks, ${bareEmojiCandidates.size} bare-emoji candidates")
 
         var inserted = 0
         var removed = 0
         val toDelete = mutableListOf<Long>()
         reactionMsgs.forEach { msg ->
-            val parsed = reactionParser.parse(msg.body) ?: return@forEach
             val senderAddress = if (msg.isSent) SELF_ADDRESS else msg.address
+            val parsed = reactionParser.parse(msg.body)
+
+            if (parsed == null) {
+                // ── Bare-emoji reaction candidate ──
+                // Attach to the immediately-preceding media message; a sent candidate uses
+                // SELF_ADDRESS so it dedupes against any existing local pill. When resolved
+                // (or already recorded) the stray bubble is removed; when it can't attach
+                // (no media predecessor) it's left in place as a normal bubble.
+                val target = findBareEmojiReactionTarget(msg, normalMsgs, participantCount) {
+                    reactionParser.isReactionFallback(it.body)
+                }
+                if (target != null) {
+                    val emoji = msg.body.trim()
+                    if (!messageRepository.reactionExists(target.id, senderAddress, emoji)) {
+                        messageRepository.insertReaction(
+                            Reaction(
+                                id = 0,
+                                messageId = target.id,
+                                senderAddress = senderAddress,
+                                emoji = emoji,
+                                timestamp = msg.timestamp,
+                                rawText = msg.body
+                            )
+                        )
+                        inserted++
+                        log("bare-emoji matched: id=${msg.id} emoji=$emoji → targetId=${target.id}")
+                    } else {
+                        log("bare-emoji duplicate: id=${msg.id} emoji=$emoji already exists — redundant row removed")
+                    }
+                    toDelete += msg.id
+                    removed++
+                } else {
+                    log("bare-emoji no-match: id=${msg.id} emoji=${msg.body.trim()} — no media predecessor, left as bubble")
+                }
+                return@forEach
+            }
+
             val reaction = reactionParser.processIncomingMessage(msg, normalMsgs, senderAddress)
 
             if (reaction != null) {

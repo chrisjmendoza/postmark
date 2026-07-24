@@ -72,11 +72,23 @@ That pattern was the tell.
 
 ## What this does NOT cover (known limitations)
 
-- **Reaction to a media-only message with no caption.** If the fallback quotes
-  a placeholder (e.g. "an image") rather than real text, matching still fails
-  and the fallback stays a readable bubble (better than empty, still not
-  attached). No device evidence yet for what that fallback looks like — see
-  verification below.
+- **Reaction to a media message (the ADD case) — now handled** (July 24 2026,
+  `fix/bare-emoji-reactions`). Device evidence finally landed and it was NOT the
+  placeholder-quote form guessed here: a reaction to an image over RCS archives
+  as an MMS whose ENTIRE body is the bare emoji (`❤️`), with no `❤️ to "…"`
+  structure at all — even when the image carried a caption. Detection lives in
+  the pure `data/reaction/BareEmojiReaction.kt`: a lone-emoji-grapheme MMS with
+  no attachments in a 1:1 thread attaches to the immediately-preceding **media**
+  message (a text predecessor means it's a genuine one-word reply, not a
+  reaction; SMS is never converted). Wired into both `SmsSyncHandler.syncLatestMms`
+  and `ReactionResolver.resolveThread`, with a bumped one-shot heal
+  (`reaction_reprocess_v3_done`).
+- **Removal of a bare-emoji media reaction — still unknown.** The add case above
+  is add-only. There's no device evidence yet for what an archival *removal* of a
+  bare-emoji reaction looks like (a second lone emoji? a distinct marker?), so
+  unreacting on a media message won't clear the pill. Capture the removal PDU
+  on-device (unreact from the other phone over RCS, read SyncLogger) before
+  extending detection.
 - **Archival rows with genuinely no text part.** If Samsung/GM archives an RCS
   reaction with no text part at all, there is nothing to recover; the row will
   keep showing as an empty bubble but now logs `still empty: id=… rawId=…`

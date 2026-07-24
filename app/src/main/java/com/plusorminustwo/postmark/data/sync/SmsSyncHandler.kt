@@ -21,8 +21,11 @@ import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker
 import com.plusorminustwo.postmark.service.sms.IncomingNotifier
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import com.plusorminustwo.postmark.domain.model.previewText
+import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
+import com.plusorminustwo.postmark.data.reaction.findBareEmojiReactionTarget
+import com.plusorminustwo.postmark.data.reaction.isBareEmojiReactionCandidate
 import androidx.core.content.FileProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -126,11 +129,12 @@ class SmsSyncHandler @Inject constructor(
         private const val KEY_ROSTER_REPAIR_DONE = "roster_repair_v1_done"
         // One-shot flag for the non-displayable-PDU Room cleanup (GROUP_MESSAGING_SPEC §4.2).
         private const val KEY_MTYPE_CLEANUP_DONE = "mtype_cleanup_v1_done"
-        // One-shot flag for the historical reaction re-resolution pass, run once after the
-        // truncated-quote matching fix landed so fallbacks that failed to match under the
-        // old strategies (e.g. ellipsized long URLs) finally resolve. v2: v1 was the
-        // original import-time pass.
-        private const val KEY_REACTION_REPROCESS_DONE = "reaction_reprocess_v2_done"
+        // One-shot flag for the historical reaction re-resolution pass. Bumped whenever a new
+        // resolution strategy lands so resolveAll() runs once more over existing installs.
+        // v1: original import-time pass. v2: truncated-quote matching (ellipsized long URLs).
+        // v3: bare-emoji MMS reactions (a lone-emoji media reaction archived without any
+        // quoted structure) — heals the owner's existing stray ❤️ onto the cat photo.
+        private const val KEY_REACTION_REPROCESS_DONE = "reaction_reprocess_v3_done"
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -201,7 +205,7 @@ class SmsSyncHandler @Inject constructor(
         if (prefs.getBoolean(KEY_REACTION_REPROCESS_DONE, false)) return
         try {
             val result = reactionResolver.resolveAll()
-            syncLogger.log(TAG, "reaction reprocess v2: inserted=${result.inserted} removed=${result.removed}")
+            syncLogger.log(TAG, "reaction reprocess v3: inserted=${result.inserted} removed=${result.removed}")
             prefs.edit().putBoolean(KEY_REACTION_REPROCESS_DONE, true).apply()
         } catch (e: CancellationException) {
             throw e
@@ -564,8 +568,23 @@ class SmsSyncHandler @Inject constructor(
 
         /* Separate reaction-fallback MMS messages from real messages before persisting.
          * Reaction fallbacks (Android: "👍 to \"text\"", Apple: "Liked 'text'") must be
-         * resolved to Reaction entities and never stored as visible message bubbles. */
-        val (reactionMsgs, normalMessages) = newMessages.partition { reactionParser.isReactionFallback(it.body) }
+         * resolved to Reaction entities and never stored as visible message bubbles.
+         *
+         * Bare-emoji reaction candidates — a lone-emoji MMS archived from an RCS reaction to
+         * media in a 1:1 thread (BareEmojiReaction.kt) — join the same partition: a resolved
+         * one is never inserted as a bubble, and an unresolved one falls through to a normal
+         * bubble below exactly like an unmatched quoted fallback. The candidate test needs the
+         * thread's participant count, which isn't on Message, so it's precomputed here (the
+         * thread was already ensured in extractMmsMessages, so getById is a cheap Room read). */
+        val bareEmojiCandidateIds = mutableSetOf<Long>()
+        for (m in newMessages) {
+            if (reactionParser.isReactionFallback(m.body)) continue
+            val participantCount = threadRepository.getById(m.threadId)?.participants?.size ?: 0
+            if (isBareEmojiReactionCandidate(m, participantCount)) bareEmojiCandidateIds += m.id
+        }
+        val (reactionMsgs, normalMessages) = newMessages.partition {
+            reactionParser.isReactionFallback(it.body) || it.id in bareEmojiCandidateIds
+        }
 
         if (normalMessages.isNotEmpty()) {
             messageRepository.insertAll(normalMessages)
@@ -679,24 +698,51 @@ class SmsSyncHandler @Inject constructor(
          * Temp rows are removed solely by the matched hand-off above. */
 
         /* Resolve MMS reaction fallback messages into Reaction entities (deduped).
-         * Mirrors the same logic used in syncLatestSms(). If the original message
-         * cannot be found, insert the fallback as a normal visible bubble. */
+         * Mirrors the same logic used in syncLatestSms() for quoted fallbacks, plus the
+         * bare-emoji branch (media reactions archived as a lone emoji). If neither can be
+         * attached, insert the row as a normal visible bubble. */
         val unresolvedReactionMsgs = mutableListOf<Message>()
         reactionMsgs.forEach { message ->
-            val parsed = reactionParser.parse(message.body) ?: return@forEach
             val threadMessages = messageRepository.getByThread(message.threadId)
             val senderAddress = if (message.isSent) SELF_ADDRESS else message.address
-            val reaction = reactionParser.processIncomingMessage(message, threadMessages, senderAddress)
+            val parsed = reactionParser.parse(message.body)
 
-            if (reaction != null) {
-                if (parsed.isRemoval) {
-                    messageRepository.deleteReaction(reaction.messageId, reaction.senderAddress, reaction.emoji)
-                } else if (!messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
-                    messageRepository.insertReaction(reaction)
+            if (parsed != null) {
+                // Quoted reaction fallback (Android/Apple textual form).
+                val reaction = reactionParser.processIncomingMessage(message, threadMessages, senderAddress)
+                if (reaction != null) {
+                    if (parsed.isRemoval) {
+                        messageRepository.deleteReaction(reaction.messageId, reaction.senderAddress, reaction.emoji)
+                    } else if (!messageRepository.reactionExists(reaction.messageId, reaction.senderAddress, reaction.emoji)) {
+                        messageRepository.insertReaction(reaction)
+                    }
+                } else if (!parsed.isRemoval) {
+                    // Original not found — preserve as a normal visible bubble (additions only).
+                    unresolvedReactionMsgs += message
                 }
             } else {
-                // Original not found — preserve as a normal visible bubble (only for additions).
-                if (!parsed.isRemoval) {
+                // Bare-emoji reaction candidate: attach to the immediately-preceding media
+                // message, else fall through to a normal bubble. A sent candidate uses
+                // SELF_ADDRESS so it dedupes against any existing local pill.
+                val participantCount = threadRepository.getById(message.threadId)?.participants?.size ?: 0
+                val target = findBareEmojiReactionTarget(message, threadMessages, participantCount) {
+                    reactionParser.isReactionFallback(it.body)
+                }
+                if (target != null) {
+                    val emoji = message.body.trim()
+                    if (!messageRepository.reactionExists(target.id, senderAddress, emoji)) {
+                        messageRepository.insertReaction(
+                            Reaction(
+                                id = 0,
+                                messageId = target.id,
+                                senderAddress = senderAddress,
+                                emoji = emoji,
+                                timestamp = message.timestamp,
+                                rawText = message.body
+                            )
+                        )
+                    }
+                } else {
                     unresolvedReactionMsgs += message
                 }
             }
