@@ -307,6 +307,47 @@ emulator flags are unverified until an actual run happens — flagged in
 TODO.md as needing a `workflow_dispatch` run before this is trusted to gate
 master. Also flagged the ~15-25 min-per-push emulator cost for the owner to
 weigh against restricting the trigger further.
+## 2026-07-23 (feat/stats-followups) — "Gone quiet" detection + Charts style completion
+
+Two Stats Tier 3 TODO follow-ups, built on top of `perf/stats-sql-aggregation`'s lean
+`MessageMeta` projections — neither adds a new DB observation.
+
+**"Gone quiet" detection** (`data/sync/GoneQuiet.kt`, new): surfaces threads that have
+dropped well below their own usual messaging frequency for 7+ days, as a global-only
+"Gone quiet" card ("You haven't talked to {name} in a while — {N} days quiet · usually
+every ~{M}d"). Pure `detectGoneQuiet(metasByThread, nowMs, zone, limit = 3)` — no wall-clock
+reads inside the function itself. A thread qualifies when ALL hold: ≥20 messages in the 90
+days before `nowMs` (enough history to trust a "usual" cadence), ≥7 days since its last
+message, and days-quiet ≥ 4× its **median** (not mean) inter-message gap over that window —
+median so a single reply burst can't be averaged into looking like a faster cadence than
+reality, with same-day/degenerate gaps floored at 1 day so an all-bursty history doesn't
+trivially satisfy the multiplier. Sorted longest-silent first, capped at 3. Wired into
+`StatsViewModel` off the same `statsInputs.metas` grouping the stats payload already
+computes (`System.currentTimeMillis()` read once at the ViewModel boundary, same pattern as
+the existing `YearMonth.now()` heatmap default); rendered in `StatsScreen`'s Numbers view
+via a new `GoneQuietCard` (`LetterAvatar` + tap-to-open-thread, reusing `selectThread`).
+Hidden entirely when nothing qualifies.
+
+**Charts style — the remaining gap, now closed**: `ChartsView` gains a hand-rolled
+sent/received **doughnut** (`Canvas` `drawArc`, stroke-style ring, total centered, animated
+sweep via `animateFloatAsState` over 600ms, `primary`/`secondary` color-scheme roles so it
+reads in light and dark) and a real **emoji bar chart** (`EmojiBarChart` — horizontal bars,
+emoji + count per row, bar length proportional to the top emoji's count) replacing the
+Charts view's plain `EmojiCard` rows for both message and reaction emoji (`NumbersView`'s
+`EmojiCard` is untouched; "Messages by Month" / "Most Active Day" bar charts untouched). No
+Vico or any new library — matches the existing hand-rolled `BarChart` idiom. New pure
+`ui/stats/ChartMath.kt`: `doughnutSweeps(sent, received)` (guards the 0/0 total case, the
+two sweeps always sum to exactly 360° regardless of float rounding) and `barFraction(count,
+maxCount)` (guards the 0-max divide).
+
+**Tests:** `GoneQuietTest` (14 cases — qualifying thread, too-little-history, quiet-but-
+within-usual-gap [must NOT flag], retired-thread-past-its-gap, burst-then-quiet, same-day
+degenerate gaps, sorting/cap/default-limit, injected now+zone determinism including a
+zone-shift case) and `ChartMathTest` (11 cases) are pure JUnit, no Robolectric. **982 unit
+tests, 0 failures** (up from 957); `assembleDebug` green. **⚠️ Needs on-device visual
+verification** — the doughnut ring, animated sweep, and emoji bar chart have not been seen
+rendered on a real device/emulator.
+
 ## 2026-07-23 (perf/stats-sql-aggregation) — Stats aggregation moves to SQL; heatmap observes lean projections
 
 Long-term form of performance-analysis.md Tier 1 #5. With 150k+ messages, opening
