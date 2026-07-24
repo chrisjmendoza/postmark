@@ -106,4 +106,54 @@ class SearchGroupingTest {
         assertEquals("+15551234", groups.first().displayName)
         assertEquals(null, groups.first().thread)
     }
+
+    // --- toggleGroupCollapsed / collapseAll / expandAll / anyGroupExpanded ---
+
+    @Test
+    fun `toggleGroupCollapsed collapses an expanded group`() {
+        val result = toggleGroupCollapsed(emptySet(), key = 1L)
+        assertEquals(setOf(1L), result)
+    }
+
+    @Test
+    fun `toggleGroupCollapsed expands a collapsed group`() {
+        val result = toggleGroupCollapsed(setOf(1L, 2L), key = 1L)
+        assertEquals(setOf(2L), result)
+    }
+
+    @Test
+    fun `toggleGroupCollapsed only touches the given key`() {
+        val result = toggleGroupCollapsed(setOf(2L), key = 1L)
+        assertEquals(setOf(1L, 2L), result)
+    }
+
+    @Test
+    fun `collapseAll with empty groups produces an empty set`() {
+        assertEquals(emptySet<Long>(), collapseAll(emptyList()))
+    }
+
+    @Test
+    fun `collapseAll collapses every given key`() {
+        assertEquals(setOf(1L, 2L, 3L), collapseAll(listOf(1L, 2L, 3L)))
+    }
+
+    @Test
+    fun `expandAll always returns the empty set`() {
+        assertEquals(emptySet<Long>(), expandAll())
+    }
+
+    @Test
+    fun `anyGroupExpanded is false when every group is collapsed`() {
+        assertEquals(false, anyGroupExpanded(setOf(1L, 2L), groupKeys = listOf(1L, 2L)))
+    }
+
+    @Test
+    fun `anyGroupExpanded is true when at least one group is expanded`() {
+        assertEquals(true, anyGroupExpanded(setOf(1L), groupKeys = listOf(1L, 2L)))
+    }
+
+    @Test
+    fun `anyGroupExpanded is false for an empty group key set`() {
+        assertEquals(false, anyGroupExpanded(emptySet(), groupKeys = emptyList()))
+    }
 }

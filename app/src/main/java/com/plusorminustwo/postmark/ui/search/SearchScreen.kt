@@ -12,13 +12,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.SortByAlpha
+import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +40,7 @@ import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.SearchDateRange
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.search.SearchResultGroup
+import com.plusorminustwo.postmark.domain.search.anyGroupExpanded
 import com.plusorminustwo.postmark.domain.search.matchThreads
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
 import com.plusorminustwo.postmark.ui.thread.ReactionPills
@@ -146,6 +154,12 @@ fun SearchScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Whether any BY_CONTACT group is currently expanded — drives the
+            // collapse-all control's icon/label/action. Meaningless outside BY_CONTACT,
+            // where the control isn't shown at all.
+            val anyGroupExpandedNow = remember(uiState.collapsedGroupKeys, uiState.groupedResults) {
+                anyGroupExpanded(uiState.collapsedGroupKeys, uiState.groupedResults.map { it.threadId })
+            }
             FilterChips(
                 filters            = uiState.filters,
                 selectedThread     = uiState.selectedThread,
@@ -159,7 +173,11 @@ fun SearchScreen(
                 onClearThreadFilter = { viewModel.setThreadFilter(null) },
                 onReactionChipClick = { showEmojiSheet = true },
                 onClearReactionFilter = { viewModel.setReactionFilter(null) },
-                onProtocolFilter    = viewModel::setProtocolFilter
+                onProtocolFilter    = viewModel::setProtocolFilter,
+                anyGroupExpanded    = anyGroupExpandedNow,
+                onToggleCollapseAll = {
+                    if (anyGroupExpandedNow) viewModel.collapseAllGroups() else viewModel.expandAllGroups()
+                }
             )
 
             if (uiState.isLoading) {
@@ -191,16 +209,25 @@ fun SearchScreen(
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     conversationsSection(matchedThreads, onThreadClick)
                     uiState.groupedResults.forEach { group ->
+                        val collapsed = group.threadId in uiState.collapsedGroupKeys
                         stickyHeader(key = "header-${group.threadId}") {
-                            SearchGroupHeader(group)
-                        }
-                        items(group.messages, key = { it.id }) { message ->
-                            SearchResultRow(
-                                message = message,
-                                query = uiState.query,
-                                onClick = { onMessageClick(message.threadId, message.id) }
+                            SearchGroupHeader(
+                                group = group,
+                                collapsed = collapsed,
+                                onToggle = { viewModel.onGroupHeaderClick(group.threadId) }
                             )
-                            HorizontalDivider()
+                        }
+                        // Collapsed groups render ONLY their header — result rows are
+                        // omitted from the LazyColumn entirely, not just hidden.
+                        if (!collapsed) {
+                            items(group.messages, key = { it.id }) { message ->
+                                SearchResultRow(
+                                    message = message,
+                                    query = uiState.query,
+                                    onClick = { onMessageClick(message.threadId, message.id) }
+                                )
+                                HorizontalDivider()
+                            }
                         }
                     }
                 }
@@ -235,7 +262,9 @@ private fun FilterChips(
     onClearThreadFilter: () -> Unit,
     onReactionChipClick: () -> Unit,
     onClearReactionFilter: () -> Unit,
-    onProtocolFilter: (Boolean?) -> Unit
+    onProtocolFilter: (Boolean?) -> Unit,
+    anyGroupExpanded: Boolean,
+    onToggleCollapseAll: () -> Unit
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -358,6 +387,19 @@ private fun FilterChips(
                 } else null
             )
         }
+        // Collapse/expand-all control — BY_CONTACT only, since collapsing has no
+        // meaning in the flat MOST_RECENT list. Icon/action flips with current state:
+        // any group expanded → offer "Collapse all"; all collapsed → offer "Expand all".
+        if (sortOrder == SortOrder.BY_CONTACT) {
+            item {
+                IconButton(onClick = onToggleCollapseAll) {
+                    Icon(
+                        imageVector = if (anyGroupExpanded) Icons.Default.UnfoldLess else Icons.Default.UnfoldMore,
+                        contentDescription = if (anyGroupExpanded) "Collapse all" else "Expand all"
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -409,11 +451,19 @@ private fun ConversationResultRow(thread: Thread, onClick: (Long) -> Unit) {
 }
 
 @Composable
-private fun SearchGroupHeader(group: SearchResultGroup) {
+private fun SearchGroupHeader(group: SearchResultGroup, collapsed: Boolean, onToggle: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(
+                onClickLabel = if (collapsed) "Expand" else "Collapse",
+                role = Role.Button,
+                onClick = onToggle
+            )
+            // Read by TalkBack alongside the click label above, so a user hears the
+            // group's current state ("Collapsed"/"Expanded"), not just that it's tappable.
+            .semantics { stateDescription = if (collapsed) "Collapsed" else "Expanded" }
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -425,6 +475,7 @@ private fun SearchGroupHeader(group: SearchResultGroup) {
             size = 28.dp
         )
         Row(
+            modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -432,7 +483,10 @@ private fun SearchGroupHeader(group: SearchResultGroup) {
                 text = group.displayName,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
             )
             // Count of this thread's results under the current filters — muted, so it
             // reads as a subtle tally rather than a second title.
@@ -442,6 +496,11 @@ private fun SearchGroupHeader(group: SearchResultGroup) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )
         }
+        Icon(
+            imageVector = if (collapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

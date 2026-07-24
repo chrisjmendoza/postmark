@@ -1,8 +1,36 @@
-﻿# Postmark â€” Changelog
+﻿# Postmark — Changelog
 
 Newest entries on top. Each day is a journal of work completed.
 
 ---
+
+## 2026-07-24 (feat/search-group-collapse) — collapsible by-contact search groups
+
+1054 tests passing (up from 1045). **Not yet verified on device.**
+
+**Owner request (from using the app tonight): long by-contact result lists are hard to
+scan.** Each BY_CONTACT sticky header (`SearchGroupHeader`) is now tappable — a trailing
+chevron (`ExpandMore`/`ExpandLess`) shows state, and a collapsed group renders ONLY its
+header; its message rows are omitted from the `LazyColumn` entirely, not just visually
+hidden. A new compact collapse-all control (`UnfoldLess`/`UnfoldMore` `IconButton`,
+contentDescription "Collapse all"/"Expand all") appears at the end of the `FilterChips`
+row only when BY_CONTACT is active, flipping icon/label based on whether any group is
+currently expanded.
+
+State is session-only in `SearchViewModel` (`collapsedGroupKeys: Set<Long>`, keyed by
+threadId — mirrors the existing `sortOrder`/`oldestFirst` pattern, never persisted). Pure
+reducers added to `domain/search/SearchGrouping.kt`: `toggleGroupCollapsed`, `collapseAll`,
+`expandAll`, `anyGroupExpanded` — 9 new plain-JUnit tests in `SearchGroupingTest`.
+**Deliberate decision:** a fresh results set (any new query/filter fetch) always resets
+`collapsedGroupKeys` to empty (all-expanded) — a stale collapsed set computed against the
+previous query's groups must never silently hide rows in the new results.
+
+MOST_RECENT flat mode and the "Conversations" thread-match section are untouched — no
+change to sticky-header behavior, A–Z ordering, or per-group sort direction. Accessibility:
+the header row now carries `Role.Button` + `onClickLabel` ("Expand"/"Collapse") and a
+`stateDescription` ("Collapsed"/"Expanded"); the collapse-all control has its own
+contentDescription. No schema change, no new DAO query — this is a display-only reducer
+over the existing `groupResultsByContact` output. **Needs on-device verification.**
 
 ## 2026-07-23 (feat/outbound-reactions) â€” reactions to 1:1 text messages are actually sent
 
