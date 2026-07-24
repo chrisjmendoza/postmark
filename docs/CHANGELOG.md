@@ -46,6 +46,39 @@ one `scrollToMessageCentered`, so the cue and centering can't drift apart. No sc
 change. 4 new plain-JUnit tests for the pure offset function; `assembleDebug` clean.
 
 ---
+## 2026-07-24 (feat/about-licenses) — open-source licenses screen + GitHub link
+
+1082 tests passing (unchanged — no new pure logic, UI wiring only).
+**Not yet verified on device.**
+
+Closed out the "Still open" tail of the Build-number-visible-in-app TODO.
+Settings → About now has two more rows after Version: **"Postmark on
+GitHub"** (opens `https://github.com/chrisjmendoza/postmark` via
+`ACTION_VIEW`, no-op on a headless device with no browser) and
+**"Open-source licenses"**, which navigates to a new `LicensesScreen`.
+
+The licenses screen is a hand-maintained static list, not Google's
+oss-licenses plugin — decision made up front: this app's dependency set is
+small and slow-changing, so a build-plugin + runtime dependency to generate
+the list is more moving parts than the problem needs. Entries cover
+Kotlin/kotlinx.coroutines, Jetpack Compose, a grouped AndroidX row, Room,
+Hilt/Dagger, WorkManager, Coil, Media3/ExoPlayer, emoji2-emojipicker, and the
+six bundled OFL fonts (Inter, Poppins, Nunito, Lora, Playfair Display,
+JetBrains Mono — full texts already live in `docs/font-licenses/`). Each row
+links out to the project/font page for the full license text rather than
+bundling it into the APK.
+
+New `util/OpenUrl.kt` (`Context.openUrl`) — the try/catch
+`ActivityNotFoundException` wrapper both new rows share; no existing
+open-URL helper was found to reuse. `AppNavigation.kt` gained
+`settings/licenses`, wired from `SettingsScreen` exactly like
+`BlockedNumbers`/`Spam`. `LicensesScreen` follows `BlockedNumbersScreen`'s
+scaffolding (`TopAppBar` + back arrow, `LazyColumn` with `contentPadding =
+padding` so the last row clears the nav bar).
+
+**Needs on-device verification**: all rows render correctly, both link
+types open, and the licenses list's last row isn't hidden behind the nav
+bar.
 
 ## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
 

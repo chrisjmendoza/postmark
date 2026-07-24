@@ -35,6 +35,7 @@ import com.plusorminustwo.postmark.ui.settings.AppearanceScreen
 import com.plusorminustwo.postmark.ui.settings.BackupSettingsScreen
 import com.plusorminustwo.postmark.ui.settings.BlockedNumbersScreen
 import com.plusorminustwo.postmark.ui.settings.DevOptionsScreen
+import com.plusorminustwo.postmark.ui.settings.LicensesScreen
 import com.plusorminustwo.postmark.ui.settings.NotificationSettingsScreen
 import com.plusorminustwo.postmark.ui.settings.export.ExportScreen
 import com.plusorminustwo.postmark.ui.settings.SettingsScreen
@@ -98,6 +99,8 @@ sealed class Screen(val route: String) {
     data object DevOptions : Screen("settings/dev")
     /** Full-screen sync log viewer. */
     data object SyncLog : Screen("settings/dev/synclog")
+    /** Open-source licenses list. Reached from Settings › About. */
+    data object Licenses : Screen("settings/licenses")
     /** Compose a new message — recipient picker / phone number entry. */
     data object NewConversation : Screen("new_conversation")
     /** Contact detail page — opened by tapping the name/avatar in the thread TopAppBar. */
@@ -262,6 +265,13 @@ fun AppNavigation(
                 onSpamClick = { navController.navigate(Screen.Spam.route) },
                 onNotificationsClick = { navController.navigate(Screen.NotificationSettings.route) },
                 onStorageUsageClick = { navController.navigate(Screen.StorageUsage.route) },
+                onLicensesClick = { navController.navigate(Screen.Licenses.route) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.Licenses.route) {
+            LicensesScreen(
                 onBack = { navController.popBackStack() }
             )
         }

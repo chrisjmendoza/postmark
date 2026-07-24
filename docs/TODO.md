@@ -1223,8 +1223,20 @@ instance, but flagged:
       it's possible to confirm a Firebase App Distribution push actually landed
       on the phone rather than silently staying on a stale build; CI's
       `distribute.yml` release notes now carry the identical string for
-      cross-checking against the Firebase console. Still open: licenses list,
-      link to GitHub (this was a one-row addition, not a full About screen).
+      cross-checking against the Firebase console.
+      **Licenses list + GitHub link done (July 24 2026, `feat/about-licenses`)**
+      — two new About rows: "Postmark on GitHub" (opens the repo via
+      `ACTION_VIEW`) and "Open-source licenses" (navigates to a new
+      `LicensesScreen`). The licenses screen is a hand-maintained static list
+      (Kotlin/coroutines, Compose, grouped AndroidX, Room, Hilt/Dagger,
+      WorkManager, Coil, Media3, emoji2-emojipicker, and the six bundled OFL
+      fonts); deliberately **not** Google's oss-licenses plugin — a build
+      plugin + runtime dependency was judged more moving parts than a short,
+      slow-changing list needs. Rows link out to the project/font page
+      instead of bundling license full-texts into the APK. **Needs on-device
+      verification**: all rows render with correct names/licenses, both the
+      GitHub link and license-row links open correctly, and the licenses
+      list's bottom row scrolls clear of the nav bar.
 - [ ] **Real app icon** — replace the placeholder envelope with
       proper branded artwork. *(Checked July 22 2026 during the
       stale-checkbox audit — flagged ambiguous, not ticked: a real
