@@ -172,6 +172,8 @@ private fun Message.toRecord(
     isRead = isRead,
     isStarred = isStarred,
     isPinned = isPinned,
+    sentAt = sentAt,
+    deliveredAt = deliveredAt,
     // An attachment whose bytes couldn't be read is dropped from the record rather
     // than pointing at a blob that isn't in the archive.
     attachments = attachments.mapNotNull { att ->

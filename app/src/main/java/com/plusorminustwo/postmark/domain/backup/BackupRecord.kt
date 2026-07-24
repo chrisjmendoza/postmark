@@ -79,7 +79,12 @@ data class MessageRecord(
     // Additive field (per-message pin) — default false so older callers and the v1 reader
     // keep compiling without naming it, and archives written before this field tolerate
     // its absence on decode.
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    // Additive fields (delivery timestamps) — default null so older callers and the v1 reader
+    // keep compiling without naming them, and archives written before these fields tolerate
+    // their absence on decode.
+    val sentAt: Long? = null,
+    val deliveredAt: Long? = null
 )
 
 /** A decoded data.jsonl line. */
@@ -136,6 +141,10 @@ fun encodeMessageLine(message: MessageRecord): String = encodeJson(
         "isRead" to message.isRead,
         "isStarred" to message.isStarred,
         "isPinned" to message.isPinned,
+        // Nullable delivery timestamps — encoded as null when absent, mirroring the
+        // ThreadRecord accentColorArgb style; decode reads them back tolerantly.
+        "sentAt" to message.sentAt,
+        "deliveredAt" to message.deliveredAt,
         "attachments" to message.attachments.map {
             linkedMapOf("sha256" to it.sha256, "mimeType" to it.mimeType)
         },
@@ -217,6 +226,9 @@ private fun decodeMessageRecord(map: Map<*, *>): MessageRecord = MessageRecord(
     isStarred = map.bool("isStarred") ?: false,
     // Absent in archives written before this field existed — tolerate the missing key.
     isPinned = map.bool("isPinned") ?: false,
+    // Absent (or explicitly null) in older archives — tolerate both; long() returns null.
+    sentAt = map.long("sentAt"),
+    deliveredAt = map.long("deliveredAt"),
     attachments = (map["attachments"] as? List<*>).orEmpty().mapNotNull { att ->
         (att as? Map<*, *>)?.let { a ->
             val sha = a.str("sha256") ?: return@let null

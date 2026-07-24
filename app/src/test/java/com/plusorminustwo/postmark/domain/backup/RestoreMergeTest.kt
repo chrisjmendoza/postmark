@@ -194,6 +194,18 @@ class RestoreMergeTest {
         assertFalse(sanitizeForRestore(record.copy(isPinned = false)).isPinned)
     }
 
+    @Test
+    fun `restore preserves delivery timestamps verbatim`() {
+        // sentAt/deliveredAt are historical fact — sanitizeForRestore only touches
+        // deliveryStatus and isRead, so both pass through unchanged (including null).
+        val withTimes = sanitizeForRestore(record.copy(sentAt = 111L, deliveredAt = 222L))
+        assertEquals(111L, withTimes.sentAt)
+        assertEquals(222L, withTimes.deliveredAt)
+        val withoutTimes = sanitizeForRestore(record.copy(sentAt = null, deliveredAt = null))
+        assertNull(withoutTimes.sentAt)
+        assertNull(withoutTimes.deliveredAt)
+    }
+
     // ---- restored id allocation ----
 
     @Test

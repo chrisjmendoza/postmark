@@ -4,6 +4,46 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (feat/delivery-timestamps) — per-message delivery timestamps + Message info sheet
+
+**Not yet verified on device** (unit + androidTest-compile only; no device to run
+the instrumented migration suite).
+
+**Two halves: store when each message was sent/delivered, and surface it.**
+
+*Schema + data (Room v20 → v21).* Added nullable `sentAt: Long?` and
+`deliveredAt: Long?` to `MessageEntity` and domain `Message`. New inline
+`MIGRATION_20_21` mirrors the `MIGRATION_8_9` nullable-column precedent — two
+`ALTER TABLE messages ADD COLUMN … INTEGER` statements, no default, so every
+existing row reads NULL; registered in `DatabaseModule`. `21.json` exported and
+committed. A migration test (`migration20To21_addsNullableTimestamps`) plus the
+extended full-chain test (`fullMigrationChain_v1DataSurvivesToV21`) cover it.
+
+- **`sentAt`** comes from the provider's `DATE_SENT` (SMS) / `date_sent` (MMS),
+  threaded through both incremental sync (`SmsSyncHandler`) and historical import
+  (`SmsHistoryImportWorker`). MMS provider times are **seconds — ×1000L** like the
+  existing `date` handling; a provider `0` becomes NULL ("not recorded", not epoch).
+- **`deliveredAt`** is written at delivery-report time by `SmsSentDeliveryReceiver`,
+  via a new `MessageDao.updateDeliveryStatusWithTimestamp` that sets status +
+  timestamp atomically. Stays NULL unless a **carrier delivery report** actually
+  arrives (carrier-dependent). Every other status transition is untouched.
+- Backup/restore carry both fields additively (`MessageRecord`, tolerant decode),
+  following the `isPinned` precedent exactly.
+- **`readAt` deliberately not added** — no MMS/RCS read-report source exists, so it
+  would be dead schema. The "Read receipt double tick" TODO stays open.
+
+*Message info sheet.* A new **Info** action joins the reaction popup's row
+(Copy / Forward / Pin / Info / Delete). It opens `MessageInfoSheet` — a
+`ModalBottomSheet` (navigation-bar insets like `EmojiPickerBottomSheet`) of labeled
+rows: absolute Sent/Received time (sent falls back to receipt time when `sentAt`
+is null), Delivered time (only when set), character count (omitted for blank/
+media-only bodies), transport, and SMS segment count / MMS attachment count. The
+row-set decision is a pure function (`domain/messageinfo/MessageInfo.kt`) with
+plain-JUnit tests; only epoch formatting and the `SmsMessage.calculateLength`
+segment call stay in the UI layer.
+
+---
+
 ## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
 
 1073 tests passing (up from ~1044). **Not yet verified on device.**

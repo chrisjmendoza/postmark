@@ -258,12 +258,14 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         threads: MutableMap<Long, Thread>,
         messages: MutableList<Message>
     ) {
-        val idIdx      = cursor.getColumnIndexOrThrow(Telephony.Sms._ID)
-        val threadIdx  = cursor.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
-        val addressIdx = cursor.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
-        val bodyIdx    = cursor.getColumnIndexOrThrow(Telephony.Sms.BODY)
-        val dateIdx    = cursor.getColumnIndexOrThrow(Telephony.Sms.DATE)
-        val typeIdx    = cursor.getColumnIndexOrThrow(Telephony.Sms.TYPE)
+        val idIdx       = cursor.getColumnIndexOrThrow(Telephony.Sms._ID)
+        val threadIdx   = cursor.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
+        val addressIdx  = cursor.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
+        val bodyIdx     = cursor.getColumnIndexOrThrow(Telephony.Sms.BODY)
+        val dateIdx     = cursor.getColumnIndexOrThrow(Telephony.Sms.DATE)
+        // Not OrThrow: date_sent isn't guaranteed present on every OEM's fallback mailbox URIs.
+        val dateSentIdx = cursor.getColumnIndex(Telephony.Sms.DATE_SENT)
+        val typeIdx     = cursor.getColumnIndexOrThrow(Telephony.Sms.TYPE)
 
         while (cursor.moveToNext()) {
             val id       = cursor.getLong(idIdx)
@@ -274,6 +276,9 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             val address  = cursor.getString(addressIdx) ?: ""
             val body     = cursor.getString(bodyIdx) ?: ""
             val date     = cursor.getLong(dateIdx)
+            // DATE_SENT is 0 when the provider never recorded a send time — store NULL, not 0.
+            val dateSent = if (dateSentIdx >= 0 && !cursor.isNull(dateSentIdx))
+                cursor.getLong(dateSentIdx).takeIf { it > 0L } else null
             val type     = cursor.getInt(typeIdx)
             // Drafts (3), outbox (4), and failed sends (5) are all outgoing — only inbox (1) is
             // received. Using != INBOX rather than == SENT prevents left-bubble display for them.
@@ -296,7 +301,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                 }
             }
 
-            messages.add(Message(id, threadId, address, body, date, isSent, type))
+            messages.add(Message(id, threadId, address, body, date, isSent, type, sentAt = dateSent))
         }
     }
 
@@ -309,7 +314,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         debugMmsLog("Querying content://mms …")
         val threads = mutableMapOf<Long, Thread>()
         var totalMmsCount = 0
-        val mmsProjection = arrayOf("_id", "thread_id", "date", "msg_box", "m_type")
+        val mmsProjection = arrayOf("_id", "thread_id", "date", "date_sent", "msg_box", "m_type")
         val filter = "msg_box NOT IN (3, 5)"
         val sortDesc = "_id DESC"
 
@@ -381,10 +386,12 @@ class SmsHistoryImportWorker @AssistedInject constructor(
         resumeBeforeRawId: Long = Long.MAX_VALUE,
         onProgress: suspend (Int, Int, String) -> Unit = { _, _, _ -> }
     ): CursorResult {
-        val idIdx     = cursor.getColumnIndexOrThrow("_id")
-        val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
-        val dateIdx   = cursor.getColumnIndexOrThrow("date")
-        val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+        val idIdx       = cursor.getColumnIndexOrThrow("_id")
+        val threadIdx   = cursor.getColumnIndexOrThrow("thread_id")
+        val dateIdx     = cursor.getColumnIndexOrThrow("date")
+        // Not OrThrow: date_sent isn't guaranteed present on every OEM's mailbox URIs.
+        val dateSentIdx = cursor.getColumnIndex("date_sent")
+        val boxIdx      = cursor.getColumnIndexOrThrow("msg_box")
         // Not OrThrow: some OEMs omit the column even when requested in the projection;
         // isDisplayableMmsType(null) treats that as displayable (GROUP_MESSAGING_SPEC §4.2).
         // A single post-query check here covers the primary URI AND every Samsung mailbox
@@ -407,6 +414,9 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             val rawId     = cursor.getLong(idIdx)
             val threadId  = cursor.getLong(threadIdx)
             val dateSec   = cursor.getLong(dateIdx)
+            // MMS provider times are SECONDS — ×1000. 0 means "not recorded" → NULL, not epoch.
+            val sentAt    = if (dateSentIdx >= 0 && !cursor.isNull(dateSentIdx))
+                cursor.getLong(dateSentIdx).takeIf { it > 0L }?.let { it * 1000L } else null
             val msgBox    = cursor.getInt(boxIdx)
             val id        = MMS_ID_OFFSET + rawId
             val isSent    = msgBox != Telephony.Mms.MESSAGE_BOX_INBOX
@@ -479,7 +489,8 @@ class SmsHistoryImportWorker @AssistedInject constructor(
                 isSent = isSent,
                 type = msgBox,
                 isMms = true,
-                attachments = parts.attachments
+                attachments = parts.attachments,
+                sentAt = sentAt
             )
             inserted++
             if (inserted % 500 == 0) {
@@ -648,6 +659,7 @@ class SmsHistoryImportWorker @AssistedInject constructor(
             Telephony.Sms.ADDRESS,
             Telephony.Sms.BODY,
             Telephony.Sms.DATE,
+            Telephony.Sms.DATE_SENT,
             Telephony.Sms.TYPE,
         )
 

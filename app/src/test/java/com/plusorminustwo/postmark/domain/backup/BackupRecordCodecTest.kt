@@ -32,6 +32,8 @@ class BackupRecordCodecTest {
         isRead = false,
         isStarred = true,
         isPinned = true,
+        sentAt = 1_752_000_000_050L,
+        deliveredAt = 1_752_000_000_200L,
         attachments = listOf(AttachmentRef("ab12cd", "image/jpeg")),
         reactions = listOf(
             ReactionRecord("self", "❤️", 1_752_000_100_000L, ""),
@@ -94,6 +96,8 @@ class BackupRecordCodecTest {
         assertEquals(true, msg.isRead)
         assertEquals(false, msg.isStarred)
         assertEquals(false, msg.isPinned)
+        assertNull(msg.sentAt)
+        assertNull(msg.deliveredAt)
         assertTrue(msg.attachments.isEmpty())
         assertTrue(msg.reactions.isEmpty())
     }

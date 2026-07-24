@@ -24,6 +24,11 @@ import androidx.compose.runtime.Immutable
  *                        global Starred Images gallery. Postmark-only, not synced anywhere.
  * @param isPinned        User-pinned message (Discord-style) — surfaces in the per-thread
  *                        Pinned messages panel. Postmark-only, not synced anywhere.
+ * @param sentAt          Epoch millis the message was actually sent (SMS DATE_SENT / MMS
+ *                        date_sent). Null when unknown. For received messages this is the
+ *                        sender's send time; for sent messages, this device's send time.
+ * @param deliveredAt     Epoch millis a carrier delivery report confirmed receipt; null
+ *                        until one arrives (carrier-dependent — many carriers never send one).
  */
 @Immutable
 data class Message(
@@ -42,7 +47,9 @@ data class Message(
     // False for incoming messages not yet viewed; drives the unread badge.
     val isRead: Boolean = true,
     val isStarred: Boolean = false,
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    val sentAt: Long? = null,
+    val deliveredAt: Long? = null
 ) {
     /** Content URI of the first attachment — convenience accessor for single-media
      *  call sites (previews, shared-media grid). Null when there are no attachments. */

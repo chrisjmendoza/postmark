@@ -873,13 +873,47 @@ instance, but flagged:
       instead of clipping under the nav bar. Needs on-device verification.
 
 ### Delivery timestamps + read receipts
-- [ ] **Store sentAt + deliveredAt** — add `sentAt: Long?` and
-      `readAt: Long?` to `MessageEntity`. Room migration required.
+- [x] **Store sentAt + deliveredAt** (July 24 2026, `feat/delivery-timestamps`) —
+      added `sentAt: Long?` and `deliveredAt: Long?` to `MessageEntity` /
+      domain `Message` (Room v20→v21, `MIGRATION_20_21`, two nullable
+      `ALTER TABLE messages ADD COLUMN … INTEGER` statements mirroring the
+      `MIGRATION_8_9` precedent; `21.json` exported + committed). **`readAt`
+      deliberately skipped** — there is no data source for it (MMS/RCS read
+      reports aren't implemented), so a `readAt` column would be dead schema
+      noise; the "Read receipt double tick" item below stays open until a real
+      read-report source exists. **`sentAt`** is populated from the provider's
+      `DATE_SENT` (SMS) / `date_sent` (MMS) in both the incremental sync
+      (`SmsSyncHandler`) and the historical import (`SmsHistoryImportWorker`);
+      **MMS provider times are seconds — multiplied by 1000L** exactly like the
+      existing `date` handling, and a provider `0` is stored as NULL ("not
+      recorded", not the epoch). **`deliveredAt`** is written at delivery-report
+      time by `SmsSentDeliveryReceiver` (new `MessageDao.updateDeliveryStatusWithTimestamp`
+      sets status + timestamp atomically); it stays NULL unless a carrier
+      delivery report actually arrives — **carrier-dependent**, many never send
+      one. Backup/restore carry both fields additively (`MessageRecord`, tolerant
+      decode). *Needs on-device verification:* migration runs clean against a
+      real populated DB; `sentAt` shows up after a fresh sync of real SMS/MMS;
+      the "Delivered" row appears after a genuine carrier delivery report.
 - [ ] **Read receipt double tick** — extend `DeliveryStatusIndicator`
-      to show ✓✓ in accent color when `readAt` is set (MMS only).
-- [ ] **Message info panel** — tapping Info in action bar slides up
-      bottom sheet: sent at / delivered at / read at / character
-      count / message parts count.
+      to show ✓✓ in accent color when a read report is set (MMS only).
+      **Still open (unchecked) by design** — see the `readAt`-skipped note on
+      "Store sentAt + deliveredAt" above: no MMS/RCS read-report source is
+      implemented, so there is nothing to drive the second tick yet.
+- [x] **Message info panel** (July 24 2026, `feat/delivery-timestamps`) —
+      tapping **Info** in the reaction popup's action row (Copy / Forward / Pin /
+      **Info** / Delete) slides up a `MessageInfoSheet` (`ModalBottomSheet`,
+      `navigationBarsPadding` on all four edges like `EmojiPickerBottomSheet`):
+      absolute Sent/Received time, Delivered time (only when a delivery report
+      set `deliveredAt`), character count (omitted for blank/media-only bodies),
+      transport (SMS/MMS), and SMS segment count / MMS attachment count. **No
+      "read at" row** — see the `readAt`-skipped rationale above. The row-set
+      decision is a pure function (`domain/messageinfo/MessageInfo.kt`,
+      plain-JUnit tested); only epoch formatting and the
+      `SmsMessage.calculateLength` segment call live in the UI layer.
+      Cross-reference: this is the same feature as the Thread-view "Message info"
+      item under §Thread view. *Needs on-device verification:* sheet insets sit
+      clear of the bottom edge; the 5-action popup row fits at large font scale;
+      Delivered row renders after a real delivery report.
 - [x] **Document RCS** (July 22 2026) — expanded the README's existing
       "No RCS" limitation with why (Google restricts RCS/Jibe chat features
       to Google Messages and carrier apps; no public third-party API) and
@@ -1038,9 +1072,16 @@ instance, but flagged:
       just without the live-compose flow's immediate status update. Acceptable
       trade-off for a secondary action; revisit if forwarded messages feel laggy on
       delivery-status in practice.
-- [ ] **Message info** — wire up Info in action bar once delivery
-      timestamps are stored. (The image viewer's "View details" is a separate,
-      already-shipped lightweight version — sender/timestamp/starred only, see below.)
+- [x] **Message info** (July 24 2026, `feat/delivery-timestamps`) — wired up Info
+      in the reaction popup's action row now that delivery timestamps are stored.
+      Opens the `MessageInfoSheet` described under §Delivery timestamps + read
+      receipts → "Message info panel" (cross-reference — same feature): absolute
+      Sent/Received + Delivered times, character count, transport, SMS parts /
+      MMS attachment count; row-set logic is the pure `messageInfoRows`. (The
+      image viewer's "View details" remains a separate, already-shipped
+      lightweight version — sender/timestamp/starred only, see below.) *Needs
+      on-device verification:* sheet bottom-edge insets; 5-action popup row at
+      large font scale; Delivered row after a real delivery report.
 - [x] **Selection mode — Copy format** — verify friendly plain text
       output matches the designed format. **July 16 2026:** media-only
       messages now emit a placeholder line — "[Photo]", "[2 photos]",

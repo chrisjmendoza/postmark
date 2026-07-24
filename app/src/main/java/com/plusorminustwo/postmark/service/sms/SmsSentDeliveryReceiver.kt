@@ -136,7 +136,12 @@ class SmsSentDeliveryReceiver : BroadcastReceiver() {
                     }
                     ACTION_SMS_DELIVERED -> {
                         syncLogger.log("SmsSentDelivery", "SMS_DELIVERED roomId=$roomId smsRowId=$smsRowId")
-                        messageRepository.updateDeliveryStatus(roomId, DELIVERY_STATUS_DELIVERED)
+                        // Record the delivery status AND the moment of delivery together so the
+                        // Message info sheet can show "Delivered <when>". This is the only place a
+                        // real delivery timestamp exists for SMS.
+                        messageRepository.updateDeliveryStatusWithTimestamp(
+                            roomId, DELIVERY_STATUS_DELIVERED, System.currentTimeMillis()
+                        )
 
                         // Mark delivery confirmed in the content provider.
                         if (smsRowId > 0L) {

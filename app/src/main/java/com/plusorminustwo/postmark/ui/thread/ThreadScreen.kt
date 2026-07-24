@@ -102,6 +102,8 @@ import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
 import com.plusorminustwo.postmark.ui.contact.addContactIntent
 import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
+import com.plusorminustwo.postmark.domain.messageinfo.MessageInfoValue
+import com.plusorminustwo.postmark.domain.messageinfo.messageInfoRows
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
@@ -677,6 +679,10 @@ private fun ThreadContent(
     // thread's pinned messages, tapping one jumps to it in the conversation.
     var showPinnedSheet by remember { mutableStateOf(false) }
 
+    // Message info sheet (reaction popup → "Info"): non-null while the sheet is open, holding
+    // the message whose sent/delivered/size details are shown.
+    var infoMessage by remember { mutableStateOf<Message?>(null) }
+
     // Export sheet (selection-mode "Export" action): Copy as text or Share as image. The
     // selection is snapshotted into exportIds when the sheet opens so the render/copy uses a
     // stable set even if the sheet outlives selection mode. isExporting drives the spinner
@@ -1058,6 +1064,13 @@ private fun ThreadContent(
             },
             onUnpin = { id -> onTogglePinnedMessage(id) },
             onDismiss = { showPinnedSheet = false }
+        )
+    }
+
+    infoMessage?.let { msg ->
+        MessageInfoSheet(
+            message = msg,
+            onDismiss = { infoMessage = null }
         )
     }
 
@@ -1665,6 +1678,11 @@ private fun ThreadContent(
                 },
                 onTogglePin = {
                     onTogglePinnedMessage(msg.id)
+                    onExitSelectionMode()
+                },
+                onInfo      = {
+                    // Open the info sheet, then dismiss the popup + selection (mirrors Copy).
+                    infoMessage = msg
                     onExitSelectionMode()
                 },
                 onDelete    = {
@@ -5560,6 +5578,7 @@ private fun EmojiReactionPopup(
     onCopy: () -> Unit,
     onForward: () -> Unit,
     onTogglePin: () -> Unit,
+    onInfo: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -5687,6 +5706,7 @@ private fun EmojiReactionPopup(
                     ActionItem(Icons.Default.ContentCopy,      "Copy",    onCopy)
                     ActionItem(Icons.AutoMirrored.Filled.Send, "Forward", onForward)
                     ActionItem(Icons.Default.PushPin, if (isPinned) "Unpin" else "Pin", onTogglePin)
+                    ActionItem(Icons.Default.Info, "Info", onInfo)
                     ActionItem(Icons.Default.Delete, "Delete", onDelete, MaterialTheme.colorScheme.error)
                 }
             }
@@ -5852,6 +5872,74 @@ private fun PinnedMessagesSheet(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ── MessageInfoSheet ──────────────────────────────────────────────────────────
+
+/**
+ * Message info panel — a [ModalBottomSheet] of labeled rows for one message: absolute
+ * Sent/Received time, Delivered time (when a delivery report set it), character count,
+ * transport, and SMS segment count / MMS attachment count. Which rows appear is decided
+ * purely by [messageInfoRows]; only timestamp formatting and the SMS segment-count
+ * platform call live here in the UI layer.
+ *
+ * navigationBarsPadding on the content keeps the rows clear of the Android gesture/nav
+ * bar — same treatment as [PinnedMessagesSheet] and [EmojiPickerBottomSheet].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MessageInfoSheet(
+    message: Message,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val rows = remember(message) { messageInfoRows(message) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp)
+        ) {
+            Text(
+                text = "Message info",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+            rows.forEach { row ->
+                val valueText = when (val v = row.value) {
+                    is MessageInfoValue.Timestamp ->
+                        formatEpochMillis(v.epochMillis, FRIENDLY_TIMESTAMP_FORMATTER)
+                    is MessageInfoValue.Text -> v.value
+                    // Platform segment-count call kept thin at the UI layer (domain stays pure).
+                    is MessageInfoValue.SmsParts ->
+                        android.telephony.SmsMessage.calculateLength(v.body, false)[0].toString()
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = row.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = valueText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.padding(start = 16.dp)
+                    )
                 }
             }
         }
