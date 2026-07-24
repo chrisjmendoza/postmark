@@ -660,6 +660,24 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       with the new trailing control.
 - [x] **Thread filter chip** — done.
 - [x] **Jump to message from result** — done.
+- [ ] **Search-jump arrival cue + centered landing** (owner request, on-device
+      July 24 2026 — queued for the overnight run) — when a search result is
+      tapped and the thread scrolls to that message, (a) the target bubble
+      should visibly announce itself on arrival: a brief "pop" (small scale
+      bounce) or a momentary glow/highlight pulse that fades, so it's
+      unambiguous WHICH bubble the jump landed on; (b) the message should land
+      vertically CENTERED in the viewport, not at the bottom — the messages
+      before and after it must both be visible for context. NOTE for the
+      implementer: the code nominally has `scrollToMessageCentered()` (shared
+      by search-jump, the image viewer's "Go to chat", and the pinned-messages
+      panel) plus a highlight via `scrollToMessageId` — but the owner observes
+      bottom-landing and no visible cue on-device, so first re-verify what the
+      search path actually calls and whether the existing highlight renders at
+      all (checkboxes drift; don't assume the routine works as named). Any new
+      pop/glow should respect the bubble gesture rules (no new gesture
+      surfaces over the bubble — see the ClickableText lesson) and reuse the
+      existing highlight plumbing if it turns out to be live. Apply the same
+      cue to all three jump entry points so they can't drift apart.
 - [x] **Date range filter** — preset chips (Today / 7 days / 30 days)
       via `SearchDateRange` enum + `toBoundsMs()`. Single
       `searchMessagesFiltered()` DAO query handles all combos.
