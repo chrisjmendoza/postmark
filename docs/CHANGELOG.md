@@ -4,6 +4,53 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (feat/camera-capture) — camera capture in the reply bar
+
+1084 tests passing (up from 1082). **Not yet verified on device.**
+
+Closes the last open item under Tier 2 "Rich media in reply bar" (docs/TODO.md):
+a "Take photo" entry in the attach dropdown, right after "Photos or videos".
+
+**No `android.permission.CAMERA` anywhere.** `ActivityResultContracts.TakePicture()`
+hands the capture off to whichever camera app is already installed — that app needs
+no permission grant from us, since the photo lands in a file we own and hand it a
+FileProvider uri for. This only holds because this app itself never declares
+`CAMERA`; if that's ever added for an unrelated reason, this flow silently breaks
+for anyone who then denies it.
+
+Capture target: `MmsManagerWrapper.cameraCaptureFile(context, epochMs)` mints
+`filesDir/camera_capture_<epochMs>.jpg`, wrapped via the existing FileProvider
+(`file_paths.xml`'s `files-path "."` already covers all of filesDir — no manifest
+change needed). `ThreadViewModel.requestCameraCapture()` mints the target (after the
+same 5-attachment cap guard the voice-memo START path uses — a single check, not
+duplicated in the UI), persists the pending uri via `SavedStateHandle` (survives the
+Activity being killed while the camera app is foreground — the classic
+`TakePicture` gotcha), and fires a one-shot `cameraCaptureRequestEvent` the reply bar
+collects to call `takePictureLauncher.launch(uri)`. The event never replays on a
+process-death restore (only a fresh request emits it) — Android redelivers the
+`TakePicture` result to the recreated launcher on its own, so re-firing it here
+would relaunch the camera on top of the one already returning.
+`onCameraCaptureResult(success)` reads the persisted uri: success funnels
+`MessageAttachment(uri, "image/jpeg")` through the same `onAttachmentsSelected` /
+`appendAttachments` pipeline a picked photo takes; cancel/failure just deletes the
+temp file — no snackbar, the user backed out rather than hit an error.
+
+`camera_capture_` joins the voice-memo owned-file lifecycle in `MmsManagerWrapper`:
+`isOutgoingCacheFileName` now recognizes it, `deleteVoiceMemoCacheFile` /
+`touchVoiceMemoCacheFile` treat it the same as `voice_memo_*`, and
+`sweepOrphanedAttachmentCache` gives it the same 24 h grace (a pending unsent
+capture must survive process death + the app-start sweep, same as a memo). New
+plain-JUnit tests in `VoiceMemoBudgetTest`: the sweep predicate accepts the new
+prefix/suffix and still rejects near-miss foreign names, and the minted-filename
+shape matches what the predicate accepts.
+
+**Needs on-device verification:** capture → preview strip → MMS send; cancel path
+deletes the temp file; cap-of-5 rejection shows the snackbar; a capture surviving
+backgrounding/process death while the camera app is foreground; the orphan sweep
+not eating a still-pending capture.
+
+---
+
 ## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
 
 1073 tests passing (up from ~1044). **Not yet verified on device.**

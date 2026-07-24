@@ -566,41 +566,65 @@ class MmsManagerWrapper @Inject constructor(
         fun voiceMemoCacheFile(context: Context, epochMs: Long): File =
             File(context.filesDir, "$VOICE_MEMO_FILE_PREFIX$epochMs$VOICE_MEMO_FILE_SUFFIX")
 
+        // ── Camera capture cache files ───────────────────────────────────────────
+        /* A camera capture is the other attachment type that exists as an app-owned
+         * file BEFORE send (the system camera app writes straight into it via the
+         * FileProvider uri we hand it), so it joins the same delete/sweep lifecycle
+         * as voice memos below — a pending unsent capture must survive process death
+         * the same way a pending memo does. */
+        const val CAMERA_CAPTURE_FILE_PREFIX = "camera_capture_"
+        const val CAMERA_CAPTURE_FILE_SUFFIX = ".jpg"
+
+        /** The filesDir file a new camera capture writes into. [epochMs] makes the
+         *  name unique per capture (dedupe is by uri string, same as any attachment). */
+        fun cameraCaptureFile(context: Context, epochMs: Long): File =
+            File(context.filesDir, "$CAMERA_CAPTURE_FILE_PREFIX$epochMs$CAMERA_CAPTURE_FILE_SUFFIX")
+
         /** True for filenames this class owns in filesDir and may delete/sweep. */
         internal fun isOutgoingCacheFileName(name: String): Boolean =
             (name.startsWith("mms_attach_") && name.endsWith(".bin")) ||
-            (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX))
+            (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) ||
+            (name.startsWith(CAMERA_CAPTURE_FILE_PREFIX) && name.endsWith(CAMERA_CAPTURE_FILE_SUFFIX))
 
         /**
          * Deletes the filesDir file backing [attachment] ONLY if it is a voice memo
-         * recording. Used when the user removes a pending memo from the reply bar (×)
-         * and after a send pins the optimistic row to the mms_attach_ copy — in both
-         * cases the recording file is exclusively owned by that pending entry, unlike
-         * mms_attach_ files, which sent rows keep referencing.
+         * recording or a camera capture — the two attachment types written directly
+         * to app storage before send. Used when the user removes a pending item from
+         * the reply bar (×) and after a send pins the optimistic row to the
+         * mms_attach_ copy — in both cases the source file is exclusively owned by
+         * that pending entry, unlike mms_attach_ files, which sent rows keep
+         * referencing.
          */
         fun deleteVoiceMemoCacheFile(context: Context, attachment: MessageAttachment) {
             val name = Uri.parse(attachment.uri).lastPathSegment ?: return
-            if (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) {
+            val owned =
+                (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) ||
+                (name.startsWith(CAMERA_CAPTURE_FILE_PREFIX) && name.endsWith(CAMERA_CAPTURE_FILE_SUFFIX))
+            if (owned) {
                 runCatching { File(context.filesDir, name).delete() }
             }
         }
 
-        /** Bumps the mtime of the recording file behind [attachment] if it is a voice memo —
-         *  a draft restored from SavedStateHandle is being actively kept, so its 24 h
-         *  orphan-sweep clock must restart. No-op for anything else. */
+        /** Bumps the mtime of the recording/capture file behind [attachment] if it's a
+         *  voice memo or camera capture — a draft restored from SavedStateHandle is
+         *  being actively kept, so its 24 h orphan-sweep clock must restart. No-op for
+         *  anything else. */
         fun touchVoiceMemoCacheFile(context: Context, attachment: MessageAttachment) {
             val name = Uri.parse(attachment.uri).lastPathSegment ?: return
-            if (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) {
+            val owned =
+                (name.startsWith(VOICE_MEMO_FILE_PREFIX) && name.endsWith(VOICE_MEMO_FILE_SUFFIX)) ||
+                (name.startsWith(CAMERA_CAPTURE_FILE_PREFIX) && name.endsWith(CAMERA_CAPTURE_FILE_SUFFIX))
+            if (owned) {
                 runCatching { File(context.filesDir, name).setLastModified(System.currentTimeMillis()) }
             }
         }
 
         /**
-         * Deletes the filesDir cache files (`mms_attach_*.bin`, `voice_memo_*.m4a`)
-         * backing [attachments] of an outgoing MMS. Received-MMS attachments carry
-         * `content://mms/part` URIs whose last segment isn't a cache-file name, so
-         * they're skipped; any non-cache URI is a no-op. Call after a message is
-         * deleted so its cached media doesn't leak.
+         * Deletes the filesDir cache files (`mms_attach_*.bin`, `voice_memo_*.m4a`,
+         * `camera_capture_*.jpg`) backing [attachments] of an outgoing MMS. Received-MMS
+         * attachments carry `content://mms/part` URIs whose last segment isn't a
+         * cache-file name, so they're skipped; any non-cache URI is a no-op. Call after
+         * a message is deleted so its cached media doesn't leak.
          */
         fun deleteAttachmentCacheFiles(context: Context, attachments: List<MessageAttachment>) {
             attachments.forEach { att ->
@@ -612,14 +636,15 @@ class MmsManagerWrapper @Inject constructor(
         }
 
         /**
-         * Deletes cache files in filesDir (`mms_attach_*.bin`, `voice_memo_*.m4a`) that
-         * no live message references. Each sent-MMS row (and any still-pending optimistic
+         * Deletes cache files in filesDir (`mms_attach_*.bin`, `voice_memo_*.m4a`,
+         * `camera_capture_*.jpg`) that no live message references. Each sent-MMS row (and any still-pending optimistic
          * row) references its own cache file via a FileProvider URI, so a file whose name
          * is absent from [referencedNames] is a leftover from a superseded/failed/deleted
-         * send — or, for voice memos, from a cancelled/crashed recording. A file is only
-         * removed once [nowMs] − its mtime exceeds its minimum age ([minAgeMs] for
-         * mms_attach_ files, [VOICE_MEMO_SWEEP_MIN_AGE_MS] for memos — a pending unsent
-         * memo isn't referenced by any message row, so it needs the longer grace).
+         * send — or, for voice memos and camera captures, from a cancelled/crashed
+         * recording or capture. A file is only removed once [nowMs] − its mtime exceeds
+         * its minimum age ([minAgeMs] for mms_attach_ files, [VOICE_MEMO_SWEEP_MIN_AGE_MS]
+         * for memos and captures — a pending unsent one isn't referenced by any message
+         * row, so it needs the longer grace).
          * Returns the number of files deleted.
          */
         fun sweepOrphanedAttachmentCache(
@@ -633,7 +658,9 @@ class MmsManagerWrapper @Inject constructor(
             } ?: return 0
             var deleted = 0
             files.forEach { f ->
-                val minAge = if (f.name.startsWith(VOICE_MEMO_FILE_PREFIX)) {
+                val minAge = if (f.name.startsWith(VOICE_MEMO_FILE_PREFIX) ||
+                    f.name.startsWith(CAMERA_CAPTURE_FILE_PREFIX)
+                ) {
                     maxOf(minAgeMs, VOICE_MEMO_SWEEP_MIN_AGE_MS)
                 } else minAgeMs
                 if (f.name !in referencedNames && nowMs - f.lastModified() > minAge) {
