@@ -544,6 +544,68 @@ in `ThreadScreen` are **deleted**; the callback uses the host View's own
 width/height and `getLocationInWindow`. `ScrollCaptureMath` (the reversed-list
 sign-flip, unit-tested) is unchanged. API 31+ gated as before; the LazyColumn's
 gesture handling and bubble internals are untouched.
+## 2026-07-24 (feat/contact-media-gallery) — Photos/Videos/Links sections on the contact profile
+
+1091 tests passing (up from 1082). **Not yet verified on device.**
+
+Owner request: restructure `ContactDetailScreen`'s flat "Shared media" grid into three
+Google Messages-style sections — Photos, Videos, Links — everything newest → oldest,
+each section hidden entirely when empty, headers reading "Photos · N" / "Videos · N" /
+"Links · N".
+
+**Photos and Videos** each show a 6-item preview grid; tapping ANYWHERE in the section
+(the whole box is one tap target, with a trailing chevron making that obvious rather
+than relying on the header text alone) opens a new full-screen route —
+`contact/{threadId}/photos` or `.../videos` — a `LazyVerticalGrid` (3 columns) of every
+matching attachment in the thread, newest first, keyed on `messageId` +
+`attachmentIndex`. The two sections are never mixed, on the preview or in the gallery.
+Tapping a photo in the gallery reuses `ContactDetailScreen`'s own
+`ContactFullScreenViewer` (widened `private` → `internal`) instead of a second
+image-viewer implementation. Video tiles use the same first-frame-still + play-badge
+treatment as the thread bubbles/grid — pulled out of `ThreadScreen`'s
+`AttachmentThumbnail`/`MmsAttachment` into a shared `VideoThumbnailTile`
+(`ui/thread/VideoThumbnails.kt`) so all three call sites render identically instead of
+three hand-synced copies; tapping a video opens the existing `VideoPlayerDialog` (also
+widened to `internal`). No new DAO query — both sections flatten
+`MessageRepository.observeMediaMessages(threadId)`, the same flow the old shared-media
+grid used, via a new `List<Message>.toGalleryAttachments(mimePrefix)`
+(`domain/model/GalleryAttachment.kt`).
+
+**Links** lists every URL found in the thread's message bodies, newest first — each row
+is the URL (single line, ellipsized), a sender label ("You" / contact name), and a
+`friendlyTimestamp` date; tap opens the browser. Extraction is a pure function,
+`domain/links/LinkExtraction.kt` (`extractLinks` + a new shared `findUrls` helper):
+given messages, returns `(url, messageId, timestamp, isSent)` newest first; the same
+URL sent twice is two entries — a timeline, not a deduped destination list.
+`findUrls` reuses the exact `android.util.Patterns.WEB_URL` matcher ThreadScreen's
+bubble-linkify pass (`linkifyText`) already used; `linkifyText` was refactored to call
+it instead of keeping its own copy of the matcher-plus-normalize loop, so a URL
+tappable in a bubble is guaranteed to also appear in the Links section. 9 new
+plain-JUnit tests (`LinkExtractionTest`) — `Patterns.WEB_URL`'s field is stubbed to
+null outside Robolectric/an instrumented run, so `extractLinks`/`findUrls` take an
+optional `Pattern` parameter (default `Patterns.WEB_URL`) that tests override with an
+equivalent plain-Java fixture; production call sites never pass it. **Decision:**
+Links renders inline in the section rather than getting its own third gallery
+route/ViewModel/nav-entry — the owner only asked for "a section for links," full grid
+parity was scoped to Photos/Videos, and a link list has no grid layout that would make
+a dedicated screen worth it. Reuses `MessageRepository.observeByThread(threadId)`, the
+same read-only query `ThreadViewModel` already drives the conversation view with.
+
+New tiny `Context.openUrl()` helper (`util/OpenUrl.kt`) opens a URL via
+`Intent.ACTION_VIEW`. It also exists on the unmerged `feat/about-licenses` branch
+(PR #30, added there for the Settings › Licenses screen) — same signature and
+behavior. If both branches merge, this is a trivial duplicate-file conflict; keep
+either copy.
+
+Both new routes wired in `AppNavigation` following the existing `ContactDetail`
+pattern; Scaffold padding is passed as `LazyVerticalGrid`'s `contentPadding` (plus a
+flat 2dp) rather than an outer `Modifier.padding`, so the last row scrolls clear of
+the nav bar instead of hiding behind it (cf. `BlockedNumbersScreen`).
+
+**On-device verification:** 6-item preview caps and that Photos/Videos never mix;
+both full grids scroll clear of the nav bar; tapping a photo/video opens the
+viewer/player; link rows open the browser; section counts are correct; empty
+sections are fully hidden (no dangling header).
 
 ---
 

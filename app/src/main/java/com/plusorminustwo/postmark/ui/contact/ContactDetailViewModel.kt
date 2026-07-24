@@ -8,14 +8,19 @@ import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.domain.customization.BackgroundPlacement
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
+import com.plusorminustwo.postmark.domain.links.LinkEntry
+import com.plusorminustwo.postmark.domain.links.extractLinks
+import com.plusorminustwo.postmark.domain.model.GalleryAttachment
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.model.toGalleryAttachments
 import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
 import com.plusorminustwo.postmark.ui.components.PlacementRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
@@ -24,14 +29,14 @@ import javax.inject.Inject
 /**
  * ViewModel for [ContactDetailScreen].
  *
- * Exposes the live [Thread] state and the list of media-bearing messages for the
- * shared-media grid. Mute / pin / notifications / nickname changes are all
- * delegated to the same repository layer used by [ThreadViewModel] so they stay
- * in sync with no extra coordination.
+ * Exposes the live [Thread] state and the derived [photos] / [videos] / [links] lists
+ * behind the Photos, Videos, and Links sections. Mute / pin / notifications / nickname
+ * changes are all delegated to the same repository layer used by [ThreadViewModel] so
+ * they stay in sync with no extra coordination.
  *
  * @param savedStateHandle  Carries the `threadId` nav argument from [AppNavigation].
  * @param threadRepository  Reads / writes thread-level metadata.
- * @param messageRepository Reads media messages for the shared-media grid.
+ * @param messageRepository Reads this thread's messages for the media/link sections.
  */
 @HiltViewModel
 class ContactDetailViewModel @Inject constructor(
@@ -55,6 +60,26 @@ class ContactDetailViewModel @Inject constructor(
     /** Messages that carry a media attachment (images, video, audio), newest first. */
     val mediaMessages: StateFlow<List<Message>> = messageRepository
         .observeMediaMessages(threadId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Every image attachment across [mediaMessages], newest first — backs the Photos
+     *  section preview (capped to 6 by the screen) and the full Photos gallery route. */
+    val photos: StateFlow<List<GalleryAttachment>> = mediaMessages
+        .map { it.toGalleryAttachments("image/") }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Every video attachment across [mediaMessages], newest first — backs the Videos
+     *  section preview (capped to 6 by the screen) and the full Videos gallery route. */
+    val videos: StateFlow<List<GalleryAttachment>> = mediaMessages
+        .map { it.toGalleryAttachments("video/") }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Every URL found in this thread's message bodies, newest first — backs the Links
+     *  section. Reuses the same [MessageRepository.observeByThread] observation
+     *  ThreadViewModel drives the conversation view with (read-only, no new query). */
+    val links: StateFlow<List<LinkEntry>> = messageRepository
+        .observeByThread(threadId)
+        .map { extractLinks(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // ── Nickname ──────────────────────────────────────────────────────────────

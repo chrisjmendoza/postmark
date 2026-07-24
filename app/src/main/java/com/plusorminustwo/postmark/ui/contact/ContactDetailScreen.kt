@@ -14,11 +14,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -43,7 +45,9 @@ import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
-import com.plusorminustwo.postmark.domain.model.Message
+import com.plusorminustwo.postmark.domain.formatter.friendlyTimestamp
+import com.plusorminustwo.postmark.domain.links.LinkEntry
+import com.plusorminustwo.postmark.domain.model.GalleryAttachment
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.ui.components.AccentColorDialog
 import com.plusorminustwo.postmark.ui.components.BackgroundPlacementEditor
@@ -56,6 +60,8 @@ import com.plusorminustwo.postmark.ui.components.accentSubtitle
 import com.plusorminustwo.postmark.ui.components.avatarColor
 import com.plusorminustwo.postmark.ui.settings.SettingsRow
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
+import com.plusorminustwo.postmark.ui.thread.VideoThumbnailTile
+import com.plusorminustwo.postmark.util.openUrl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -72,22 +78,35 @@ import java.io.File
  *  - Large avatar + resolved display name + inline nickname editor
  *  - "Open in Contacts" button (opens system Contacts app; creates if new)
  *  - Mute / Pin / Notifications toggles (mirrors the ⋮ menu)
- *  - Shared-media grid (images, video, audio) with tap-to-full-screen for images
+ *  - Photos / Videos / Links sections (Google Messages-style): each media section shows
+ *    a capped 6-item preview grid that opens a full gallery route ([onOpenPhotos] /
+ *    [onOpenVideos]) when tapped; Links renders inline (no third route — see
+ *    [LinkRow]/docs/TODO.md for why). Empty sections are hidden entirely.
  *
- * @param threadId  Room thread ID passed via the nav graph.
- * @param onBack    Called when the user presses the back arrow.
+ * @param threadId     Room thread ID passed via the nav graph.
+ * @param onBack       Called when the user presses the back arrow.
+ * @param onOpenPhotos Called to open the full Photos gallery route for this thread.
+ * @param onOpenVideos Called to open the full Videos gallery route for this thread.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContactDetailScreen(
     threadId: Long,
     onBack: () -> Unit,
+    onOpenPhotos: () -> Unit,
+    onOpenVideos: () -> Unit,
     viewModel: ContactDetailViewModel = hiltViewModel()
 ) {
     val thread       by viewModel.thread.collectAsState()
-    val mediaMessages by viewModel.mediaMessages.collectAsState()
+    val photos       by viewModel.photos.collectAsState()
+    val videos       by viewModel.videos.collectAsState()
+    val links        by viewModel.links.collectAsState()
     val context      = LocalContext.current
     val scope        = rememberCoroutineScope()
+
+    // Resolved name for the received side of a Links row: nickname overrides displayName,
+    // same precedence as the avatar/name header below.
+    val contactLabel = thread?.let { it.nickname ?: formatPhoneNumber(it.displayName) } ?: "Contact"
 
     // ── Nickname dialog state ──────────────────────────────────────────────────
     var showNicknameDialog by remember { mutableStateOf(false) }
@@ -114,9 +133,6 @@ fun ContactDetailScreen(
     ) { uri ->
         if (uri != null) viewModel.beginPlacementForPick(uri)
     }
-
-    // ── Full-screen viewer state ───────────────────────────────────────────────
-    var fullScreenUri by remember { mutableStateOf<String?>(null) }
 
     // ── Nickname dialog ────────────────────────────────────────────────────────
     if (showNicknameDialog) {
@@ -244,11 +260,6 @@ fun ContactDetailScreen(
             },
             onDismiss = { showThemePresetDialog = false }
         )
-    }
-
-    // ── Full-screen image viewer ───────────────────────────────────────────────
-    fullScreenUri?.let { uri ->
-        ContactFullScreenViewer(uri = uri, onDismiss = { fullScreenUri = null })
     }
 
     Scaffold(
@@ -381,55 +392,68 @@ fun ContactDetailScreen(
                 Spacer(Modifier.height(20.dp))
             }
 
-            // ── Shared media header ────────────────────────────────────────────
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text  = "Shared media",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text  = "${mediaMessages.size} items",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            // ── Photos section (Google Messages-style) ─────────────────────────
+            // Preview capped at 6, newest first; tapping anywhere in the section opens
+            // the full Photos gallery route ([onOpenPhotos]) rather than the viewer
+            // directly — matching Google Messages, where the profile preview is a
+            // doorway into the full grid, not the viewer itself. Hidden entirely when empty.
+            if (photos.isNotEmpty()) {
+                item {
+                    MediaSectionPreview(
+                        title = "Photos",
+                        count = photos.size,
+                        items = photos.take(6),
+                        onOpenGallery = onOpenPhotos
+                    ) { attachment -> PhotoPreviewTile(attachment) }
                 }
-                Spacer(Modifier.height(4.dp))
             }
 
-            // ── Shared media grid (3 columns, chunked into rows) ───────────────
-            if (mediaMessages.isEmpty()) {
+            // ── Videos section ──────────────────────────────────────────────────
+            // Same preview(6) → full-gallery pattern as Photos, but never mixed with
+            // it — a thread with both gets two separate sections.
+            if (videos.isNotEmpty()) {
                 item {
-                    Box(
+                    MediaSectionPreview(
+                        title = "Videos",
+                        count = videos.size,
+                        items = videos.take(6),
+                        onOpenGallery = onOpenVideos
+                    ) { attachment -> VideoPreviewTile(attachment) }
+                }
+            }
+
+            // ── Links section ────────────────────────────────────────────────────
+            // Renders every link inline rather than capping + a third gallery route:
+            // full grid parity was only asked for Photos/Videos, and a link list has no
+            // grid layout to make a dedicated route worth its own screen/ViewModel/nav
+            // entry for. See docs/TODO.md for the full writeup of this decision.
+            if (links.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Links · ${links.size}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text  = "No shared media",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
-                // Chunk into rows of 3 so they fit inside the LazyColumn without
-                // triggering nested-scroll conflicts with LazyVerticalGrid.
-                items(mediaMessages.chunked(3)) { rowItems ->
-                    MediaGridRow(
-                        items        = rowItems,
-                        onImageClick = { uri -> fullScreenUri = uri }
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
                     )
                 }
-                // Bottom breathing room.
+                itemsIndexed(
+                    items = links,
+                    // messageId+url isn't unique alone if the same link appears twice in
+                    // one body; the index breaks that tie.
+                    key = { index, link -> "${link.messageId}_${link.url}_$index" }
+                ) { _, link ->
+                    LinkRow(
+                        link = link,
+                        contactName = contactLabel,
+                        onClick = { context.openUrl(link.url) }
+                    )
+                }
+            }
+
+            // Bottom breathing room, but only when at least one section rendered above.
+            if (photos.isNotEmpty() || videos.isNotEmpty() || links.isNotEmpty()) {
                 item { Spacer(Modifier.height(24.dp)) }
             }
         }
@@ -656,120 +680,154 @@ private fun ContactActionRow(
     }
 }
 
-// ── MediaGridRow ──────────────────────────────────────────────────────────────
+// ── MediaSectionPreview ───────────────────────────────────────────────────────
 
 /**
- * A single row of up to three media thumbnails laid out with equal weights.
+ * A Photos/Videos section: a header ("Photos · 34") plus a 6-item preview grid (3
+ * columns, chunked into up to 2 rows — matches the thread's own bubble-grid technique
+ * of plain `Row`s rather than a nested `LazyVerticalGrid`, avoiding nested-scroll
+ * conflicts inside the outer `LazyColumn`).
  *
- * Images are shown as square Coil thumbnails; video items get a play badge;
- * audio items show a waveform icon placeholder.
+ * The ENTIRE section — header and grid alike — is one tap target: tapping anywhere
+ * calls [onOpenGallery] to open the full gallery route, rather than opening a viewer
+ * directly from a preview tile (Google Messages treats the profile preview as a doorway
+ * into the full grid, not the viewer itself). A trailing chevron on the header makes
+ * that tappability visible rather than relying on an implicit "text looks pressable" cue.
  *
- * @param items       Up to 3 [Message] objects that have a non-null [Message.attachmentUri].
- * @param onImageClick Called with the URI when the user taps an image or video thumbnail.
+ * @param items Already capped to the preview size (6) by the caller.
+ * @param tile  Renders one preview cell for a [T] — [PhotoPreviewTile] or [VideoPreviewTile].
  */
 @Composable
-private fun MediaGridRow(
-    items: List<Message>,
-    onImageClick: (String) -> Unit
+private fun <T> MediaSectionPreview(
+    title: String,
+    count: Int,
+    items: List<T>,
+    onOpenGallery: () -> Unit,
+    tile: @Composable (T) -> Unit
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 2.dp, vertical = 1.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp)
+            .clickable(onClick = onOpenGallery)
     ) {
-        items.forEach { message ->
-            Box(modifier = Modifier.weight(1f)) {
-                MediaGridItem(message = message, onImageClick = onImageClick)
-            }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text  = "$title · $count",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Open all $title",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
-        // Fill empty slots in the last row with invisible spacers so items stay left-aligned
-        // and don't stretch to fill the row.
-        repeat(3 - items.size) {
-            Spacer(modifier = Modifier.weight(1f))
+        Spacer(Modifier.height(4.dp))
+        items.chunked(3).forEach { rowItems ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 2.dp, vertical = 1.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                rowItems.forEach { item ->
+                    Box(modifier = Modifier.weight(1f).aspectRatio(1f)) { tile(item) }
+                }
+                // Fill empty slots in the last row so items stay left-aligned.
+                repeat(3 - rowItems.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
         }
     }
 }
 
-/**
- * A single square thumbnail cell in the shared-media grid.
- *
- * Routing logic:
- *  - image types: Coil thumbnail; tap opens full-screen viewer.
- *  - video types: dark background with a play icon; tap opens full-screen viewer.
- *  - audio types or anything else: dark background with a music-note icon.
- */
+/** One square Photos-preview cell — plain Coil thumbnail; the whole section (not this
+ *  tile) is the tap target, see [MediaSectionPreview]. */
 @Composable
-private fun MediaGridItem(
-    message: Message,
-    onImageClick: (String) -> Unit
-) {
-    val uri      = message.attachmentUri ?: return
-    val mime     = message.mimeType ?: ""
-    val context  = LocalContext.current
-
-    // Square aspect ratio using BoxWithConstraints so the height matches the width.
-    BoxWithConstraints(
+private fun PhotoPreviewTile(attachment: GalleryAttachment) {
+    val context = LocalContext.current
+    SubcomposeAsyncImage(
+        model = ImageRequest.Builder(context)
+            .data(Uri.parse(attachment.uri))
+            .size(280, 280)
+            .crossfade(true)
+            .build(),
+        contentDescription = "Photo",
+        contentScale = ContentScale.Crop,
         modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
+            .fillMaxSize()
             .clip(RoundedCornerShape(2.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable {
-                // Images and video both open the full-screen viewer.
-                if (mime.startsWith("image/") || mime.startsWith("video/")) {
-                    onImageClick(uri)
-                }
-            }
+    )
+}
+
+/** One square Videos-preview cell — the shared first-frame-still + play-badge tile
+ *  (see [VideoThumbnailTile]); the whole section (not this tile) is the tap target. */
+@Composable
+private fun VideoPreviewTile(attachment: GalleryAttachment) {
+    VideoThumbnailTile(
+        uri = attachment.uri,
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(2.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    )
+}
+
+// ── LinkRow ────────────────────────────────────────────────────────────────────
+
+/**
+ * One row in the Links section: the URL (single line, ellipsized), then a sender label
+ * + friendly date underneath. Tapping opens the URL via [openUrl][com.plusorminustwo.postmark.util.openUrl].
+ *
+ * @param contactName Resolved display name for received links; sent links show "You".
+ */
+@Composable
+private fun LinkRow(
+    link: LinkEntry,
+    contactName: String,
+    onClick: () -> Unit
+) {
+    val friendly = remember(link.timestamp) {
+        friendlyTimestamp(
+            timestampMs = link.timestamp,
+            nowMs = System.currentTimeMillis()
+        )
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        when {
-            mime.startsWith("image/") -> {
-                // Coil thumbnail — crossfade on load.
-                SubcomposeAsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(Uri.parse(uri))
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "Image attachment",
-                    contentScale       = ContentScale.Crop,
-                    modifier           = Modifier.fillMaxSize()
-                )
-            }
-
-            mime.startsWith("video/") -> {
-                // Dark tile with a centred play icon. Coil's VideoFrameDecoder would give a
-                // real thumbnail but requires the coil-video artefact; keep it simple for now.
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xFF1A1A1A)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector        = Icons.Default.PlayCircle,
-                        contentDescription = "Video",
-                        tint               = Color.White.copy(alpha = 0.8f),
-                        modifier           = Modifier.size(36.dp)
-                    )
-                }
-            }
-
-            else -> {
-                // Audio or unknown — music-note placeholder.
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector        = Icons.Default.MusicNote,
-                        contentDescription = "Audio attachment",
-                        tint               = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier           = Modifier.size(32.dp)
-                    )
-                }
-            }
+        Icon(
+            imageVector = Icons.Default.Link,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = link.url,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "${if (link.isSent) "You" else contactName} · $friendly",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -788,7 +846,7 @@ private fun MediaGridItem(
  * @param onDismiss Called when the user closes the viewer.
  */
 @Composable
-private fun ContactFullScreenViewer(uri: String, onDismiss: () -> Unit) {
+internal fun ContactFullScreenViewer(uri: String, onDismiss: () -> Unit) {
     var scale   by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
