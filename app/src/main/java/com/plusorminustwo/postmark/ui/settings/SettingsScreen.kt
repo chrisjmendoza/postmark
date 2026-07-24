@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Report
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Storage
 import com.plusorminustwo.postmark.BuildConfig
 import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import androidx.compose.material3.*
@@ -59,6 +60,7 @@ fun SettingsScreen(
     onBlockedNumbersClick: () -> Unit = {},
     onSpamClick: () -> Unit = {},
     onNotificationsClick: () -> Unit = {},
+    onStorageUsageClick: () -> Unit = {},
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -140,6 +142,14 @@ fun SettingsScreen(
                 title = "Backup",
                 subtitle = "Schedule automatic backups",
                 onClick = onBackupSettingsClick
+            )
+            HorizontalDivider()
+
+            SettingsRow(
+                icon = { Icon(Icons.Default.Storage, null) },
+                title = "Storage usage",
+                subtitle = "See what's using space, clean up unused files",
+                onClick = onStorageUsageClick
             )
             HorizontalDivider()
 

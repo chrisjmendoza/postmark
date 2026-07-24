@@ -7,6 +7,9 @@ import kotlinx.coroutines.flow.Flow
 /** Projection returned by [MessageDao.observeUnreadCounts]. */
 data class UnreadCount(val threadId: Long, val count: Int)
 
+/** Projection returned by [MessageDao.getMessageCountsByThread]. */
+data class ThreadMessageCount(val threadId: Long, val count: Int)
+
 /**
  * DAO for the `messages` table.
  *
@@ -184,6 +187,11 @@ interface MessageDao {
     /** Live (threadId → unread count) pairs used by [ConversationsViewModel] for unread badges. */
     @Query("SELECT threadId, COUNT(*) as count FROM messages WHERE isRead = 0 GROUP BY threadId")
     fun observeUnreadCounts(): Flow<List<UnreadCount>>
+
+    /** One-shot (threadId → total message count) pairs, every thread. Feeds the Storage
+     *  usage screen's per-conversation breakdown (top-N by message count). */
+    @Query("SELECT threadId, COUNT(*) as count FROM messages GROUP BY threadId")
+    suspend fun getMessageCountsByThread(): List<ThreadMessageCount>
 
     /** Highest SMS provider _id stored in Room (SMS only, excluding MMS offset rows).
      *  Used by [SmsSyncHandler] to bound incremental queries to rows not yet imported.

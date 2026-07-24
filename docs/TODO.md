@@ -1079,9 +1079,32 @@ instance, but flagged:
       mapping, a migration for existing threads, and care around how a
       per-thread channel interacts with the group-summary channel.
       Standalone design effort.
-- [ ] **Storage usage screen** — show database size, attachment
-      cache size, backup folder size. Button to clear attachment
-      cache.
+- [x] **Storage usage screen** (July 23 2026) — new `StorageUsageScreen` +
+      `StorageUsageViewModel` (route `settings/storage`, row under Backup in
+      Settings' General section). Per-section breakdown: database (db + -wal
+      + -shm), attachments & voice memos (filesDir `mms_attach_*`/
+      `voice_memo_*`, count + bytes), chat backgrounds, Coil image cache
+      (`cacheDir/image_cache`), backups (app-local `backups/` dir plus the
+      optional SAF folder size + display name when configured), sync log.
+      Per-conversation breakdown (top 20 by message count) via a new
+      `MessageDao.getMessageCountsByThread()` projection query + thread
+      names from `ThreadDao.getAll()`; app-local attachment bytes attributed
+      to a thread by matching filesDir cache filenames against
+      `getMessagesWithAttachments()` rows (pure functions in new
+      `domain/storage/StorageUsage.kt`, unit tested — attribution, orphan/
+      unreferenced files, top-N ordering and ties, empty states). Two safe
+      cleanup actions: "Clean up unused files" reuses the existing
+      `MmsManagerWrapper.sweepOrphanedAttachmentCache` with `minAgeMs = 0`
+      (a pending unsent voice memo stays protected — the sweep's own
+      `maxOf(minAgeMs, VOICE_MEMO_SWEEP_MIN_AGE_MS)` still applies
+      regardless of what's passed in); "Clear image cache" deletes
+      `cacheDir/image_cache` (Coil refetches from content URIs). No delete
+      button for the database or backups themselves. Footer notes received
+      MMS media lives in the OS's own content provider, not app storage.
+      **Needs on-device verification**: sizes are plausible against a real
+      device's data, the SAF folder size/label reads correctly when a
+      backup folder is configured, both cleanup actions actually free the
+      reported bytes and leave referenced/pending files untouched.
 - [x] **Build number visible in-app** (July 6 2026) — Settings → About shows
       `versionName (versionCode, gitSha)`, tap to copy to clipboard. Exists so
       it's possible to confirm a Firebase App Distribution push actually landed

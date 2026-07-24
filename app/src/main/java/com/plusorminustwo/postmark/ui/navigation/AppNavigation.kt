@@ -39,6 +39,7 @@ import com.plusorminustwo.postmark.ui.settings.NotificationSettingsScreen
 import com.plusorminustwo.postmark.ui.settings.export.ExportScreen
 import com.plusorminustwo.postmark.ui.settings.SettingsScreen
 import com.plusorminustwo.postmark.ui.settings.SpamScreen
+import com.plusorminustwo.postmark.ui.settings.StorageUsageScreen
 import com.plusorminustwo.postmark.ui.settings.SyncLogScreen
 import com.plusorminustwo.postmark.ui.starred.StarredImagesScreen
 import com.plusorminustwo.postmark.ui.stats.StatsScreen
@@ -83,6 +84,8 @@ sealed class Screen(val route: String) {
     data object Appearance : Screen("settings/appearance")
     /** Backup & restore settings screen. */
     data object BackupSettings : Screen("settings/backup")
+    /** Storage usage screen — per-section and per-conversation breakdown, safe cleanup. */
+    data object StorageUsage : Screen("settings/storage")
     /** Selective export — pick conversations/date range, save an archive anywhere. */
     data object ExportConversations : Screen("settings/backup/export")
     /** Blocked-numbers list + unblock — reached from Settings › Privacy. */
@@ -258,6 +261,13 @@ fun AppNavigation(
                 onBlockedNumbersClick = { navController.navigate(Screen.BlockedNumbers.route) },
                 onSpamClick = { navController.navigate(Screen.Spam.route) },
                 onNotificationsClick = { navController.navigate(Screen.NotificationSettings.route) },
+                onStorageUsageClick = { navController.navigate(Screen.StorageUsage.route) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.StorageUsage.route) {
+            StorageUsageScreen(
                 onBack = { navController.popBackStack() }
             )
         }
