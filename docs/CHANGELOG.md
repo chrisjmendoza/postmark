@@ -4,6 +4,44 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (docs/play-store-drafts) — privacy policy + Play listing copy drafted
+
+Docs only, no code changes. Two Play Store prep TODO items now have text an owner can
+react to — neither item is ticked; both drafts explicitly require owner review, a
+public hosting URL, and screenshot/graphic assets before they're submission-ready.
+
+**`docs/PRIVACY_POLICY_DRAFT.md`** — every claim grounded in the codebase, not assumed:
+confirmed no `INTERNET` permission anywhere in `AndroidManifest.xml` (only
+`ACCESS_NETWORK_STATE`, used solely for WorkManager's Wi-Fi-only backup constraint and
+the send-queue's "wait for connectivity" retry — never to make a network call);
+confirmed no Firebase SDK or any analytics/crash-reporting library in `app/build.gradle.kts`
+/ `gradle/libs.versions.toml` — Firebase App Distribution is CI-only tooling
+(`.github/workflows/distribute.yml` shells out to `firebase-tools` to upload the built
+APK), not code shipped in the app; confirmed the only `ContentResolver.delete()` call on
+a telephony URI in the whole tree is the confirm-gated user-initiated conversation delete
+in `ConversationsViewModel`, matching the CLAUDE.md CRITICAL rule. Covers data
+collected/shared, backup destination and retention, a plain-English reason for every
+manifest permission (SMS permission justification per Play's SMS & Call Log
+Declaration), user rights, and a contact placeholder. Several items flagged
+`[OWNER CONFIRM]` (effective date, Data Safety form alignment, backup-encryption
+messaging, children's-privacy rating).
+
+**`docs/PLAY_LISTING_DRAFT.md`** — three 80-char short-description candidates (78/77/74
+chars), a ~3340-char long description (plain-text block, paste-ready), a cuttable
+feature-bullet list, and an assets checklist: 8 suggested screenshots mapped to the
+app's actual screens (conversations list, thread + voice memo, search, both stats
+styles, personalization, backup settings — nothing staged), feature graphic spec
+(1024×500), and an icon-export note (the in-app adaptive icon isn't the same asset Play
+wants at 512×512). Long description is honest about SMS/MMS-only with no RCS (per
+README's "Known Limitations"), including what happens to a user's existing RCS threads
+after switching default SMS apps. Flags the open "Postmark" name/trademark question
+from `docs/OWNER-ACTIONS.md` before finalizing icon/feature-graphic branding.
+
+Neither TODO.md item ("Privacy policy", "App description copy" under Play Store prep)
+is ticked — both are annotated pointing at this branch and these files.
+
+---
+
 ## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
 
 1073 tests passing (up from ~1044). **Not yet verified on device.**

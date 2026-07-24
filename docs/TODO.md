@@ -1395,8 +1395,12 @@ instance, but flagged:
 ### Play Store prep (when ready)
 - [ ] **Privacy policy** — required for any app requesting SMS
       permissions. Host at a public URL.
+      (draft written July 24 2026, `docs/play-store-drafts` — see
+      `docs/PRIVACY_POLICY_DRAFT.md`; needs owner review + hosting/assets)
 - [ ] **App description copy** — 80-char short description +
       4000-char long description. Screenshots x8. Feature graphic.
+      (draft written July 24 2026, `docs/play-store-drafts` — see
+      `docs/PLAY_LISTING_DRAFT.md`; needs owner review + hosting/assets)
 - [ ] **Content rating questionnaire** — messaging apps require
       answering questions about user-generated content.
 - [ ] **Target SDK review** — ensure all Android 14/15 behavior
