@@ -10,15 +10,20 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Message
 import androidx.compose.material3.Button
@@ -46,10 +51,22 @@ fun OnboardingScreen(onComplete: () -> Unit) {
         onComplete()
     }
 
-    Column(
+    // BoxWithConstraints + heightIn(min = viewport): inside a verticalScroll the Column
+    // wraps its content, which would strand Arrangement.Center at the top on screens
+    // where everything fits. Pinning the scrolled content's MIN height to the viewport
+    // keeps the fits-case centered exactly as before, while overflow (large system font
+    // size / short screens) scrolls instead of clipping.
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .safeDrawingPadding()
+    ) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .heightIn(min = this@BoxWithConstraints.maxHeight)
             .padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -120,7 +137,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
+                .heightIn(min = 52.dp),
             shape = RoundedCornerShape(14.dp)
         ) {
             Text(
@@ -137,6 +154,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
     }
 }
 
