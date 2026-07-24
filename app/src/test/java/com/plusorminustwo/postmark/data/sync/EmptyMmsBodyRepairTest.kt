@@ -305,6 +305,7 @@ private class RepairRecordingThreadDao : ThreadDao {
     override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
     override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
     override suspend fun updateSpam(threadId: Long, isSpam: Boolean) = Unit
+    override suspend fun markSpam(ids: List<Long>) = Unit
     override suspend fun getThreadsForBackup(): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsByPolicy(policy: BackupPolicy): List<ThreadEntity> = emptyList()
     override suspend fun getThreadsWithParticipants(): List<ThreadEntity> = emptyList()

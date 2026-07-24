@@ -516,6 +516,55 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       full-screen image viewer.
 
 ### Conversation list polish
+- [x] **Bulk "Report spam" / "Block" in the selection ⋮ overflow** (July 24 2026,
+      `feat/bulk-spam-block`, owner request from on-device testing) — the
+      owner selected a spam number on the home screen and found no way to
+      mark it spam or block it from there; both actions previously lived
+      only in the thread ⋮ menu. Menu order: Pin all / Mute all / Mark
+      unread / Report spam / Block. "Report spam" opens a confirm
+      `AlertDialog` worded like ThreadScreen's single-thread spam confirm
+      (plural-adapted: "Report N conversations as spam?"), then
+      `ConversationsViewModel.reportSpamSelected()` writes `isSpam = 1` for
+      every selected id in one `IN (:ids)` batch (`ThreadDao.markSpam` /
+      `ThreadRepository.markSpam`) rather than looping single-row
+      `updateSpam` calls, clears the selection, and shows "Reported N as
+      spam". Always one-way — spam threads are already excluded from the
+      list a selection is made from (`ThreadDao.observeNonSpam`), so no
+      toggle labeling is needed. "Block" opens a confirm dialog worded
+      like ThreadScreen's single-thread Block confirm
+      ("Block N numbers?" / body mentions Settings › Privacy › Blocked
+      numbers), then `ConversationsViewModel.blockSelected()` writes each
+      selected **non-group** thread's address to the system
+      `BlockedNumberContract` provider; **group threads are skipped**
+      (no single number to block — same reason Block is hidden in the
+      thread ⋮ menu for group threads) and the result snackbar accounts
+      for it: "Blocked 2" or "Blocked 2 · skipped 1 group chat"
+      (singular/plural). Blocking does not delete or spam-mark the
+      conversations — system-level block only, threads remain until the
+      user deletes them. Gated by the default-SMS-app check, reusing the
+      exact "Set Postmark as default SMS app" dialog mechanism the
+      swipe-to-delete gate already used — that dialog was generalized
+      from a single boolean to a `pendingDefaultSmsGateReason: String?`
+      so one dialog now serves both triggers with per-action wording,
+      rather than adding a second copy of the same dialog.
+      Extended `BlockedNumbersRepository` (previously read/unblock-only)
+      with a `block(number)` method and refactored
+      `ThreadViewModel.blockNumber()` to call it instead of duplicating
+      the raw `ContentResolver.insert` — one write implementation shared
+      by the single-thread and bulk paths. Pure partition/summary logic
+      (`partitionForBlock`, `blockResultMessage`) extracted to
+      `domain/selection/BlockSelection.kt`, covered by
+      `BlockSelectionTest` (8 plain-JUnit tests: no groups, all groups,
+      mixed, empty selection, singular/plural summary wording, zero-
+      blocked-with-skips). No schema change — `isSpam` already existed;
+      blocking is a system provider write, not Room.
+      **Needs on-device verification**: bulk spam hides all selected
+      threads and they appear in the Spam folder; bulk block writes to
+      the system blocked list (Settings › Privacy › Blocked numbers
+      shows the new entries); group-skip accounting in the snackbar
+      matches what was actually selected; the non-default-SMS-app gate
+      dialog appears and "Set as default" actually flips the role when
+      Block is tapped while Postmark isn't the default SMS app.
 - [x] **Unread filter button** — `FilterChip` below the conversation list top
       bar (`AnimatedVisibility`, shown when unread threads exist or the filter
       is on) toggles `showUnreadOnly` in `ConversationsViewModel`, filtering

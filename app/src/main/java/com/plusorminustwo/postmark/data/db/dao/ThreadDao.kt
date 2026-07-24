@@ -78,6 +78,13 @@ interface ThreadDao {
     @Query("UPDATE threads SET isSpam = :isSpam WHERE id = :threadId")
     suspend fun updateSpam(threadId: Long, isSpam: Boolean)
 
+    /* Bulk "Report spam" from the conversation-list selection menu: always one-way (spam
+     * threads are already hidden from the list a selection is made from, so an already-spam
+     * thread can never be among :ids) — no toggle variant needed, unlike the single-thread
+     * updateSpam above. */
+    @Query("UPDATE threads SET isSpam = 1 WHERE id IN (:ids)")
+    suspend fun markSpam(ids: List<Long>)
+
     @Query("SELECT * FROM threads WHERE backupPolicy != 'NEVER_INCLUDE'")
     suspend fun getThreadsForBackup(): List<ThreadEntity>
 

@@ -1,6 +1,5 @@
 ﻿package com.plusorminustwo.postmark.ui.thread
 
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.app.PendingIntent
@@ -29,6 +28,7 @@ import com.plusorminustwo.postmark.data.preferences.SaveNumberPromptRepository
 import com.plusorminustwo.postmark.data.preferences.SpamSuspicionRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
+import com.plusorminustwo.postmark.data.repository.BlockedNumbersRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.data.repository.ScheduledMessageRepository
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
@@ -149,6 +149,7 @@ class ThreadViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val messageRepository: MessageRepository,
     private val scheduledMessageRepository: ScheduledMessageRepository,
+    private val blockedNumbersRepository: BlockedNumbersRepository,
     private val smsManagerWrapper: SmsManagerWrapper,
     private val smsSendDispatcher: SmsSendDispatcher,
     private val mmsManagerWrapper: MmsManagerWrapper,
@@ -1719,27 +1720,20 @@ class ThreadViewModel @Inject constructor(
     val blockResultEvent: SharedFlow<String> = _blockResultEvent.asSharedFlow()
 
     /**
-     * Adds this thread's address to the system [BlockedNumberContract] provider, so the
-     * platform rejects future calls and texts from it before they reach any app.
-     * Only the default SMS app (or dialer/carrier app) may write to the provider —
-     * when Postmark isn't default, the result message says so instead of failing silently.
+     * Adds this thread's address to the system [BlockedNumberContract] provider (via
+     * [BlockedNumbersRepository.block]), so the platform rejects future calls and texts from
+     * it before they reach any app. Only the default SMS app (or dialer/carrier app) may
+     * write to the provider — when Postmark isn't default, the result message says so
+     * instead of failing silently.
      */
     fun blockNumber() {
         val address = uiState.value.thread?.address?.takeIf { it.isNotEmpty() } ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            val message = try {
-                if (BlockedNumberContract.canCurrentUserBlockNumbers(context)) {
-                    val values = ContentValues().apply {
-                        put(BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER, address)
-                    }
-                    context.contentResolver.insert(
-                        BlockedNumberContract.BlockedNumbers.CONTENT_URI, values
-                    )
-                    "Blocked $address — calls and texts from this number will be rejected"
-                } else {
-                    "Postmark must be your default SMS app to block numbers"
-                }
-            } catch (e: Exception) {
+            val message = if (!blockedNumbersRepository.canBlock()) {
+                "Postmark must be your default SMS app to block numbers"
+            } else if (blockedNumbersRepository.block(address)) {
+                "Blocked $address — calls and texts from this number will be rejected"
+            } else {
                 "Couldn't block $address"
             }
             _blockResultEvent.emit(message)

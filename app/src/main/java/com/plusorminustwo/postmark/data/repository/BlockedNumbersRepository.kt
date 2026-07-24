@@ -1,6 +1,7 @@
 package com.plusorminustwo.postmark.data.repository
 
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.provider.BlockedNumberContract
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -23,8 +24,9 @@ data class BlockedNumber(
  * every method here degrades gracefully (empty list / no-op) when it isn't, so a
  * non-default app never crashes.
  *
- * The block *write* still lives inline in ThreadViewModel; this repository covers
- * only the list + unblock the new Blocked-numbers screen needs.
+ * Covers the list + unblock the Blocked-numbers screen needs, plus the block *write*
+ * itself (shared by [com.plusorminustwo.postmark.ui.thread.ThreadViewModel]'s single-thread
+ * Block action and the conversation-list bulk Block action) — one write implementation.
  */
 @Singleton
 class BlockedNumbersRepository @Inject constructor(
@@ -32,6 +34,25 @@ class BlockedNumbersRepository @Inject constructor(
 ) {
     /** True when the current user/app may read and modify the blocked-numbers list. */
     fun canBlock(): Boolean = BlockedNumberContract.canCurrentUserBlockNumbers(context)
+
+    /**
+     * Adds [number] to the system [BlockedNumberContract] provider, so the platform rejects
+     * future calls and texts from it before they reach any app. Returns false (no-op) when
+     * Postmark isn't the default SMS app or the provider throws — callers decide how to
+     * surface that to the user.
+     */
+    fun block(number: String): Boolean {
+        if (!canBlock()) return false
+        return try {
+            val values = ContentValues().apply {
+                put(BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER, number)
+            }
+            context.contentResolver.insert(BlockedNumberContract.BlockedNumbers.CONTENT_URI, values)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     /**
      * Every currently-blocked number, most-recently-blocked first (the provider
