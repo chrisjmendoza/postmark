@@ -105,6 +105,7 @@ import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.messageinfo.MessageInfoValue
 import com.plusorminustwo.postmark.domain.messageinfo.messageInfoRows
 import com.plusorminustwo.postmark.domain.reminder.reminderPresets
+import com.plusorminustwo.postmark.domain.scheduled.ScheduledMessage
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
@@ -290,6 +291,9 @@ fun ThreadScreen(
     val pinnedMessages by viewModel.pinnedMessages.collectAsState()
     // This thread's flagged messages (soonest reminder first) for the Reminders panel.
     val flaggedMessages by viewModel.flaggedMessages.collectAsState()
+    // This thread's parked "Schedule send" texts (soonest first) — rendered as scheduled
+    // bubbles at the bottom of the thread.
+    val scheduledMessages by viewModel.scheduledMessages.collectAsState()
     // Whether the conservative "Looks like spam?" banner should show for this thread.
     val spamBannerVisible by viewModel.spamBannerVisible.collectAsState()
     // Whether the "Add to contacts?" banner should show for this thread (spam banner wins).
@@ -373,6 +377,10 @@ fun ThreadScreen(
     val onToggleStarred           = remember(viewModel) { { id: Long -> viewModel.toggleStarred(id) } }
     val onTogglePinnedMessage     = remember(viewModel) { { id: Long -> viewModel.togglePinnedMessage(id) } }
     val onSetReminder             = remember(viewModel) { { id: Long, remindAt: Long? -> viewModel.setReminder(id, remindAt) } }
+    val onScheduleSend            = remember(viewModel) { { at: Long -> viewModel.scheduleSend(at) } }
+    val onSendScheduledNow        = remember(viewModel) { { id: Long -> viewModel.sendScheduledNow(id) } }
+    val onEditScheduled           = remember(viewModel) { { id: Long -> viewModel.editScheduled(id) } }
+    val onCancelScheduled         = remember(viewModel) { { id: Long -> viewModel.cancelScheduled(id) } }
     val onDismissDefaultSmsDialog = remember(viewModel) { { viewModel.dismissDefaultSmsDialog() } }
     val onUpdateBackupPolicy      = remember(viewModel) { { policy: BackupPolicy -> viewModel.updateBackupPolicy(policy) } }
     val onDismissReactionPicker   = remember(viewModel) { { viewModel.dismissReactionPicker() } }
@@ -465,6 +473,11 @@ fun ThreadScreen(
         onTogglePinnedMessage = onTogglePinnedMessage,
         flaggedMessages = flaggedMessages,
         onSetReminder = onSetReminder,
+        scheduledMessages = scheduledMessages,
+        onScheduleSend = onScheduleSend,
+        onSendScheduledNow = onSendScheduledNow,
+        onEditScheduled = onEditScheduled,
+        onCancelScheduled = onCancelScheduled,
         onDismissDefaultSmsDialog = onDismissDefaultSmsDialog,
         onUpdateBackupPolicy = onUpdateBackupPolicy,
         onDismissReactionPicker = onDismissReactionPicker,
@@ -600,6 +613,14 @@ private fun ThreadContent(
     // second arg flags + schedules; null unflags + cancels.
     flaggedMessages: List<Message> = emptyList(),
     onSetReminder: (Long, Long?) -> Unit = { _, _ -> },
+    // This thread's parked "Schedule send" texts (soonest first), rendered as distinct bubbles
+    // at the bottom of the thread, plus their lifecycle callbacks. onScheduleSend receives the
+    // chosen absolute epoch-millis (from the ScheduleSendSheet); the other three act on a row id.
+    scheduledMessages: List<ScheduledMessage> = emptyList(),
+    onScheduleSend: (Long) -> Unit = {},
+    onSendScheduledNow: (Long) -> Unit = {},
+    onEditScheduled: (Long) -> Unit = {},
+    onCancelScheduled: (Long) -> Unit = {},
     onDismissDefaultSmsDialog: () -> Unit,
     onUpdateBackupPolicy: (BackupPolicy) -> Unit,
     onDismissReactionPicker: () -> Unit,
@@ -698,6 +719,12 @@ private fun ThreadContent(
     // Reminder time-picker sheet (reaction popup → "Remind" on an unflagged message): non-null
     // while the picker is open, holding the message being flagged.
     var reminderPickerMessage by remember { mutableStateOf<Message?>(null) }
+
+    // "Schedule send" time-picker sheet (long-press the send button): true while open. Reuses the
+    // reminder picker shape (presets + custom date/time).
+    var showScheduleSendSheet by remember { mutableStateOf(false) }
+    // Tapped scheduled bubble → its action dialog (Send now / Edit / Cancel schedule); null closed.
+    var scheduledActionMessage by remember { mutableStateOf<ScheduledMessage?>(null) }
 
     // Message info sheet (reaction popup → "Info"): non-null while the sheet is open, holding
     // the message whose sent/delivered/size details are shown.
@@ -1117,6 +1144,43 @@ private fun ThreadContent(
         )
     }
 
+    if (showScheduleSendSheet) {
+        ReminderTimePickerSheet(
+            title = "Schedule send",
+            confirmLabel = "Schedule",
+            onPick = { timeMs ->
+                if (timeMs <= System.currentTimeMillis()) {
+                    scope.launch {
+                        snackbarHostState.showSnackbar("That time is in the past")
+                    }
+                } else {
+                    onScheduleSend(timeMs)
+                    showScheduleSendSheet = false
+                }
+            },
+            onDismiss = { showScheduleSendSheet = false }
+        )
+    }
+
+    scheduledActionMessage?.let { scheduled ->
+        ScheduledMessageActionsDialog(
+            scheduled = scheduled,
+            onSendNow = {
+                onSendScheduledNow(scheduled.id)
+                scheduledActionMessage = null
+            },
+            onEdit = {
+                onEditScheduled(scheduled.id)
+                scheduledActionMessage = null
+            },
+            onCancelSchedule = {
+                onCancelScheduled(scheduled.id)
+                scheduledActionMessage = null
+            },
+            onDismiss = { scheduledActionMessage = null }
+        )
+    }
+
     infoMessage?.let { msg ->
         MessageInfoSheet(
             message = msg,
@@ -1443,6 +1507,7 @@ private fun ThreadContent(
                     onRemoveAttachment    = onRemoveAttachment,
                     onClearReplyingTo     = onClearReplyingTo,
                     onSend                = { onSendMessage() },
+                    onLongPressSend       = { showScheduleSendSheet = true },
                     voiceMemo             = voiceMemo,
                     onVoiceMemoEvent      = onVoiceMemoEvent,
                     recordingLevel        = recordingLevel,
@@ -1521,6 +1586,23 @@ private fun ThreadContent(
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
+                // Scheduled ("Schedule send") bubbles: rendered BEFORE the message items so, under
+                // reverseLayout, they sit at the visual BOTTOM of the thread (below the newest
+                // message — they're the future). Deliberately a separate section: scheduled rows
+                // do NOT participate in message grouping/clustering/search/stats, and observing
+                // the scheduled_messages table means a bubble vanishes the instant its row is
+                // deleted (fires / cancelled / sent-now / edited).
+                items(
+                    scheduledMessages,
+                    key = { "scheduled_${it.id}" },
+                    contentType = { "scheduled" }
+                ) { scheduled ->
+                    ScheduledMessageBubble(
+                        scheduled = scheduled,
+                        modifier = Modifier.animateItem(),
+                        onClick = { scheduledActionMessage = scheduled }
+                    )
+                }
                 // Flat list from renderState — no forEach loops, stable keys, no recomputation.
                 // contentType lets LazyColumn reuse composition slots per item kind instead
                 // of pairing a disposed DateHeader slot with an incoming Bubble during fling.
@@ -3342,6 +3424,7 @@ private fun GestureTipRow(icon: ImageVector, text: String) {
  *  already ambitious on stingy carriers. */
 private const val MAX_MMS_ATTACHMENTS = ThreadViewModel.MAX_ATTACHMENTS
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ReplyBar(
     text: String,
@@ -3358,6 +3441,9 @@ private fun ReplyBar(
     onRemoveAttachment: (Int) -> Unit,
     onClearReplyingTo: () -> Unit = {},
     onSend: () -> Unit,
+    // Long-press the send button → "Schedule send". Only offered for a plain text send
+    // (non-blank text, no pending attachments); the send button itself enforces that gate.
+    onLongPressSend: () -> Unit = {},
     // Voice memo recording phase + event sink for the mic button (see VoiceMemoLogic).
     voiceMemo: ThreadViewModel.VoiceMemoUiState = ThreadViewModel.VoiceMemoUiState(),
     onVoiceMemoEvent: (VoiceMemoEvent) -> Unit = {},
@@ -3749,18 +3835,34 @@ private fun ReplyBar(
                                 onEvent = onVoiceMemoEvent
                             )
                         } else {
-                            IconButton(
-                                onClick  = onSend,
-                                // Enabled when there is text OR media attachments are pending.
-                                enabled  = text.isNotBlank() || pendingAttachments.isNotEmpty(),
-                                colors   = IconButtonDefaults.iconButtonColors(
-                                    containerColor         = MaterialTheme.colorScheme.primary,
-                                    contentColor           = MaterialTheme.colorScheme.onPrimary,
-                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                    disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                                )
+                            // Filled circular send button. combinedClickable (not IconButton) so a
+                            // LONG-PRESS can open "Schedule send" — but only for a plain text send
+                            // (non-blank text, no pending attachments): with attachments pending the
+                            // long-press is ignored (v1 is text-only) and only the normal tap sends.
+                            val sendEnabled = text.isNotBlank() || pendingAttachments.isNotEmpty()
+                            val canSchedule = text.isNotBlank() && pendingAttachments.isEmpty()
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (sendEnabled) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceContainerHighest
+                                    )
+                                    .combinedClickable(
+                                        enabled = sendEnabled,
+                                        onClick = onSend,
+                                        onLongClick = if (canSchedule) onLongPressSend else null,
+                                        onLongClickLabel = if (canSchedule) "Schedule send" else null
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Send,
+                                    contentDescription = "Send",
+                                    tint = if (sendEnabled) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                )
                             }
                         }
                     }
@@ -6067,6 +6169,113 @@ private fun FlaggedMessagesSheet(
     }
 }
 
+// ── ScheduledMessageBubble ────────────────────────────────────────────────────
+
+/**
+ * A parked "Schedule send" text, rendered as a distinct sent-side (end-aligned) bubble at the
+ * bottom of the thread. A tertiaryContainer fill + clock badge + "Scheduled for {absolute time}"
+ * caption set it apart from real sent bubbles. Tapping opens [ScheduledMessageActionsDialog].
+ */
+@Composable
+private fun ScheduledMessageBubble(
+    scheduled: ScheduledMessage,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.End
+    ) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .clickable(onClick = onClick)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                if (scheduled.body.isNotEmpty()) {
+                    Text(text = scheduled.body, style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(4.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Schedule,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "Scheduled for ${formatEpochMillis(scheduled.scheduledAt, FRIENDLY_TIMESTAMP_FORMATTER)}",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── ScheduledMessageActionsDialog ─────────────────────────────────────────────
+
+/**
+ * Actions for a tapped scheduled bubble: Send now, Edit (moves the text back to the composer),
+ * and Cancel schedule (a two-tap inline confirm, since it discards the parked send).
+ */
+@Composable
+private fun ScheduledMessageActionsDialog(
+    scheduled: ScheduledMessage,
+    onSendNow: () -> Unit,
+    onEdit: () -> Unit,
+    onCancelSchedule: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var confirmingCancel by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Scheduled message") },
+        text = {
+            Column {
+                if (scheduled.body.isNotEmpty()) {
+                    Text(scheduled.body, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                }
+                Text(
+                    "Scheduled for ${formatEpochMillis(scheduled.scheduledAt, FRIENDLY_TIMESTAMP_FORMATTER)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                TextButton(onClick = onSendNow, modifier = Modifier.fillMaxWidth()) {
+                    Text("Send now")
+                }
+                // Edit deletes the schedule and drops the text back into the composer draft.
+                TextButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
+                    Text("Edit (returns text to composer)")
+                }
+                if (!confirmingCancel) {
+                    TextButton(
+                        onClick = { confirmingCancel = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Cancel schedule") }
+                } else {
+                    TextButton(
+                        onClick = onCancelSchedule,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) { Text("Tap again to cancel schedule") }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
+
 // ── ReminderTimePickerSheet ───────────────────────────────────────────────────
 
 /**
@@ -6082,7 +6291,11 @@ private fun FlaggedMessagesSheet(
 @Composable
 private fun ReminderTimePickerSheet(
     onPick: (Long) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // Reused by both "Remind me" (reminders) and "Schedule send" — the header text and the
+    // custom date/time confirm-button label are the only copy that differs between them.
+    title: String = "Remind me",
+    confirmLabel: String = "Set reminder"
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val presets = remember { reminderPresets(System.currentTimeMillis(), ZoneId.systemDefault()) }
@@ -6101,7 +6314,7 @@ private fun ReminderTimePickerSheet(
                 .padding(bottom = 8.dp)
         ) {
             Text(
-                text = "Remind me",
+                text = title,
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
             )
@@ -6162,7 +6375,7 @@ private fun ReminderTimePickerSheet(
                         .toInstant()
                     pickedDateMillis = null
                     onPick(instant.toEpochMilli())
-                }) { Text("Set reminder") }
+                }) { Text(confirmLabel) }
             },
             dismissButton = {
                 TextButton(onClick = { pickedDateMillis = null }) { Text("Cancel") }

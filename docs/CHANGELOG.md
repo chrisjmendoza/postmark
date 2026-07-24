@@ -4,6 +4,74 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (feat/scheduled-messages) — Schedule send (long-press the send button)
+
+**Not yet verified on device** (unit + androidTest-compile only; no device to run
+the instrumented migration suite or watch a scheduled send actually fire).
+
+Based on `feat/message-reminders` (owns schema v22); this branch owns **v23** and
+reuses the reminder/WorkManager/deep-link infrastructure.
+
+**Long-press the send button → pick a time → the message parks as a scheduled
+bubble at the bottom of the thread and sends itself at that time.** Tapping the
+bubble offers Send now / Edit / Cancel schedule.
+
+*Scope — text-only SMS (v1).* No scheduled MMS/attachments (matches the send
+queue's MMS exclusion; avoids attachment-lifetime complexity). The long-press
+affordance lights only for a non-blank, attachment-free composer; a long-press with
+attachments pending is ignored (normal tap sends).
+
+*Schema + data (Room v22 → v23) — a NEW `scheduled_messages` table, NOT a column on
+`messages`.* `ScheduledMessageEntity` (id autoGenerate, threadId, address, body,
+scheduledAt, createdAt) with `ScheduledMessageDao`
+(`insert`/`deleteById`/`getById`/`observeByThread`/`getAll`) and
+`ScheduledMessageRepository`. `MIGRATION_22_23` is a single `CREATE TABLE` matching
+Room's generated DDL exactly; registered in `DatabaseModule`; `23.json` exported and
+committed. Rationale (in the entity KDoc): a scheduled send must **never enter the
+telephony provider or the `messages` table early** — so sync dedup/healing never
+sees it and no thread/search/stats query can leak it. **Not** carried through
+backup/restore in v1 (transient device state, not history — deferred).
+
+*Scheduling — WorkManager, not exact alarms.* `ScheduledSendWorker` (HiltWorker)
+mirrors `MessageReminderWorker`: a `OneTimeWorkRequest` with `initialDelay`, unique
+name `scheduled_send_<id>`, `REPLACE`. Same zero-exact-alarm stance as reminders.
+**OPEN OWNER QUESTION:** the ± few minutes of WorkManager inexactness — the owner
+may later want `SCHEDULE_EXACT_ALARM` for punctuality; the seam is one
+`ScheduledSendWorker.schedule()` call site so that swap stays localized.
+
+*On fire (pure decision table `scheduledSendDecision`).* Row missing → success
+(cancelled/sent-now race). Not the default SMS app → **keep the row**, post a
+"Couldn't send scheduled message — tap to review" notification (reminders channel,
+deep-links to the thread) and return success — no retry loop. Otherwise → delete the
+row and send through the existing queue-aware SMS path, so offline-at-fire-time
+parks the message as **QUEUED** exactly like a live send.
+
+*Send-path seam.* The queue-aware 1:1 SMS dispatch was extracted from
+`ThreadViewModel.dispatchSmsSend` into a `@Singleton SmsSendDispatcher` that **both**
+the ViewModel (user sends + reaction fallbacks) and `ScheduledSendWorker` call — the
+worker never reimplements send logic. `ThreadViewModel.dispatchSmsSend` now delegates
+to it and keeps only the scroll-to-bottom UX cue.
+
+*UI.* Long-press the send button (rebuilt as a `combinedClickable` circular button)
+opens `ScheduleSendSheet` — the reminder time-picker reused via new `title` /
+`confirmLabel` params (presets + custom date/time, past-time rejected via snackbar).
+Scheduled rows render as a distinct tertiaryContainer bubble with a clock badge +
+"Scheduled for <absolute time>", composed as a separate `items` section at the
+index-0 (bottom) side of the reverse-layout list — they do not participate in
+grouping/clustering/search/stats. Tapping a bubble opens a Send now / Edit / Cancel
+dialog (Edit = cancel-to-draft; Cancel = two-tap inline confirm). The sheet gets
+`navigationBarsPadding`. New `ThreadViewModel.scheduledMessages` StateFlow observes
+the table so a bubble appears/vanishes live.
+
+*Tests.* `ScheduledMessageLogicTest` (+9 — validation blank-body/past-time ordering
++ strictly-future boundary, the three worker decision branches, soonest-first
+display sort). androidTest `migration22To23_createsScheduledMessagesTable`
+(runMigrationsAndValidate against `23.json`) + the full migration chain extended to
+v23. Unit suite 1101 → **1110**, 0 failures; `assembleDebug` +
+`compileDebugAndroidTestKotlin` clean.
+
+---
+
 ## 2026-07-24 (feat/message-reminders) — flag a message for later ("Remind me")
 
 **Not yet verified on device** (unit + androidTest-compile only; no device to run

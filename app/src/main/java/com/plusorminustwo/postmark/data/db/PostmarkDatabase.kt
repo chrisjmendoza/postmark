@@ -14,9 +14,10 @@ import kotlinx.coroutines.withContext
 /**
  * Room database for Postmark.
  *
- * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity].
+ * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity],
+ * [ScheduledMessageEntity].
  *
- * Current schema version: 22.
+ * Current schema version: 23.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -25,9 +26,10 @@ import kotlinx.coroutines.withContext
         ThreadEntity::class,
         MessageEntity::class,
         ReactionEntity::class,
-        MessageFtsEntity::class
+        MessageFtsEntity::class,
+        ScheduledMessageEntity::class
     ],
-    version = 22,
+    version = 23,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -40,6 +42,7 @@ abstract class PostmarkDatabase : RoomDatabase() {
     // Read-only aggregate/projection queries for the Stats screen. Adding a DAO accessor
     // is not a schema change — version stays 20, no migration, exported schema unchanged.
     abstract fun statsDao(): StatsDao
+    abstract fun scheduledMessageDao(): ScheduledMessageDao
 
     companion object {
         const val DATABASE_NAME = "postmark.db"
@@ -269,6 +272,25 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // A fired reminder deliberately leaves the value set (the flag persists until
                 // the user clears it). SQLite requires one ALTER TABLE per column.
                 db.execSQL("ALTER TABLE messages ADD COLUMN remindAt INTEGER")
+            }
+        }
+
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // "Schedule send" storage — a NEW table, deliberately NOT a column on messages,
+                // so a not-yet-sent scheduled text can never enter the messages table (and thus
+                // never leak into sync dedup/healing, thread/search/stats, or backup) before it
+                // fires. The DDL matches Room's generated schema for ScheduledMessageEntity
+                // exactly (autoGenerate Long PK → INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL).
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `scheduled_messages` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`threadId` INTEGER NOT NULL, " +
+                        "`address` TEXT NOT NULL, " +
+                        "`body` TEXT NOT NULL, " +
+                        "`scheduledAt` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
             }
         }
 

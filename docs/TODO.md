@@ -1157,6 +1157,75 @@ instance, but flagged:
       - The now-**6-action popup row fits at large font scale** (Copy / Forward /
         Pin / Info / Remind / Delete — the row is crowded; watch for clipping).
       - Reminders + time-picker sheets sit clear of the nav bar on all edges.
+- [x] **Schedule send** (July 24 2026, `feat/scheduled-messages`, dependent on
+      `feat/message-reminders`) — Google-Messages-style: compose text now,
+      **long-press the send button** → time picker (reuses the reminder picker
+      shape: presets + custom date/time, past-time rejected via snackbar) → the
+      message parks as a **scheduled bubble at the bottom of the thread** (clock
+      badge + "Scheduled for <time>") and **sends itself** at that time. Tapping
+      the scheduled bubble offers **Send now / Edit / Cancel schedule**.
+      **Decisions:**
+      - **v1 is text-only SMS.** No scheduled MMS/attachments (matches the
+        send-queue's MMS exclusion; avoids attachment-lifetime complexity).
+        Long-press send **with attachments pending is ignored** — normal tap
+        behaviour only; the schedule affordance only lights for a non-blank,
+        attachment-free composer.
+      - **A NEW `scheduled_messages` table, NOT a column on `messages`** (Room
+        v22→v23, `MIGRATION_22_23`, one `CREATE TABLE` matching Room's generated
+        DDL exactly; `23.json` exported + committed). Rationale: a scheduled send
+        must **never enter the telephony provider or the `messages` table early** —
+        sync dedup/healing must never see it, and no thread/search/stats query can
+        leak it. It reaches `messages` (and the provider) only when it fires, as a
+        normal optimistic send. Entity + DAO (`insert`/`deleteById`/`getById`/
+        `observeByThread`/`getAll`) + `ScheduledMessageRepository`.
+      - **WorkManager, not exact alarms** — same zero-exact-alarm stance as
+        reminders. A `OneTimeWorkRequest` with `initialDelay`, unique name
+        `scheduled_send_<id>`, `REPLACE`; mirrors `MessageReminderWorker`'s
+        HiltWorker shape. **OPEN OWNER QUESTION:** the ± few minutes of WorkManager
+        inexactness — the owner may later want `SCHEDULE_EXACT_ALARM` for
+        punctuality; the seam is kept to a single `ScheduledSendWorker.schedule()`
+        call site so that swap stays localized.
+      - **On fire** the worker (pure decision table `scheduledSendDecision`):
+        row missing → success (cancelled/sent-now race); **not the default SMS app
+        → keep the row, post a "Couldn't send scheduled message — tap to review"
+        notification** (reminders channel, deep-links to the thread) and return
+        success (no retry loop); otherwise **delete the row and send through the
+        EXISTING queue-aware SMS path** — so offline-at-fire-time parks it as
+        **QUEUED** exactly like a live send.
+      - **Send-path seam:** the queue-aware 1:1 SMS dispatch was extracted from
+        `ThreadViewModel.dispatchSmsSend` into a `@Singleton SmsSendDispatcher`
+        that **both** the ViewModel (user sends + reaction fallbacks) and the
+        worker call — the worker never reimplements send logic. The
+        scroll-to-bottom UX cue stays in the ViewModel.
+      - **Edit = cancel-to-draft** — the simplest correct edit: cancel the
+        schedule, delete the row, and drop the text back into the composer draft
+        (the dialog says so). Cancel schedule is a two-tap inline confirm.
+      - **A time that passes while the app is open** — the worker fires, the row
+        deletes, the real message appears via the normal optimistic-insert flow;
+        the scheduled section observes the table so the bubble vanishes on delete.
+      - **Not carried through backup/restore in v1** — a pending scheduled send is
+        transient device state, not history (deferred).
+      - Insets: the `ScheduleSendSheet` gets `navigationBarsPadding` (house
+        pattern); it reuses the reminder time-picker composable via `title` +
+        `confirmLabel` params.
+      **Tests:** `ScheduledMessageLogicTest` (+9 — validation blank-body/past-time
+      ordering + strictly-future boundary, the three worker decision branches,
+      soonest-first display sort); androidTest
+      `migration22To23_createsScheduledMessagesTable` (runMigrationsAndValidate
+      against `23.json`) + full chain extended to v23. Unit suite 1101 → **1110**,
+      0 failures; `assembleDebug` + `compileDebugAndroidTestKotlin` clean.
+      **On-device checklist (not yet verified):**
+      - Long-press send → sheet opens (only with non-blank text + no attachments).
+      - Scheduled bubble renders at the bottom + **survives an app restart**
+        (WorkManager persists across process death/reboot).
+      - **Fires on time** (± WorkManager slop) and the real bubble replaces it.
+      - **Send now** sends immediately; **Edit** returns the text to the composer;
+        **Cancel schedule** removes the bubble and the pending work.
+      - **Offline at fire time → the sent message parks as Queued** and flushes
+        when service returns.
+      - **Default-SMS role revoked before fire → the "Couldn't send" notification**
+        posts and deep-links to the thread (row kept, no retry loop).
+      - The schedule sheet + bubble action dialog sit clear of the nav bar.
 
 ### Starred & pinned messages
 - [x] **Star an image** (July 6 2026) — wording landed as "star," scoped to images

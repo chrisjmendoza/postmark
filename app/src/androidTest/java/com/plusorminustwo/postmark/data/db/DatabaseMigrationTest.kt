@@ -558,10 +558,48 @@ class DatabaseMigrationTest {
         db21.close()
     }
 
-    // ── Full chain 1 → 22 ─────────────────────────────────────────────────
+    // ── MIGRATION 22 → 23 ─────────────────────────────────────────────────
 
     @Test
-    fun fullMigrationChain_v1DataSurvivesToV22() {
+    fun migration22To23_createsScheduledMessagesTable() {
+        // runMigrationsAndValidate checks the live schema against the exported 23.json, so a
+        // drift between ScheduledMessageEntity and the CREATE TABLE DDL fails here, not on device.
+        helper.createDatabase("test_m2223", 22).apply {
+            execSQL(
+                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead)" +
+                " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate("test_m2223", 23, true, PostmarkDatabase.MIGRATION_22_23)
+
+        // The new table exists...
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_messages'").use { c ->
+            assertTrue(c.moveToFirst())
+        }
+        // ...and accepts a scheduled row, autoGenerating its id.
+        db.execSQL(
+            "INSERT INTO scheduled_messages (threadId, address, body, scheduledAt, createdAt)" +
+            " VALUES (1, '+1', 'later text', 1750000000000, 1740000000000)"
+        )
+        db.query("SELECT id, body, scheduledAt FROM scheduled_messages").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1L, c.getLong(0))
+            assertEquals("later text", c.getString(1))
+            assertEquals(1750000000000L, c.getLong(2))
+        }
+        // The pre-migration message row is untouched by the table add.
+        db.query("SELECT body FROM messages WHERE id = 7").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("sms", c.getString(0))
+        }
+    }
+
+    // ── Full chain 1 → 23 ─────────────────────────────────────────────────
+
+    @Test
+    fun fullMigrationChain_v1DataSurvivesToV23() {
         val db = helper.createDatabase("test_chain", 1)
         db.execSQL(
             "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
@@ -583,7 +621,7 @@ class DatabaseMigrationTest {
             PostmarkDatabase.MIGRATION_15_16, PostmarkDatabase.MIGRATION_16_17,
             PostmarkDatabase.MIGRATION_17_18, PostmarkDatabase.MIGRATION_18_19,
             PostmarkDatabase.MIGRATION_19_20, PostmarkDatabase.MIGRATION_20_21,
-            PostmarkDatabase.MIGRATION_21_22
+            PostmarkDatabase.MIGRATION_21_22, PostmarkDatabase.MIGRATION_22_23
         ).forEach { it.migrate(db) }
 
         db.query(
@@ -612,6 +650,10 @@ class DatabaseMigrationTest {
         }
         db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_stats','global_stats')").use { c ->
             assertFalse(c.moveToFirst())
+        }
+        // v23 adds the scheduled_messages table (Schedule send).
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_messages'").use { c ->
+            assertTrue(c.moveToFirst())
         }
         db.close()
     }
