@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import androidx.compose.material.icons.filled.AddCircleOutline
 import android.os.Build
 import android.os.SystemClock
 import android.app.role.RoleManager
@@ -1519,7 +1520,7 @@ private fun ThreadContent(
                     onRemoveAttachment    = onRemoveAttachment,
                     onClearReplyingTo     = onClearReplyingTo,
                     onSend                = { onSendMessage() },
-                    onLongPressSend       = { showScheduleSendSheet = true },
+                    onScheduleSend        = { showScheduleSendSheet = true },
                     voiceMemo             = voiceMemo,
                     onVoiceMemoEvent      = onVoiceMemoEvent,
                     recordingLevel        = recordingLevel,
@@ -3443,9 +3444,9 @@ private fun ReplyBar(
     onRemoveAttachment: (Int) -> Unit,
     onClearReplyingTo: () -> Unit = {},
     onSend: () -> Unit,
-    // Long-press the send button → "Schedule send". Only offered for a plain text send
-    // (non-blank text, no pending attachments); the send button itself enforces that gate.
-    onLongPressSend: () -> Unit = {},
+    // "Schedule send" from the send-options (+) menu. Only meaningful for a plain text
+    // send (non-blank text, no pending attachments); the menu item enforces that gate.
+    onScheduleSend: () -> Unit = {},
     // Voice memo recording phase + event sink for the mic button (see VoiceMemoLogic).
     voiceMemo: ThreadViewModel.VoiceMemoUiState = ThreadViewModel.VoiceMemoUiState(),
     onVoiceMemoEvent: (VoiceMemoEvent) -> Unit = {},
@@ -3505,8 +3506,35 @@ private fun ReplyBar(
     val takePictureLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success -> onCameraCaptureResult(success) }
+    // "Take selfie" (send-options menu) shares the whole capture pipeline — the only
+    // difference is which launcher fires: this one adds best-effort front-camera hints.
+    val takeSelfieLauncher = rememberLauncherForActivityResult(
+        contract = TakeSelfiePicture()
+    ) { success -> onCameraCaptureResult(success) }
+    // True while a just-requested capture should open the FRONT camera. UI-local: set by
+    // the "Take selfie" menu item right before onRequestCameraCapture, consumed (and
+    // cleared) when the minted uri arrives below. Result handling is identical for both
+    // launchers, so losing this flag across process death only loses the front-facing
+    // hint, never the capture itself.
+    var pendingSelfieCapture by remember { mutableStateOf(false) }
     LaunchedEffect(cameraCaptureRequestEvent) {
-        cameraCaptureRequestEvent.collect { uri -> takePictureLauncher.launch(Uri.parse(uri)) }
+        cameraCaptureRequestEvent.collect { uri ->
+            val launcher = if (pendingSelfieCapture) takeSelfieLauncher else takePictureLauncher
+            pendingSelfieCapture = false
+            launcher.launch(Uri.parse(uri))
+        }
+    }
+
+    // "Attach file" (send-options menu): the system document picker, scoped to the media
+    // types the MMS pipeline can actually carry. Complements the Photo Picker — this one
+    // reaches Downloads/Drive/etc. Single-select; appends through the same capped path.
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+            onAttachmentsSelected(listOf(MessageAttachment(uri.toString(), mimeType)))
+        }
     }
 
     // RECORD_AUDIO gate for the attach-menu "Record voice memo" item (the mic button
@@ -3845,6 +3873,54 @@ private fun ReplyBar(
                             }
                         }
                         Spacer(Modifier.width(4.dp))
+                        // Send-options (+) menu — the discoverable home for secondary send
+                        // actions (owner feedback July 24 2026: the long-press-on-send gesture
+                        // it replaces was invisible). Sits left of the mic/send button; grows
+                        // over time ("to start": schedule, file attach, selfie).
+                        var showSendOptions by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(
+                                onClick = { showSendOptions = true },
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.AddCircleOutline,
+                                    contentDescription = "More send options",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showSendOptions,
+                                onDismissRequest = { showSendOptions = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text    = { Text("Schedule send") },
+                                    // Text-only v1 (same gate the long-press had): needs typed
+                                    // text and no pending attachments.
+                                    enabled = text.isNotBlank() && pendingAttachments.isEmpty(),
+                                    onClick = {
+                                        showSendOptions = false
+                                        onScheduleSend()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text    = { Text("Attach file") },
+                                    onClick = {
+                                        showSendOptions = false
+                                        filePickerLauncher.launch(arrayOf("image/*", "video/*", "audio/*"))
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text    = { Text("Take selfie") },
+                                    onClick = {
+                                        showSendOptions = false
+                                        pendingSelfieCapture = true
+                                        onRequestCameraCapture()
+                                    }
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(2.dp))
                         // WhatsApp/Google Messages pattern: the action button is a mic
                         // while the composer is empty and becomes send once there is
                         // anything to send. Typing and attaching are impossible while
@@ -3861,12 +3937,10 @@ private fun ReplyBar(
                                 onEvent = onVoiceMemoEvent
                             )
                         } else {
-                            // Filled circular send button. combinedClickable (not IconButton) so a
-                            // LONG-PRESS can open "Schedule send" — but only for a plain text send
-                            // (non-blank text, no pending attachments): with attachments pending the
-                            // long-press is ignored (v1 is text-only) and only the normal tap sends.
+                            // Filled circular send button — plain tap only. "Schedule send"
+                            // moved to the send-options (+) menu on the left (the long-press
+                            // gesture that used to live here was undiscoverable).
                             val sendEnabled = text.isNotBlank() || pendingAttachments.isNotEmpty()
-                            val canSchedule = text.isNotBlank() && pendingAttachments.isEmpty()
                             Box(
                                 modifier = Modifier
                                     .size(40.dp)
@@ -3875,12 +3949,7 @@ private fun ReplyBar(
                                         if (sendEnabled) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.surfaceContainerHighest
                                     )
-                                    .combinedClickable(
-                                        enabled = sendEnabled,
-                                        onClick = onSend,
-                                        onLongClick = if (canSchedule) onLongPressSend else null,
-                                        onLongClickLabel = if (canSchedule) "Schedule send" else null
-                                    ),
+                                    .clickable(enabled = sendEnabled, onClick = onSend),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
@@ -3968,6 +4037,21 @@ private fun View.performConfirmHaptic() {
  *  (rationale flag false after a completed request = "don't ask again" or policy)
  *  can only be undone in Settings, so deep-link there; a plain denial keeps the
  *  explanatory toast. */
+/**
+ * [ActivityResultContracts.TakePicture] with best-effort FRONT-camera hints for the
+ * send-options menu's "Take selfie". The extras below are the de-facto set OEM camera
+ * apps look for — none is a platform contract, so some devices will still open on the
+ * rear camera (the user just flips it; the capture pipeline is identical either way).
+ */
+private class TakeSelfiePicture : ActivityResultContracts.TakePicture() {
+    override fun createIntent(context: Context, input: Uri): Intent =
+        super.createIntent(context, input).apply {
+            putExtra("android.intent.extras.CAMERA_FACING", 1)
+            putExtra("android.intent.extras.LENS_FACING_FRONT", 1)
+            putExtra("android.intent.extra.USE_FRONT_CAMERA", true)
+        }
+}
+
 private fun onMicPermissionDenied(context: Context) {
     // Walk the ContextWrapper chain to the hosting Activity (needed for the rationale
     // check); null if this context isn't Activity-backed.

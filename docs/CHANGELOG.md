@@ -4,6 +4,26 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (master) — send-options (+) menu replaces long-press-send
+
+1140 tests passing (unchanged). **Not yet verified on device.**
+
+Owner feedback same evening as the scheduled-messages landing: long-pressing send is
+not a discoverable gesture. A new **send-options (+) button** now sits left of the
+mic/send button and opens a menu — the discoverable home for secondary send actions,
+"to start": **Schedule send** (same text-only gate the long-press had; disabled until
+there's typed text and no pending attachments), **Attach file** (system document
+picker scoped to image/video/audio — reaches Downloads/Drive etc., complementing the
+Photo Picker; appends through the same capped attachment path), and **Take selfie**
+(the existing zero-permission capture pipeline via a `TakePicture` subclass adding
+best-effort front-camera extras — OEM-dependent, some devices will still open on the
+rear camera). The send button is back to a plain tap; the long-press gesture is
+removed outright. Needs on-device verification: menu rendering/row order, schedule
+gating, document-picker attach → MMS send, whether the selfie hint actually opens the
+front camera on the S24 Ultra.
+
+---
+
 ## 2026-07-24 (fix/search-jump-arrival-cue) — center the search-jump landing + add an arrival pop
 
 1086 tests passing (up from 1073). **Not yet verified on device.**
