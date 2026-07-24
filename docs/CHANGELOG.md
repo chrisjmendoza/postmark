@@ -4,6 +4,37 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (docs/target-sdk-review) — Android 14/15 target-SDK behavior-change audit
+
+Audit only — **no code changed**, no test run needed (branch is green as
+committed). New review doc `docs/TARGET_SDK_REVIEW.md` covers the Play Store-prep
+TODO "Target SDK review" item.
+
+Established the SDK facts (compile/target **35**, min **26**) and walked each
+relevant Android 14 (API 34) and Android 15 (API 35) behavior change against the
+codebase. **20 change areas → 11 HANDLED, 2 GAP, 7 N-A.**
+
+Confirmed HANDLED by inspection: foreground-service `dataSync` type + matching
+`FOREGROUND_SERVICE_DATA_SYNC` permission (manifest + all three workers, API-29
+gated); all PendingIntent targets explicit and all carry a mutability flag (the
+single `FLAG_MUTABLE` is the RemoteInput direct-reply, as required); Photo Picker
+used with **no** `READ_MEDIA_*` declared; scoped-storage save path;
+`POST_NOTIFICATIONS` gated on TIRAMISU; `enableEdgeToEdge()` with no deprecated
+window-color APIs. Confirmed **N-A**: no `AlarmManager`/exact alarms anywhere, no
+context-registered `BroadcastReceiver`s (so the API-34 `RECEIVER_EXPORTED` rule
+doesn't apply), no full-screen intents, no Health Connect.
+
+Two open gaps (TODO stays unticked): **G1** — Android 15's 6h/24h `dataSync` FGS
+timeout could clip a first-run import of a very large mailbox; WorkManager 2.10 +
+existing checkpoint-resume likely mitigate, but it needs a device test. **G2** —
+16 KB page-size alignment of media3 1.5.1's native `.so` libraries is a
+Play-submission requirement (deadline May 31 2026); must be checked on the built
+AAB and may need a media3 bump. Neither gap was a trivial zero-risk source edit,
+so no code was touched. TODO item annotated; sources: developer.android.com FGS
+timeout + Google Play 16 KB pages, plus auditor knowledge for predictive-back.
+
+---
+
 ## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
 
 1073 tests passing (up from ~1044). **Not yet verified on device.**

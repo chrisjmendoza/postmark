@@ -1401,7 +1401,17 @@ instance, but flagged:
       answering questions about user-generated content.
 - [ ] **Target SDK review** — ensure all Android 14/15 behavior
       changes are handled (exact alarms, photo picker, health
-      connect, etc.).
+      connect, etc.). *(audit done July 24 2026, `docs/target-sdk-review` —
+      see `docs/TARGET_SDK_REVIEW.md`; 2 gaps found, both open. Currently
+      compile/target 35, min 26. HANDLED: FGS dataSync type+permission,
+      explicit intents, PendingIntent mutability flags, manifest-only
+      receivers, Photo Picker w/o READ_MEDIA_*, edge-to-edge. No exact
+      alarms / context-registered receivers / full-screen intents at all.
+      **G1** Android 15 dataSync 6h/24h FGS timeout on the bulk importer —
+      device-verify on a large mailbox (WorkManager 2.10 + checkpoint-resume
+      likely mitigate). **G2** 16 KB page-size alignment of media3 1.5.1
+      native `.so` — Play-blocking, verify on the built AAB, may need a
+      media3 bump. No code changed — no trivial zero-risk gap existed.)*
 - [ ] **Samsung Galaxy Store** — consider dual submission.
       Samsung users are primary target given S24 Ultra testing.
 
