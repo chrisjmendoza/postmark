@@ -1500,6 +1500,69 @@ instance, but flagged:
       message count deleted. Surface in the Backup status area in
       Settings.
 
+### Privacy (Settings → Privacy — user-facing options)
+Settings → Privacy already exists (Blocked numbers, Spam rows); these
+slot in as toggles/rows on that screen.
+
+- [ ] **Strip image metadata before sending** (owner request, July 24
+      2026) — toggle: remove EXIF (GPS location, device make/model,
+      capture timestamp) from images before they leave the phone.
+      Current state (verified in `MmsManagerWrapper`): an OVER-budget
+      image already loses all EXIF as a side effect of `compressImage`
+      re-encoding via `Bitmap.compress` (rotation is baked into pixels
+      first, nothing else is copied back) — the gap is UNDER-budget
+      images, which are sent byte-for-byte with full EXIF intact.
+      Simplest fix: when the toggle is on, route every outgoing image
+      through the existing decode→bake-rotation→re-encode path even
+      when it fits the budget (reuse `compressImage` at high quality),
+      so there's exactly one strip implementation and nothing new to
+      test beyond the routing decision (pure function candidate:
+      `shouldReencode(toggle, overBudget, mimeType)`). Default ON —
+      leaking a home address is the silent failure, degraded EXIF the
+      visible one; note in the toggle subtitle that PNG/GIF sent
+      re-encoded lose format (matches existing over-budget behavior).
+- [ ] **Strip video metadata before sending** — companion gap to the
+      image item: an over-budget video is re-encoded by
+      `compressVideo` (metadata gone), but an under-budget video keeps
+      its location in the MP4 container (`moov/udta` — what
+      `MediaMetadataRetriever.METADATA_KEY_LOCATION` reads). No
+      Bitmap-style one-liner here; needs a remux pass (MediaMuxer
+      copies tracks, drops container metadata) or accept re-encoding
+      small videos too. Scope separately — ship the image toggle
+      first, label it "photos" honestly until video is covered.
+- [ ] **App lock** — require biometric/PIN (`BiometricPrompt`, with
+      device-credential fallback) to open Postmark. Timeout options
+      (immediately / 1 min / 5 min) rather than every-resume-only.
+      Note the honest limitation somewhere visible: notifications
+      still show message content unless notification privacy mode is
+      also on — consider auto-suggesting it when app lock is enabled.
+- [ ] **Locked conversations** — per-thread lock behind the app-lock
+      credential: thread ⋮ → "Lock conversation"; locked threads show
+      name-only rows (no preview, no unread body in notifications —
+      reuse privacy-mode's redacted notification path per-thread) and
+      require auth to open. Depends on App lock above for the
+      credential plumbing; schema is one nullable flag on
+      `ThreadEntity` alongside pin/mute/spam.
+- [ ] **Block screenshots (screen security)** — toggle that sets
+      `FLAG_SECURE` on the activity window: blocks
+      screenshots/screen-recording AND blanks the app in the recents
+      switcher. One flag, two user-visible behaviors — word the
+      toggle so both are expected. Interaction to check: our own
+      scroll-capture export (`ThreadScrollCapture`) renders via
+      ComposeView, not the system screenshotter — verify export still
+      works with the flag set, or gate export while the toggle is on.
+- [ ] **Incognito keyboard in the composer** — toggle adding
+      `IME_FLAG_NO_PERSONALIZED_LEARNING` to the reply-bar text field
+      so Gboard/Samsung Keyboard don't add typed messages to their
+      personal dictionary / cloud learning. Advisory flag (keyboards
+      may ignore it) — subtitle should say "supported keyboards".
+- [ ] **Per-thread notification privacy** — the existing global
+      privacy mode ("New message", no sender/body) as a per-thread
+      override, for people who want one sensitive conversation
+      redacted without degrading every notification. Natural home:
+      thread ⋮ next to mute/notifications toggles; falls out almost
+      free if Locked conversations lands first (same redaction path).
+
 ### Settings — completeness
 - [x] **Notification settings screen** (July 22 2026, scoped) — new
       `NotificationSettingsScreen` reachable from a "Notifications" nav
