@@ -692,12 +692,23 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       memoization + v16 index already removed the per-keystroke rebuild and sort pass.)
 
 ### Export — image rendering
-- [ ] **Image export** — render selected messages to `Canvas`,
-      convert to `Bitmap`, compress to PNG, write to
-      `getExternalFilesDir("exports")/`, share via
-      `FileProvider` + `ACTION_SEND`.
-- [ ] **"Share as image" button** — restore to `ExportBottomSheet`
-      once rendering is in place.
+- [x] **Image export** — done July 23 (`feat/image-export`): selected
+      messages render to `Canvas`/`Paint`/`StaticLayout` → `Bitmap` →
+      PNG in `getExternalFilesDir("exports")`, shared via the existing
+      `FileProvider` + `ACTION_SEND` / `ACTION_SEND_MULTIPLE`. Fixed
+      1080px-wide light chat rendering (accent-blue sent bubbles, neutral
+      received with group sender labels, day separators, timestamps,
+      reaction rows, footer watermark; media messages get a "📷 Photo"
+      placeholder chip — no inline thumbnails in v1). Pagination/sizing
+      math is pure in `domain/export/ImageExportPlan.kt` (9 tests):
+      12000px hard cap, auto-splits into "part X of N" PNGs past it.
+      Android drawing in `service/export/ImageExportRenderer.kt`; sweeps
+      export files older than 24h each run. **Needs on-device VISUAL
+      verification** (rendering quality, share sheet, multi-part split).
+- [x] **"Share as image" button** — done July 23: `ExportBottomSheet`
+      restored (`ui/export/`) with Copy-as-text + Share-as-image; opened
+      from the selection top bar's Export (share) icon, progress spinner
+      while rendering, errors → snackbar. **Needs on-device verification.**
 
 ### Backup — remaining
 - [x] **Backup history list** — done.
