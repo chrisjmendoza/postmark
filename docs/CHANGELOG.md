@@ -4,6 +4,49 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (fix/search-jump-arrival-cue) — center the search-jump landing + add an arrival pop
+
+1086 tests passing (up from 1073). **Not yet verified on device.**
+
+**Tapping a search result jumped into the thread but landed the target bubble at the
+BOTTOM of the viewport with no visible cue.** Two independent root causes in
+`ui/thread/ThreadScreen.kt`, both confirmed:
+
+1. **Centering sign bug.** `scrollToMessageCentered` computed `(viewport/2)-(item/2)`
+   and passed it as a NEGATIVE `scrollOffset`. But this thread list is
+   `LazyColumn(reverseLayout = true)`, where a POSITIVE `scrollOffset` shifts the item
+   UPWARD from the bottom edge (the working `scrollToDateLabel` right below relies on
+   exactly this). The negative sign therefore pinned the target at the bottom edge —
+   the observed bottom-landing. Extracted a pure
+   `centeredScrollOffsetReverseLayout(viewportHeight, itemSize)` =
+   `((viewport - item) / 2).coerceAtLeast(0)` into new `domain/thread/CenteredScroll.kt`
+   (clamps to 0 when the item is taller than the viewport, so its bottom lands at the
+   viewport bottom instead of over-scrolling) and call it with a POSITIVE sign.
+
+2. **Racing duplicate scroll.** A one-shot `LaunchedEffect(uiState.messages)` ALSO
+   handled `scrollToMessageId` with a plain, un-centered `scrollToItem`. It woke on the
+   same first messages emission as the centered path and fought over the shared scroll
+   mutex — the snap could cancel/override the centered animate. Deleted that branch
+   entirely; `scrollToMessageCentered` (which snap-scrolls first, then centers, then
+   highlights) is now the single owner of message-id jumps, and the one-shot effect
+   owns only `scrollToDate` (semantics unchanged).
+
+**Arrival "pop" cue.** The existing 2s `tertiaryContainer` colour tint on
+`highlightedMessageId` was kept exactly as-is; a scale bounce was layered on top so the
+landing is unmistakable over any theme or photo background. On the rising edge of
+`isHighlighted`, an `Animatable(1f)` animates to 1.06f (tween 120ms) then springs back
+(`spring(DampingRatioMediumBouncy)`), applied through a lambda `graphicsLayer` on the
+bubble surface container (default center origin). No new gesture/pointer surface is
+placed over the bubble — that would silently break the parent `combinedClickable`
+(the ClickableText lesson). Resting bubbles run no per-frame animation cost.
+
+All three jump entry points — the nav-arg effect (search-jump AND StarredImagesScreen),
+the pinned-messages sheet, and the image viewer's "Go to chat" — still route through the
+one `scrollToMessageCentered`, so the cue and centering can't drift apart. No schema
+change. 4 new plain-JUnit tests for the pure offset function; `assembleDebug` clean.
+
+---
+
 ## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
 
 1073 tests passing (up from ~1044). **Not yet verified on device.**

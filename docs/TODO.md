@@ -668,24 +668,33 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       with the new trailing control.
 - [x] **Thread filter chip** — done.
 - [x] **Jump to message from result** — done.
-- [ ] **Search-jump arrival cue + centered landing** (owner request, on-device
-      July 24 2026 — queued for the overnight run) — when a search result is
-      tapped and the thread scrolls to that message, (a) the target bubble
-      should visibly announce itself on arrival: a brief "pop" (small scale
-      bounce) or a momentary glow/highlight pulse that fades, so it's
-      unambiguous WHICH bubble the jump landed on; (b) the message should land
-      vertically CENTERED in the viewport, not at the bottom — the messages
-      before and after it must both be visible for context. NOTE for the
-      implementer: the code nominally has `scrollToMessageCentered()` (shared
-      by search-jump, the image viewer's "Go to chat", and the pinned-messages
-      panel) plus a highlight via `scrollToMessageId` — but the owner observes
-      bottom-landing and no visible cue on-device, so first re-verify what the
-      search path actually calls and whether the existing highlight renders at
-      all (checkboxes drift; don't assume the routine works as named). Any new
-      pop/glow should respect the bubble gesture rules (no new gesture
-      surfaces over the bubble — see the ClickableText lesson) and reuse the
-      existing highlight plumbing if it turns out to be live. Apply the same
-      cue to all three jump entry points so they can't drift apart.
+- [x] **Search-jump arrival cue + centered landing** (July 24 2026, owner request,
+      `fix/search-jump-arrival-cue`) — owner observed on device that a tapped search
+      result landed at the BOTTOM of the viewport with no visible cue. Two root causes,
+      both real: (1) a SIGN bug in `scrollToMessageCentered` — it applied a NEGATIVE
+      `scrollOffset` (`-((viewport/2)-(item/2))`), but in this `reverseLayout = true`
+      list a POSITIVE offset shifts the item UP from the bottom edge (the working
+      `scrollToDateLabel` a few lines below proves the convention), so the negative sign
+      pinned the target at the bottom. Fixed by extracting a pure
+      `centeredScrollOffsetReverseLayout(viewportHeight, itemSize)` =
+      `((viewport - item)/2).coerceAtLeast(0)` into `domain/thread/CenteredScroll.kt`
+      and calling it with a POSITIVE sign. (2) A racing duplicate: the one-shot
+      `LaunchedEffect(uiState.messages)` ALSO handled `scrollToMessageId` with a plain
+      un-centered `scrollToItem`, waking on the same first emission and fighting the
+      centered animate over the shared scroll mutex — that branch was DELETED, leaving
+      `scrollToMessageCentered` the sole owner of message-id jumps and the effect owning
+      only `scrollToDate`. The existing 2s `tertiaryContainer` tint was kept as-is and a
+      scale "pop" was added ON TOP: an `Animatable(1f)` bounces to 1.06f (tween 120ms)
+      then springs back (`DampingRatioMediumBouncy`) on the rising edge of
+      `isHighlighted`, applied via lambda `graphicsLayer` on the bubble surface — NO new
+      gesture/pointer surface over the bubble (ClickableText lesson respected); resting
+      bubbles pay no per-frame cost. All three entry points (nav-arg/search + StarredImages,
+      pinned-messages sheet, image-viewer "Go to chat") still route through the single
+      `scrollToMessageCentered`, so the cue can't drift apart. 1086 tests, 0 failures
+      (4 new pure-function tests); `assembleDebug` clean. **Needs on-device verification**:
+      centered landing from a search result; pop + tint visibility over light/dark themes
+      and photo backgrounds; all three entry points (search, image-viewer "Go to chat",
+      pinned panel); and the StarredImagesScreen jump.
 - [x] **Date range filter** — preset chips (Today / 7 days / 30 days)
       via `SearchDateRange` enum + `toBoundsMs()`. Single
       `searchMessagesFiltered()` DAO query handles all combos.

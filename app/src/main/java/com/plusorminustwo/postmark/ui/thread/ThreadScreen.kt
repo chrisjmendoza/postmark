@@ -113,6 +113,7 @@ import androidx.compose.ui.tooling.preview.Devices
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
 import com.plusorminustwo.postmark.domain.customization.ContactPalette
+import com.plusorminustwo.postmark.domain.thread.centeredScrollOffsetReverseLayout
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoEvent
 import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
 import com.plusorminustwo.postmark.domain.voicememo.formatMemoDuration
@@ -836,8 +837,14 @@ private fun ThreadContent(
         val item = info.visibleItemsInfo.firstOrNull { it.index == targetIndex }
         if (item != null) {
             val viewportHeight = info.viewportEndOffset - info.viewportStartOffset
-            val centeredOffset = (viewportHeight / 2) - (item.size / 2)
-            listState.animateScrollToItem(targetIndex, scrollOffset = -centeredOffset)
+            // In reverseLayout, a POSITIVE scrollOffset shifts the item upward from the
+            // bottom edge (same convention as scrollToDateLabel below). Centering lifts the
+            // item by half the leftover space; the helper clamps to 0 when the item is
+            // taller than the viewport so its bottom lands at the viewport bottom.
+            listState.animateScrollToItem(
+                targetIndex,
+                scrollOffset = centeredScrollOffsetReverseLayout(viewportHeight, item.size)
+            )
         }
         onHighlightMessage(targetId)
     }
@@ -927,17 +934,17 @@ private fun ThreadContent(
         }
     }
 
-    // ── One-shot scroll to target message or date ─────────────────────────────
+    // ── One-shot scroll to target date ────────────────────────────────────────
+    // Message-id jumps are owned solely by scrollToMessageCentered (it snap-scrolls,
+    // then centers, then highlights) — routing them through here too would race that
+    // animation over the shared scroll mutex. This effect handles only scrollToDate.
 
     var initialScrollDone by remember { mutableStateOf(false) }
     LaunchedEffect(uiState.messages) {
         if (initialScrollDone || uiState.messages.isEmpty()) return@LaunchedEffect
-        if (scrollToMessageId == -1L && scrollToDate.isEmpty()) { initialScrollDone = true; return@LaunchedEffect }
-        val targetIdx = when {
-            scrollToMessageId != -1L            -> uiState.renderState.messageIdToIndex[scrollToMessageId]
-            initialScrollDateLabel.isNotEmpty() -> uiState.renderState.dateToHeaderIndex[initialScrollDateLabel]
-            else                                -> null
-        }
+        if (scrollToDate.isEmpty()) { initialScrollDone = true; return@LaunchedEffect }
+        val targetIdx = if (initialScrollDateLabel.isNotEmpty())
+            uiState.renderState.dateToHeaderIndex[initialScrollDateLabel] else null
         if (targetIdx != null) {
             listState.scrollToItem(targetIdx)
             initialScrollDone = true
@@ -1930,6 +1937,24 @@ private fun MessageBubble(
     val bubbleBrush = remember(bubbleColor) {
         Brush.verticalGradient(ContactPalette.bubbleGradientStops(bubbleColor.toArgb()).map { Color(it) })
     }
+    // Arrival "pop": on top of the colour tint above, punch the bubble scale up briefly on
+    // the rising edge of isHighlighted so the landing is unmistakable over any theme/photo
+    // background. The Animatable rests at 1f and only animates inside the LaunchedEffect when
+    // isHighlighted flips true, so unhighlighted bubbles pay no per-frame cost. Applied via
+    // graphicsLayer only — no pointer/gesture modifier is added over the bubble (that would
+    // silently break the parent combinedClickable, per project history).
+    val highlightScale = remember { Animatable(1f) }
+    LaunchedEffect(isHighlighted) {
+        if (isHighlighted) {
+            highlightScale.animateTo(1.06f, animationSpec = tween(durationMillis = 120))
+            highlightScale.animateTo(
+                1f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+            )
+        } else {
+            highlightScale.snapTo(1f)
+        }
+    }
     // Concrete content color for a contained audio chip (item 3): the message's own accent
     // content when customized, else the ambient content color the text bubble also uses.
     val chipContentColor = bubbleContentColor ?: LocalContentColor.current
@@ -2089,6 +2114,14 @@ private fun MessageBubble(
                             Modifier.onSizeChanged { bubbleWidthPx = it.width }
                         else Modifier
                     )
+                    // Arrival pop — scale from the bubble's center (default origin). Lambda
+                    // graphicsLayer defers the Animatable read to the draw phase, so the
+                    // brief highlight bounce never recomposes the bubble.
+                    .graphicsLayer {
+                        val s = highlightScale.value
+                        scaleX = s
+                        scaleY = s
+                    }
                     .background(bubbleBrush, bubbleShape(bubbleStyle, message.isSent, clusterPosition))
                     .then(
                         // Tighter padding when an attachment fills the bubble edges.
