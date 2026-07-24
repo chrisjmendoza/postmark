@@ -307,6 +307,52 @@ emulator flags are unverified until an actual run happens — flagged in
 TODO.md as needing a `workflow_dispatch` run before this is trusted to gate
 master. Also flagged the ~15-25 min-per-push emulator cost for the owner to
 weigh against restricting the trigger further.
+## 2026-07-23 (perf/stats-sql-aggregation) — Stats aggregation moves to SQL; heatmap observes lean projections
+
+Long-term form of performance-analysis.md Tier 1 #5. With 150k+ messages, opening
+Stats materialized every full `MessageEntity` row on every DB invalidation
+(`observeMessagesFrom(0L)`) — GC pressure and scroll hitches. That full-table
+SharedFlow is gone.
+
+**What moved to SQL** (timezone-free, new read-only `StatsDao`): per-thread and global
+`COUNT(*)`, `SUM(isSent)` (received = total − sent), `MIN`/`MAX(timestamp)` via
+`observeThreadAggregates` (GROUP BY threadId) and `observeGlobalAggregates`. Adding the
+DAO is **not** a schema change — version stays 20, no migration, exported `20.json`
+unchanged (verified).
+
+**What stayed in Kotlin, but on lean projections:** the zone-dependent buckets
+(active-day count, longest streak, by-day-of-week, by-month, response-time gaps) and
+emoji extraction can't be parity-proven in SQL right now — Room DAO tests are
+instrumented-only, no device is available, and there's direct precedent (the deleted
+`getActiveDatesForThread`) of SQLite day-bucketing silently disagreeing with the UI's
+`ZoneId.systemDefault()` dates. So instead of `SELECT *`, they observe a 3-primitive
+`MessageMeta(threadId, timestamp, isSent)` projection and a `(threadId, body)` projection
+restricted to `WHERE body != ''` — no body/attachment/address strings materialized per
+invalidation. `StatsAlgorithms` pure functions now take an explicit `ZoneId` (defaulting
+to `systemDefault()` at call sites) and use `java.time` throughout — the internal shared
+`SimpleDateFormat`/`Calendar.getInstance()` are gone (the shared-formatter pattern is what
+caused the July 12 `flowOn` regression).
+
+**Heatmap:** the count-by-day grid, day-of-week chart, and month "top contacts" panel now
+observe month-ranged `MessageMeta` (`observeMessageMetasInRange(ForThread)`) instead of
+full rows. `selectedDayMessages` still needs full rows (it renders bodies), but is now
+scoped to the SELECTED day *range* via `observeMessagesInRange(ForThread)` — and isn't
+observed at all when nothing is selected — rather than filtering the whole month's
+full-entity list. StatsScreen's two inline `SimpleDateFormat` day-bucket sites route
+through the shared `localDay(...)` java.time helper (identical rendered strings). No UI
+behavior or state-shape change.
+
+**Tests:** new `StatsAlgorithmsParityTest` proves the meta path equals the old full-entity
+path (ported verbatim as the oracle) across UTC / America/New_York / Pacific/Kiritimati
+(+14) / Asia/Kolkata (+5:30), plus explicit-zone DST cases around the 2026 US
+spring-forward and fall-back (near-midnight and cross-transition messages land on the
+correct local day; streaks count calendar days). `PostmarkDatabaseTest` gains 7
+instrumented cases asserting the `StatsDao` GROUP BY / projections equal Kotlin
+aggregation over the same rows (compile-verified; on-device run pending). Existing
+`StatsAlgorithmsTest` / `StatsComputationTest` / `StatsViewModel*Test` updated for the new
+signatures with all assertions kept. **957 unit tests, 0 failures** (up from 949);
+`assembleDebug` + `compileDebugAndroidTestKotlin` green. **On-device perf check still
+pending** (staging build — heatmap month-nav + Stats-open smoothness at 150k rows).
 
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 

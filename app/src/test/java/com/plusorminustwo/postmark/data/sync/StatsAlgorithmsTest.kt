@@ -1,20 +1,42 @@
 package com.plusorminustwo.postmark.data.sync
 
+import com.plusorminustwo.postmark.data.db.dao.MessageMeta
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
 import org.junit.Assert.*
 import org.junit.Test
+import java.time.ZoneId
 
 /**
  * Tests for [buildThreadStatsData] and [buildGlobalStatsData].
  * Pure JVM — no Android runtime, no org.json, no Room.
+ *
+ * The build functions now take the SQL aggregate + lean [MessageMeta] projection + the
+ * message bodies; these helpers convert a [MessageEntity] fixture into that shape so the
+ * assertions below are unchanged. A fixed UTC zone keeps day/month buckets deterministic
+ * regardless of the CI machine's timezone.
  */
 class StatsAlgorithmsTest {
+
+    private val utc = ZoneId.of("UTC")
+
+    private fun List<MessageEntity>.metas() = map { MessageMeta(it.threadId, it.timestamp, it.isSent) }
+    private fun List<MessageEntity>.bodies() = filter { it.body.isNotEmpty() }.map { it.body }
+
+    private fun threadStats(msgs: List<MessageEntity>, reactions: List<String> = emptyList()): ThreadStatsData {
+        val metas = msgs.metas()
+        return buildThreadStatsData(threadAggregateOf(metas), metas, msgs.bodies(), reactions, utc)
+    }
+
+    private fun globalStats(msgs: List<MessageEntity>, threadCount: Int, reactions: List<String> = emptyList()): GlobalStatsData {
+        val metas = msgs.metas()
+        return buildGlobalStatsData(globalAggregateOf(metas), threadCount, metas, msgs.bodies(), reactions, utc)
+    }
 
     // ── buildThreadStatsData ───────────────────────────────────────────────
 
     @Test
     fun `empty message list returns default ThreadStatsData`() {
-        val result = buildThreadStatsData(emptyList())
+        val result = threadStats(emptyList())
         assertEquals(0, result.totalMessages)
         assertEquals(0, result.sentCount)
         assertEquals(0, result.receivedCount)
@@ -26,7 +48,7 @@ class StatsAlgorithmsTest {
 
     @Test
     fun `single sent message gives correct counts`() {
-        val result = buildThreadStatsData(listOf(msg(1, isSent = true, t = 1_000L)))
+        val result = threadStats(listOf(msg(1, isSent = true, t = 1_000L)))
         assertEquals(1, result.totalMessages)
         assertEquals(1, result.sentCount)
         assertEquals(0, result.receivedCount)
@@ -44,7 +66,7 @@ class StatsAlgorithmsTest {
             msg(3, isSent = true, t = 2_000L),
             msg(4, isSent = false, t = 3_000L)
         )
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertEquals(4, result.totalMessages)
         assertEquals(2, result.sentCount)
         assertEquals(2, result.receivedCount)
@@ -57,7 +79,7 @@ class StatsAlgorithmsTest {
             msg(2, isSent = false, t = 200L),
             msg(3, isSent = true, t = 50L)   // out-of-order input
         )
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertEquals(50L, result.firstMessageAt)
         assertEquals(200L, result.lastMessageAt)
     }
@@ -72,7 +94,7 @@ class StatsAlgorithmsTest {
             msg(2, isSent = false, t = day1 + 3600_000),
             msg(3, isSent = true, t = day2)
         )
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertEquals(2, result.activeDayCount)
     }
 
@@ -82,7 +104,7 @@ class StatsAlgorithmsTest {
             msg(1, isSent = true, t = 0L, body = "😂😂🎉"),
             msg(2, isSent = false, t = 1_000L, body = "😂 wow")
         )
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertEquals(3, result.topEmojis["😂"])
         assertEquals(1, result.topEmojis["🎉"])
     }
@@ -92,7 +114,7 @@ class StatsAlgorithmsTest {
         // 7 different emojis in one message
         val body = "😀😁😂🤣😃😄😅"  // 7 emoji
         val msgs = listOf(msg(1, isSent = true, t = 0L, body = body))
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertTrue(result.topEmojis.size <= 6)
     }
 
@@ -103,7 +125,7 @@ class StatsAlgorithmsTest {
             val monday = 1736121600_000L  // 2025-01-06 00:00 UTC
             msg(i.toLong(), isSent = true, t = monday + (i - 1) * 86_400_000L)
         }
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertEquals(7, result.byDayOfWeek.sum())
     }
 
@@ -113,7 +135,7 @@ class StatsAlgorithmsTest {
             msg(1, isSent = true, t = 0L),           // Jan 1970
             msg(2, isSent = false, t = 86_400_000L)  // Jan 1970 (same month)
         )
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertEquals(2, result.byMonth.sum())
     }
 
@@ -123,7 +145,7 @@ class StatsAlgorithmsTest {
             msg(1, isSent = true, t = 0L),
             msg(2, isSent = false, t = 60_000L)   // 1-min response
         )
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertEquals(60_000L, result.avgResponseTimeMs)
     }
 
@@ -131,7 +153,7 @@ class StatsAlgorithmsTest {
 
     @Test
     fun `empty messages returns global default with correct threadCount`() {
-        val result = buildGlobalStatsData(emptyList(), threadCount = 5)
+        val result = globalStats(emptyList(), threadCount = 5)
         assertEquals(0, result.totalMessages)
         assertEquals(5, result.threadCount)
     }
@@ -144,7 +166,7 @@ class StatsAlgorithmsTest {
             msg(3, isSent = true, t = 0L, threadId = 2L),
             msg(4, isSent = false, t = 30_000L, threadId = 2L)
         )
-        val result = buildGlobalStatsData(msgs, threadCount = 2)
+        val result = globalStats(msgs, threadCount = 2)
         assertEquals(4, result.totalMessages)
         assertEquals(2, result.sentCount)
         assertEquals(2, result.receivedCount)
@@ -162,7 +184,7 @@ class StatsAlgorithmsTest {
             msg(3, isSent = true, t = 0L, threadId = 2L),
             msg(4, isSent = false, t = 30_000L, threadId = 2L)
         )
-        val result = buildGlobalStatsData(msgs, threadCount = 2)
+        val result = globalStats(msgs, threadCount = 2)
         assertEquals(45_000L, result.avgResponseTimeMs)
     }
 
@@ -200,16 +222,18 @@ class StatsAlgorithmsTest {
 
     // ── groupMessagesByDay ────────────────────────────────────────────────
 
+    private fun groupByDay(msgs: List<MessageEntity>) = groupMessagesByDay(msgs.metas(), utc)
+
     @Test
     fun `groupMessagesByDay empty list returns empty map`() {
-        assertTrue(groupMessagesByDay(emptyList()).isEmpty())
+        assertTrue(groupByDay(emptyList()).isEmpty())
     }
 
     @Test
     fun `groupMessagesByDay single message counted for its day`() {
         // 2025-04-26 00:00:00 UTC in millis
         val ts = 1745625600_000L
-        val result = groupMessagesByDay(listOf(msg(1, isSent = true, t = ts)))
+        val result = groupByDay(listOf(msg(1, isSent = true, t = ts)))
         assertEquals(1, result.values.sum())
         assertEquals(1, result.values.single())
     }
@@ -222,7 +246,7 @@ class StatsAlgorithmsTest {
             msg(2, isSent = false, t = dayStart + 3_600_000L),
             msg(3, isSent = true,  t = dayStart + 7_200_000L)
         )
-        val result = groupMessagesByDay(msgs)
+        val result = groupByDay(msgs)
         assertEquals(3, result.values.sum())
         assertEquals(1, result.keys.size)
     }
@@ -237,7 +261,7 @@ class StatsAlgorithmsTest {
             msg(2, isSent = false, t = day2),
             msg(3, isSent = true,  t = day3)
         )
-        val result = groupMessagesByDay(msgs)
+        val result = groupByDay(msgs)
         assertEquals(3, result.keys.size)
         result.values.forEach { assertEquals(1, it) }
     }
@@ -253,7 +277,7 @@ class StatsAlgorithmsTest {
             msg(4, isSent = false, t = day2 + 1_000L),
             msg(5, isSent = true,  t = day2 + 2_000L)
         )
-        val result = groupMessagesByDay(msgs)
+        val result = groupByDay(msgs)
         assertEquals(2, result.keys.size)
         assertEquals(5, result.values.sum())
     }
@@ -302,7 +326,7 @@ class StatsAlgorithmsTest {
     fun `reactions tracked separately from message emoji in buildThreadStatsData`() {
         val msgs = listOf(msg(1, isSent = true, t = 0L, body = "😂😂 message"))
         val reactions = listOf("👍", "👍", "🎉")
-        val result = buildThreadStatsData(msgs, reactions)
+        val result = threadStats(msgs, reactions)
         // message emoji from body
         assertEquals(2, result.topEmojis["😂"])
         assertNull(result.topEmojis["👍"])
@@ -315,7 +339,7 @@ class StatsAlgorithmsTest {
     @Test
     fun `reaction emojis empty when no reactions provided`() {
         val msgs = listOf(msg(1, isSent = true, t = 0L, body = "hi"))
-        val result = buildThreadStatsData(msgs)
+        val result = threadStats(msgs)
         assertTrue(result.topReactionEmojis.isEmpty())
     }
 

@@ -37,6 +37,9 @@ abstract class PostmarkDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun reactionDao(): ReactionDao
     abstract fun searchDao(): SearchDao
+    // Read-only aggregate/projection queries for the Stats screen. Adding a DAO accessor
+    // is not a schema change — version stays 20, no migration, exported schema unchanged.
+    abstract fun statsDao(): StatsDao
 
     companion object {
         const val DATABASE_NAME = "postmark.db"

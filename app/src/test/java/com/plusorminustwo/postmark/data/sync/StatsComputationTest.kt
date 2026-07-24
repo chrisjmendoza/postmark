@@ -1,6 +1,6 @@
 package com.plusorminustwo.postmark.data.sync
 
-import com.plusorminustwo.postmark.data.db.entity.MessageEntity
+import com.plusorminustwo.postmark.data.db.dao.MessageMeta
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -211,8 +211,6 @@ class StatsComputationTest {
 
     // ── helpers ───────────────────────────────────────────────────────────
 
-    private fun msg(id: Long, isSent: Boolean, t: Long) = MessageEntity(
-        id = id, threadId = 1L, address = "+1", body = "x",
-        timestamp = t, isSent = isSent, type = 1
-    )
+    private fun msg(id: Long, isSent: Boolean, t: Long) =
+        MessageMeta(threadId = 1L, timestamp = t, isSent = isSent)
 }

@@ -54,4 +54,5 @@ object DatabaseModule {
     @Provides fun provideMessageDao(db: PostmarkDatabase): MessageDao = db.messageDao()
     @Provides fun provideReactionDao(db: PostmarkDatabase): ReactionDao = db.reactionDao()
     @Provides fun provideSearchDao(db: PostmarkDatabase): SearchDao = db.searchDao()
+    @Provides fun provideStatsDao(db: PostmarkDatabase): StatsDao = db.statsDao()
 }

@@ -1,11 +1,15 @@
 package com.plusorminustwo.postmark.ui.stats
 
 import androidx.lifecycle.SavedStateHandle
+import com.plusorminustwo.postmark.data.db.dao.EmojiBodyRow
+import com.plusorminustwo.postmark.data.db.dao.GlobalAggregateRow
 import com.plusorminustwo.postmark.data.db.dao.MessageDao
-import com.plusorminustwo.postmark.data.db.dao.ReactionDao
+import com.plusorminustwo.postmark.data.db.dao.MessageMeta
+import com.plusorminustwo.postmark.data.db.dao.StatsDao
+import com.plusorminustwo.postmark.data.db.dao.ThreadAggregateRow
 import com.plusorminustwo.postmark.data.db.dao.ThreadDao
+import com.plusorminustwo.postmark.data.db.dao.ThreadEmojiRow
 import com.plusorminustwo.postmark.data.db.entity.MessageEntity
-import com.plusorminustwo.postmark.data.db.entity.ReactionEntity
 import com.plusorminustwo.postmark.data.db.entity.ThreadEntity
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import kotlinx.coroutines.Dispatchers
@@ -57,7 +61,7 @@ class StatsViewModelActionsTest {
         return StatsViewModel(
             ActionsThreadDao(),
             dao,
-            ActionsReactionDao(),
+            ActionsFakeStatsDao(messages),
             savedStateHandle
         )
     }
@@ -332,7 +336,7 @@ class StatsViewModelHeatmapDowTest {
         return StatsViewModel(
             ActionsThreadDao(),
             dao,
-            ActionsReactionDao(),
+            ActionsFakeStatsDao(messages),
             SavedStateHandle()
         )
     }
@@ -575,21 +579,37 @@ private class ActionsThreadDao : ThreadDao {
     override suspend fun updateSentColor(threadId: Long, argb: Int?) = Unit
 }
 
-private class ActionsReactionDao : ReactionDao {
-    override fun observeAll(): Flow<List<ReactionEntity>> = flowOf(emptyList())
-    override suspend fun getAll(): List<ReactionEntity> = emptyList()
-    override fun observeByMessage(messageId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
-    override suspend fun getByMessage(messageId: Long): List<ReactionEntity> = emptyList()
-    override suspend fun insert(reaction: ReactionEntity): Long = 0L
-    override suspend fun delete(reaction: ReactionEntity) = Unit
-    override suspend fun deleteByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String) = Unit
-    override suspend fun getByEmoji(emoji: String): List<ReactionEntity> = emptyList()
-    override suspend fun getByMessageIds(messageIds: List<Long>): List<ReactionEntity> = emptyList()
-    override suspend fun getTopEmojis(limit: Int): List<com.plusorminustwo.postmark.data.db.dao.EmojiCount> = emptyList()
-    override fun observeTopEmojisBySender(senderAddress: String): Flow<List<com.plusorminustwo.postmark.data.db.dao.EmojiCount>> = flowOf(emptyList())
-    override fun observeByThread(threadId: Long): Flow<List<ReactionEntity>> = flowOf(emptyList())
-    override suspend fun getByThread(threadId: Long): List<ReactionEntity> = emptyList()
-    override suspend fun deleteAll() = Unit
-    override fun observeDistinctEmojis(): Flow<List<String>> = flowOf(emptyList())
-    override suspend fun countByMessageSenderAndEmoji(messageId: Long, senderAddress: String, emoji: String): Int = 0
+/**
+ * Stats DAO backed by the same pre-loaded message list as [ActionsRangeFakeMessageDao],
+ * projecting the SQL aggregates / metas in memory so [StatsViewModel.heatmapByDayOfWeek]
+ * (now driven by the meta range queries) sees the fixture data.
+ */
+private class ActionsFakeStatsDao(
+    private val allMessages: List<MessageEntity> = emptyList()
+) : StatsDao {
+    private fun metas() = allMessages.map { MessageMeta(it.threadId, it.timestamp, it.isSent) }
+
+    override fun observeThreadAggregates(): Flow<List<ThreadAggregateRow>> = flowOf(
+        metas().groupBy { it.threadId }.map { (tid, ms) ->
+            ThreadAggregateRow(tid, ms.size, ms.count { it.isSent }, ms.minOf { it.timestamp }, ms.maxOf { it.timestamp })
+        }
+    )
+
+    override fun observeGlobalAggregates(): Flow<GlobalAggregateRow> {
+        val ms = metas()
+        return flowOf(GlobalAggregateRow(ms.size, ms.count { it.isSent }, ms.minOfOrNull { it.timestamp } ?: 0L, ms.maxOfOrNull { it.timestamp } ?: 0L))
+    }
+
+    override fun observeMessageMetas(): Flow<List<MessageMeta>> = flowOf(metas())
+
+    override fun observeEmojiBodies(): Flow<List<EmojiBodyRow>> =
+        flowOf(allMessages.filter { it.body.isNotEmpty() }.map { EmojiBodyRow(it.threadId, it.body) })
+
+    override fun observeReactionEmojisByThread(): Flow<List<ThreadEmojiRow>> = flowOf(emptyList())
+
+    override fun observeMessageMetasInRange(startMs: Long, endMs: Long): Flow<List<MessageMeta>> =
+        flowOf(metas().filter { it.timestamp in startMs until endMs })
+
+    override fun observeMessageMetasInRangeForThread(threadId: Long, startMs: Long, endMs: Long): Flow<List<MessageMeta>> =
+        flowOf(metas().filter { it.threadId == threadId && it.timestamp in startMs until endMs })
 }
