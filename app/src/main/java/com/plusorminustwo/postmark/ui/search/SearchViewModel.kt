@@ -10,7 +10,10 @@ import com.plusorminustwo.postmark.domain.model.SearchDateRange
 import com.plusorminustwo.postmark.domain.model.Thread
 import com.plusorminustwo.postmark.domain.model.toBoundsMs
 import com.plusorminustwo.postmark.domain.search.SearchResultGroup
+import com.plusorminustwo.postmark.domain.search.collapseAll
+import com.plusorminustwo.postmark.domain.search.expandAll
 import com.plusorminustwo.postmark.domain.search.groupResultsByContact
+import com.plusorminustwo.postmark.domain.search.toggleGroupCollapsed
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -49,7 +52,11 @@ data class SearchUiState(
     // true = oldest-first. Session-only, never persisted.
     val oldestFirst: Boolean = false,
     // Populated only in BY_CONTACT mode — a pure regrouping of [results] by thread.
-    val groupedResults: List<SearchResultGroup> = emptyList()
+    val groupedResults: List<SearchResultGroup> = emptyList(),
+    // BY_CONTACT per-group collapse state, keyed by threadId. Session-only, never
+    // persisted; reset to empty (all-expanded) whenever a new results set arrives —
+    // see [SearchViewModel.search].
+    val collapsedGroupKeys: Set<Long> = emptySet()
 )
 
 /**
@@ -80,6 +87,7 @@ class SearchViewModel @Inject constructor(
     private val _selectedThread = MutableStateFlow<Thread?>(null)
     private val _sortOrder = MutableStateFlow(SortOrder.MOST_RECENT)
     private val _oldestFirst = MutableStateFlow(false)
+    private val _collapsedGroupKeys = MutableStateFlow<Set<Long>>(emptySet())
 
     // Groups the "auxiliary" inputs so the outer combine stays within its 5-flow arity.
     private data class Aux(
@@ -87,7 +95,8 @@ class SearchViewModel @Inject constructor(
         val selectedThread: Thread?,
         val emojis: List<String>,
         val sortOrder: SortOrder,
-        val oldestFirst: Boolean
+        val oldestFirst: Boolean,
+        val collapsedGroupKeys: Set<Long>
     )
 
     val uiState: StateFlow<SearchUiState> = combine(
@@ -97,9 +106,10 @@ class SearchViewModel @Inject constructor(
             _selectedThread,
             searchRepository.observeDistinctEmojis(),
             _sortOrder,
-            _oldestFirst
-        ) { threads, selected, emojis, sortOrder, oldestFirst ->
-            Aux(threads, selected, emojis, sortOrder, oldestFirst)
+            // Nested so the outer combine (of both) still fits the 5-flow overload.
+            combine(_oldestFirst, _collapsedGroupKeys) { oldestFirst, collapsed -> oldestFirst to collapsed }
+        ) { threads, selected, emojis, sortOrder, (oldestFirst, collapsed) ->
+            Aux(threads, selected, emojis, sortOrder, oldestFirst, collapsed)
         }
     ) { query, filters, results, loading, aux ->
         SearchUiState(
@@ -113,7 +123,8 @@ class SearchViewModel @Inject constructor(
             sortOrder = aux.sortOrder,
             oldestFirst = aux.oldestFirst,
             groupedResults = if (aux.sortOrder == SortOrder.BY_CONTACT)
-                groupResultsByContact(results, aux.threads, aux.oldestFirst) else emptyList()
+                groupResultsByContact(results, aux.threads, aux.oldestFirst) else emptyList(),
+            collapsedGroupKeys = aux.collapsedGroupKeys
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SearchUiState())
 
@@ -165,11 +176,27 @@ class SearchViewModel @Inject constructor(
 
     fun setOldestFirst(oldestFirst: Boolean) { _oldestFirst.value = oldestFirst }
 
+    /** Toggles one BY_CONTACT group's collapsed state (see [SearchGroupHeader]'s tap). */
+    fun onGroupHeaderClick(threadId: Long) {
+        _collapsedGroupKeys.update { toggleGroupCollapsed(it, threadId) }
+    }
+
+    /** Collapses every currently-visible BY_CONTACT group to just its header. */
+    fun collapseAllGroups() {
+        _collapsedGroupKeys.value = collapseAll(uiState.value.groupedResults.map { it.threadId })
+    }
+
+    /** Expands every BY_CONTACT group. */
+    fun expandAllGroups() {
+        _collapsedGroupKeys.value = expandAll()
+    }
+
     private fun search(query: String, filters: SearchFilters, oldestFirst: Boolean) {
         // Allow browse (blank query) when a protocol filter is active.
         if (query.isBlank() && filters.isMms == null) {
             searchJob?.cancel()
             _results.value = emptyList()
+            _collapsedGroupKeys.value = emptySet()
             return
         }
         // Cancel the in-flight query: without this, an expensive broad FTS query
@@ -187,6 +214,11 @@ class SearchViewModel @Inject constructor(
                 reactionEmoji = filters.reactionEmoji,
                 oldestFirst = oldestFirst
             )
+            // A fresh results set invalidates any stale collapsed-group selection from
+            // the previous query — a collapsed key that no longer matches a real group
+            // is harmless, but one that DOES collide with a new group would wrongly
+            // hide freshly-arrived rows. Always reset to all-expanded.
+            _collapsedGroupKeys.value = emptySet()
             _isLoading.value = false
         }
     }

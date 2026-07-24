@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: July 23, 2026
+Last updated: July 24, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -639,8 +639,45 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       verification (notification action rendering, contact-lookup gating).
 
 ### Search — remaining items
+- [x] **Expand/collapse by-contact groups** (July 24 2026, owner request from using
+      the app the night before, `feat/search-group-collapse`) — long BY_CONTACT result
+      lists were hard to scan. Each sticky `SearchGroupHeader` is now tappable
+      (`ExpandMore`/`ExpandLess` chevron, `Role.Button` + `stateDescription`
+      "Collapsed"/"Expanded" for accessibility); a collapsed group renders ONLY its
+      header — its message rows are omitted from the `LazyColumn` entirely. A
+      collapse-all control (`UnfoldLess`/`UnfoldMore` `IconButton`, contentDescription
+      "Collapse all"/"Expand all") sits at the end of the `FilterChips` row, shown only
+      in BY_CONTACT mode, flipping based on whether any group is currently expanded.
+      Session-only state in `SearchViewModel` (`collapsedGroupKeys: Set<Long>` keyed by
+      threadId, mirrors `sortOrder`/`oldestFirst`); pure reducers `toggleGroupCollapsed`/
+      `collapseAll`/`expandAll`/`anyGroupExpanded` in `domain/search/SearchGrouping.kt`
+      (9 new plain-JUnit tests). A fresh results set (new query/filter fetch) always
+      resets collapse state to all-expanded — a stale collapsed set from the previous
+      query must never silently hide rows in new results. MOST_RECENT flat mode and the
+      "Conversations" section untouched. No schema change. 1054 tests, 0 failures;
+      `assembleDebug` clean. **Needs on-device verification**: tap-to-collapse feel,
+      collapse-all/expand-all icon flip, chevron rendering, chip row at large font scale
+      with the new trailing control.
 - [x] **Thread filter chip** — done.
 - [x] **Jump to message from result** — done.
+- [ ] **Search-jump arrival cue + centered landing** (owner request, on-device
+      July 24 2026 — queued for the overnight run) — when a search result is
+      tapped and the thread scrolls to that message, (a) the target bubble
+      should visibly announce itself on arrival: a brief "pop" (small scale
+      bounce) or a momentary glow/highlight pulse that fades, so it's
+      unambiguous WHICH bubble the jump landed on; (b) the message should land
+      vertically CENTERED in the viewport, not at the bottom — the messages
+      before and after it must both be visible for context. NOTE for the
+      implementer: the code nominally has `scrollToMessageCentered()` (shared
+      by search-jump, the image viewer's "Go to chat", and the pinned-messages
+      panel) plus a highlight via `scrollToMessageId` — but the owner observes
+      bottom-landing and no visible cue on-device, so first re-verify what the
+      search path actually calls and whether the existing highlight renders at
+      all (checkboxes drift; don't assume the routine works as named). Any new
+      pop/glow should respect the bubble gesture rules (no new gesture
+      surfaces over the bubble — see the ClickableText lesson) and reuse the
+      existing highlight plumbing if it turns out to be live. Apply the same
+      cue to all three jump entry points so they can't drift apart.
 - [x] **Date range filter** — preset chips (Today / 7 days / 30 days)
       via `SearchDateRange` enum + `toBoundsMs()`. Single
       `searchMessagesFiltered()` DAO query handles all combos.

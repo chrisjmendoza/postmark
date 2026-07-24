@@ -52,3 +52,31 @@ fun groupResultsByContact(
             compareBy({ it.displayName.lowercase() }, { it.threadId })
         )
 }
+
+/**
+ * Pure reducers over the BY_CONTACT per-group collapse state — a `Set<Long>` of collapsed
+ * `threadId`s, held session-only in [com.plusorminustwo.postmark.ui.search.SearchViewModel]
+ * (mirrors the existing `sortOrder`/`oldestFirst` pattern, never persisted).
+ *
+ * IMPORTANT: whenever a new results set arrives (query/filter change), the ViewModel resets
+ * this set to empty (all-expanded) — a collapsed set computed against a *previous* query's
+ * groups must never silently hide rows in a *new* query's results.
+ */
+
+/** Toggles [key] (a threadId) in [collapsed]. Pure — returns a new set. */
+fun toggleGroupCollapsed(collapsed: Set<Long>, key: Long): Set<Long> =
+    if (key in collapsed) collapsed - key else collapsed + key
+
+/** Collapses every group in [groupKeys]. An empty input collapses nothing. */
+fun collapseAll(groupKeys: Collection<Long>): Set<Long> = groupKeys.toSet()
+
+/** Expands every group — always the empty collapsed set. */
+fun expandAll(): Set<Long> = emptySet()
+
+/**
+ * True when at least one of [groupKeys] is currently expanded (not in [collapsed]). Drives
+ * the collapse-all control: true → show "Collapse all", false → show "Expand all". An empty
+ * [groupKeys] is vacuously false — nothing to collapse.
+ */
+fun anyGroupExpanded(collapsed: Set<Long>, groupKeys: Collection<Long>): Boolean =
+    groupKeys.any { it !in collapsed }
