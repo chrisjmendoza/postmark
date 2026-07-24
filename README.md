@@ -1,5 +1,8 @@
 # Postmark
 
+[![Build & Distribute APK](https://github.com/chrisjmendoza/postmark/actions/workflows/distribute.yml/badge.svg)](https://github.com/chrisjmendoza/postmark/actions/workflows/distribute.yml)
+[![Instrumented Tests](https://github.com/chrisjmendoza/postmark/actions/workflows/instrumented.yml/badge.svg)](https://github.com/chrisjmendoza/postmark/actions/workflows/instrumented.yml)
+
 A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark is a full default SMS replacement that maintains its own local copy of your messages, enabling photo/video/voice-memo messaging, fast full-text search, rich conversation export, detailed activity stats, deep per-conversation personalization, and flexible per-thread backup control — all without any cloud dependency.
 
 ---
