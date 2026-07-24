@@ -562,8 +562,8 @@ class DatabaseMigrationTest {
                 " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
             )
             execSQL(
-                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type)" +
-                " VALUES (42, 1, '+1', 'survives the drop', 1000000, 1, 2)"
+                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead, isStarred)" +
+                " VALUES (42, 1, '+1', 'survives the drop', 1000000, 1, 2, 0, 0, 1, 0)"
             )
             execSQL(
                 "INSERT INTO thread_stats (threadId, totalMessages, sentCount, receivedCount, firstMessageAt, " +
@@ -594,8 +594,8 @@ class DatabaseMigrationTest {
                 " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
             )
             execSQL(
-                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type)" +
-                " VALUES (42, 1, '+1', 'indexed message', 1000000, 1, 2)"
+                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead, isStarred)" +
+                " VALUES (42, 1, '+1', 'indexed message', 1000000, 1, 2, 0, 0, 1, 0)"
             )
             close()
         }
