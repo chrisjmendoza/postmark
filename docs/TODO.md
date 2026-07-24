@@ -1058,43 +1058,70 @@ instance, but flagged:
       Decide whether the transient fallback bubble is acceptable in a busy group
       before shipping.
 - [~] **Scrolling screenshot ("capture more") support in threads**
-      (IMPLEMENTED-UNTESTED July 23 2026, `feat/thread-scrollcapture`) — took
-      option (2) from the diagnosis below: a custom `ScrollCaptureCallback`.
-      Web research (July 22-23) reconfirmed option (1) is a dead end — no
-      Compose release lifts the reversed-scrollable exclusion, and the blind
-      BOM bump was rejected for blast radius. Option (3) stands: `reverseLayout`
-      is load-bearing and untouched.
-      **What landed:** `ui/thread/ThreadScrollCapture.kt` — API 31+ only
-      (`Build.VERSION_CODES.S` guard; older devices keep today's flat
-      screenshot). `ThreadScrollCaptureEffect` registers an explicit
-      `View.setScrollCaptureCallback` on the host `AndroidComposeView` inside a
-      `DisposableEffect` (unregisters on dispose — thread-screen-scoped, no
-      global handler). The callback reports the LazyColumn's bounds (published
-      via `onGloballyPositioned { boundsInRoot() }`), then per tile request:
-      resets `listState` to the session-start position, `scrollBy`s the
-      **sign-flipped** delta (the reversed-list conversion stock Compose
-      declines — pure `ScrollCaptureMath.scrollDeltaForCaptureTop`, unit
-      tested), waits two frames, `PixelCopy`s the aligned strip out of the
-      window, and blits it into the capture surface at (0,0). Scroll position
-      is restored in `onScrollCaptureEnd`. LazyColumn gesture handling and
-      bubble internals untouched. 903 tests (was 898), `assembleDebug` green.
-      **⚠️ NOT DEVICE-VERIFIED — cannot be tonight.** On-device test steps for
-      tomorrow (needs an Android 12+ / API 31+ device):
+      (RE-FIXED July 24 2026, `fix/thread-scrollcapture-selection`; was
+      IMPLEMENTED-UNTESTED July 23 `feat/thread-scrollcapture`).
+      **July 24 device result (Samsung S24 Ultra, Android 15/OneUI):** the July
+      23 build did NOT work — capture-more produced the toast **"Scroll capture
+      isn't supported, so we captured as much of the page as possible"** and a
+      flat ~551×4592 long-screenshot, not our tiled capture. Our callback was
+      registered but the system never drove it.
+      **Root cause (source-confirmed July 24):** the July 23 code called
+      `setScrollCaptureCallback` on the host **`AndroidComposeView`**. That view
+      **overrides `View.onScrollCaptureSearch(...)`** and delegates only to its
+      own `ScrollCapture.onScrollCaptureSearch(...)` — it **never calls
+      `super`**. The framework's *default* `View.onScrollCaptureSearch` is the
+      only place that reads `mScrollCaptureCallback` (what
+      `setScrollCaptureCallback` sets) and produces a target for it. Compose's
+      override bypasses super, so our callback was stored but **never
+      consulted**; on the reversed list Compose's own search also yields no
+      target, so the ComposeView produced zero targets → flat fallback. Sources:
+      androidx-main `AndroidComposeView.android.kt` (`onScrollCaptureSearch`
+      override → `scrollCapture?.onScrollCaptureSearch(...)`, no `super`);
+      `ScrollCapture.android.kt` (`targets.accept(ScrollCaptureTarget)` only when
+      a candidate is found, else returns with no target); AOSP
+      `View.setScrollCaptureCallback` docs (custom callback "takes precedence
+      over a system version"; recommend `SCROLL_CAPTURE_HINT_INCLUDE`) — both via
+      the default `onScrollCaptureSearch` path Compose skips.
+      **What landed (July 24):** `ui/thread/ThreadScrollCapture.kt` now exposes
+      `ThreadScrollCaptureOverlay`, an `AndroidView` emitting a transparent,
+      non-interactive `ScrollCaptureHostView` (a plain child `View`) sized to
+      exactly cover the list (`Modifier.matchParentSize()`), placed **behind**
+      the `LazyColumn` in a wrapping `Box` so it never intercepts touches. A
+      child View keeps the framework's default (non-overridden)
+      `onScrollCaptureSearch`, which DOES read our callback;
+      `ViewGroup.dispatchScrollCaptureSearch` recurses into children so it is
+      visited. `scrollCaptureHint = SCROLL_CAPTURE_HINT_INCLUDE` so the resolver
+      reliably selects it. Thread-screen-scoped — the conversations list's
+      working Compose-native long-screenshot is untouched. Because the overlay
+      now equals the capturable region, the old `onGloballyPositioned {
+      boundsInRoot() }` / `listBoundsInRoot` plumbing in `ThreadScreen` is
+      DELETED; the callback uses the host View's own width/height +
+      `getLocationInWindow`. Per-tile logic unchanged: reset `listState`,
+      `scrollBy` the **sign-flipped** delta (pure
+      `ScrollCaptureMath.scrollDeltaForCaptureTop`, unit tested), wait two
+      frames, `PixelCopy` the aligned strip, blit at (0,0); restore scroll in
+      `onScrollCaptureEnd`. API 31+ only. 1082 tests, `assembleDebug` green.
+      **⚠️ STILL NOT DEVICE-VERIFIED.** On-device test steps (needs API 31+):
         1. Open a thread long enough to scroll (several screens of messages).
         2. Take a screenshot; the system preview should now offer **"Capture
-           more"** / the scroll-capture crop UI (it currently does not).
+           more"** / the scroll-capture crop UI (the July 23 build did not —
+           watch specifically for the absence of the "isn't supported" toast).
         3. Tap it and confirm the long image stitches older messages upward
            WITHOUT gaps, overlaps, or duplicated tiles, and includes the top
            bar + reply bar once (not repeated per tile).
         4. Confirm the thread is left at its original scroll position after the
            capture UI closes.
-      **Most likely to need iteration on-device** (flagged in-code): the
-      reversed scroll-delta *sign*, the two-frame `awaitDraw` timing before
-      `PixelCopy`, and the exact strip origin / edge-tile handling (a partial
-      tile at the very top/bottom may be dropped by the `EDGE_TOLERANCE_PX`
-      guard). If the platform never offers "Capture more" at all, verify our
-      callback is actually being selected (Compose's own view-level
-      registration vs. our explicit one).
+        5. Regression check: confirm the CONVERSATIONS list still offers a
+           working long-screenshot (must not have regressed).
+        6. Confirm normal thread scrolling/long-press/selection is unaffected by
+           the behind-the-list overlay View.
+      **Most likely to need iteration on-device:** whether OneUI's resolver
+      accepts an occluded/empty child View as the target (if not, the fallback
+      candidate is to move the overlay in FRONT with a pass-through touch policy,
+      or set `SCROLL_CAPTURE_HINT_EXCLUDE` on the ComposeView); the reversed
+      scroll-delta *sign*; the two-frame `awaitDraw` timing before `PixelCopy`;
+      and the exact strip origin / edge-tile handling (a partial tile at the
+      very top/bottom may be dropped by the `EDGE_TOLERANCE_PX` guard).
       _Original diagnosis (July 22 2026, found on-device):_ Samsung's scroll
       capture works on the conversations list but reports it can't scroll in a
       thread. CONFIRMED by on-device experiment: the platform ScrollCapture API

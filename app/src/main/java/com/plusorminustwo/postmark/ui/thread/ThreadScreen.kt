@@ -173,7 +173,6 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.layout.boundsInRoot
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
@@ -683,12 +682,6 @@ private fun ThreadContent(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-
-    // Thread list bounds in the host-view coordinate space, published by the LazyColumn's
-    // onGloballyPositioned below. Feeds the custom scroll-capture callback (long-screenshot
-    // support for the reversed list — see ThreadScrollCapture.kt). NOT device-verified.
-    var listBoundsInRoot by remember { mutableStateOf<android.graphics.Rect?>(null) }
-    ThreadScrollCaptureEffect(listState = listState, boundsProvider = { listBoundsInRoot })
 
     LaunchedEffect(attachmentRejectedEvent) {
         attachmentRejectedEvent.collect { message ->
@@ -1589,20 +1582,21 @@ private fun ThreadContent(
                         onDismiss = onDismissSaveNumberPrompt
                     )
                 }
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                // Scrolling-screenshot ("Capture more") overlay: a transparent, non-
+                // interactive child View sized to exactly cover the list, carrying our
+                // ScrollCaptureCallback. It MUST live on a dedicated child View — the shared
+                // AndroidComposeView overrides onScrollCaptureSearch without super, so a
+                // setScrollCaptureCallback there is never consulted (root cause of the flat-
+                // screenshot fallback). Placed BEHIND the LazyColumn so it never intercepts
+                // touches. See ThreadScrollCapture.kt. NOT device-verified.
+                ThreadScrollCaptureOverlay(
+                    listState = listState,
+                    modifier = Modifier.matchParentSize(),
+                )
                 LazyColumn(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .onGloballyPositioned { coords ->
-                        // Publish the list region for the scroll-capture callback, in the
-                        // host-view (compose-root) space that PixelCopy + getLocationInWindow
-                        // expect. NOT device-verified — see ThreadScrollCapture.kt.
-                        val b = coords.boundsInRoot()
-                        listBoundsInRoot = android.graphics.Rect(
-                            b.left.roundToInt(), b.top.roundToInt(),
-                            b.right.roundToInt(), b.bottom.roundToInt()
-                        )
-                    },
+                    .fillMaxSize(),
                 state = listState,
                 reverseLayout = true,
                 contentPadding = PaddingValues(vertical = 8.dp)
@@ -1687,6 +1681,7 @@ private fun ThreadContent(
                         )
                     }
                 }
+            }
             }
             }
 
