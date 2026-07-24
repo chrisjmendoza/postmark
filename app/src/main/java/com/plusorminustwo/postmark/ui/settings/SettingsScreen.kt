@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
 import com.plusorminustwo.postmark.BuildConfig
 import com.plusorminustwo.postmark.util.isDefaultSmsApp
+import com.plusorminustwo.postmark.util.openUrl
 import androidx.compose.material3.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,6 +63,7 @@ fun SettingsScreen(
     onSpamClick: () -> Unit = {},
     onNotificationsClick: () -> Unit = {},
     onStorageUsageClick: () -> Unit = {},
+    onLicensesClick: () -> Unit = {},
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -227,6 +230,22 @@ fun SettingsScreen(
                         snackbarHostState.showSnackbar("Build info copied")
                     }
                 }
+            )
+            HorizontalDivider()
+
+            SettingsRow(
+                icon = { Icon(Icons.Default.Code, null) },
+                title = "Postmark on GitHub",
+                subtitle = "Source code and issue tracker",
+                onClick = { context.openUrl("https://github.com/chrisjmendoza/postmark") }
+            )
+            HorizontalDivider()
+
+            SettingsRow(
+                icon = { Icon(Icons.Default.Description, null) },
+                title = "Open-source licenses",
+                subtitle = "Libraries and fonts this app uses",
+                onClick = onLicensesClick
             )
         }
     }
