@@ -132,6 +132,8 @@ class FailedSendRetryTest {
         override fun observeStarredMedia(): Flow<List<MessageEntity>> = flowOf(emptyList())
         override suspend fun updatePinned(messageId: Long, isPinned: Boolean) = Unit
         override fun observePinnedByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
+        override suspend fun updateRemindAt(messageId: Long, remindAt: Long?) = Unit
+        override fun observeFlaggedByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())
     }
 
     private class StubReactionDao : ReactionDao {

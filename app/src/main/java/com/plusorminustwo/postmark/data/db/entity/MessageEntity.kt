@@ -93,7 +93,13 @@ data class MessageEntity(
     // Epoch millis a carrier delivery report confirmed handset receipt — written by
     // SmsSentDeliveryReceiver at report time. Null until/unless a delivery report arrives
     // (carrier-dependent; many carriers never send one).
-    val deliveredAt: Long? = null
+    val deliveredAt: Long? = null,
+    // Epoch millis at which a reply reminder should fire ("Remind me" / flag-for-later,
+    // added v22). A message is "flagged" iff this is non-null; a WorkManager job named
+    // message_reminder_<id> posts the reminder notification at this time. A fired reminder
+    // leaves the value set (the flag persists — a past remindAt still renders the 🔖 and
+    // still appears in the per-thread reminders list until the user clears it).
+    val remindAt: Long? = null
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -116,7 +122,8 @@ fun MessageEntity.toDomain() = Message(
     isStarred = isStarred,
     isPinned = isPinned,
     sentAt = sentAt,
-    deliveredAt = deliveredAt
+    deliveredAt = deliveredAt,
+    remindAt = remindAt
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -136,5 +143,6 @@ fun Message.toEntity() = MessageEntity(
     isStarred = isStarred,
     isPinned = isPinned,
     sentAt = sentAt,
-    deliveredAt = deliveredAt
+    deliveredAt = deliveredAt,
+    remindAt = remindAt
 )

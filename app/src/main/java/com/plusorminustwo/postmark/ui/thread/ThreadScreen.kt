@@ -104,6 +104,7 @@ import com.plusorminustwo.postmark.ui.export.ExportBottomSheet
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.messageinfo.MessageInfoValue
 import com.plusorminustwo.postmark.domain.messageinfo.messageInfoRows
+import com.plusorminustwo.postmark.domain.reminder.reminderPresets
 import com.plusorminustwo.postmark.domain.model.BackupPolicy
 import com.plusorminustwo.postmark.domain.model.Message
 import com.plusorminustwo.postmark.domain.model.MessageAttachment
@@ -148,8 +149,11 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.absoluteValue
@@ -284,6 +288,8 @@ fun ThreadScreen(
     val threadTipsDismissed by viewModel.threadTipsDismissed.collectAsState()
     // This thread's pinned messages (oldest first) for the Pinned messages panel.
     val pinnedMessages by viewModel.pinnedMessages.collectAsState()
+    // This thread's flagged messages (soonest reminder first) for the Reminders panel.
+    val flaggedMessages by viewModel.flaggedMessages.collectAsState()
     // Whether the conservative "Looks like spam?" banner should show for this thread.
     val spamBannerVisible by viewModel.spamBannerVisible.collectAsState()
     // Whether the "Add to contacts?" banner should show for this thread (spam banner wins).
@@ -366,6 +372,7 @@ fun ThreadScreen(
     val onDeleteMessages          = remember(viewModel) { { ids: Collection<Long> -> viewModel.deleteMessages(ids) } }
     val onToggleStarred           = remember(viewModel) { { id: Long -> viewModel.toggleStarred(id) } }
     val onTogglePinnedMessage     = remember(viewModel) { { id: Long -> viewModel.togglePinnedMessage(id) } }
+    val onSetReminder             = remember(viewModel) { { id: Long, remindAt: Long? -> viewModel.setReminder(id, remindAt) } }
     val onDismissDefaultSmsDialog = remember(viewModel) { { viewModel.dismissDefaultSmsDialog() } }
     val onUpdateBackupPolicy      = remember(viewModel) { { policy: BackupPolicy -> viewModel.updateBackupPolicy(policy) } }
     val onDismissReactionPicker   = remember(viewModel) { { viewModel.dismissReactionPicker() } }
@@ -456,6 +463,8 @@ fun ThreadScreen(
         onToggleStarred = onToggleStarred,
         pinnedMessages = pinnedMessages,
         onTogglePinnedMessage = onTogglePinnedMessage,
+        flaggedMessages = flaggedMessages,
+        onSetReminder = onSetReminder,
         onDismissDefaultSmsDialog = onDismissDefaultSmsDialog,
         onUpdateBackupPolicy = onUpdateBackupPolicy,
         onDismissReactionPicker = onDismissReactionPicker,
@@ -586,6 +595,11 @@ private fun ThreadContent(
     // the Pinned messages panel (⋮ overflow) and the long-press Pin/Unpin action.
     pinnedMessages: List<Message> = emptyList(),
     onTogglePinnedMessage: (Long) -> Unit = {},
+    // This thread's flagged messages (soonest reminder first) + the set/clear reminder action —
+    // back the Reminders panel (⋮ overflow) and the long-press Remind/Unflag action. A non-null
+    // second arg flags + schedules; null unflags + cancels.
+    flaggedMessages: List<Message> = emptyList(),
+    onSetReminder: (Long, Long?) -> Unit = { _, _ -> },
     onDismissDefaultSmsDialog: () -> Unit,
     onUpdateBackupPolicy: (BackupPolicy) -> Unit,
     onDismissReactionPicker: () -> Unit,
@@ -678,6 +692,12 @@ private fun ThreadContent(
     // Pinned messages panel (⋮ → "Pinned messages"); a ModalBottomSheet listing this
     // thread's pinned messages, tapping one jumps to it in the conversation.
     var showPinnedSheet by remember { mutableStateOf(false) }
+    // Reminders panel (⋮ → "Reminders"); a ModalBottomSheet listing this thread's flagged
+    // messages, tapping one jumps to it in the conversation.
+    var showFlaggedSheet by remember { mutableStateOf(false) }
+    // Reminder time-picker sheet (reaction popup → "Remind" on an unflagged message): non-null
+    // while the picker is open, holding the message being flagged.
+    var reminderPickerMessage by remember { mutableStateOf<Message?>(null) }
 
     // Message info sheet (reaction popup → "Info"): non-null while the sheet is open, holding
     // the message whose sent/delivered/size details are shown.
@@ -1067,6 +1087,36 @@ private fun ThreadContent(
         )
     }
 
+    if (showFlaggedSheet) {
+        FlaggedMessagesSheet(
+            flaggedMessages = flaggedMessages,
+            contactName = contactDisplayName,
+            participantNames = participantNames,
+            onJumpTo = { id ->
+                showFlaggedSheet = false
+                scope.launch { scrollToMessageCentered(id) }
+            },
+            onUnflag = { id -> onSetReminder(id, null) },
+            onDismiss = { showFlaggedSheet = false }
+        )
+    }
+
+    reminderPickerMessage?.let { msg ->
+        ReminderTimePickerSheet(
+            onPick = { timeMs ->
+                if (timeMs <= System.currentTimeMillis()) {
+                    scope.launch {
+                        snackbarHostState.showSnackbar("That time is in the past")
+                    }
+                } else {
+                    onSetReminder(msg.id, timeMs)
+                    reminderPickerMessage = null
+                }
+            },
+            onDismiss = { reminderPickerMessage = null }
+        )
+    }
+
     infoMessage?.let { msg ->
         MessageInfoSheet(
             message = msg,
@@ -1296,6 +1346,10 @@ private fun ThreadContent(
                                 DropdownMenuItem(
                                     text = { Text("Pinned messages") },
                                     onClick = { menuExpanded = false; showPinnedSheet = true }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Reminders") },
+                                    onClick = { menuExpanded = false; showFlaggedSheet = true }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(if (uiState.thread?.isMuted == true) "Unmute" else "Mute") },
@@ -1664,6 +1718,7 @@ private fun ThreadContent(
                 bubbleTopY     = liveBubbleTopY,
                 bubbleBottomY  = liveBubbleY,
                 isPinned       = msg.isPinned,
+                isFlagged      = msg.remindAt != null,
                 onReact     = { emoji -> onToggleReaction(msg.id, emoji) },
                 onCopy      = {
                     val cb = context.getSystemService(ClipboardManager::class.java)
@@ -1684,6 +1739,18 @@ private fun ThreadContent(
                     // Open the info sheet, then dismiss the popup + selection (mirrors Copy).
                     infoMessage = msg
                     onExitSelectionMode()
+                },
+                onToggleReminder = {
+                    // Already flagged → clear + cancel the scheduled work immediately.
+                    // Not flagged → dismiss the popup + selection (mirrors Info) and open the
+                    // time picker to choose when to be reminded.
+                    if (msg.remindAt != null) {
+                        onSetReminder(msg.id, null)
+                        onExitSelectionMode()
+                    } else {
+                        reminderPickerMessage = msg
+                        onExitSelectionMode()
+                    }
                 },
                 onDelete    = {
                     // Confirm dialog takes over; selection is exited (popup cleared too).
@@ -1983,7 +2050,7 @@ private fun MessageBubble(
     // Below-bubble layout: the timestamp row renders whenever there's a timestamp to show,
     // a delivery indicator (sent), or a pin marker. When the message also has reactions we
     // merge the two onto one level (see [belowBubbleLayout]).
-    val showTimestampRow = showTimestamp || message.isSent || message.isPinned
+    val showTimestampRow = showTimestamp || message.isSent || message.isPinned || message.remindAt != null
     val below = belowBubbleLayout(message.reactions.isNotEmpty(), showTimestampRow)
     // Bubble's measured width (px). Only sampled for a COMBINED row, whose width we pin to
     // the bubble so its two ends map to the bubble's inner/outer corners — derived from
@@ -2311,6 +2378,16 @@ private fun TimestampRow(
             Icon(
                 imageVector = Icons.Default.PushPin,
                 contentDescription = "Pinned",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.size(12.dp)
+            )
+        }
+        // Subtle inline reminder indicator — same size/alpha/row-guard treatment as the pin
+        // marker. Stays visible while scrolling so flagged messages are identifiable in-place.
+        if (message.remindAt != null) {
+            Icon(
+                imageVector = Icons.Default.Bookmark,
+                contentDescription = "Reminder set",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier.size(12.dp)
             )
@@ -5574,11 +5651,13 @@ private fun EmojiReactionPopup(
     bubbleTopY: Float,
     bubbleBottomY: Float,
     isPinned: Boolean,
+    isFlagged: Boolean,
     onReact: (String) -> Unit,
     onCopy: () -> Unit,
     onForward: () -> Unit,
     onTogglePin: () -> Unit,
     onInfo: () -> Unit,
+    onToggleReminder: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -5707,6 +5786,11 @@ private fun EmojiReactionPopup(
                     ActionItem(Icons.AutoMirrored.Filled.Send, "Forward", onForward)
                     ActionItem(Icons.Default.PushPin, if (isPinned) "Unpin" else "Pin", onTogglePin)
                     ActionItem(Icons.Default.Info, "Info", onInfo)
+                    ActionItem(
+                        Icons.Default.Bookmark,
+                        if (isFlagged) "Unflag" else "Remind",
+                        onToggleReminder
+                    )
                     ActionItem(Icons.Default.Delete, "Delete", onDelete, MaterialTheme.colorScheme.error)
                 }
             }
@@ -5875,6 +5959,216 @@ private fun PinnedMessagesSheet(
                 }
             }
         }
+    }
+}
+
+// ── FlaggedMessagesSheet ──────────────────────────────────────────────────────
+
+/**
+ * Per-thread Reminders panel — a [ModalBottomSheet] listing every flagged message
+ * (reminder set), soonest reminder first. Mirrors [PinnedMessagesSheet] exactly: each row
+ * shows a sender label ("You" / contact name), the body or an attachment placeholder
+ * ([previewText]), and the reminder time (absolute, [FRIENDLY_TIMESTAMP_FORMATTER] — the
+ * time is often in the future, so a "5m ago"-style relative label would be wrong); tapping a
+ * row jumps to that message via the shared scroll/highlight mechanism, and a bookmark button
+ * unflags in place.
+ *
+ * navigationBarsPadding on the content keeps the list clear of the Android gesture/nav bar —
+ * same treatment as [PinnedMessagesSheet].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FlaggedMessagesSheet(
+    flaggedMessages: List<Message>,
+    contactName: String,
+    participantNames: Map<String, String>,
+    onJumpTo: (Long) -> Unit,
+    onUnflag: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp)
+        ) {
+            Text(
+                text = "Reminders",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+            if (flaggedMessages.isEmpty()) {
+                Text(
+                    text = "No reminders yet. Long-press a message and choose Remind.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    items(flaggedMessages, key = { it.id }) { msg ->
+                        val sender = when {
+                            msg.isSent -> "You"
+                            participantNames.isNotEmpty() ->
+                                participantNames[msg.address] ?: formatPhoneNumber(msg.address)
+                            else -> contactName
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onJumpTo(msg.id) }
+                                .padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = sender,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    msg.remindAt?.let { remindAt ->
+                                        Text(
+                                            text = "Remind ${formatEpochMillis(remindAt, FRIENDLY_TIMESTAMP_FORMATTER)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = msg.previewText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(onClick = { onUnflag(msg.id) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Bookmark,
+                                    contentDescription = "Remove reminder",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── ReminderTimePickerSheet ───────────────────────────────────────────────────
+
+/**
+ * Reminder time picker — a small [ModalBottomSheet] of preset "remind me at" rows plus a
+ * "Pick date & time" escape hatch. Preset instants come from the pure [reminderPresets]
+ * (evening-cutoff + tomorrow-morning math, DST-safe); [onPick] receives the chosen absolute
+ * epoch-millis. The custom path chains an M3 [DatePickerDialog] then a [TimePicker] dialog and
+ * combines them in the device zone. Past-time rejection is the caller's ([onPick]) job.
+ *
+ * navigationBarsPadding keeps the rows clear of the Android gesture/nav bar.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReminderTimePickerSheet(
+    onPick: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val presets = remember { reminderPresets(System.currentTimeMillis(), ZoneId.systemDefault()) }
+
+    var showDatePicker by remember { mutableStateOf(false) }
+    var pickedDateMillis by remember { mutableStateOf<Long?>(null) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp)
+        ) {
+            Text(
+                text = "Remind me",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            )
+            presets.forEach { preset ->
+                Text(
+                    text = preset.label,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPick(preset.epochMillis) }
+                        .padding(horizontal = 20.dp, vertical = 14.dp)
+                )
+            }
+            Text(
+                text = "Pick date & time…",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showDatePicker = true }
+                    .padding(horizontal = 20.dp, vertical = 14.dp)
+            )
+        }
+    }
+
+    if (showDatePicker) {
+        val dateState = rememberDatePickerState()
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pickedDateMillis = dateState.selectedDateMillis
+                        showDatePicker = false
+                    },
+                    enabled = dateState.selectedDateMillis != null
+                ) { Text("Next") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("Cancel") }
+            }
+        ) {
+            DatePicker(state = dateState)
+        }
+    }
+
+    pickedDateMillis?.let { dateMillis ->
+        val timeState = rememberTimePickerState(initialHour = 9, initialMinute = 0)
+        AlertDialog(
+            onDismissRequest = { pickedDateMillis = null },
+            confirmButton = {
+                TextButton(onClick = {
+                    // DatePicker reports UTC midnight; take its calendar date and stamp the
+                    // chosen wall-clock time in the device zone (DST-correct via java.time).
+                    val date = Instant.ofEpochMilli(dateMillis).atZone(ZoneOffset.UTC).toLocalDate()
+                    val instant = date.atTime(timeState.hour, timeState.minute)
+                        .atZone(ZoneId.systemDefault())
+                        .toInstant()
+                    pickedDateMillis = null
+                    onPick(instant.toEpochMilli())
+                }) { Text("Set reminder") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pickedDateMillis = null }) { Text("Cancel") }
+            },
+            text = { TimePicker(state = timeState) }
+        )
     }
 }
 

@@ -29,6 +29,10 @@ import androidx.compose.runtime.Immutable
  *                        sender's send time; for sent messages, this device's send time.
  * @param deliveredAt     Epoch millis a carrier delivery report confirmed receipt; null
  *                        until one arrives (carrier-dependent — many carriers never send one).
+ * @param remindAt        Epoch millis a reply reminder should fire ("Remind me" / flag-for-
+ *                        later). Non-null == flagged; a WorkManager job fires the reminder.
+ *                        A fired reminder leaves this set — the flag persists until cleared.
+ *                        Postmark-only, not synced to the SMS/MMS provider.
  */
 @Immutable
 data class Message(
@@ -49,7 +53,8 @@ data class Message(
     val isStarred: Boolean = false,
     val isPinned: Boolean = false,
     val sentAt: Long? = null,
-    val deliveredAt: Long? = null
+    val deliveredAt: Long? = null,
+    val remindAt: Long? = null
 ) {
     /** Content URI of the first attachment — convenience accessor for single-media
      *  call sites (previews, shared-media grid). Null when there are no attachments. */

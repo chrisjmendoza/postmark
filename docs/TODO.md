@@ -1109,11 +1109,54 @@ instance, but flagged:
       scroll does. `AppearanceScreen`'s "Text size" row has a slider plus
       a "Reset" button (enabled only when the scale differs from 1.0),
       matching every design point in this item.
-- [ ] **Flag message for later** — long-press → "Remind me to reply";
-      user picks a time; schedules a notification with a jump-to-message
-      deep-link action. Flagged bubble gets a small 🔖 indicator.
-      Flagged messages list accessible from thread ⋮ menu or global
-      Settings.
+- [x] **Flag message for later** (July 24 2026, `feat/message-reminders`) —
+      long-press → reaction popup's 6th action **Remind** (flips to **Unflag**
+      when already flagged); picks a time; a WorkManager job posts a reminder
+      notification at that time that deep-links back to the message. Flagged
+      bubble gets a small 🔖 in its timestamp row; a per-thread **Reminders**
+      list (thread ⋮ menu) shows all flagged messages.
+      **Decisions:**
+      - **Single `remindAt: Long?` column** on `messages` (Room v21→v22,
+        `MIGRATION_21_22`, one nullable `ALTER TABLE … ADD COLUMN remindAt
+        INTEGER` mirroring `MIGRATION_20_21`; `22.json` exported + committed).
+        "Flagged" == `remindAt != null` — no separate boolean, no parallel table.
+      - **WorkManager, not AlarmManager / exact alarms** — deliberate: the app
+        keeps **zero exact-alarm surface** (`SCHEDULE_EXACT_ALARM` is N/A; see
+        `docs/TARGET_SDK_REVIEW.md`). Minute-level inexactness is fine for a reply
+        reminder, and WorkManager persists its queue **across reboots** for free.
+        A `OneTimeWorkRequest` with `initialDelay`, unique name
+        `message_reminder_<messageId>`, `REPLACE` policy; cancelled on unflag.
+      - **The flag persists after the reminder fires** — the worker re-checks
+        `remindAt != null` (unflag race), posts, and **leaves `remindAt` set**. A
+        past `remindAt` renders the same 🔖 and still lists in Reminders until the
+        user clears it manually.
+      - **Reminders bypass thread mute** — an explicitly user-set reminder fires
+        even for a muted thread (an explicit request beats a thread-level mute).
+        New `reminders` notification channel (IMPORTANCE_HIGH, "Reply reminders").
+      - **Per-thread list only; global cross-thread list deferred** to a later
+        pass (would need a cross-thread `observeFlagged()` + a Settings surface).
+      - **Backup/restore** carry `remindAt` additively (`MessageRecord`, tolerant
+        decode); re-scheduling a restored future reminder's WorkManager job is out
+        of scope for v1 (the flag + list survive; the notification isn't re-armed).
+      - Preset math is pure (`domain/reminder/ReminderTimes.kt`,
+        `reminderPresets(nowMs, zone)` — evening-cutoff + tomorrow-morning,
+        DST-safe via `java.time`); the custom picker chains M3
+        `DatePickerDialog` → `TimePicker` and rejects a past time with a snackbar.
+      **Tests:** `ReminderTimesTest` (+9 — evening cutoff at/around 5 PM,
+      tomorrow-morning 9 AM, spring-forward DST safety, all-presets-future);
+      `RestoreMergeTest` reminder-flag-preserved (+1); `BackupRecordCodecTest`
+      round-trip + absent-decode extended for `remindAt`; androidTest
+      `migration21To22_addsNullableRemindAt` + full chain extended to v22. Unit
+      suite 1091 → **1101**, 0 failures; `assembleDebug` +
+      `compileDebugAndroidTestKotlin` clean.
+      **On-device checklist (not yet verified):**
+      - Reminder actually fires at the chosen time and the tap deep-links onto the
+        message **centered + highlighted** (reuses `scrollToMessageId`).
+      - **Reboot survival** — a pending reminder still fires after a restart.
+      - **Unflag cancels** the scheduled work (no stale notification).
+      - The now-**6-action popup row fits at large font scale** (Copy / Forward /
+        Pin / Info / Remind / Delete — the row is crowded; watch for clipping).
+      - Reminders + time-picker sheets sit clear of the nav bar on all edges.
 
 ### Starred & pinned messages
 - [x] **Star an image** (July 6 2026) — wording landed as "star," scoped to images

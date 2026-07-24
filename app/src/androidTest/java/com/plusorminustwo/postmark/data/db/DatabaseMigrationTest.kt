@@ -527,10 +527,41 @@ class DatabaseMigrationTest {
         db20.close()
     }
 
-    // ── Full chain 1 → 21 ─────────────────────────────────────────────────
+    // ── MIGRATION 21 → 22 ─────────────────────────────────────────────────
 
     @Test
-    fun fullMigrationChain_v1DataSurvivesToV21() {
+    fun migration21To22_addsNullableRemindAt() {
+        val db21 = helper.createDatabase("test_m2122", 21)
+        db21.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead)" +
+            " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1)"
+        )
+
+        PostmarkDatabase.MIGRATION_21_22.migrate(db21)
+
+        // The new column exists and is NULL for the pre-migration row (not flagged).
+        db21.query("SELECT remindAt FROM messages WHERE id = 7").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+        }
+        // It accepts a value (flag set) and can be cleared back to NULL (unflag).
+        db21.execSQL("UPDATE messages SET remindAt = 1750000000000 WHERE id = 7")
+        db21.query("SELECT remindAt FROM messages WHERE id = 7").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1750000000000L, c.getLong(0))
+        }
+        db21.execSQL("UPDATE messages SET remindAt = NULL WHERE id = 7")
+        db21.query("SELECT remindAt FROM messages WHERE id = 7").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+        }
+        db21.close()
+    }
+
+    // ── Full chain 1 → 22 ─────────────────────────────────────────────────
+
+    @Test
+    fun fullMigrationChain_v1DataSurvivesToV22() {
         val db = helper.createDatabase("test_chain", 1)
         db.execSQL(
             "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
@@ -551,12 +582,13 @@ class DatabaseMigrationTest {
             PostmarkDatabase.MIGRATION_13_14, PostmarkDatabase.MIGRATION_14_15,
             PostmarkDatabase.MIGRATION_15_16, PostmarkDatabase.MIGRATION_16_17,
             PostmarkDatabase.MIGRATION_17_18, PostmarkDatabase.MIGRATION_18_19,
-            PostmarkDatabase.MIGRATION_19_20, PostmarkDatabase.MIGRATION_20_21
+            PostmarkDatabase.MIGRATION_19_20, PostmarkDatabase.MIGRATION_20_21,
+            PostmarkDatabase.MIGRATION_21_22
         ).forEach { it.migrate(db) }
 
         db.query(
             "SELECT m.body, m.deliveryStatus, m.isMms, m.isRead, m.isStarred, m.isPinned," +
-            " m.sentAt, m.deliveredAt," +
+            " m.sentAt, m.deliveredAt, m.remindAt," +
             " t.isPinned, t.notificationsEnabled," +
             " t.accentColorArgb, t.chatBackgroundId, t.sentColorArgb, t.isSpam" +
             " FROM messages m JOIN threads t ON t.id = m.threadId WHERE m.id = 42"
@@ -570,12 +602,13 @@ class DatabaseMigrationTest {
             assertEquals(0, c.getInt(5))  // message not pinned
             assertTrue(c.isNull(6))       // no sentAt (added v21, NULL for old rows)
             assertTrue(c.isNull(7))       // no deliveredAt (added v21, NULL for old rows)
-            assertEquals(0, c.getInt(8))  // thread not pinned
-            assertEquals(1, c.getInt(9))  // notifications on
-            assertTrue(c.isNull(10))      // no accent color
-            assertTrue(c.isNull(11))      // no chat background
-            assertTrue(c.isNull(12))      // no sent color
-            assertEquals(0, c.getInt(13)) // not spam
+            assertTrue(c.isNull(8))       // no remindAt (added v22, NULL for old rows)
+            assertEquals(0, c.getInt(9))  // thread not pinned
+            assertEquals(1, c.getInt(10)) // notifications on
+            assertTrue(c.isNull(11))      // no accent color
+            assertTrue(c.isNull(12))      // no chat background
+            assertTrue(c.isNull(13))      // no sent color
+            assertEquals(0, c.getInt(14)) // not spam
         }
         db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_stats','global_stats')").use { c ->
             assertFalse(c.moveToFirst())

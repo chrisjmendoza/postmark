@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  *
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity].
  *
- * Current schema version: 21.
+ * Current schema version: 22.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
         ReactionEntity::class,
         MessageFtsEntity::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -258,6 +258,17 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 // report arrives. SQLite requires one ALTER TABLE per column.
                 db.execSQL("ALTER TABLE messages ADD COLUMN sentAt INTEGER")
                 db.execSQL("ALTER TABLE messages ADD COLUMN deliveredAt INTEGER")
+            }
+        }
+
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Per-message reply reminder ("Remind me" / flag-for-later). One nullable
+                // column — a message is "flagged" iff remindAt IS NOT NULL. Nullable, no
+                // default (mirrors MIGRATION_8_9 / MIGRATION_20_21): existing rows get NULL.
+                // A fired reminder deliberately leaves the value set (the flag persists until
+                // the user clears it). SQLite requires one ALTER TABLE per column.
+                db.execSQL("ALTER TABLE messages ADD COLUMN remindAt INTEGER")
             }
         }
 

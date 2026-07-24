@@ -44,6 +44,14 @@ class MainActivity : ComponentActivity() {
      */
     private val pendingOpenThreadId = MutableStateFlow<Long?>(null)
 
+    /**
+     * Message id a reminder notification asked us to scroll to inside the opened thread,
+     * or -1L. Set alongside [pendingOpenThreadId] from the incoming intent and consumed by
+     * [AppNavigation] on the same navigation, so the deep-link lands centered on that
+     * message via the existing scroll/highlight mechanism.
+     */
+    private val pendingScrollToMessageId = MutableStateFlow(-1L)
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { triggerFirstLaunchSyncIfPermitted() }
@@ -71,7 +79,11 @@ class MainActivity : ComponentActivity() {
                 AppNavigation(
                     showOnboarding = showOnboarding,
                     pendingOpenThreadId = pendingOpenThreadId,
-                    onThreadOpened = { pendingOpenThreadId.value = null }
+                    pendingScrollToMessageId = pendingScrollToMessageId,
+                    onThreadOpened = {
+                        pendingOpenThreadId.value = null
+                        pendingScrollToMessageId.value = -1L
+                    }
                 )
             }
         }
@@ -100,10 +112,16 @@ class MainActivity : ComponentActivity() {
         readPendingOpenThreadId(intent)
     }
 
-    /** Publishes the notification's target thread id, if present, for AppNavigation. */
+    /** Publishes the notification's target thread id (and optional scroll-to message id, set
+     *  by a reminder notification), if present, for AppNavigation. */
     private fun readPendingOpenThreadId(intent: Intent?) {
         val threadId = intent?.getLongExtra(EXTRA_OPEN_THREAD_ID, -1L) ?: -1L
-        if (threadId != -1L) pendingOpenThreadId.value = threadId
+        if (threadId != -1L) {
+            // Set the scroll target BEFORE the thread id so AppNavigation's LaunchedEffect
+            // (keyed on the thread id) reads an up-to-date value on the same navigation.
+            pendingScrollToMessageId.value = intent?.getLongExtra(EXTRA_SCROLL_TO_MESSAGE_ID, -1L) ?: -1L
+            pendingOpenThreadId.value = threadId
+        }
     }
 
     override fun onResume() {
@@ -149,5 +167,9 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** Intent extra carrying the telephony thread id a notification wants opened. */
         const val EXTRA_OPEN_THREAD_ID = "com.plusorminustwo.postmark.extra.OPEN_THREAD_ID"
+
+        /** Intent extra carrying a message id to scroll to within the opened thread — set by a
+         *  reply-reminder notification so the deep-link lands centered on that message. */
+        const val EXTRA_SCROLL_TO_MESSAGE_ID = "com.plusorminustwo.postmark.extra.SCROLL_TO_MESSAGE_ID"
     }
 }
