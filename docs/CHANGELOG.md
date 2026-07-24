@@ -356,6 +356,40 @@ from `docs/OWNER-ACTIONS.md` before finalizing icon/feature-graphic branding.
 
 Neither TODO.md item ("Privacy policy", "App description copy" under Play Store prep)
 is ticked — both are annotated pointing at this branch and these files.
+## 2026-07-24 (fix/reaction-pill-sender-colors) — reaction pills colored by reactor's bubble color
+
+1082 tests passing (unchanged). **Not yet verified on device.**
+
+**Owner-observed on device just now: reaction pill chips are colored from the app
+theme, not the thread.** His own chips used the global accent (`primaryContainer` —
+purple in his setup) even though his SENT bubbles in that thread are blue-ish and the
+contact's RECEIVED bubbles are green; received-side chips used a flat neutral
+`surfaceContainer` regardless. A chip's background should identify WHO reacted using
+the thread's actual resolved bubble colors, not a chip-specific theme shade.
+
+`ReactionPills` (`ThreadScreen.kt`) now reads `LocalBubbleAccentColors` — the same
+CompositionLocal `MessageBubble` reads for `baseBubbleColor`/`bubbleContentColor` — and
+resolves each chip's background/content with the identical fallback chain:
+- Mine-inclusive chip (local user is among the reactors — unchanged "iMine" rule,
+  including the case where both sides used the same emoji): background
+  `accentColors.sentContainer ?: primaryContainer`, content `accentColors.sentContent ?:`
+  ambient.
+- Theirs-only chip: background `accentColors.receivedContainer ?: surfaceVariant`
+  (was a fixed `surfaceContainer` before — now matches the bubble's own default shade,
+  not a separate neutral), content `accentColors.receivedContent ?:` ambient.
+
+Border/outline treatment, chip size, `FlowRow` wrap, count text, and tap/haptics are
+untouched. Kept as an inline two-line `?:` chain per pill (not extracted to a pure
+function) — no new branching beyond what `MessageBubble` already does at line ~1910.
+`LocalBubbleAccentColors` is only provided inside `ThreadContent`'s scope; `SearchScreen`'s
+display-only reuse of `ReactionPills` (`SearchResultRow`) never enters that provider, so
+it resolves to the CompositionLocal's default all-null `BubbleAccentColors()` there —
+search-result pills keep the previous theme-derived (`primaryContainer`/`surfaceVariant`)
+look, unchanged in practice.
+
+**On-device verification:** open a thread with custom sent/received bubble colors —
+pill backgrounds should match the corresponding bubble color exactly, including
+legibility over a photo chat background; confirm search-result pills still look neutral.
 
 ---
 
