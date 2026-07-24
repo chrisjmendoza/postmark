@@ -4,6 +4,75 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-23 (feat/outbound-reactions) — reactions to 1:1 text messages are actually sent
+
+970 tests passing (up from 949). **Not yet verified on device.**
+
+**Reacting only stored the reaction locally — the other person never saw it.**
+Toggling a reaction on a 1:1 text message now ALSO sends the Android-Messages
+-style fallback SMS (`😎 to "…"`, removal `😎 to "…" removed`, straight double
+quotes — exactly what our own `AndroidReactionParser` accepts) so the
+recipient's app renders it as a reaction instead of nothing. The local pill
+still toggles immediately and unconditionally; the send is a best-effort side
+channel, and sync's existing `reactionExists` dedupe stops the re-imported sent
+fallback from double-inserting.
+
+New pure file `domain/reaction/OutboundReactionFallback.kt`:
+- `composeReactionFallback(emoji, targetBody, isRemoval)` — quote budget 30
+  chars (`OUTBOUND_QUOTE_BUDGET`, documented next to the code): quote the whole
+  body if it fits, else truncate + `…` keeping a ≥10-char stem (mirrors the
+  parser's `TRUNCATED_QUOTE_MIN_STEM`), single-line-ified at the first in-budget
+  newline; returns null for a blank/too-short quote.
+- `reactionFallbackRoundTrips(...)` — belt-and-braces gate taking the composed
+  string + parse/match lambdas (wired to the REAL `ReactionFallbackParser` in
+  both prod and tests). A send only happens if the composed string parses back
+  AND `findOriginalMessage` resolves it to **exactly** the reacted message id —
+  so an over-long ZWJ emoji beyond the parser's `\S{1,8}`, an ambiguous short
+  first line, or duplicate text resolving to a newer id all fall back to
+  local-only rather than landing a reaction on the wrong message.
+
+**v1 scope:** 1:1 threads (`recipientsFor(thread).size == 1`) with a non-blank
+text target only. Media-only targets and group threads stay local-only (both
+logged as follow-ups in TODO.md). The `sendMessage` SMS-branch dispatch
+(optimistic negative-id insert → `hasQueuedInThread` → `QUEUED` +
+`SendQueueWorker` else `PENDING` + `SmsManagerWrapper`) was **extracted** into a
+shared `dispatchSmsSend(...)` used by both `sendMessage` and the reaction path
+(refactor, not copy-paste). The transient fallback bubble until sync resolves it
+is accepted; queued-offline shows as "Queued".
+
+**The "reactions stay on your phone" notice** was reworded ("This reaction stays
+on your phone — reactions to media and group messages aren't sent as texts
+yet.") and now fires ONLY when a toggle-ON stays local-only. The pref key was
+bumped (`gesture_hint_reactions_local_shown_v2`) so existing users see the new
+copy once.
+
+**Risk audit (verified in code, not assumed):**
+- **A — sent-direction inline resolution / optimistic cleanup:** already handled.
+  `SmsSyncHandler.syncLatestSms` runs `deleteOptimisticMessages(threadId,
+  isMms=false)` for threads that received ONLY reaction fallbacks (the
+  `normalThreadIds`-exclusion loop), so the optimistic fallback bubble clears
+  even when the synced batch is all fallbacks. No change needed.
+- **B — conversation-list preview:** already correct. The list reads the
+  `threads.lastMessagePreview` COLUMN, which is only written by `updateLastMessagePreview`
+  in the sync normal-message branch and `ReactionResolver` — never by the
+  optimistic insert nor the reaction-only sync branch. The fallback text never
+  reaches the column, and the previous real message stays the preview. No change.
+- **C — send-failure recovery (the real gap):** a sent fallback is resolved out
+  of Room by sync, so `SmsSentDeliveryReceiver`'s recovery keyed on `roomId =
+  smsRowId` finds no row and a queue-worthy (radio-off) failure would silently
+  park QUEUED on nothing — dropping the send. Fixed: when the failed body parses
+  as a reaction fallback and no Room row exists, the receiver parks a fresh
+  QUEUED optimistic row so `SendQueueWorker` resends it (it then syncs and
+  resolves normally, deduped against the local pill). Gate extracted to pure
+  `shouldRequeueOrphanedReactionFallback(...)`. Insert-only — nothing is ever
+  deleted from `content://sms`.
+
+Tests: `OutboundReactionFallbackTest` (21 cases) round-trips compose + the
+decision gate through the real parser — short body, the Tonya ~70-char https URL
+(truncated-quote strategy), multiline, embedded double quotes, ambiguous short
+first line, family vs. over-long ZWJ emoji, duplicate-id, removal, and the
+requeue gate. `./gradlew test`: 970 passing, 0 failed; `assembleDebug` clean.
+**On-device verification pending** (see TODO.md for the checklist).
 ## 2026-07-23 (fix/reaction-pill-gap) — reaction pills sit flush under the bubble
 
 **Phantom gap between bubble and reaction pills** (found on-device right after

@@ -12,16 +12,44 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       hides (existing fade animation) while `topBarMode != NORMAL`, so it never
       renders in front of the selection/action bars' controls. Needs on-device
       check: enter selection mode mid-scroll, pill should fade out.
-- [ ] **Outbound reactions are local-only** (found on-device July 23 2026) —
-      reacting to a message (seen with a voice memo) only stores the reaction
-      locally; the snackbar even says "Reactions stay on your phone — the other
-      person doesn't see them." The whole point is the other person seeing it.
-      SMS/MMS has no reaction protocol, so this means sending a Google-Messages
-      -style fallback message (e.g. `Reacted 😎 to "…"` / media placeholder)
-      that their app can render or parse back into a pill — the mirror image of
-      the inbound reaction parsing we already do. Needs a decision on exact
-      outbound text format so our own parser (and Google Messages') recognizes
-      it; reuse the quote-truncation rules from the July 22 parser work.
+- [x] **Outbound reactions are local-only** (found on-device July 23 2026;
+      fixed July 23 2026, `feat/outbound-reactions`) — reacting to a 1:1 text
+      message now ALSO sends the Android-Messages-style fallback SMS
+      (`😎 to "…"`, removal `😎 to "…" removed`, straight double quotes — exactly
+      what our own `AndroidReactionParser` accepts) so the recipient's app shows
+      it. The local pill still toggles immediately and unconditionally; the send
+      is a best-effort side channel (sync's `reactionExists` dedupe stops the
+      re-imported sent fallback double-inserting).
+      Decisions: v1 scope is 1:1 threads (`recipientsFor(thread).size == 1`) with
+      a non-blank text target only — media-only targets and group threads stay
+      local-only (follow-ups below). Quote budget is 30 chars
+      (`OUTBOUND_QUOTE_BUDGET`): full body if it fits, else truncate + `…` with a
+      ≥10-char stem (mirrors the parser's `TRUNCATED_QUOTE_MIN_STEM`), single-
+      line-ified at the first in-budget newline. Every candidate send is gated
+      through OUR OWN parser+matcher (`reactionFallbackRoundTrips`): unless the
+      composed string parses back AND `findOriginalMessage` resolves it to exactly
+      the reacted message, it's left local-only (catches over-long ZWJ emoji
+      beyond `\S{1,8}`, ambiguous short first lines, duplicate text resolving to a
+      newer id). Sends through the shared queue-aware SMS path (`dispatchSmsSend`,
+      extracted from `sendMessage`): offline → `QUEUED` + `SendQueueWorker`. The
+      transient fallback bubble until sync resolves it is accepted; queued-offline
+      shows as "Queued". Notice reworded ("This reaction stays on your phone —
+      reactions to media and group messages aren't sent as texts yet.") and now
+      fires ONLY when a toggle-ON stays local-only; pref key bumped
+      (`_v2`) so existing users see it once. Pure logic in
+      `domain/reaction/OutboundReactionFallback.kt`
+      (`OutboundReactionFallbackTest`, 21 cases incl. the Tonya long-URL,
+      multiline, embedded-quotes, removal, over-long-ZWJ, and unsent-gating
+      cases). 970 tests, 0 failures; `assembleDebug` clean.
+      **On-device verification pending** (cannot device-test): (1) react to a 1:1
+      text on device with Google Messages on the other phone — confirm a reaction
+      appears there, not a literal `😎 to "…"` bubble; (2) toggle the reaction off
+      — confirm it disappears on their side; (3) react while in airplane mode —
+      confirm the fallback parks as "Queued" and flushes when service returns
+      (risk-C path: `SmsSentDeliveryReceiver` re-queues the orphaned fallback);
+      (4) react to a media-only message and to a group thread — confirm both stay
+      local-only and the reworded notice shows once; (5) confirm the conversation-
+      list preview never sticks on `😎 to "…"` after the fallback resolves.
 - [x] **Timestamp legibility + same-level layout** (July 23 2026, on-device
       request from tonight, `fix/timestamp-legibility`) — two fixes to the
       timestamp row under a bubble, both from screenshots over a photo chat
@@ -735,6 +763,24 @@ instance, but flagged:
       Show in global stats as "You haven't talked to Jake in a while."
 
 ### Thread view — deeper polish
+- [ ] **Outbound reactions — media targets** (follow-up to
+      `feat/outbound-reactions`, July 23 2026) — v1 only sends fallbacks for
+      non-blank TEXT targets; reacting to a media-only message (photo/video/voice
+      memo — the exact case Chris hit on-device) still stays local-only. Needs a
+      media-placeholder quote both our parser and Google Messages recognize
+      (Google emits e.g. `😎 to "📷 Photo"` / an attachment descriptor). Confirm
+      the real Google Messages media-fallback wording on-device first (logcat /
+      cross-send), then extend `composeReactionFallback` to build that quote when
+      `target.body.isBlank()` and the round-trip gate can resolve it back to the
+      media message.
+- [ ] **Outbound reactions — group threads** (follow-up to
+      `feat/outbound-reactions`, July 23 2026) — v1 restricts sending to 1:1
+      threads (`recipientsFor(thread).size == 1`); reacting in a group stays
+      local-only. A group reaction fallback must go as a group MMS to the full
+      roster (mirroring `sendMessage`'s MMS branch), and inbound group-reaction
+      resolution needs verifying end-to-end (sender attribution per participant).
+      Decide whether the transient fallback bubble is acceptable in a busy group
+      before shipping.
 - [~] **Scrolling screenshot ("capture more") support in threads**
       (IMPLEMENTED-UNTESTED July 23 2026, `feat/thread-scrollcapture`) — took
       option (2) from the diagnosis below: a custom `ScrollCaptureCallback`.

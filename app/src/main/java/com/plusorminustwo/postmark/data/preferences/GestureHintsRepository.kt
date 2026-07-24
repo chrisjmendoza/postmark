@@ -58,7 +58,10 @@ class GestureHintsRepository @Inject constructor(
 
     private companion object {
         const val KEY_THREAD_TIPS       = "gesture_hint_thread_tips_dismissed"
-        const val KEY_REACTIONS_NOTICE  = "gesture_hint_reactions_local_shown"
+        // v2: bumped when outbound reactions shipped — the notice now fires only for
+        // still-local-only cases (media/group) with reworded copy, so existing users
+        // should see the new message once. The old "_shown" key is intentionally abandoned.
+        const val KEY_REACTIONS_NOTICE  = "gesture_hint_reactions_local_shown_v2"
         const val KEY_MULTI_SELECT_HINT = "gesture_hint_multiselect_dismissed"
     }
 }
