@@ -389,7 +389,9 @@ class PostmarkDatabaseTest {
         ))
         val result = db.messageDao().observeMessagesInRangeForThread(1L, 1000L, 2000L).first()
         assertEquals(2, result.size)
-        assertEquals(setOf(1L, 2L), result.map { it.id - 1L + 1L }.toSet())
+        // Half-open [start, end): ts=1000 (id 2) and ts=1500 (id 3) are in; ts=2500 is out
+        // and so is ts=500. The end bound is exclusive to match the heatmap's month math.
+        assertEquals(setOf(2L, 3L), result.map { it.id }.toSet())
         assertTrue(result.all { it.timestamp >= 1000L && it.timestamp < 2000L })
     }
 

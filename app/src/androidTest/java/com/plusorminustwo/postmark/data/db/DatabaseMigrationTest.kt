@@ -558,8 +558,8 @@ class DatabaseMigrationTest {
     fun migration14To15_dropsStatsTablesAndPreservesUserData() {
         helper.createDatabase("test_m1415", 14).apply {
             execSQL(
-                "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
-                " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+                "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+                " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
             )
             execSQL(
                 "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type)" +
@@ -590,8 +590,8 @@ class DatabaseMigrationTest {
     fun migration15To16_replacesThreadIdIndexWithPerfIndexes() {
         helper.createDatabase("test_m1516", 15).apply {
             execSQL(
-                "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy)" +
-                " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL')"
+                "INSERT INTO threads (id, displayName, address, lastMessageAt, lastMessagePreview, backupPolicy, isMuted, isPinned, notificationsEnabled)" +
+                " VALUES (1, 'Alice', '+1', 1000000, '', 'GLOBAL', 0, 0, 1)"
             )
             execSQL(
                 "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type)" +
