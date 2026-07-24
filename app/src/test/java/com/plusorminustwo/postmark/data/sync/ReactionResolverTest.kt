@@ -312,6 +312,7 @@ private class InMemoryMessageDao : MessageDao {
     override suspend fun countByThread(threadId: Long): Int = 0
     override suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity> = emptyList()
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
+    override suspend fun updateDeliveryStatusWithTimestamp(messageId: Long, status: Int, deliveredAt: Long) = Unit
     override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
     override suspend fun updateAttachments(messageId: Long, attachmentsJson: String?, firstUri: String?, firstMime: String?) = Unit
     override suspend fun getEmptyMmsRows(limit: Int): List<MessageEntity> = emptyList()

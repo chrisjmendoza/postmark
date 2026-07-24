@@ -65,6 +65,11 @@ class MessageRepository @Inject constructor(
     suspend fun updateDeliveryStatus(messageId: Long, status: Int) =
         messageDao.updateDeliveryStatus(messageId, status)
 
+    /** Sets delivery status and the delivery timestamp atomically — used when a carrier
+     *  delivery report arrives (see SmsSentDeliveryReceiver). */
+    suspend fun updateDeliveryStatusWithTimestamp(messageId: Long, status: Int, deliveredAt: Long) =
+        messageDao.updateDeliveryStatusWithTimestamp(messageId, status, deliveredAt)
+
     suspend fun updateThreadId(messageId: Long, threadId: Long) =
         messageDao.updateThreadId(messageId, threadId)
 

@@ -83,6 +83,10 @@ class FailedSendRetryTest {
             lastStatusUpdate = messageId to status
         }
 
+        override suspend fun updateDeliveryStatusWithTimestamp(messageId: Long, status: Int, deliveredAt: Long) {
+            lastStatusUpdate = messageId to status
+        }
+
         override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
 
         override fun observeByThread(threadId: Long): Flow<List<MessageEntity>> = flowOf(emptyList())

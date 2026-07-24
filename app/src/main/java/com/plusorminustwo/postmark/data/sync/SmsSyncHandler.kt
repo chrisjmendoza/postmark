@@ -356,6 +356,7 @@ class SmsSyncHandler @Inject constructor(
             Telephony.Sms.ADDRESS,
             Telephony.Sms.BODY,
             Telephony.Sms.DATE,
+            Telephony.Sms.DATE_SENT,
             Telephony.Sms.TYPE
         )
 
@@ -405,12 +406,13 @@ class SmsSyncHandler @Inject constructor(
         val ensuredThreadIds = mutableSetOf<Long>()
 
         for (cursor in cursors) cursor.use {
-            val idIdx      = it.getColumnIndexOrThrow(Telephony.Sms._ID)
-            val threadIdx  = it.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
-            val addressIdx = it.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
-            val bodyIdx    = it.getColumnIndexOrThrow(Telephony.Sms.BODY)
-            val dateIdx    = it.getColumnIndexOrThrow(Telephony.Sms.DATE)
-            val typeIdx    = it.getColumnIndexOrThrow(Telephony.Sms.TYPE)
+            val idIdx       = it.getColumnIndexOrThrow(Telephony.Sms._ID)
+            val threadIdx   = it.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
+            val addressIdx  = it.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
+            val bodyIdx     = it.getColumnIndexOrThrow(Telephony.Sms.BODY)
+            val dateIdx     = it.getColumnIndexOrThrow(Telephony.Sms.DATE)
+            val dateSentIdx = it.getColumnIndexOrThrow(Telephony.Sms.DATE_SENT)
+            val typeIdx     = it.getColumnIndexOrThrow(Telephony.Sms.TYPE)
 
             while (it.moveToNext()) {
                 val id       = it.getLong(idIdx)
@@ -421,6 +423,8 @@ class SmsSyncHandler @Inject constructor(
                 val address  = it.getString(addressIdx) ?: ""
                 val body     = it.getString(bodyIdx) ?: ""
                 val date     = it.getLong(dateIdx)
+                // DATE_SENT is 0 when the provider never recorded a send time — store NULL, not 0.
+                val dateSent = it.getLong(dateSentIdx).takeIf { v -> v > 0L }
                 val type     = it.getInt(typeIdx)
                 // Drafts (3), outbox (4), and failed sends (5) are outgoing; only inbox (1) is received.
                 val isSent   = type != Telephony.Sms.MESSAGE_TYPE_INBOX
@@ -442,7 +446,8 @@ class SmsSyncHandler @Inject constructor(
                      * shows the clock icon. Received messages have no delivery tracking. */
                     deliveryStatus = if (isSent) DELIVERY_STATUS_PENDING else DELIVERY_STATUS_NONE,
                     // Incoming messages start as unread; sent messages are always read.
-                    isRead = isSent
+                    isRead = isSent,
+                    sentAt = dateSent
                 )
             }
         }
@@ -530,7 +535,7 @@ class SmsSyncHandler @Inject constructor(
         val maxRawId = (maxStoredId - MMS_ID_OFFSET).coerceAtLeast(0L)
         debugLog("syncLatestMms: maxStoredId=$maxStoredId  maxRawId=$maxRawId")
 
-        val mmsIncProjection = arrayOf("_id", "thread_id", "date", "msg_box", "m_type")
+        val mmsIncProjection = arrayOf("_id", "thread_id", "date", "date_sent", "msg_box", "m_type")
         // NOT IN (3, 5): exclude drafts and failed sends. Every other msg_box value
         // (inbox=1, sent=2, outbox=4 for RCS) represents a real message worth importing.
         // A single aggregate query is sufficient — no supplement cursors needed.
@@ -760,10 +765,12 @@ class SmsSyncHandler @Inject constructor(
         ensuredThreadIds: MutableSet<Long>,
         seenRawIds: MutableSet<Long> = mutableSetOf()
     ) {
-        val idIdx     = cursor.getColumnIndexOrThrow("_id")
-        val threadIdx = cursor.getColumnIndexOrThrow("thread_id")
-        val dateIdx   = cursor.getColumnIndexOrThrow("date")
-        val boxIdx    = cursor.getColumnIndexOrThrow("msg_box")
+        val idIdx       = cursor.getColumnIndexOrThrow("_id")
+        val threadIdx   = cursor.getColumnIndexOrThrow("thread_id")
+        val dateIdx     = cursor.getColumnIndexOrThrow("date")
+        // Not OrThrow: date_sent isn't guaranteed present on every OEM's mailbox URIs.
+        val dateSentIdx = cursor.getColumnIndex("date_sent")
+        val boxIdx      = cursor.getColumnIndexOrThrow("msg_box")
         // Not OrThrow: some OEMs omit the column even when requested in the projection;
         // isDisplayableMmsType(null) treats that as displayable (GROUP_MESSAGING_SPEC §4.2).
         val mTypeIdx  = cursor.getColumnIndex("m_type")
@@ -773,6 +780,9 @@ class SmsSyncHandler @Inject constructor(
             if (!seenRawIds.add(rawId)) continue
             val threadId = cursor.getLong(threadIdx)
             val dateSec  = cursor.getLong(dateIdx)
+            // MMS provider times are SECONDS — ×1000. 0 means "not recorded" → NULL, not epoch.
+            val sentAt   = if (dateSentIdx >= 0 && !cursor.isNull(dateSentIdx))
+                cursor.getLong(dateSentIdx).takeIf { it > 0L }?.let { it * 1000L } else null
             val msgBox   = cursor.getInt(boxIdx)
             val mType    = if (mTypeIdx >= 0 && !cursor.isNull(mTypeIdx)) cursor.getInt(mTypeIdx) else null
             // Non-displayable PDU (M-Notification.ind, delivery/read reports): no text/media
@@ -821,7 +831,8 @@ class SmsSyncHandler @Inject constructor(
                 type = msgBox,
                 isMms = true,
                 attachments = parts.attachments,
-                isRead = isSent
+                isRead = isSent,
+                sentAt = sentAt
             )
         }
     }

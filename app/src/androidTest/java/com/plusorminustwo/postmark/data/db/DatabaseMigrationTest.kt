@@ -499,10 +499,38 @@ class DatabaseMigrationTest {
         db19.close()
     }
 
-    // ── Full chain 1 → 20 ─────────────────────────────────────────────────
+    // ── MIGRATION 20 → 21 ─────────────────────────────────────────────────
 
     @Test
-    fun fullMigrationChain_v1DataSurvivesToV20() {
+    fun migration20To21_addsNullableTimestamps() {
+        val db20 = helper.createDatabase("test_m2021", 20)
+        db20.execSQL(
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead)" +
+            " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1)"
+        )
+
+        PostmarkDatabase.MIGRATION_20_21.migrate(db20)
+
+        // Both new columns exist and are NULL for the pre-migration row.
+        db20.query("SELECT sentAt, deliveredAt FROM messages WHERE id = 7").use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+            assertTrue(c.isNull(1))
+        }
+        // They accept values independently after the migration.
+        db20.execSQL("UPDATE messages SET sentAt = 999, deliveredAt = 1500 WHERE id = 7")
+        db20.query("SELECT sentAt, deliveredAt FROM messages WHERE id = 7").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(999L, c.getLong(0))
+            assertEquals(1500L, c.getLong(1))
+        }
+        db20.close()
+    }
+
+    // ── Full chain 1 → 21 ─────────────────────────────────────────────────
+
+    @Test
+    fun fullMigrationChain_v1DataSurvivesToV21() {
         val db = helper.createDatabase("test_chain", 1)
         db.execSQL(
             "INSERT INTO threads (id, displayName, address, lastMessageAt, backupPolicy)" +
@@ -523,11 +551,12 @@ class DatabaseMigrationTest {
             PostmarkDatabase.MIGRATION_13_14, PostmarkDatabase.MIGRATION_14_15,
             PostmarkDatabase.MIGRATION_15_16, PostmarkDatabase.MIGRATION_16_17,
             PostmarkDatabase.MIGRATION_17_18, PostmarkDatabase.MIGRATION_18_19,
-            PostmarkDatabase.MIGRATION_19_20
+            PostmarkDatabase.MIGRATION_19_20, PostmarkDatabase.MIGRATION_20_21
         ).forEach { it.migrate(db) }
 
         db.query(
             "SELECT m.body, m.deliveryStatus, m.isMms, m.isRead, m.isStarred, m.isPinned," +
+            " m.sentAt, m.deliveredAt," +
             " t.isPinned, t.notificationsEnabled," +
             " t.accentColorArgb, t.chatBackgroundId, t.sentColorArgb, t.isSpam" +
             " FROM messages m JOIN threads t ON t.id = m.threadId WHERE m.id = 42"
@@ -539,12 +568,14 @@ class DatabaseMigrationTest {
             assertEquals(1, c.getInt(3))  // read
             assertEquals(0, c.getInt(4))  // not starred
             assertEquals(0, c.getInt(5))  // message not pinned
-            assertEquals(0, c.getInt(6))  // thread not pinned
-            assertEquals(1, c.getInt(7))  // notifications on
-            assertTrue(c.isNull(8))       // no accent color
-            assertTrue(c.isNull(9))       // no chat background
-            assertTrue(c.isNull(10))      // no sent color
-            assertEquals(0, c.getInt(11)) // not spam
+            assertTrue(c.isNull(6))       // no sentAt (added v21, NULL for old rows)
+            assertTrue(c.isNull(7))       // no deliveredAt (added v21, NULL for old rows)
+            assertEquals(0, c.getInt(8))  // thread not pinned
+            assertEquals(1, c.getInt(9))  // notifications on
+            assertTrue(c.isNull(10))      // no accent color
+            assertTrue(c.isNull(11))      // no chat background
+            assertTrue(c.isNull(12))      // no sent color
+            assertEquals(0, c.getInt(13)) // not spam
         }
         db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_stats','global_stats')").use { c ->
             assertFalse(c.moveToFirst())

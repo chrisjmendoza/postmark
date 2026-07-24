@@ -84,7 +84,16 @@ data class MessageEntity(
     // Postmark-only pin flag (Discord-style) — surfaces this message in the per-thread
     // Pinned messages panel. Distinct from the image-only isStarred and from the
     // thread-level ThreadEntity.isPinned. Never written back to the SMS/MMS provider.
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    // Epoch millis the message was actually sent by the originating device — from the
+    // provider's DATE_SENT (SMS) / date_sent (MMS, seconds ×1000). Null when the provider
+    // recorded 0 ("not recorded") or the row predates this column (added v21). Distinct from
+    // `timestamp`, which for received messages is the receipt time, not the send time.
+    val sentAt: Long? = null,
+    // Epoch millis a carrier delivery report confirmed handset receipt — written by
+    // SmsSentDeliveryReceiver at report time. Null until/unless a delivery report arrives
+    // (carrier-dependent; many carriers never send one).
+    val deliveredAt: Long? = null
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -105,7 +114,9 @@ fun MessageEntity.toDomain() = Message(
     },
     isRead = isRead,
     isStarred = isStarred,
-    isPinned = isPinned
+    isPinned = isPinned,
+    sentAt = sentAt,
+    deliveredAt = deliveredAt
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -123,5 +134,7 @@ fun Message.toEntity() = MessageEntity(
     attachmentsJson = encodeAttachmentsJson(attachments),
     isRead = isRead,
     isStarred = isStarred,
-    isPinned = isPinned
+    isPinned = isPinned,
+    sentAt = sentAt,
+    deliveredAt = deliveredAt
 )

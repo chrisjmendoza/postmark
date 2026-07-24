@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  *
  * Entities: [ThreadEntity], [MessageEntity], [ReactionEntity], [MessageFtsEntity].
  *
- * Current schema version: 20.
+ * Current schema version: 21.
  * All upgrades are handled by explicit [Migration] objects — never by destructive
  * fallback. [FTS_CALLBACK] re-populates the FTS shadow table after fresh installs.
  */
@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
         ReactionEntity::class,
         MessageFtsEntity::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -247,6 +247,17 @@ abstract class PostmarkDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE threads ADD COLUMN isSpam INTEGER NOT NULL DEFAULT 0"
                 )
+            }
+        }
+
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Per-message delivery timestamps (Message info sheet). Nullable, no default
+                // — mirrors MIGRATION_8_9: existing rows get NULL. sentAt is backfilled only
+                // as future syncs re-import rows; deliveredAt only when a carrier delivery
+                // report arrives. SQLite requires one ALTER TABLE per column.
+                db.execSQL("ALTER TABLE messages ADD COLUMN sentAt INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN deliveredAt INTEGER")
             }
         }
 

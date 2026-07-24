@@ -58,6 +58,13 @@ interface MessageDao {
     @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :messageId")
     suspend fun updateDeliveryStatus(messageId: Long, status: Int)
 
+    /** Sets delivery status AND the delivery timestamp in one atomic update. Used by
+     *  SmsSentDeliveryReceiver when a carrier delivery report confirms handset receipt, so the
+     *  Message info sheet can show when delivery happened. Every other status transition
+     *  (which has no timestamp to record) keeps using [updateDeliveryStatus]. */
+    @Query("UPDATE messages SET deliveryStatus = :status, deliveredAt = :deliveredAt WHERE id = :messageId")
+    suspend fun updateDeliveryStatusWithTimestamp(messageId: Long, status: Int, deliveredAt: Long)
+
     /** Moves a message to another thread. Used by MmsSentReceiver to repair a sent MMS
      *  the platform persisted with a wrong thread_id (Room ids mirror system thread ids). */
     @Query("UPDATE messages SET threadId = :threadId WHERE id = :messageId")

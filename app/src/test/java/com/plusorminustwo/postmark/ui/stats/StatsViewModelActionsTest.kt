@@ -516,6 +516,7 @@ private class ActionsRangeFakeMessageDao(
     override suspend fun getByThreadAndDateRange(threadId: Long, startMs: Long, endMs: Long): List<MessageEntity> =
         allMessages.filter { it.threadId == threadId && it.timestamp in startMs until endMs }
     override suspend fun updateDeliveryStatus(messageId: Long, status: Int) = Unit
+    override suspend fun updateDeliveryStatusWithTimestamp(messageId: Long, status: Int, deliveredAt: Long) = Unit
     override suspend fun updateThreadId(messageId: Long, threadId: Long) = Unit
     override suspend fun deleteOptimisticMessages(threadId: Long, isMms: Boolean) = Unit
     override suspend fun getOptimisticSentDeliveryStatus(threadId: Long, isMms: Boolean): Int? = null
