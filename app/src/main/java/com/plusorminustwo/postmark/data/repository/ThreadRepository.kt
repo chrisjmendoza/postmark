@@ -98,30 +98,12 @@ class ThreadRepository @Inject constructor(
     /** Returns true if the threads table has no rows. */
     suspend fun isEmpty(): Boolean = dao.count() == 0
 
-    /** Returns true if the thread with [address] has notifications muted, false otherwise. */
-    suspend fun isMutedByAddress(address: String): Boolean =
-        dao.isMutedByAddress(address) ?: false
-
-    /** Returns true if the thread with [address] has notifications enabled (default), false if
-     *  the user has fully disabled notifications for that number. */
-    suspend fun isNotificationsEnabledByAddress(address: String): Boolean =
-        dao.isNotificationsEnabledByAddress(address) ?: true
-
     suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) =
         dao.updateNotificationsEnabled(threadId, enabled)
 
     /** Marks a thread as spam (hidden into the Spam folder + silenced) or restores it. */
     suspend fun updateSpam(threadId: Long, isSpam: Boolean) =
         dao.updateSpam(threadId, isSpam)
-
-    /** Returns true if the thread with [address] is flagged spam, false otherwise. */
-    suspend fun isSpamByAddress(address: String): Boolean =
-        dao.isSpamByAddress(address) ?: false
-
-    // Looks up a stored display name by raw phone address; returns null when the thread
-    // isn't in Room yet (e.g. before first sync completes).
-    suspend fun getDisplayNameByAddress(address: String): String? =
-        dao.getDisplayNameByAddress(address)
 
     /** Saves a Postmark-only nickname for the thread; pass null to clear it. */
     suspend fun setNickname(threadId: Long, nickname: String?) =

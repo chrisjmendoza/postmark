@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.plusorminustwo.postmark.data.contacts.formatContactSupportingText
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.domain.model.RecipientChip
 import com.plusorminustwo.postmark.domain.model.normalizeAddressForDedupe
@@ -260,7 +261,9 @@ fun NewConversationScreen(
                     val haptics = LocalHapticFeedback.current
                     ListItem(
                         headlineContent   = { Text(contact.displayName) },
-                        supportingContent = { Text(formatPhoneNumber(contact.address)) },
+                        supportingContent = {
+                            Text(formatContactSupportingText(contact.label, formatPhoneNumber(contact.address)))
+                        },
                         // Contact photo/letter avatar, or a filled check while selected —
                         // mirrors ConversationsScreen's ThreadRow selection treatment.
                         leadingContent    = {

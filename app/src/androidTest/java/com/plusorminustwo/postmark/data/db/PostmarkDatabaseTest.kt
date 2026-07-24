@@ -121,17 +121,15 @@ class PostmarkDatabaseTest {
     }
 
     @Test
-    fun updateSpamFlagAndAddressLookup() = runTest {
+    fun updateSpamFlagById() = runTest {
         db.threadDao().insert(thread(1))
         assertEquals(false, db.threadDao().getById(1L)?.isSpam)
 
         db.threadDao().updateSpam(1L, true)
         assertEquals(true, db.threadDao().getById(1L)?.isSpam)
-        // Address lookup mirrors isMutedByAddress — used by the notification suppression path.
-        assertEquals(true, db.threadDao().isSpamByAddress("+15550001"))
 
         db.threadDao().updateSpam(1L, false)
-        assertEquals(false, db.threadDao().isSpamByAddress("+15550001"))
+        assertEquals(false, db.threadDao().getById(1L)?.isSpam)
     }
 
     @Test

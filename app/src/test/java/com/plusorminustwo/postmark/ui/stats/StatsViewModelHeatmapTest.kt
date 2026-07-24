@@ -309,14 +309,10 @@ private class FakeThreadDao : ThreadDao {
     override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
     override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) = Unit
     override suspend fun updateLastMessagePreview(threadId: Long, preview: String) = Unit
-    override suspend fun isMutedByAddress(address: String): Boolean? = null
-    override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
-    override suspend fun getDisplayNameByAddress(address: String): String? = null
     override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) = Unit
     override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
     override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
     override suspend fun updateSpam(threadId: Long, isSpam: Boolean) = Unit
-    override suspend fun isSpamByAddress(address: String): Boolean? = null
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit

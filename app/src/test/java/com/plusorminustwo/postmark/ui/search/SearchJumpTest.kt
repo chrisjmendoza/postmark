@@ -152,14 +152,10 @@ class SearchJumpTest {
         override suspend fun updateRoster(threadId: Long, participantsJson: String?, displayName: String) {}
         override suspend fun updateLastMessageAt(threadId: Long, timestamp: Long) {}
         override suspend fun updateLastMessagePreview(threadId: Long, preview: String) {}
-        override suspend fun isMutedByAddress(address: String): Boolean? = null
-        override suspend fun isNotificationsEnabledByAddress(address: String): Boolean? = null
-        override suspend fun getDisplayNameByAddress(address: String): String? = null
         override suspend fun updateNotificationsEnabled(threadId: Long, enabled: Boolean) {}
         override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
         override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
         override suspend fun updateSpam(threadId: Long, isSpam: Boolean) {}
-        override suspend fun isSpamByAddress(address: String): Boolean? = null
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}

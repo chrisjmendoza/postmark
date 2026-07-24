@@ -423,8 +423,6 @@ Ordered by priority tier. Work top-to-bottom within each tier.
 - [x] **Phone number formatting** — `formatPhoneNumber()` in
       `PhoneNumberFormatter.kt`; E.164 NANP → `(xxx) xxx-xxxx`;
       wired in Conversations, Thread, and Search screens.
-- [ ] **Multiple numbers per contact** — handle correctly during
-      sync and display.
 - [x] **Save number prompt** (July 23 2026) — "Add to contacts?" banner at the top
       of a 1:1 thread, mirroring `feat/spam-heuristics`'s wiring exactly: pure
       `shouldShowSaveNumberPrompt`/`isSaveablePhoneNumber` (`domain/contacts/
@@ -441,6 +439,32 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       contact actually exists. "Dismiss" (X) persists forever. 961 tests. Needs
       on-device verification: banner rendering, the Contacts intent flow, and
       post-add banner disappearance.
+- [x] **Multiple numbers per contact** — handle correctly during
+      sync and display. *(fix/multi-number-contacts, July 23 2026)* Contact
+      NAME and PHOTO resolution were already correct (`ContactsContract.
+      PhoneLookup` normalizes a number to its owning contact internally).
+      Two real defects fixed: (1) `SmsReceiver`'s mute/spam/notifications-
+      enabled gates matched the stored thread `address` column by exact
+      string, so an incoming PDU in a different format — or a contact's
+      *other* number reaching the same thread — could silently defeat mute/
+      spam suppression; now gates on one `threadRepository.getById(threadId)`
+      fetch (Room `Thread.id` == telephony thread id) instead, inheriting the
+      OS's own number-identity rules from `getOrCreateThreadId` for free.
+      Deleted the four now-unused `...ByAddress` queries (`ThreadDao`/
+      `ThreadRepository`) and their test coverage. (2) `NewConversationViewModel`
+      and `ForwardPickerViewModel` had verbatim-copied contact search that
+      queried only DISPLAY_NAME + NUMBER, so a contact with two numbers
+      showed as two identical-looking rows; extracted shared `data/contacts/
+      ContactSearch.kt` (adds Phone.TYPE/LABEL, surfaces "Mobile · (555)
+      123-4567" in both pickers) and switched dedupe to
+      `normalizeAddressForDedupe`. Needs on-device verification (mute/spam
+      suppression from an alternate-format sender; picker labels on a real
+      multi-number contact).
+- [ ] **Contact-level settings sharing across a contact's numbers** — a
+      person with two numbers currently gets two independent threads, each
+      with its own mute/notifications/nickname/color/pin state; product
+      decision needed on whether (and how) those should share one identity.
+      Deliberately out of scope for the fix above.
 - [x] **Contact name refresh** (July 22 2026) — `Thread.displayName` was only
       ever resolved from Contacts at thread-creation time (`SmsSyncHandler.
       ensureThread`, `SmsHistoryImportWorker`) and never re-checked, so a
