@@ -403,6 +403,8 @@ fun ThreadScreen(
     val onSelectByDateRange       = remember(viewModel) { { start: LocalDate, end: LocalDate -> viewModel.selectByDateRange(start, end) } }
     val onAttachmentsSelected     = remember(viewModel) { { attachments: List<MessageAttachment> -> viewModel.onAttachmentsSelected(attachments) } }
     val onRemoveAttachment        = remember(viewModel) { { index: Int -> viewModel.removeAttachment(index) } }
+    val onRequestCameraCapture    = remember(viewModel) { { viewModel.requestCameraCapture() } }
+    val onCameraCaptureResult     = remember(viewModel) { { success: Boolean -> viewModel.onCameraCaptureResult(success) } }
     val onSetReplyingTo           = remember(viewModel) { { id: Long -> viewModel.setReplyingTo(id) } }
     val onClearReplyingTo         = remember(viewModel) { { viewModel.clearReplyingTo() } }
     val onSearchInThread_         = remember(viewModel, threadId, onSearchInThread) { { onSearchInThread(threadId) } }
@@ -480,6 +482,9 @@ fun ThreadScreen(
         onSelectByDateRange = onSelectByDateRange,
         onAttachmentsSelected = onAttachmentsSelected,
         onRemoveAttachment = onRemoveAttachment,
+        onRequestCameraCapture = onRequestCameraCapture,
+        onCameraCaptureResult = onCameraCaptureResult,
+        cameraCaptureRequestEvent = viewModel.cameraCaptureRequestEvent,
         onSetReplyingTo = onSetReplyingTo,
         onClearReplyingTo = onClearReplyingTo,
         onSearchInThread = onSearchInThread_,
@@ -630,6 +635,12 @@ private fun ThreadContent(
     memoWaveforms: StateFlow<Map<String, List<Float>>> = MutableStateFlow(emptyMap()),
     onAudioPlayPause: (String) -> Unit = {},
     onAudioSeek: (String, Float) -> Unit = { _, _ -> },
+    // Camera capture (attach-menu "Take photo"): mints a filesDir target + fires
+    // cameraCaptureRequestEvent with its uri; ReplyBar launches TakePicture at it
+    // and reports the result back via onCameraCaptureResult.
+    onRequestCameraCapture: () -> Unit = {},
+    onCameraCaptureResult: (Boolean) -> Unit = {},
+    cameraCaptureRequestEvent: SharedFlow<String> = MutableSharedFlow(),
 ) {
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -1389,7 +1400,10 @@ private fun ThreadContent(
                     audioPlayback         = audioPlayback,
                     memoWaveforms         = memoWaveforms,
                     onAudioPlayPause      = onAudioPlayPause,
-                    onAudioSeek           = onAudioSeek
+                    onAudioSeek           = onAudioSeek,
+                    onRequestCameraCapture   = onRequestCameraCapture,
+                    onCameraCaptureResult    = onCameraCaptureResult,
+                    cameraCaptureRequestEvent = cameraCaptureRequestEvent
                 )
                 }
             }
@@ -3309,6 +3323,11 @@ private fun ReplyBar(
     memoWaveforms: StateFlow<Map<String, List<Float>>> = MutableStateFlow(emptyMap()),
     onAudioPlayPause: (String) -> Unit = {},
     onAudioSeek: (String, Float) -> Unit = { _, _ -> },
+    // Camera capture: requests a filesDir target from the ViewModel (which fires
+    // cameraCaptureRequestEvent once minted) and reports the TakePicture result back.
+    onRequestCameraCapture: () -> Unit = {},
+    onCameraCaptureResult: (Boolean) -> Unit = {},
+    cameraCaptureRequestEvent: SharedFlow<String> = MutableSharedFlow(),
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -3340,6 +3359,18 @@ private fun ReplyBar(
             val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
             onAttachmentsSelected(listOf(MessageAttachment(uri.toString(), mimeType)))
         }
+    }
+
+    /* Camera capture: no CAMERA permission involved (see ThreadViewModel). The uri to
+     * launch at comes from the ViewModel (it owns the filesDir target and its
+     * SavedStateHandle-backed lifecycle), delivered via cameraCaptureRequestEvent —
+     * collected once here so a config change never re-fires an already-launched
+     * request. */
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success -> onCameraCaptureResult(success) }
+    LaunchedEffect(cameraCaptureRequestEvent) {
+        cameraCaptureRequestEvent.collect { uri -> takePictureLauncher.launch(Uri.parse(uri)) }
     }
 
     // RECORD_AUDIO gate for the attach-menu "Record voice memo" item (the mic button
@@ -3599,6 +3630,13 @@ private fun ReplyBar(
                                                     ActivityResultContracts.PickVisualMedia.ImageAndVideo
                                                 )
                                             )
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text    = { Text("Take photo") },
+                                        onClick = {
+                                            showAttachMenu = false
+                                            onRequestCameraCapture()
                                         }
                                     )
                                     DropdownMenuItem(

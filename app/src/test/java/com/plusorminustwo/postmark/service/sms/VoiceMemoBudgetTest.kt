@@ -85,10 +85,11 @@ class VoiceMemoBudgetTest {
 
     // ── Cache filename predicate (shared by orphan sweep + delete paths) ──────
 
-    @Test fun `sweep recognizes both outgoing cache patterns`() {
+    @Test fun `sweep recognizes all three outgoing cache patterns`() {
         assertTrue(MmsManagerWrapper.isOutgoingCacheFileName("mms_attach_-123.bin"))
         assertTrue(MmsManagerWrapper.isOutgoingCacheFileName("mms_attach_-123_2.bin"))
         assertTrue(MmsManagerWrapper.isOutgoingCacheFileName("voice_memo_1752685000000.m4a"))
+        assertTrue(MmsManagerWrapper.isOutgoingCacheFileName("camera_capture_1752685000000.jpg"))
     }
 
     @Test fun `sweep never touches files it does not own`() {
@@ -96,5 +97,31 @@ class VoiceMemoBudgetTest {
         assertFalse(MmsManagerWrapper.isOutgoingCacheFileName("voice_memo_123.bin"))
         assertFalse(MmsManagerWrapper.isOutgoingCacheFileName("mms_attach_123.m4a"))
         assertFalse(MmsManagerWrapper.isOutgoingCacheFileName("profile.jpg"))
+        // Camera-capture-specific near-misses: wrong suffix, wrong prefix, and a
+        // foreign name that merely shares the "camera" word.
+        assertFalse(MmsManagerWrapper.isOutgoingCacheFileName("camera_capture_123.png"))
+        assertFalse(MmsManagerWrapper.isOutgoingCacheFileName("photo_123.jpg"))
+        assertFalse(MmsManagerWrapper.isOutgoingCacheFileName("camera_roll_123.jpg"))
+    }
+
+    // ── Camera capture filename shape ──────────────────────────────────────────
+    // cameraCaptureFile(context, epochMs) itself needs a real Context, so it isn't
+    // called directly here (same constraint that already keeps voiceMemoCacheFile
+    // untested below the Context boundary) — instead these assert that the naming
+    // convention it must follow (prefix + epochMs + suffix) is exactly what
+    // isOutgoingCacheFileName recognizes, and that two captures a millisecond apart
+    // never collide (dedupe in appendAttachments is by uri string).
+
+    @Test fun `camera capture filename shape matches what the sweep predicate accepts`() {
+        val epochMs = 1752685000000L
+        val name = "${MmsManagerWrapper.CAMERA_CAPTURE_FILE_PREFIX}$epochMs${MmsManagerWrapper.CAMERA_CAPTURE_FILE_SUFFIX}"
+        assertEquals("camera_capture_1752685000000.jpg", name)
+        assertTrue(MmsManagerWrapper.isOutgoingCacheFileName(name))
+    }
+
+    @Test fun `distinct epochMs values never collide in the minted filename`() {
+        val a = "${MmsManagerWrapper.CAMERA_CAPTURE_FILE_PREFIX}1000${MmsManagerWrapper.CAMERA_CAPTURE_FILE_SUFFIX}"
+        val b = "${MmsManagerWrapper.CAMERA_CAPTURE_FILE_PREFIX}1001${MmsManagerWrapper.CAMERA_CAPTURE_FILE_SUFFIX}"
+        assertFalse(a == b)
     }
 }

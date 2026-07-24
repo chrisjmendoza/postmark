@@ -913,6 +913,73 @@ class ThreadViewModel @Inject constructor(
         savedStateHandle.remove<String>(DRAFT_ATTACHMENTS_KEY)
     }
 
+    // ── Camera capture ─────────────────────────────────────────────────────────
+    // No CAMERA permission is requested or declared anywhere in this app (see
+    // AndroidManifest). ActivityResultContracts.TakePicture() hands the capture off
+    // to whatever camera app is already installed — that app needs no permission
+    // grant from US, since the photo lands in a file WE own and hand it via a
+    // FileProvider uri. This is a deliberate zero-permission-surface choice: if
+    // CAMERA is ever added to the manifest for an unrelated reason, this flow
+    // breaks for anyone who denies it (the system will then require it before the
+    // camera app can be launched this way).
+
+    /** URI of a just-minted, not-yet-resolved capture target — survives process
+     *  death (the camera app runs in a separate process/task while ours may be
+     *  killed) so [onCameraCaptureResult] can still find the right file when the
+     *  camera app returns. Null once the result is processed either way. */
+    private var pendingCameraCaptureUri: String?
+        get() = savedStateHandle.get<String>(DRAFT_CAMERA_CAPTURE_KEY)
+        set(value) {
+            if (value != null) savedStateHandle[DRAFT_CAMERA_CAPTURE_KEY] = value
+            else savedStateHandle.remove<String>(DRAFT_CAMERA_CAPTURE_KEY)
+        }
+
+    /** Fires the filesDir-backed capture-target URI the UI should hand to
+     *  `TakePicture().launch(...)`. Emitted only from a fresh [requestCameraCapture]
+     *  call — NOT replayed on process-death restore, since the camera app is
+     *  already in the foreground by then and Android redelivers its result to the
+     *  recreated launcher on its own; re-launching here would reopen the camera
+     *  on top of the returning one. */
+    private val _cameraCaptureRequestEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val cameraCaptureRequestEvent: SharedFlow<String> = _cameraCaptureRequestEvent.asSharedFlow()
+
+    /** Mints a fresh capture target and asks the UI to launch the system camera at
+     *  it (attach-menu "Take photo"). Same cap guard as starting a voice memo
+     *  recording — checked here, not duplicated in the UI. */
+    fun requestCameraCapture() {
+        if (_pendingAttachments.value.size >= MAX_ATTACHMENTS) {
+            _attachmentRejectedEvent.tryEmit(
+                "Up to $MAX_ATTACHMENTS attachments per message — remove one to take a photo"
+            )
+            return
+        }
+        val file = MmsManagerWrapper.cameraCaptureFile(context, System.currentTimeMillis())
+        val uri = try {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file).toString()
+        } catch (e: Exception) {
+            _attachmentRejectedEvent.tryEmit("Couldn't open camera")
+            return
+        }
+        pendingCameraCaptureUri = uri
+        _cameraCaptureRequestEvent.tryEmit(uri)
+    }
+
+    /** Result of the `TakePicture` launcher started by [requestCameraCapture].
+     *  Success funnels the capture into the pending-attachment strip through the
+     *  same path a picked photo takes; cancel/failure just deletes the unused
+     *  temp file — the user backed out, not an error, so no snackbar. */
+    fun onCameraCaptureResult(success: Boolean) {
+        val uri = pendingCameraCaptureUri ?: return
+        pendingCameraCaptureUri = null
+        if (success) {
+            onAttachmentsSelected(listOf(MessageAttachment(uri, "image/jpeg")))
+        } else {
+            viewModelScope.launch(Dispatchers.IO) {
+                MmsManagerWrapper.deleteVoiceMemoCacheFile(context, MessageAttachment(uri, "image/jpeg"))
+            }
+        }
+    }
+
     /**
      * Sets the message being quoted in the reply bar (triggered by swipe-to-reply).
      * Clears automatically when the user sends a message or taps the × in the quote strip.
@@ -1593,10 +1660,11 @@ class ThreadViewModel @Inject constructor(
     }
 
     companion object {
-        private const val DRAFT_TEXT_KEY         = "draft_text"
-        private const val DRAFT_ATTACHMENTS_KEY  = "draft_attachments"
-        private const val DRAFT_PREVIEW_MEMO_KEY = "draft_preview_memo"
-        private const val DRAFT_WAVEFORMS_KEY    = "draft_waveforms"
+        private const val DRAFT_TEXT_KEY            = "draft_text"
+        private const val DRAFT_ATTACHMENTS_KEY     = "draft_attachments"
+        private const val DRAFT_PREVIEW_MEMO_KEY    = "draft_preview_memo"
+        private const val DRAFT_WAVEFORMS_KEY       = "draft_waveforms"
+        private const val DRAFT_CAMERA_CAPTURE_KEY  = "draft_camera_capture_uri"
 
         /** Max attachments per outgoing MMS — shared by the picker's maxItems and
          *  the accumulate-across-picker-trips cap in [appendAttachments]. */

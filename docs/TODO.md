@@ -310,11 +310,25 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       16:9 letterbox); tap anywhere on the frame toggles play/pause with a center
       icon-flash cue; player state hoisted to screen scope so it survives rotation.
 - [x] **Audio playback controls** — `MediaPlayer` play/pause on audio chip in `ThreadScreen`.
-- [ ] **Rich media in reply bar** — ~~attachment button left of text field. Image picker
+- [x] **Rich media in reply bar** — ~~attachment button left of text field. Image picker
       (`PickVisualMedia`), camera capture. Requires `READ_MEDIA_IMAGES` / `CAMERA`.~~
       **Done (different approach):** `GetContent` launcher with `image/*` / `audio/*` MIME
       filter, attach button with dropdown, attachment preview chip, MMS send path via
-      `MmsManagerWrapper` + WAP Binary PDU. Camera capture still pending.
+      `MmsManagerWrapper` + WAP Binary PDU.
+      **Camera capture done (July 24 2026, `feat/camera-capture`):** "Take photo" item
+      in the attach dropdown uses `ActivityResultContracts.TakePicture()` against a
+      filesDir target (`camera_capture_<epochMs>.jpg`, `MmsManagerWrapper.cameraCaptureFile`)
+      handed off via the existing FileProvider, then funnels the result through the
+      same `onAttachmentsSelected`/`appendAttachments` pipeline a picked photo uses.
+      **No `CAMERA` permission** — deliberately not declared in the manifest, so the
+      system camera app launches with zero permission surface from us. The pending
+      capture target survives process death via `SavedStateHandle` (mirrors the voice
+      memo preview take); the temp file joins the same `voice_memo_`-style owned-file
+      sweep/delete lifecycle (new `camera_capture_` prefix, same 24 h sweep grace).
+      **Needs on-device verification:** capture → preview strip → MMS send; cancel
+      path deletes the temp file; cap-of-5 rejection routes through the snackbar;
+      capture surviving backgrounding/process death while the camera app is
+      foreground; the orphan sweep not eating a still-pending capture.
 - [x] **Attachment picker gaps found testing against Google Messages** —
       all three resolved (July 5 2026) by replacing `GetContent("image/*")` with
       `ActivityResultContracts.PickMultipleVisualMedia(maxItems = 5)` +
