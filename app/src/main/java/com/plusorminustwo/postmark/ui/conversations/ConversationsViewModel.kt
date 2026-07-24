@@ -15,13 +15,17 @@ import androidx.work.WorkManager
 import com.plusorminustwo.postmark.data.preferences.GestureHintsRepository
 import com.plusorminustwo.postmark.data.preferences.HomeBackgroundPreferenceRepository
 import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
+import com.plusorminustwo.postmark.data.repository.BlockedNumbersRepository
 import com.plusorminustwo.postmark.data.repository.MessageRepository
 import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.repository.ThreadRepository
 import com.plusorminustwo.postmark.data.sync.SmsHistoryImportWorker
 import com.plusorminustwo.postmark.data.sync.SmsSyncHandler
 import com.plusorminustwo.postmark.domain.model.Thread
+import com.plusorminustwo.postmark.domain.selection.BlockCandidate
+import com.plusorminustwo.postmark.domain.selection.blockResultMessage
 import com.plusorminustwo.postmark.domain.selection.bulkToggleTarget
+import com.plusorminustwo.postmark.domain.selection.partitionForBlock
 import com.plusorminustwo.postmark.service.sms.MmsManagerWrapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -61,6 +65,7 @@ class ConversationsViewModel @Inject constructor(
     private val gestureHintsRepo: GestureHintsRepository,
     private val homeBackgroundRepo: HomeBackgroundPreferenceRepository,
     private val backgroundImageStore: ChatBackgroundImageStore,
+    private val blockedNumbersRepository: BlockedNumbersRepository,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -319,6 +324,52 @@ class ConversationsViewModel @Inject constructor(
         viewModelScope.launch {
             ids.forEach { messageRepository.markLatestUnread(it) }
             clearSelection()
+        }
+    }
+
+    /**
+     * Marks every selected thread as spam — hides it into the Spam folder and silences its
+     * notifications, same as the thread ⋮ menu's "Report as spam" (see
+     * [com.plusorminustwo.postmark.ui.thread.ThreadViewModel.toggleSpam]). Always one-way:
+     * [allThreads] is already filtered to non-spam threads ([ThreadDao.observeNonSpam]), so
+     * the selection can never contain an already-spam thread to restore. Batches with
+     * [ThreadRepository.markSpam] (a single `IN (:ids)` write) rather than looping
+     * single-row updates. Callers MUST confirm with the user first — marking spam hides the
+     * thread away, same as the single-thread action.
+     */
+    fun reportSpamSelected() {
+        val ids = _selectedThreadIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            threadRepository.markSpam(ids)
+            clearSelection()
+            _snackbarMessages.tryEmit("Reported ${ids.size} as spam")
+        }
+    }
+
+    /**
+     * Blocks every selected NON-GROUP thread's address via the system
+     * [android.provider.BlockedNumberContract] provider (recoverable from Settings ›
+     * Privacy › Blocked numbers) — group threads are skipped since there's no single number
+     * to block (see [partitionForBlock]), same reason "Block number" is hidden in the
+     * thread ⋮ menu for group threads. Guarded by the default-SMS check like
+     * [deleteSelected]; callers MUST confirm with the user first. Blocking does NOT delete
+     * or spam-mark the conversations — this is a system-level block only, the threads
+     * remain in the list until the user deletes them.
+     */
+    fun blockSelected() {
+        if (!context.isDefaultSmsApp()) return
+        val targets = selectedThreads()
+        if (targets.isEmpty()) return
+        viewModelScope.launch {
+            val partition = partitionForBlock(
+                targets.map { BlockCandidate(it.address, isGroup = it.participants.size > 1) }
+            )
+            val blockedCount = withContext(Dispatchers.IO) {
+                partition.addressesToBlock.count { blockedNumbersRepository.block(it) }
+            }
+            clearSelection()
+            _snackbarMessages.tryEmit(blockResultMessage(blockedCount, partition.skippedGroupCount))
         }
     }
 

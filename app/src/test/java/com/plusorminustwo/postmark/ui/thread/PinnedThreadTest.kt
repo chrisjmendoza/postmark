@@ -137,6 +137,7 @@ class PinnedThreadTest {
         override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
         override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
         override suspend fun updateSpam(threadId: Long, isSpam: Boolean) {}
+        override suspend fun markSpam(ids: List<Long>) {}
         override suspend fun deleteAll() {}
         override suspend fun count(): Int = 0
         override suspend fun updateNickname(threadId: Long, nickname: String?) {}

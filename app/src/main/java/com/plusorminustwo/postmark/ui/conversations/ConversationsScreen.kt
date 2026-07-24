@@ -121,15 +121,21 @@ fun ConversationsScreen(
     }
     // Confirmation dialog visibility for the destructive bulk delete.
     var showDeleteDialog by remember { mutableStateOf(false) }
+    // Confirmation dialog visibility for the bulk "Report spam" action.
+    var showBulkSpamDialog by remember { mutableStateOf(false) }
+    // Confirmation dialog visibility for the bulk "Block" action. Only opened when Postmark
+    // is already the default SMS app — see pendingDefaultSmsGateReason below otherwise.
+    var showBulkBlockDialog by remember { mutableStateOf(false) }
     // Non-null while the swipe-left confirm dialog is up for that thread id (see
     // SwipeableThreadRow's onSwipeDelete). Mirrors the bulk-delete dialog above but for a
     // single conversation — same delete path, same confirm-gate, one fewer thing to select.
     var pendingSwipeDeleteId by remember { mutableStateOf<Long?>(null) }
-    // Shown instead of the swipe-delete confirm dialog when Postmark isn't the default SMS
-    // app (mirrors ThreadScreen's "Set Postmark as default SMS app" dialog) — swiping to
-    // delete can't be gated by hiding a button the way the bulk-select bar hides Delete, so
-    // it prompts to fix the role instead.
-    var showSwipeSetDefaultDialog by remember { mutableStateOf(false) }
+    // Reason text for the shared "Set Postmark as default SMS app" gate dialog below;
+    // non-null while showing. Shared by swipe-to-delete and the bulk Block action — both
+    // need the same fix before they can write to a system provider, and neither can be
+    // gated by simply hiding a button once the action has already been triggered (a swipe
+    // already happened; Block was tapped from the overflow menu). One dialog, one mechanism.
+    var pendingDefaultSmsGateReason by remember { mutableStateOf<String?>(null) }
 
     // Back exits selection mode rather than leaving the screen.
     BackHandler(enabled = selectionMode) { viewModel.clearSelection() }
@@ -240,6 +246,12 @@ fun ConversationsScreen(
                         onMarkUnread = { viewModel.markSelectedUnread() },
                         onTogglePin = { viewModel.pinSelected() },
                         onToggleMute = { viewModel.muteSelected() },
+                        onReportSpam = { showBulkSpamDialog = true },
+                        onBlock = {
+                            if (isDefaultSmsApp) showBulkBlockDialog = true
+                            else pendingDefaultSmsGateReason =
+                                "To block numbers, Postmark needs to be your default SMS app."
+                        },
                         onDelete = { showDeleteDialog = true }
                     )
                 } else {
@@ -386,7 +398,8 @@ fun ConversationsScreen(
                                             onLongPress = { viewModel.enterSelection(thread.id) },
                                             onSwipeDeleteRequested = { threadId ->
                                                 if (isDefaultSmsApp) pendingSwipeDeleteId = threadId
-                                                else showSwipeSetDefaultDialog = true
+                                                else pendingDefaultSmsGateReason =
+                                                    "To delete conversations, Postmark needs to be your default SMS app."
                                             },
                                             onSwipeToggleRead = { threadId, markRead ->
                                                 viewModel.toggleThreadRead(threadId, markRead)
@@ -436,6 +449,70 @@ fun ConversationsScreen(
                 )
             }
 
+            // ── Bulk "Report spam" confirmation ──────────────────────────────────────
+            // Mirrors ThreadScreen's single-thread spam confirm (showSpamConfirmDialog there):
+            // marking spam hides the thread away, so it's confirmed first. Always one-way from
+            // here — spam threads are already excluded from this list (ThreadDao.observeNonSpam),
+            // so the selection can never contain one already spam to restore.
+            if (showBulkSpamDialog) {
+                val count = selectedIds.size
+                AlertDialog(
+                    onDismissRequest = { showBulkSpamDialog = false },
+                    title = {
+                        Text(if (count == 1) "Report 1 conversation as spam?" else "Report $count conversations as spam?")
+                    },
+                    text = {
+                        Text(
+                            (if (count == 1) "It" else "They") +
+                                " will be moved to the Spam folder — hidden from your list and " +
+                                "silenced (no notifications). You can restore " +
+                                (if (count == 1) "it" else "them") +
+                                " anytime from Settings › Privacy › Spam."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showBulkSpamDialog = false
+                            viewModel.reportSpamSelected()
+                        }) { Text("Report") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showBulkSpamDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
+
+            // ── Bulk "Block" confirmation ────────────────────────────────────────────
+            // Mirrors ThreadScreen's single-thread Block confirm. Only reachable when
+            // Postmark is the default SMS app (gated above via pendingDefaultSmsGateReason).
+            // Group threads in the selection are skipped by the ViewModel — no single number
+            // to block — and that outcome is reported in the result snackbar, not here; this
+            // dialog's count is the full selection, same as the bulk-delete dialog above.
+            if (showBulkBlockDialog) {
+                val count = selectedIds.size
+                AlertDialog(
+                    onDismissRequest = { showBulkBlockDialog = false },
+                    title = { Text(if (count == 1) "Block 1 number?" else "Block $count numbers?") },
+                    text = {
+                        Text(
+                            "Calls and texts from " + (if (count == 1) "it" else "them") +
+                                " will be rejected by your phone. You can unblock " +
+                                (if (count == 1) "it" else "them") +
+                                " later from Settings › Privacy › Blocked numbers."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showBulkBlockDialog = false
+                            viewModel.blockSelected()
+                        }) { Text("Block") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showBulkBlockDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
+
             // ── Swipe-to-delete confirmation ─────────────────────────────────────────
             // Same real, irreversible delete as above (viewModel.deleteThread reuses the
             // exact deleteThreadsInternal path deleteSelected uses) — a swipe only ever
@@ -461,24 +538,23 @@ fun ConversationsScreen(
                 )
             }
 
-            // ── Swipe-to-delete "set default" gate ───────────────────────────────────
-            // Swiping to delete when Postmark isn't the default SMS app can't be gated by
-            // hiding a button the way the selection bar hides Delete — the swipe already
-            // happened — so it prompts to fix the role instead (mirrors ThreadScreen's
-            // "Set Postmark as default SMS app" dialog).
-            if (showSwipeSetDefaultDialog) {
+            // ── "Set Postmark as default SMS app" gate ───────────────────────────────
+            // Shared by swipe-to-delete and the bulk Block action (mirrors ThreadScreen's
+            // "Set Postmark as default SMS app" dialog) — see pendingDefaultSmsGateReason
+            // above for why one dialog covers both triggers.
+            pendingDefaultSmsGateReason?.let { reason ->
                 AlertDialog(
-                    onDismissRequest = { showSwipeSetDefaultDialog = false },
+                    onDismissRequest = { pendingDefaultSmsGateReason = null },
                     title = { Text("Set Postmark as default SMS app") },
-                    text = { Text("To delete conversations, Postmark needs to be your default SMS app.") },
+                    text = { Text(reason) },
                     confirmButton = {
                         TextButton(onClick = {
-                            showSwipeSetDefaultDialog = false
+                            pendingDefaultSmsGateReason = null
                             launchRoleRequest()
                         }) { Text("Set as default") }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showSwipeSetDefaultDialog = false }) { Text("Not now") }
+                        TextButton(onClick = { pendingDefaultSmsGateReason = null }) { Text("Not now") }
                     }
                 )
             }
@@ -873,8 +949,11 @@ private fun ThreadRow(
 // ── Selection top bar ─────────────────────────────────────────────────────────
 /** Replaces the normal top bar while conversations are selected (mirrors ThreadScreen's
  *  SELECTION mode). Surfaces Mark-read and Delete as icons and the stateful Pin/Mute plus
- *  Mark-unread actions in an overflow menu (their labels reflect the apply-to-all decision).
- *  Delete is only offered when Postmark is the default SMS app. */
+ *  Mark-unread/Report spam/Block actions in an overflow menu (Pin/Mute labels reflect the
+ *  apply-to-all decision). Delete is only offered when Postmark is the default SMS app;
+ *  Block is always offered but the caller gates what tapping it does (confirm dialog vs.
+ *  the "set default" prompt) since group threads in the selection are simply skipped rather
+ *  than hiding the whole action. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConversationSelectionTopBar(
@@ -887,6 +966,8 @@ private fun ConversationSelectionTopBar(
     onMarkUnread: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleMute: () -> Unit,
+    onReportSpam: () -> Unit,
+    onBlock: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var overflowExpanded by remember { mutableStateOf(false) }
@@ -924,6 +1005,14 @@ private fun ConversationSelectionTopBar(
                 DropdownMenuItem(
                     text = { Text("Mark unread") },
                     onClick = { overflowExpanded = false; onMarkUnread() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Report spam") },
+                    onClick = { overflowExpanded = false; onReportSpam() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Block") },
+                    onClick = { overflowExpanded = false; onBlock() }
                 )
             }
         }

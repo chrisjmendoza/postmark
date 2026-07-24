@@ -105,6 +105,11 @@ class ThreadRepository @Inject constructor(
     suspend fun updateSpam(threadId: Long, isSpam: Boolean) =
         dao.updateSpam(threadId, isSpam)
 
+    /** Bulk "Report spam" for the conversation-list multi-select action — one `IN (:ids)`
+     *  write instead of looping single-row [updateSpam] calls. Always one-way (see
+     *  [ThreadDao.markSpam]). */
+    suspend fun markSpam(ids: List<Long>) = dao.markSpam(ids)
+
     /** Saves a Postmark-only nickname for the thread; pass null to clear it. */
     suspend fun setNickname(threadId: Long, nickname: String?) =
         dao.updateNickname(threadId, nickname)

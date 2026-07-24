@@ -318,6 +318,7 @@ private class FakeThreadDao : ThreadDao {
     override fun observeNonSpam(): Flow<List<ThreadEntity>> = observeAll()
     override fun observeSpam(): Flow<List<ThreadEntity>> = observeAll()
     override suspend fun updateSpam(threadId: Long, isSpam: Boolean) = Unit
+    override suspend fun markSpam(ids: List<Long>) = Unit
     override suspend fun deleteAll() = Unit
     override suspend fun count(): Int = 0
     override suspend fun updateNickname(threadId: Long, nickname: String?) = Unit
