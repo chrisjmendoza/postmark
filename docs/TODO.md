@@ -81,10 +81,18 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       `docs/fable-reaction-parsing.md`: Fry thread empty bubble should heal
       into a ❤️ on the image (or log `EmptyMmsRepair: still empty`), Tonya
       thread's raw `❤️ to "https://…"` bubble should resolve via the one-shot
-      reprocess. Open question needing device data: what does the archival
-      fallback look like for a reaction to a caption-less image / voice memo
-      (placeholder quote? no text part?) — capture via SyncLogger before
-      deciding whether media-placeholder matching is worth building.
+      reprocess. **Device data now captured (July 24):** a reaction to a media
+      message archives as an MMS whose ENTIRE body is the bare emoji (just `❤️`,
+      no quoted structure), even with a caption — NOT the placeholder-quote form
+      we'd guessed. Handled by `fix/bare-emoji-reactions` (bumped one-shot
+      `reaction_reprocess_v3_done`): a lone-emoji MMS in a 1:1 thread attaches to
+      the immediately-preceding media message; SMS is never converted. Verify:
+      after one catch-up the owner's stray ❤️ becomes a pill on the cat photo and
+      the bubble is gone; a fresh sent/received media reaction attaches; a lone
+      emoji typed as a real SMS reply stays a normal message. Still-open device
+      question: the archival **removal** shape for a bare-emoji reaction is
+      unknown (add-only for now) — capture an unreact-from-the-other-phone over
+      RCS via SyncLogger before building removal detection.
 - [x] **Reaction chip position** (moved below the bubble July 22 2026) — pills
       are a plain layout child of the bubble Column, sitting in their own row
       just below the bubble (Google Messages look, but below rather than
