@@ -4,6 +4,66 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-24 (fix/reaction-removal-prefix) — removal-PREFIX shape recognized, stray bubble heals
+
+1089 tests passing (up from 1082). **Not yet verified on device.**
+
+**Un-reacting to a quoted-text message archived as a permanent stray bubble AND
+left the pill stuck.** Fresh device evidence (owner's phone): when the other
+party (Google Messages, RCS→SMS fallback) removes a reaction, the archived MMS
+body is a `Removed <emoji> from "<quote>"` PREFIX — not the guessed
+`<emoji> to "<quote>" removed` suffix `AndroidReactionParser` already handled.
+The real captured body (quotes and commas embedded in the quoted text, closing
+quote is the last character of the body):
+
+    Removed 👍 from "In the column of "I don't have kids because of this, but
+    here we are," Frankie is kind of like one of those kids that tells you
+    that they pooped after they pooped while you're trying to potty train
+    them. I was late to work this morning because, after giving multiple
+    opportunities to go outside, she decided she wanted to poop inside and
+    then barked at me to clean it."
+
+Because the parser didn't recognize this shape, the removal rendered as a
+literal text bubble and the original 👍 pill was never cleared.
+
+`AndroidReactionParser` gained a second regex (`removalPrefixRegex`) alongside
+the existing `to`/`removed` one — same quote-character class
+(`" " ' ' „ " « »`), same 1–8-non-whitespace + first-codepoint-non-ASCII emoji
+guard, `DOT_MATCHES_ALL` with `^…$` anchors so the non-greedy quote capture
+backtracks out to the body's LAST closing quote, keeping embedded quotes
+inside the quoted text intact exactly like the existing regex. "Removed" and
+"from" are literal English keywords, the same limitation the existing "to"
+literal already has.
+
+The downstream removal machinery needed no changes — `ReactionResolver`
+(historical/re-scan pass) and both `SmsSyncHandler` incremental paths
+(SMS + MMS) already honor `ParsedReaction.isRemoval` by deleting the matching
+`ReactionEntity` (keyed on `messageId` + `senderAddress` + `emoji`) and
+dropping the fallback row instead of inserting it as a bubble — the gap was
+purely parser recognition.
+
+The one-shot historical reprocess flag was bumped `reaction_reprocess_v3_done`
+→ `reaction_reprocess_v4_done`, so `ReactionResolver.resolveAll()` runs once
+more on existing installs — the owner's stray "Removed 👍 from …" bubble
+should resolve (pill cleared, bubble deleted) after one catch-up. Room-side
+only; the telephony provider is never written (CLAUDE.md CRITICAL). No schema
+change.
+
+New tests in `AndroidReactionParserTest` (the exact device body incl. embedded
+quotes, a simple removal, a curly-quote variant, and non-matches: ASCII
+"emoji", no quotes, plain sentences starting with "Removed") plus a mirrored
+removal-prefix case in `ReactionResolverTest` confirming the re-scan pass
+resolves it. All existing suffix-form and quote-variant cases still pass.
+
+**On-device verification:** open Postmark, wait for a catch-up; the existing
+"Removed 👍 from …" bubble should disappear and the 👍 pill should clear from
+the original message. Confirm a fresh live un-react from the other phone also
+clears the pill without leaving a bubble. Still open: the archival removal
+shape for a **bare-emoji** media reaction (no quoted structure) is unknown —
+not covered by this fix.
+
+---
+
 ## 2026-07-24 (fix/bare-emoji-reactions) — lone-emoji media reactions become pills
 
 1073 tests passing (up from ~1044). **Not yet verified on device.**

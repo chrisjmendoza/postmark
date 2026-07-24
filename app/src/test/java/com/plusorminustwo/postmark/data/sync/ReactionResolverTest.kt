@@ -187,6 +187,28 @@ class ReactionResolverTest {
     }
 
     @Test
+    fun `removal-prefix fallback deletes the existing reaction and its bubble`() = runTest {
+        // Mirrors the suffix-form removal test above, but for the real on-device removal
+        // shape captured 2026-07-24: "Removed <emoji> from <quote>" (a PREFIX, not a
+        // trailing "removed" suffix). Confirms the re-scan pass (resolveAll — the same
+        // pass the v4 one-shot reprocess runs) resolves this shape too.
+        messageDao.seed(
+            msg(7, "Dinner at 7?", timestamp = 1_000),
+            msg(9, "Removed 👍 from \"Dinner at 7?\"", timestamp = 3_000)
+        )
+        reactionDao.rows += ReactionEntity(
+            id = 1, messageId = 7, senderAddress = "+15551234567",
+            emoji = "👍", timestamp = 2_000, rawText = "👍 to \"Dinner at 7?\""
+        )
+
+        val result = resolver.resolveAll()
+
+        assertEquals(ReactionResolver.Result(inserted = 0, removed = 1), result)
+        assertTrue(reactionDao.rows.isEmpty())
+        assertFalse(messageDao.rows.containsKey(9L))
+    }
+
+    @Test
     fun `duplicate reaction is not inserted twice and its redundant row is removed`() = runTest {
         messageDao.seed(
             msg(7, "Dinner at 7?", timestamp = 1_000),
