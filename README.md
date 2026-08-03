@@ -45,7 +45,6 @@ A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark 
 ### Export
 - Select individual messages, a whole day, or a date range from any thread
 - **Copy** — writes a clean labeled transcript to clipboard, ready to paste into Claude, ChatGPT, or anywhere else
-- Image export ("share as picture") is planned but not yet implemented
 
 ### Backup & Restore
 - Scheduled automatic backups — daily, weekly, or monthly via WorkManager
@@ -251,7 +250,6 @@ The live, tiered backlog lives in `docs/TODO.md` — see [Documentation](#docume
   report/hide/restore is done; Play Store requirement)
 - On-device verification of the voice memo hardening rounds (screen-off/backgrounding,
   TalkBack, audio focus, process death — see `docs/fable-voice-memo.md`)
-- Image export (Canvas to Bitmap rendering)
 - Play Store prep — SMS permissions declaration, privacy policy, store assets
 
 ---

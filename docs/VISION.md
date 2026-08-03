@@ -13,7 +13,7 @@ opening.
 Postmark's existing, verifiable moats — lean into all three:
 1. **Radical privacy** — no INTERNET permission. Not "we don't upload"; *can't*. No other
    maintained SMS app can claim this. It's the headline.
-2. **Your data is yours** — real backups, readable exports, image exports, stats. GM gives
+2. **Your data is yours** — real backups, readable exports, stats. GM gives
    you none of this.
 3. **Iteration speed** — 20+ features/fixes shipped *today*. Google ships quarterly.
 
@@ -35,8 +35,9 @@ Postmark's existing, verifiable moats — lean into all three:
   "on this day", per-contact shared-history timelines (the new media gallery is step one),
   saved searches. GM's search is an afterthought; make ours the reason people switch.
 - **Stats → shareable.** Nobody else has conversation stats at all. A "year in texts" /
-  monthly recap rendered with the existing image-export pipeline is organic marketing
-  built into the product.
+  monthly recap rendered as an image is organic marketing built into the product.
+  (The message-export image pipeline was removed July 29 — a recap card would be a
+  fresh, much smaller renderer.)
 - **Organization: labels + snooze.** Manual labels (no ML needed), filter chips on the home
   screen; snooze-a-conversation reuses the reminders infrastructure nearly verbatim.
 - **Per-thread appearance + per-contact rows** — already 60% built (see the July 24 scout in

@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <external-files-path name="exports" path="exports/" />
     <external-files-path name="backups" path="backups/" />
     <cache-path name="cache" path="." />
     <!-- sync_log.txt lives in filesDir (app-private internal storage).

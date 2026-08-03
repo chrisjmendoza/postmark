@@ -4,6 +4,29 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-07-29 (master) — remove "Share as image"; selection top bar back to direct Copy
+
+1131 tests passing (down from 1140 — the 9 `ImageExportPlanTest` tests went with the
+feature).
+
+Owner decision: the July 23 image-export path added a Share/Export bottom sheet in
+front of the copy action, and the top-bar icon changed from copy to share. Chris
+doesn't want it — if someone wants to share a conversation as a picture, a screenshot
+already does that. Reverted to the pre-export behavior: the selection top bar's first
+action is **Copy** (`ContentCopy` icon) and tapping it copies the
+`ExportFormatter.formatForCopy` transcript to the clipboard directly — no
+intermediate sheet.
+
+Deleted outright (prefer deletion): `ui/export/ExportBottomSheet.kt`,
+`domain/export/ImageExportPlan.kt`, `service/export/ImageExportRenderer.kt`,
+`ImageExportPlanTest.kt`, `ThreadViewModel.renderSelectionAsImage()` (+ the renderer
+injection), ThreadScreen's export-sheet state/`imageShareIntent()` helper, and the
+now-unreferenced `exports/` FileProvider path in `file_paths.xml`. README, TODO,
+ROADMAP, and VISION scrubbed of the image-export claims; TODO/ROADMAP entries note
+the removal is deliberate so it isn't rebuilt without a new owner ask.
+
+---
+
 ## 2026-07-24 (master) — send-options (+) menu replaces long-press-send
 
 1140 tests passing (unchanged). **Not yet verified on device.**

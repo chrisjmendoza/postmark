@@ -76,10 +76,9 @@ Build order follows the spec. Each phase depends on the previous.
 ## Phase 4 — Export 🚧 In Progress
 
 - [x] `ExportFormatter.formatForCopy()` — clean labeled transcript per spec
-- [x] `ExportBottomSheet` — Copy + Share buttons
-- [ ] **Rendered image export** — draw conversation to `Canvas`, convert to `Bitmap`, share via `FileProvider` + `ACTION_SEND`
-- [x] Wire selection → `ExportBottomSheet` from `ThreadScreen`
-- [ ] AI Export as distinct format option (same as Copy but labelled separately in sheet)
+- ~~Rendered image export / `ExportBottomSheet`~~ — built July 23, **removed July 29 by
+  owner decision** (screenshots cover it); selection top bar is a direct Copy action again
+- [ ] AI Export as distinct format option (same as Copy but labelled separately)
 
 ---
 
