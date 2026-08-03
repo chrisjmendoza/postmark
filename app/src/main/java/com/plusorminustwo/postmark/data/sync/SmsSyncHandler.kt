@@ -24,6 +24,7 @@ import com.plusorminustwo.postmark.domain.model.previewText
 import com.plusorminustwo.postmark.domain.model.Reaction
 import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
+import com.plusorminustwo.postmark.util.isDefaultSmsApp
 import com.plusorminustwo.postmark.data.reaction.findBareEmojiReactionTarget
 import com.plusorminustwo.postmark.data.reaction.isBareEmojiReactionCandidate
 import androidx.core.content.FileProvider
@@ -137,6 +138,10 @@ class SmsSyncHandler @Inject constructor(
         // v4: removal-PREFIX shape ("Removed <emoji> from "<quote>"") — heals the owner's
         // existing stray "Removed 👍 from …" bubble and clears the stale pill it never removed.
         private const val KEY_REACTION_REPROCESS_DONE = "reaction_reprocess_v4_done"
+        /* How recent a synced incoming MMS must be to earn a notification banner
+         * (see notifyIncomingMms). Generous enough for slow MMS downloads and
+         * carrier/device clock skew; far below any app-open backlog's age. */
+        private const val NOTIFY_FRESHNESS_WINDOW_MS = 15 * 60_000L
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -952,6 +957,20 @@ class SmsSyncHandler @Inject constructor(
      * as valid for a 1:1 MMS sender as it is for an SMS sender — no new plumbing needed.
      */
     private suspend fun notifyIncomingMms(threadId: Long, message: Message) {
+        /* Sync-time notification needs two gates the SMS broadcast path gets for free
+         * from SMS_DELIVER's default-app-only dispatch:
+         *  — Default-app: sync runs no matter who the default messenger is (foreground
+         *    catch-up poll, content observer, RCS archival broadcast). When another app
+         *    holds the SMS role it is already notifying the user; every banner from us
+         *    is a duplicate — and opening the app after a backlog accumulated blasted
+         *    one notification per thread in a burst.
+         *  — Freshness: a genuinely-new arrival (MmsReceiver-triggered sync) is seconds
+         *    old when it reaches here; a backlog row (e.g. imported right after Postmark
+         *    becomes default) can be hours old. Old messages belong in the thread, not
+         *    in a banner.
+         * The message itself still synced above; only the banner is skipped. */
+        if (!context.isDefaultSmsApp()) return
+        if (System.currentTimeMillis() - message.timestamp > NOTIFY_FRESHNESS_WINDOW_MS) return
         val thread = threadRepository.getById(threadId) ?: return
         // Suppress when the user is already viewing this exact thread (same id space as
         // ThreadScreen's threadId), or notifications are off / muted. The MMS still synced

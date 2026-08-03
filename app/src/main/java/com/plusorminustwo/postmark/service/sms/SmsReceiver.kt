@@ -82,6 +82,16 @@ class SmsReceiver : BroadcastReceiver() {
                          * even if the observer notification is delayed or lost. */
                         syncHandler.onSmsContentChanged(Telephony.Sms.CONTENT_URI)
 
+                        /* ── Notification (default SMS app only) ────────────────────────
+                         * SMS_DELIVER fires exclusively for the default SMS app, so gating
+                         * on it lets the OS answer "are we the user's messenger?". The
+                         * SMS_RECEIVED broadcast reaches every app: acting on it duplicated
+                         * the real messenger's notification when another app was default,
+                         * and double-ran this block when Postmark itself was default (the
+                         * default app receives BOTH actions). Non-default receipt now only
+                         * syncs Room, silently. */
+                        if (!isDeliver) return@launch
+
                         /* Resolve the canonical thread id once, reused for the active-thread
                          * suppression check, the deep-link, and the group check below. This
                          * is the same id space as ThreadScreen's threadId (Room Thread.id ==

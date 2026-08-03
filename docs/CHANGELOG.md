@@ -4,6 +4,33 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-08-03 (master) — notifications gated on default-SMS-app role (no more app-open blast)
+
+1131 tests passing (unchanged). **Not yet verified on device.**
+
+Owner report: with another app set as default messenger, opening Postmark fired a
+notification burst for every text that had arrived since the last open (heavy enough
+to stutter the phone), and incoming SMS were double-notified alongside the real
+messenger in real time. Root cause: neither notification entry point ever asked
+"am I the default SMS app?" —
+
+- `SmsReceiver` notified on **SMS_RECEIVED** (broadcast to every app, and *also* to
+  the default app in addition to SMS_DELIVER — so when Postmark was default the
+  notify block ran twice per message). Now it notifies only on **SMS_DELIVER**,
+  which the OS dispatches exclusively to the default app; RECEIVED is sync-only.
+- `SmsSyncHandler.notifyIncomingMms` ran on every sync pass — including the
+  foreground catch-up poll that imports the whole backlog (RCS-archived texts land
+  as MMS rows, hence "all my new texts") — with no role check. Two new gates:
+  bail unless `isDefaultSmsApp()`, and bail for rows older than 15 min
+  (`NOTIFY_FRESHNESS_WINDOW_MS`) so becoming default doesn't blast the accumulated
+  backlog either. Sync itself still runs on both paths; only the banner is skipped.
+
+Net messenger behavior: not default → never notify (the real messenger owns that);
+default → notify at arrival time only, with the existing active-thread suppression
+unchanged.
+
+---
+
 ## 2026-07-29 (master) — remove "Share as image"; selection top bar back to direct Copy
 
 1131 tests passing (down from 1140 — the 9 `ImageExportPlanTest` tests went with the
