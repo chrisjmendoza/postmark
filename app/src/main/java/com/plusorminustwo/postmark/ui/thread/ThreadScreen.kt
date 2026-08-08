@@ -2030,9 +2030,24 @@ private fun MessageBubble(
         accentColors.sentContainer ?: MaterialTheme.colorScheme.primaryContainer
     else
         accentColors.receivedContainer ?: MaterialTheme.colorScheme.surfaceVariant
-    // Bubble text color when a custom fill is set for this direction; null falls back
-    // to the ambient LocalContentColor read at each Text below, unchanged from before.
+    // Bubble ICON/chip color when a custom fill is set for this direction; null falls back
+    // to the ambient LocalContentColor read below, unchanged from before. This stays
+    // white/black-by-contrast — only the body TEXT gets cross-tinted (see below).
     val bubbleContentColor = if (message.isSent) accentColors.sentContent else accentColors.receivedContent
+    // Cross-tinted body text: when the OTHER direction is customized, this bubble's text
+    // takes that color rather than white/black — a green sent bubble gets orange text and
+    // the orange received bubble gets green text. ContactPalette.crossTintedTextColor keeps
+    // the other accent's hue/saturation but walks its lightness to clear the 4.5 WCAG text
+    // floor against this fill (a raw flip is ~1.1:1 — invisible), falling back to
+    // bubbleContentColor's white/black when a color has no legible variant here.
+    // Keyed on baseBubbleColor, NOT the animated bubbleColor — the search-jump highlight
+    // animates that one per frame, and the text shouldn't re-derive (or re-tint) mid-flash.
+    val otherAccentContainer = if (message.isSent) accentColors.receivedContainer else accentColors.sentContainer
+    val bubbleTextColor = remember(otherAccentContainer, baseBubbleColor, bubbleContentColor) {
+        otherAccentContainer?.let {
+            Color(ContactPalette.crossTintedTextColor(it.toArgb(), baseBubbleColor.toArgb()))
+        } ?: bubbleContentColor
+    }
     // Search-jump / "Go to chat" highlight. The ViewModel drops highlightedMessageId
     // 2 s after the jump; animating the colour turns that hard flip into a quick
     // tint-in and a gentle fade back to the resting bubble colour.
@@ -2303,11 +2318,12 @@ private fun MessageBubble(
                         if (message.body.isNotEmpty()) {
                             val fontScale   = LocalBubbleFontScale.current
                             // On a custom-colored bubble, the default link blue/purple is
-                            // near-invisible — use the bubble's own content color instead
-                            // (linkifyText still underlines it, iMessage-style). Default
+                            // near-invisible — use the bubble's own text color instead
+                            // (linkifyText still underlines it, iMessage-style, so links stay
+                            // distinguishable even though they match the body). Default
                             // bubbles keep the primary link color unchanged.
-                            val linkColor   = bubbleContentColor ?: MaterialTheme.colorScheme.primary
-                            val textColor   = bubbleContentColor ?: LocalContentColor.current
+                            val linkColor   = bubbleTextColor ?: MaterialTheme.colorScheme.primary
+                            val textColor   = bubbleTextColor ?: LocalContentColor.current
                             val baseStyle   = MaterialTheme.typography.bodyMedium
                             val ctx         = LocalContext.current
                             val annotated   = remember(message.body, linkColor, ctx) {
@@ -2326,11 +2342,12 @@ private fun MessageBubble(
                     // Plain SMS bubble — linkify URLs and phone numbers.
                     val fontScale  = LocalBubbleFontScale.current
                     // On a custom-colored bubble, the default link blue/purple is
-                    // near-invisible — use the bubble's own content color instead
-                    // (linkifyText still underlines it, iMessage-style). Default
+                    // near-invisible — use the bubble's own text color instead
+                    // (linkifyText still underlines it, iMessage-style, so links stay
+                    // distinguishable even though they match the body). Default
                     // bubbles keep the primary link color unchanged.
-                    val linkColor  = bubbleContentColor ?: MaterialTheme.colorScheme.primary
-                    val textColor  = bubbleContentColor ?: LocalContentColor.current
+                    val linkColor  = bubbleTextColor ?: MaterialTheme.colorScheme.primary
+                    val textColor  = bubbleTextColor ?: LocalContentColor.current
                     val baseStyle  = MaterialTheme.typography.bodyMedium
                     val ctx        = LocalContext.current
                     val annotated  = remember(message.body, linkColor, ctx) {

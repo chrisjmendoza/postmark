@@ -177,6 +177,77 @@ object ContactPalette {
         return ColorMath.hsvToArgb(h, s, v)
     }
 
+    // ── Cross-tinted bubble text ─────────────────────────────────────────────────
+
+    /** WCAG AA floor for normal-size body text. Unlike the deliberately-low
+     *  [ColorMath.adjustAccentForBackground] guards (which only stop a bubble from vanishing
+     *  into the screen), cross-tinted text has to be genuinely *readable*, so this is the real
+     *  4.5 bar. */
+    private const val CROSS_TINT_CONTRAST_FLOOR = 4.5
+
+    private const val CROSS_TINT_V_STEP = 0.04f
+    /** 1.0 / [CROSS_TINT_V_STEP] — enough steps to walk the full HSV value range from any start. */
+    private const val CROSS_TINT_MAX_STEPS = 25
+
+    /**
+     * Body-text color for a bubble filled with [containerArgb] when the thread's OTHER
+     * direction is customized to [otherAccentArgb] — the "flip" that paints a green sent
+     * bubble's text in the received bubble's orange, and vice versa.
+     *
+     * A raw flip is unreadable: the presets are all mid-tones of similar luminance, so e.g.
+     * Orange on Green is 1.13:1 — invisible. So the other accent's HUE AND SATURATION are kept
+     * (that's what makes it read as "the other color") while its HSV *value* is walked in
+     * [CROSS_TINT_V_STEP] steps until it clears [CROSS_TINT_CONTRAST_FLOOR] against the
+     * container. Orange-on-green lands on a deep burnt orange; the color is still obviously
+     * orange, and it's legible.
+     *
+     * BOTH directions are walked and the one needing the smaller change wins. A single
+     * direction chosen from the container's luminance (what the [ColorMath] guards do) is not
+     * enough here: against mid-tone Green, lightening Orange tops out at 1.51:1 even at full
+     * value — only darkening ever reaches 4.5 — so a one-way walk would strand on the fallback
+     * for the most common preset pairs.
+     *
+     * If neither direction clears (a saturated hue with no luminance headroom on either side
+     * of the container) this falls back to [onBubbleContentColor] — white/black-by-contrast,
+     * which always clears — so the text is never illegible, it just doesn't get the flip.
+     * Returns [otherAccentArgb] untouched when it already clears the floor.
+     */
+    fun crossTintedTextColor(otherAccentArgb: Int, containerArgb: Int): Int {
+        if (contrastRatio(otherAccentArgb, containerArgb) >= CROSS_TINT_CONTRAST_FLOOR) {
+            return otherAccentArgb
+        }
+        val (h, s, v) = ColorMath.argbToHsv(otherAccentArgb)
+        val darker = walkValueToTextFloor(h, s, v, -CROSS_TINT_V_STEP, containerArgb)
+        val lighter = walkValueToTextFloor(h, s, v, CROSS_TINT_V_STEP, containerArgb)
+        val best = listOfNotNull(darker, lighter).minByOrNull { it.second }
+        return best?.first ?: onBubbleContentColor(containerArgb, isDark = true)
+    }
+
+    /**
+     * Walks HSV value from [v] by [step] (clamped to 0..1) until the resulting color clears
+     * [CROSS_TINT_CONTRAST_FLOOR] against [containerArgb], preserving [h] and [s]. Returns the
+     * cleared color paired with the number of steps it took (so the caller can prefer the
+     * smaller change), or null if [CROSS_TINT_MAX_STEPS] — the full value range — is exhausted
+     * without clearing.
+     */
+    private fun walkValueToTextFloor(
+        h: Float,
+        s: Float,
+        v: Float,
+        step: Float,
+        containerArgb: Int
+    ): Pair<Int, Int>? {
+        var value = v
+        for (stepsTaken in 1..CROSS_TINT_MAX_STEPS) {
+            value = (value + step).coerceIn(0f, 1f)
+            val candidate = ColorMath.hsvToArgb(h, s, value)
+            if (contrastRatio(candidate, containerArgb) >= CROSS_TINT_CONTRAST_FLOOR) {
+                return candidate to stepsTaken
+            }
+        }
+        return null
+    }
+
     /** WCAG relative luminance (0..1) of an opaque ARGB color. */
     fun relativeLuminance(argb: Int): Double {
         val r = srgbToLinear(red(argb))

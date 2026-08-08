@@ -74,6 +74,121 @@ class ContactPaletteTest {
         }
     }
 
+    // ── crossTintedTextColor ─────────────────────────────────────────────────────
+    // The "flip": a bubble's body text takes the OTHER direction's accent, walked in HSV
+    // value until it's actually readable on this bubble's fill.
+
+    /** Hue of an ARGB color, for asserting the flip kept the other accent's identity. */
+    private fun hueOf(argb: Int) = ColorMath.argbToHsv(argb).first
+
+    /** Hue tolerance in degrees. The walk preserves hue exactly in HSV, but hsvToArgb rounds
+     *  to 8-bit channels, and a darkened result has few levels left to encode hue in — Amber
+     *  darkened onto Red drifts ~1.5°. The 12 presets sit ~30° apart, so 5° still pins the
+     *  text to the right color while tolerating quantization. */
+    private val hueTolerance = 5.0
+
+    @Test
+    fun `cross tint clears the 4point5 text floor for every ordered pair of presets`() {
+        for (container in ContactPalette.colors) {
+            for (other in ContactPalette.colors) {
+                val text = ContactPalette.crossTintedTextColor(other.argb, container.argb)
+                val ratio = ContactPalette.contrastRatio(text, container.argb)
+                assertTrue(
+                    "${other.name} text on ${container.name} bubble: contrast $ratio < 4.5",
+                    ratio >= 4.5
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `cross tint clears the floor on the plain theme backgrounds too`() {
+        // Uncustomized directions leave the bubble on a theme fill; the text still has to read.
+        for (container in listOf(darkThemeBg, lightThemeBg, white, black)) {
+            for (other in ContactPalette.colors) {
+                val text = ContactPalette.crossTintedTextColor(other.argb, container)
+                assertTrue(
+                    "${other.name} on container $container: below 4.5",
+                    ContactPalette.contrastRatio(text, container) >= 4.5
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `cross tint preserves hue rather than falling back to white or black, for every preset pair`() {
+        // The whole point of the flip is that the text still reads as the other color. A
+        // white/black fallback would silently defeat it, so pin that no preset pair needs one.
+        for (container in ContactPalette.colors) {
+            for (other in ContactPalette.colors) {
+                if (other.argb == container.argb) continue // same color both ways — no hue to keep
+                val text = ContactPalette.crossTintedTextColor(other.argb, container.argb)
+                assertTrue(
+                    "${other.name} on ${container.name}: fell back to white/black instead of tinting",
+                    text != white && text != black
+                )
+                assertEquals(
+                    "${other.name} on ${container.name}: hue drifted",
+                    hueOf(other.argb).toDouble(),
+                    hueOf(text).toDouble(),
+                    hueTolerance
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `cross tint returns the other accent untouched when it is already legible`() {
+        // Amber on Brown-ish dark: pick a pair that already clears, via the theme background.
+        val amber = ContactPalette.colors.first { it.name == "Amber" }.argb
+        assertTrue(
+            "precondition: amber should already clear 4.5 on the dark theme background",
+            ContactPalette.contrastRatio(amber, darkThemeBg) >= 4.5
+        )
+        assertEquals(amber, ContactPalette.crossTintedTextColor(amber, darkThemeBg))
+    }
+
+    @Test
+    fun `cross tint makes the green-orange pair readable in both directions`() {
+        // The motivating example. Raw, these two are ~1.13:1 — invisible.
+        val green = ContactPalette.colors.first { it.name == "Green" }.argb
+        val orange = ContactPalette.colors.first { it.name == "Orange" }.argb
+        assertTrue(
+            "precondition: raw green/orange should be illegible",
+            ContactPalette.contrastRatio(green, orange) < 2.0
+        )
+        val orangeOnGreen = ContactPalette.crossTintedTextColor(orange, green)
+        val greenOnOrange = ContactPalette.crossTintedTextColor(green, orange)
+        assertTrue(ContactPalette.contrastRatio(orangeOnGreen, green) >= 4.5)
+        assertTrue(ContactPalette.contrastRatio(greenOnOrange, orange) >= 4.5)
+        // Still recognizably the other color, not a white/black cop-out.
+        assertEquals(hueOf(orange).toDouble(), hueOf(orangeOnGreen).toDouble(), hueTolerance)
+        assertEquals(hueOf(green).toDouble(), hueOf(greenOnOrange).toDouble(), hueTolerance)
+    }
+
+    @Test
+    fun `cross tint is deterministic`() {
+        val green = ContactPalette.colors.first { it.name == "Green" }.argb
+        val orange = ContactPalette.colors.first { it.name == "Orange" }.argb
+        assertEquals(
+            ContactPalette.crossTintedTextColor(orange, green),
+            ContactPalette.crossTintedTextColor(orange, green)
+        )
+    }
+
+    @Test
+    fun `cross tint falls back to a legible white or black for a hue with no headroom`() {
+        // Fully-saturated blue tops out at luminance 0.0722, so on a mid-grey container
+        // neither darkening nor lightening can reach 4.5 — the fallback must still be legible.
+        val saturatedBlue = 0xFF0000FF.toInt()
+        val midGrey = 0xFF808080.toInt()
+        val text = ContactPalette.crossTintedTextColor(saturatedBlue, midGrey)
+        assertTrue(
+            "fallback $text should be legible on mid grey",
+            ContactPalette.contrastRatio(text, midGrey) >= 4.5
+        )
+    }
+
     // ── deriveAccentPair ─────────────────────────────────────────────────────────
     // The container is adjustAccentForBackground(accent, bg) — the identity for every
     // preset against both theme backgrounds — and the content is white/black-by-contrast.
