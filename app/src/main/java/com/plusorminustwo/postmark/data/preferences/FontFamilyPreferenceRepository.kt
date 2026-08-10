@@ -1,8 +1,8 @@
 package com.plusorminustwo.postmark.data.preferences
 
 import android.content.Context
-import com.plusorminustwo.postmark.ui.theme.FontFamilyPreference
-import com.plusorminustwo.postmark.ui.theme.fontFamilyPreferenceFromString
+import com.plusorminustwo.postmark.domain.customization.FontFamilyPreference
+import com.plusorminustwo.postmark.domain.customization.fontFamilyPreferenceFromString
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

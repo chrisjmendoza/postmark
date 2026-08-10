@@ -1,8 +1,8 @@
 package com.plusorminustwo.postmark.data.preferences
 
 import android.content.Context
-import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
-import com.plusorminustwo.postmark.ui.theme.bubbleStylePreferenceFromString
+import com.plusorminustwo.postmark.domain.customization.BubbleStylePreference
+import com.plusorminustwo.postmark.domain.customization.bubbleStylePreferenceFromString
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

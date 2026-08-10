@@ -16,9 +16,9 @@ import com.plusorminustwo.postmark.domain.customization.BackgroundPlacement
 import com.plusorminustwo.postmark.domain.customization.ChatBackgrounds
 import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
 import com.plusorminustwo.postmark.ui.components.PlacementRequest
-import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
-import com.plusorminustwo.postmark.ui.theme.FontFamilyPreference
-import com.plusorminustwo.postmark.ui.theme.ThemePreference
+import com.plusorminustwo.postmark.domain.customization.BubbleStylePreference
+import com.plusorminustwo.postmark.domain.customization.FontFamilyPreference
+import com.plusorminustwo.postmark.domain.customization.ThemePreference
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

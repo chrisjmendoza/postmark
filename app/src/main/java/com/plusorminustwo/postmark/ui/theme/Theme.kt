@@ -23,6 +23,8 @@ import androidx.compose.ui.text.font.FontWeight
 import com.plusorminustwo.postmark.R
 import com.plusorminustwo.postmark.domain.customization.ColorMath
 import com.plusorminustwo.postmark.domain.customization.ContactPalette
+import com.plusorminustwo.postmark.domain.customization.FontFamilyPreference
+import com.plusorminustwo.postmark.domain.customization.ThemePreference
 
 // ── Brand colors (dark) ──────────────────────────────────────────────────────
 

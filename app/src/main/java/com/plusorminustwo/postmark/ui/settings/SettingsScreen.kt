@@ -48,8 +48,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.plusorminustwo.postmark.ui.theme.ThemePreference
-import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.domain.customization.ThemePreference
+import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)

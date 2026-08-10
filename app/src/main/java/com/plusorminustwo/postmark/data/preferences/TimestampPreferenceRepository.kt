@@ -1,7 +1,7 @@
 package com.plusorminustwo.postmark.data.preferences
 
 import android.content.Context
-import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

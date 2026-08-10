@@ -124,9 +124,9 @@ import com.plusorminustwo.postmark.domain.voicememo.VoiceMemoPhase
 import com.plusorminustwo.postmark.domain.voicememo.formatMemoDuration
 import com.plusorminustwo.postmark.domain.voicememo.shouldCancelDrag
 import com.plusorminustwo.postmark.domain.voicememo.shouldLatchLock
-import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
+import com.plusorminustwo.postmark.domain.customization.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
-import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import com.plusorminustwo.postmark.ui.theme.withBubbleScale
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
