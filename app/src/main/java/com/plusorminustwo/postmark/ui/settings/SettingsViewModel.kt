@@ -4,8 +4,8 @@ import androidx.lifecycle.ViewModel
 import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.preferences.ThemePreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
-import com.plusorminustwo.postmark.ui.theme.ThemePreference
-import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.domain.customization.ThemePreference
+import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject

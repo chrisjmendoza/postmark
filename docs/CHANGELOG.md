@@ -4,6 +4,63 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-08-10 (master) — review pass: data layer decoupled from ui, mapper round-trip tests, doc drift
+
+1148 tests passing (+10 new).
+
+A code review from the textbook-writing session (Claude desktop) surfaced nine
+findings. All nine verified against the code; five landed, two declined on
+purpose, two were smells the reviewer already said to leave.
+
+- **data/ no longer imports ui/** — the four preference enums
+  (`BubbleStylePreference`, `FontFamilyPreference`, `ThemePreference`,
+  `TimestampPreference`) and their `fromString` helpers moved from `ui/theme`
+  to `domain/customization` (which already existed — ColorMath, ThemePresets).
+  Imports-only change; the Compose mappings (`toFontFamilyOrNull` etc.) stay in
+  `ui/theme/Theme.kt`. ARCHITECTURE.md's layer diagram is now true as written,
+  with one documented accepted exception: workers import `ui.MainActivity` as
+  the notification PendingIntent target (a platform wart, not a leak).
+- **`EntityMappingRoundTripTest` (10 tests)** pins `toEntity()`/`toDomain()`
+  as inverses for Message/Thread/Reaction. Every entity constructor param has
+  a default, so a domain field forgotten in `toEntity()` compiled fine and
+  silently persisted the default — the round trip turns that into a failing
+  test. Also pins the two deliberate asymmetries (reactions are assembled from
+  ReactionEntity by the repository, not the mapper; a size-≤1 participants
+  list normalizes to NULL — load-bearing for `recipientsFor()`'s
+  SMS-vs-group-MMS routing) and the pre-v12 attachment fallback.
+- **Doc drift**: ARCHITECTURE.md and BRIEFING.md claimed schema v15/v20
+  (actual: v23), "all 4 DAOs" (actual: 6), two `@HiltWorker` workers (actual:
+  7), and — in two independent places — the FTS query form `^"term"*`, which
+  FTS4 would silently treat as an exact-word match; the real form is `"term*"`
+  (star inside the quotes, per `FtsQueryBuilder`). BRIEFING's DATABASE section
+  gained the v21–23 columns/table + migrations; `PostmarkDatabase`'s statsDao
+  comment no longer names a hardcoded version.
+- **Full current-state docs audit** (owner request — hold docs to a higher
+  bar): BRIEFING, README, ARCHITECTURE, ROADMAP, and OWNER-ACTIONS audited
+  claim-by-claim against the code; CLAUDE.md verified clean. Highlights:
+  BRIEFING's theme section described default bubble colors (`#378ADD` sent,
+  `#2C2C2E`+border received) that don't exist — actual defaults are
+  `#1A3A5C` primaryContainer / `#3A3A3C` surfaceVariant, no border; four
+  "TIER 1 REMAINING" items (multipart tracking, send queue, media playback)
+  and several "UPCOMING" blocks (delivery timestamps, in-thread search,
+  restore, reaction parser) were already shipped and are now marked DONE;
+  ROADMAP checkboxes landed for pinch-zoom viewer, camera capture, group MMS,
+  in-thread search, MMS sync, and incoming notifications; ARCHITECTURE's FTS
+  update trigger is scoped `AFTER UPDATE OF body` (not plain UPDATE), the
+  reaction-match strategy is four-tier (not three) and shared (not
+  per-parser), and the wired-in `BareEmojiReaction` RCS path is now
+  documented; OWNER-ACTIONS item 2 corrected — testers install minified
+  `assembleStaging` builds, not debuggable `assembleDebug`; README's project
+  tree rewritten to the real package layout (12 undocumented domain/
+  subpackages) and the font list completed (9 families, not 3).
+
+Declined, on purpose: `android.util.Patterns` in `domain/links` already
+implements the reviewer's suggested fix (injectable pattern parameter; JVM
+tests inject a fixture); the MessageId value-class and `@Immutable`-in-domain
+suggestions stay as knowing trades per the reviewer's own verdicts.
+
+---
+
 ## 2026-08-03 (master) — notifications gated on default-SMS-app role (no more app-open blast)
 
 1131 tests passing (unchanged). **Not yet verified on device.**

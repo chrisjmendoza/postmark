@@ -20,7 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.plusorminustwo.postmark.ui.theme.FontFamilyPreference
+import com.plusorminustwo.postmark.domain.customization.FontFamilyPreference
 import com.plusorminustwo.postmark.ui.theme.toFontFamilyOrNull
 
 /**

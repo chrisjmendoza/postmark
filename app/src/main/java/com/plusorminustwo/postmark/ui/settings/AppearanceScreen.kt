@@ -38,8 +38,8 @@ import com.plusorminustwo.postmark.ui.components.ChatBackgroundPreview
 import com.plusorminustwo.postmark.ui.components.ChatBackgroundThumbnail
 import com.plusorminustwo.postmark.ui.components.FontFamilyDialog
 import com.plusorminustwo.postmark.ui.components.accentSubtitle
-import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
-import com.plusorminustwo.postmark.ui.theme.ThemePreference
+import com.plusorminustwo.postmark.domain.customization.BubbleStylePreference
+import com.plusorminustwo.postmark.domain.customization.ThemePreference
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import com.plusorminustwo.postmark.ui.theme.withBubbleScale
 import java.io.File

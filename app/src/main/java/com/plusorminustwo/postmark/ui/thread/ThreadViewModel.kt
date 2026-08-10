@@ -57,8 +57,8 @@ import com.plusorminustwo.postmark.domain.voicememo.isMemoKeepable
 import com.plusorminustwo.postmark.domain.voicememo.normalizedRecordingLevel
 import com.plusorminustwo.postmark.domain.voicememo.resampleAmplitudes
 import com.plusorminustwo.postmark.domain.voicememo.voiceMemoTransition
-import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
-import com.plusorminustwo.postmark.ui.theme.TimestampPreference
+import com.plusorminustwo.postmark.domain.customization.BubbleStylePreference
+import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import com.plusorminustwo.postmark.service.audio.VoiceMemoRecorder
 import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
 import com.plusorminustwo.postmark.service.sms.ActiveThreadTracker

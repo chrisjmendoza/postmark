@@ -1,4 +1,4 @@
-package com.plusorminustwo.postmark.ui.theme
+package com.plusorminustwo.postmark.domain.customization
 
 /**
  * Controls the app-wide font family. Persisted by [FontFamilyPreferenceRepository] BY NAME,

@@ -1,4 +1,4 @@
-package com.plusorminustwo.postmark.ui.theme
+package com.plusorminustwo.postmark.domain.customization
 
 import org.junit.Assert.assertEquals
 import org.junit.Test

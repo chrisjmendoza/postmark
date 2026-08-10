@@ -1,4 +1,4 @@
-package com.plusorminustwo.postmark.ui.theme
+package com.plusorminustwo.postmark.domain.customization
 
 /** Controls the shape of message bubbles app-wide. Persisted by [BubbleStylePreferenceRepository]. */
 enum class BubbleStylePreference {

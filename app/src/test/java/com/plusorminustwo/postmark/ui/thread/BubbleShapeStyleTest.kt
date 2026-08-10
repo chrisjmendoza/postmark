@@ -2,7 +2,7 @@ package com.plusorminustwo.postmark.ui.thread
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
-import com.plusorminustwo.postmark.ui.theme.BubbleStylePreference
+import com.plusorminustwo.postmark.domain.customization.BubbleStylePreference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

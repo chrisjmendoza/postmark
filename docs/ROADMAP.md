@@ -82,7 +82,7 @@ Build order follows the spec. Each phase depends on the previous.
 
 ---
 
-## Phase 4b — MMS Media 🚧 Core done, playback pending
+## Phase 4b — MMS Media ✅ Done
 
 - [x] **Coil 2.7.0** — `coil-compose` added as dependency
 - [x] **Room schema v9** — `attachmentUri TEXT` + `mimeType TEXT` nullable columns on messages; `MIGRATION_8_9` non-destructive
@@ -91,17 +91,19 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **`MmsAttachment` composable** — `AsyncImage` for images, play-icon placeholder for video, chip for audio
 - [x] **`MessageBubble` updated** — attachment-mode vs text-mode layout switch; caption below attachment when body non-empty
 - [x] **"Wipe DB + re-import"** in Dev Options — retroactive re-sync for previously imported MMS without attachment data
-- [ ] Tap image → full-screen pinch-to-zoom viewer
+- [x] Tap image → full-screen pinch-to-zoom viewer (`ZoomableImage`, pager over the message's attachments)
 - [x] Tap video → ExoPlayer dialog (media3 1.5.1; auto-plays, releases on dismiss)
 - [x] Audio chip → `MediaPlayer` playback controls — play/pause button in `ThreadScreen`; `DisposableEffect` for cleanup
-- [x] **Rich media in reply bar** — attach button + dropdown (photo/video, audio file), `GetContent` launcher, attachment preview chip, MMS send path (`MmsManagerWrapper` + WAP Binary PDU, `MmsSentReceiver`). Camera capture still pending.
+- [x] **Rich media in reply bar** — attach button + dropdown (photo/video, audio file), `GetContent` launcher, attachment preview chip, MMS send path (`MmsManagerWrapper` + WAP Binary PDU, `MmsSentReceiver`).
 - [x] **SMS/MMS type label** — dimmed label next to timestamp in `MessageBubble`
 - [x] **Heatmap month/year jump picker** — tap label → `MonthYearPickerDialog`, year navigation, 4×3 month grid, future months disabled
 - [x] **MIME type case fix** — `ignoreCase = true` in both sync handlers for Samsung mixed-case MIME types
 - [x] **Foreground service crash fix** — `SystemForegroundService` declared in manifest with `foregroundServiceType=dataSync`; fixes Android 14 `IllegalArgumentException` that killed every MMS sync attempt
 - [x] **Sync progress notification** — determinate progress bar + counted label ("Syncing MMS — 5,000 / 108,592") updating every 500 rows; `ConversationsScreen` shows inline `LinearProgressIndicator` while sync is in flight
-- [ ] Camera capture in attach menu
-- [ ] Group MMS — multi-recipient threads, per-bubble sender display
+- [x] Camera capture in attach menu (`TakePicture` contract, "Take selfie"/photo menu item)
+- [x] Group MMS — multi-recipient threads, per-bubble sender display (`MmsManagerWrapper`
+      multi-recipient PDU, "Start group conversation" entry point, per-bubble `senderName`
+      in group threads); not yet verified on-device against a real carrier
 
 ---
 
@@ -120,9 +122,9 @@ Build order follows the spec. Each phase depends on the previous.
 
 ---
 
-## Phase 6 — Search 🚧 Scaffold only
+## Phase 6 — Search ✅ Done
 
-- [x] FTS4 word-start search (`^"term"*`)
+- [x] FTS4 word-start search (`"term*"` — star inside the phrase quotes, `FtsQueryBuilder`)
 - [x] `SearchScreen` with debounced query input
 - [x] Filter chips: Sent / Received / Reactions
 - [x] Query highlighting in results (`buildAnnotatedString`)
@@ -130,7 +132,8 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] **Thread filter chip** — opens thread picker bottom sheet
 - [x] **Reaction filter** — emoji picker; tapping emoji filters to messages that received that reaction
 - [x] Tapping result navigates to that exact message in `ThreadScreen` (scroll-to + highlight)
-- [ ] Search within a single thread (entry point: search icon in thread toolbar)
+- [x] Search within a single thread — search icon in thread toolbar navigates to
+      `SearchScreen` pre-filtered to that thread
 
 ---
 
@@ -139,7 +142,7 @@ Build order follows the spec. Each phase depends on the previous.
 - [x] Regex pattern matching for reaction verb + quoted text
 - [x] Verb → emoji mapping from JSON asset
 - [x] Removal phrase detection (`"Removed a heart from '...'"`)
-- [x] Three-tier matching: exact → normalized → prefix (a `.contains()`/"fuzzy containment" tier was deliberately **removed** — it self-matched the reaction body; do not reintroduce)
+- [x] Four-tier matching: exact → normalized → prefix → truncated-quote (a `.contains()`/"fuzzy containment" tier was deliberately **removed** — it self-matched the reaction body; do not reintroduce)
 - [x] Stored as `ReactionEntity`, not as a message
 - [x] Run on every incoming message via `SmsSyncHandler`
 - [x] Run on all historical messages during `SmsHistoryImportWorker`
@@ -178,8 +181,8 @@ Philosophy: core app is free forever. A single one-time "Postmark Pro" purchase 
 
 ## Future / Nice-to-have
 
-- MMS full sync (image/video attachments stored as file references)
-- Notification for incoming SMS
+- [x] MMS full sync (image/video attachments stored as file references — schema v9 `attachmentUri`/`mimeType`)
+- [x] Notification for incoming SMS (`IncomingNotifier`, `MessagingStyle`)
 - [x] Pinned conversations
 - Search result count / pagination
 - iCloud backup import (parse Apple `.db` export)

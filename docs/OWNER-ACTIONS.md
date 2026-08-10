@@ -2,7 +2,8 @@
 
 Three items from `docs/fable-analysis.md`'s 🟡 tier are blocked on decisions or
 assets only the project owner can provide. Everything else in that tier is done
-(see CHANGELOG 2026-07-12). Last updated: July 12, 2026.
+(see CHANGELOG 2026-07-12). Last updated: August 10, 2026 (audited against code;
+item 2 corrected — CI ships minified `assembleStaging`, not debug builds).
 
 ---
 
@@ -34,11 +35,13 @@ backup setting.
 
 ## 2. Release-signed tester builds (#14) — needs a keystore + repo secrets
 
-**Current state:** every build testers install is `assembleDebug`, signed with the
-**publicly committed** `debug.keystore` (password "android") and debuggable. That
-means: anyone with brief USB access can `adb run-as` the app and copy the entire
-message database; anyone with the repo can sign a trojan "update" that installs
-over the real app. The `release` build type has **no signing config at all**.
+**Current state:** every build testers install is `assembleStaging` (CI's
+`distribute.yml` runs `./gradlew assembleStaging`) — minified and non-debuggable
+like release, but signed with the **publicly committed** `debug.keystore` (password
+"android") so updates install over the previous build without an uninstall. That
+means: anyone with the repo can extract the private key and sign a trojan "update"
+that installs over the real app on any tester's device. The `release` build type
+has **no signing config at all**.
 
 **What only you can do** (the private key must never enter the repo or a chat):
 
@@ -85,8 +88,9 @@ feature work, not after it.
    you need to host it (GitHub Pages is fine) under a domain you control.
 2. **Play Console: SMS & Call Log Declaration Form** — declare "Default SMS
    handler" as the core functionality; every requested permission must map to a
-   user-visible feature. Blocking/spam being real (block ✅, spam folder still
-   open — TODO.md TIER 2) matters here: the messaging-category guidelines expect it.
+   user-visible feature. Blocking/spam being real (block ✅, spam folder ✅ — both
+   shipped, see TODO.md; on-device verification pass still pending) matters here:
+   the messaging-category guidelines expect it.
 3. **Content rating questionnaire** — messaging app with user-generated content.
 4. **Data safety form** — should be short and flattering: no collection, no
    sharing, no INTERNET permission.
