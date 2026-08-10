@@ -68,7 +68,7 @@ A privacy-first Android SMS app built with Kotlin and Jetpack Compose. Postmark 
 - **Per-contact colors** — give each contact their own color (12 presets or any custom color): it fills their avatar and their incoming bubbles, with an optional separate color for your sent bubbles; text stays legible automatically (white/black chosen by WCAG contrast, ≥ 4.5:1 guaranteed)
 - **Chat backgrounds** — six built-in gradients or any photo from your gallery (copied into app storage and downscaled; rendered behind the thread with a theme-aware scrim), settable per conversation or as a global default
 - **Custom color picker** — full HSV panel + hue slider + hex entry behind a "Custom…" tile, with a legibility guard so no pick can make bubbles vanish into the background
-- **Appearance screen** — theme (Follow system / Always dark / Always light), Material You wallpaper colors (Android 12+), global app accent color, font family (System / Serif / Monospace), bubble style (Rounded / Pill / Square), and message text size (also pinch-to-zoom in any thread)
+- **Appearance screen** — theme (Follow system / Always dark / Always light), Material You wallpaper colors (Android 12+), global app accent color, font family (System / Serif / Monospace, plus 6 bundled OFL typefaces — Inter, Poppins, Nunito, Lora, Playfair Display, JetBrains Mono), bubble style (Rounded / Pill / Square), and message text size (also pinch-to-zoom in any thread)
 - Reachable from Settings → Appearance, the contact page, or "Customize appearance" in any thread's ⋮ menu; per-contact choices ride backups and restores
 
 ### Privacy
@@ -88,7 +88,7 @@ UI (Jetpack Compose + ViewModel + StateFlow)
     Android OS (content://sms, SmsManager, RoleManager, MediaRecorder)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, FTS sync strategy, and key design decisions (note: its schema section lags the code — the entity definitions are authoritative).
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, FTS sync strategy, and key design decisions.
 
 ---
 
@@ -113,41 +113,65 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layer map, database schema, 
 ```
 app/src/main/java/com/plusorminustwo/postmark/
 ├── data/
-│   ├── contacts/       # Shared contact-name lookup
+│   ├── contacts/       # Shared contact-name lookup, photo lookup, contact search
 │   ├── db/             # Room database, entities, DAOs, migrations
-│   ├── reaction/       # AppleReactionParser, AndroidReactionParser, fallback parsing
-│   ├── repository/     # Data access layer (incl. SearchRepository)
 │   ├── preferences/    # SharedPreferences-backed repositories
-│   └── sync/           # SmsSyncHandler, SmsHistoryImportWorker, StatsAlgorithms
+│   ├── reaction/       # AppleReactionParser, AndroidReactionParser, BareEmojiReaction,
+│   │                   # fallback parsing
+│   ├── repository/     # Data access layer (incl. SearchRepository, BlockedNumbersRepository,
+│   │                   # ScheduledMessageRepository)
+│   └── sync/           # SmsSyncHandler, SmsHistoryImportWorker, StatsAlgorithms,
+│                       # ReactionResolver, MmsPartParsing
 ├── di/                 # Hilt modules (DatabaseModule, RepositoryModule, BackupModule)
 ├── domain/
 │   ├── backup/         # Backup archive format v2 (pure, JVM-testable)
-│   ├── customization/  # ContactPalette, ChatBackgrounds, ColorMath (pure color math)
+│   ├── contacts/       # SaveNumberPrompt logic
+│   ├── customization/  # Preference enums (theme/font/bubble/timestamp), ContactPalette,
+│   │                   # ChatBackgrounds, ColorMath, BackgroundPlacement, ThemePresets
 │   ├── formatter/      # ExportFormatter, date/phone formatters
+│   ├── links/          # Link extraction from message text
 │   ├── logging/        # Log PII redaction
+│   ├── messageinfo/    # Per-message info-sheet data
 │   ├── model/          # Clean domain models (Message, Thread, MessageAttachment, ...)
+│   ├── reaction/       # OutboundReactionFallback
+│   ├── reminder/       # Reminder time math
+│   ├── scheduled/      # ScheduledMessage domain model
+│   ├── scrollcapture/  # Pure math for the thread scroll-to-message feature
+│   ├── search/         # Search result grouping/thread-matching (pure)
+│   ├── selection/      # Selection-mode helpers (block, bulk toggle, swipe actions)
+│   ├── spam/           # SpamHeuristics — pure "looks like spam?" detection
+│   ├── storage/        # Storage-usage calculation
+│   ├── thread/         # Centered-scroll math
 │   └── voicememo/      # VoiceMemoLogic — pure state machine + gesture math for recording
-├── search/             # FtsQueryBuilder (SearchDao/SearchRepository live under data/)
+├── search/
+│   └── parser/         # FtsQueryBuilder (SearchDao/SearchRepository live under data/)
 ├── service/
 │   ├── audio/          # VoiceMemoRecorder (MediaRecorder wrapper)
+│   ├── backup/         # BackupWorker, ExportWorker, RestoreWorker, scheduler
 │   ├── customization/  # ChatBackgroundImageStore (custom background photos)
-│   ├── sms/            # SmsReceiver, send/receive wrappers, MmsManagerWrapper
-│   │                   # (attachment budget allocation, video transcode planning)
-│   └── backup/         # BackupWorker, ExportWorker, RestoreWorker, scheduler
+│   ├── reminder/       # MessageReminderWorker
+│   ├── scheduled/      # ScheduledSendWorker
+│   └── sms/            # SmsReceiver, MmsReceiver, send/receive wrappers, MmsManagerWrapper
+│                       # (attachment budget allocation, video transcode planning),
+│                       # IncomingNotifier, spam/block receivers
 ├── ui/
 │   ├── components/     # Shared composables (avatars, color/background pickers)
-│   ├── contact/        # Contact detail screen
+│   ├── contact/        # Contact detail screen, media gallery
 │   ├── conversations/  # Conversation list, new-conversation screen
 │   ├── forward/        # Forward destination picker
 │   ├── navigation/     # Nav graph, Screen routes
 │   ├── onboarding/     # Default-SMS role onboarding
 │   ├── search/         # Search screen
-│   ├── settings/       # Settings, Appearance, Backup/Export, Dev options
+│   ├── settings/       # Settings, Appearance, Backup, Blocked numbers, Spam, Storage,
+│   │   │               # Notification settings, Dev options, Sync log, Licenses
+│   │   └── export/     # Export screen
 │   ├── starred/        # Starred images gallery
 │   ├── stats/          # Stats screen (Numbers, Charts, Heatmap)
-│   ├── theme/          # Material 3 theme, ThemePreference
+│   ├── theme/          # Material 3 theme (Compose mappings; preference enums
+│   │                   # live in domain/customization/)
 │   └── thread/         # Thread detail, voice memo recording UI + ThreadAudioPlayer,
 │                       # selection mode, image viewer
+├── util/               # BitmapScaling, DefaultSmsApp, OpenUrl
 └── PostmarkApplication.kt
 ```
 
@@ -246,8 +270,9 @@ The live, tiered backlog lives in `docs/TODO.md` — see [Documentation](#docume
 - On-device verification pass — several July 2026 features (spam folder, blocked-numbers
   screen, pinned messages, conversation-style notifications, notification settings screen)
   are implemented and unit-tested but not yet confirmed on a physical device
-- Spam auto-flag heuristics + an inline "Report spam" notification action (manual
-  report/hide/restore is done; Play Store requirement)
+- Spam auto-flag heuristics + inline "Report spam" notification action — implemented
+  (`SpamHeuristics.looksLikeSpam`, `ReportSpamReceiver`); needs on-device verification
+  of notification-action rendering and contact-lookup gating (Play Store requirement)
 - On-device verification of the voice memo hardening rounds (screen-off/backgrounding,
   TalkBack, audio focus, process death — see `docs/fable-voice-memo.md`)
 - Play Store prep — SMS permissions declaration, privacy policy, store assets

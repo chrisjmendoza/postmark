@@ -35,11 +35,15 @@ The app stores its own copy of SMS data in a Room database. This allows fast, of
 └─────────────────────────────────────────────────────────┘
 ```
 
+Dependencies point downward only. Known accepted exception: WorkManager workers
+(and `IncomingNotifier`) import `ui.MainActivity` as the notification
+`PendingIntent` target — a platform requirement, not a layering leak.
+
 ---
 
 ## Database Schema
 
-Current Room schema **version 15** (`PostmarkDatabase.kt`).
+Current Room schema **version 23** (`PostmarkDatabase.kt`).
 
 ### Tables
 
@@ -47,8 +51,9 @@ Current Room schema **version 15** (`PostmarkDatabase.kt`).
 |-------|---------|
 | `threads` | One row per SMS conversation |
 | `messages` | Individual SMS messages |
-| `reactions` | Apple reaction fallback texts parsed into emoji |
+| `reactions` | Emoji reactions — Apple/Android reaction fallback texts parsed into emoji, plus reactions added locally |
 | `messages_fts` | FTS4 virtual table mirroring `messages.body` |
+| `scheduled_messages` | Text-only SMS parked for "Schedule send" — kept out of `messages` until the send fires |
 
 > The pre-aggregated `thread_stats`/`global_stats` tables (and their DAOs) were
 > removed in schema v15 — nothing read them, and stats are now computed live.
@@ -62,8 +67,8 @@ It is kept in sync with `messages` via three SQL triggers installed in `Postmark
 ```sql
 -- Insert
 AFTER INSERT ON messages → INSERT INTO messages_fts(rowid, body)
--- Update
-AFTER UPDATE ON messages → DELETE + re-INSERT into messages_fts
+-- Update (scoped to `UPDATE OF body` — status/read/star flips don't re-tokenize)
+AFTER UPDATE OF body ON messages → DELETE + re-INSERT into messages_fts
 -- Delete
 AFTER DELETE ON messages → DELETE FROM messages_fts WHERE rowid = old.id
 ```
@@ -84,15 +89,16 @@ JOIN messages_fts ON m.id = messages_fts.rowid
 
 | Module | Provides |
 |--------|---------|
-| `DatabaseModule` | `PostmarkDatabase`, all 4 DAOs (`ThreadDao`, `MessageDao`, `ReactionDao`, `SearchDao`) |
+| `DatabaseModule` | `PostmarkDatabase`, all 6 DAOs (`ThreadDao`, `MessageDao`, `ReactionDao`, `SearchDao`, `StatsDao`, `ScheduledMessageDao`) |
 | `RepositoryModule` | `ThreadRepository`, `MessageRepository`, `SearchRepository` |
 
 `AndroidReactionParser`, `AppleReactionParser`, `ReactionFallbackParser`,
 `SmsContentObserver`, `SmsSyncHandler`, `BackupScheduler` are `@Singleton` Hilt
 bindings injected directly.
 
-`SmsHistoryImportWorker` and `BackupWorker` use `@HiltWorker` + `HiltWorkerFactory`
-(configured in `PostmarkApplication`).
+All WorkManager workers (`SmsHistoryImportWorker`, `BackupWorker`, `RestoreWorker`,
+`ExportWorker`, `SendQueueWorker`, `ScheduledSendWorker`, `MessageReminderWorker`)
+use `@HiltWorker` + `HiltWorkerFactory` (configured in `PostmarkApplication`).
 
 ---
 
@@ -139,14 +145,18 @@ Android/Google Messages devices send:
 ```
 👍 to "original message text"
 👍 to "original message text" removed
+Removed 👍 from "original message text"
 ```
+(the last form is the actual on-device removal shape captured 2026-07-24 — a
+"Removed … from" *prefix*, not a "… removed" *suffix*; both are recognised.)
 
 **`ReactionFallbackParser`** is the unified entry point used by all sync workers. It
 tries `AndroidReactionParser` first, then falls back to `AppleReactionParser`.
 
 **`AndroidReactionParser`**:
-1. Matches the `emoji to "quoted text" [removed]` format with multiple quote-variant regexes
-2. Finds the original message via a three-tier strategy (see below)
+1. Matches the `emoji to "quoted text" [removed]` suffix format and the `Removed emoji
+   from "quoted text"` prefix format, with multiple quote-variant regexes
+2. Finds the original message via the four-tier strategy (see below)
 3. Excludes the reaction message itself and other reaction fallbacks from the candidate pool
 4. Inserts a `ReactionEntity` (or handles removal)
 
@@ -155,7 +165,8 @@ tries `AndroidReactionParser` first, then falls back to `AppleReactionParser`.
 2. Supports English, Dutch, French, German, Spanish
 3. Same match strategy and candidate filtering as AndroidReactionParser
 
-**`findOriginalMessage` strategy** (both parsers):
+**`findOriginalMessage` strategy** — implemented once in `ReactionFallbackParser`
+(a single shared implementation used by both formats, not duplicated per-parser):
 - Search window: all candidates sorted newest-to-oldest, capped at 100 messages.
   Reactions to messages more than 100 positions back are treated as unresolvable.
 - **Tier 1**: Exact match (case-insensitive)
@@ -163,6 +174,11 @@ tries `AndroidReactionParser` first, then falls back to `AppleReactionParser`.
   U+2026 → `...`, U+2014/2013 → `-`. Handles apostrophe/quote mismatches between
   Apple (smart quotes) and Android (straight apostrophe) keyboards.
 - **Tier 3**: Prefix match — reaction may quote only the start of a long message.
+- **Tier 4**: Truncated-quote match — both Apple and Android ellipsize a long
+  original in the fallback text, so the quote can only ever be a prefix of the
+  original plus a trailing `...` the original doesn't contain. Strips the ellipsis
+  and prefix-matches the remaining stem (minimum 10 characters) against the
+  normalized body.
 - **No `.contains()` match** — deliberately removed; it caused self-matching where
   the reaction body (which contains the quoted text literally) resolved to itself.
 
@@ -173,6 +189,15 @@ preserved as a normal visible bubble rather than being silently deleted.
 (not the contact's address) so the UI's own-reaction highlighting works correctly.
 
 The JSON asset makes it easy to add new languages without a code change.
+
+**Bare-emoji MMS reactions** (`BareEmojiReaction.kt`, `data/reaction/`): reactions to
+an image message that arrive via RCS-archived-to-MMS can show up as a message whose
+entire body is a single emoji grapheme cluster, with none of the `emoji to "quote"`
+structure the parsers above rely on. Detected separately (pure, `BreakIterator`-based
+single-grapheme check) and driven from both `SmsSyncHandler.syncLatestMms` (live sync)
+and `ReactionResolver.resolveThread` (historical heal), so the two paths can't drift
+apart. Removal variants are out of scope — there's no on-device evidence yet for what
+an archived removal of a bare-emoji reaction looks like.
 
 ---
 
@@ -233,5 +258,5 @@ and never depended on those tables.
 | FTS4 standalone (not content table) | Avoids KSP cross-reference bug in Room 2.6.1 with `@Fts5`; triggers provide equivalent sync |
 | Reactions as a separate table | Independently queryable by emoji; not a column that would need JSON parsing at query time |
 | Stats computed live from `messages`/`reactions` (no stats table) | The screen always computed live; the parallel persisted tables were write-only dead weight and a full-scan cost on every sync — removed in v15 |
-| Word-start FTS (`^"term"*`) not substring | Less noise; users find it more predictable than mid-word matches |
+| Word-prefix FTS (`"term*"`, star inside the quotes) not substring | Less noise; users find it more predictable than mid-word matches. See **Search** above — FTS4 silently drops a star outside the quotes |
 | BackupPolicy on ThreadEntity | Privacy-sensitive threads excluded at query time, not in the serializer |

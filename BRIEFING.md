@@ -1,21 +1,23 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: July 22, 2026
+Last updated: August 10, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
-Tests: 885 passing (`./gradlew test`)
+Tests: 1148 passing (`./gradlew test`)
 
 ═══════════════════════════════════════════════════════
 TECH STACK
 ═══════════════════════════════════════════════════════
 - Kotlin + Jetpack Compose
-- Room (database) — currently on schema version 20
+- Room (database) — currently on schema version 23
 - Hilt (dependency injection)
-- WorkManager (scheduled backup)
+- WorkManager (7 @HiltWorker workers: SMS history import, backup,
+  restore, export, send queue, scheduled send, message reminder)
 - Kotlin Coroutines + Flow
 - SQLite FTS4 (full-text search — fully wired,
-  word-start prefix via `^"term"*`, triggers sync
+  word-prefix via `"term*"` (star INSIDE the quotes —
+  FTS4 drops a star outside them), triggers sync
   messages_fts virtual table with messages table)
 - Material3 dark theme with custom extended colors
 
@@ -25,8 +27,8 @@ PROJECT STRUCTURE
 com.plusorminustwo.postmark
 ├── ui
 │   ├── theme
-│   │   ├── Theme.kt          ← full custom dark/light
-│   │   └── ThemePreference.kt ← SYSTEM/ALWAYS_DARK/ALWAYS_LIGHT
+│   │   └── Theme.kt          ← full custom dark/light (Compose mappings;
+│   │                            preference enums live in domain/customization)
 │   ├── AppThemeViewModel.kt
 │   ├── thread              ← thread view (done — selection mode, reactions,
 │   │                          pinning, voice memos, image viewer)
@@ -34,17 +36,26 @@ com.plusorminustwo.postmark
 │   ├── search              ← search screen (done — FTS4, filters, sort,
 │   │                          contact-match section, in-thread entry)
 │   ├── stats               ← stats screen (done — Numbers/Charts/Heatmap)
-│   ├── export              ← export sheet (done — Copy/Readable/Postmark
-│   │                          backup formats; image render still pending)
 │   └── settings            ← settings screens (Appearance, Notifications,
-│                              Backup/Export, Blocked numbers, Spam, Dev)
+│                              Backup/Export, Blocked numbers, Spam, Dev);
+│                              settings/export ← ExportScreen (done —
+│                              Readable text+media / Postmark backup
+│                              restorable formats; NOT "Copy" — that's the
+│                              thread-selection top bar's direct clipboard
+│                              copy, a separate feature; no image-render
+│                              format — built, then reverted, see git log)
 ├── data
-│   ├── db                  ← Room database, schema v20 (see DATABASE below)
+│   ├── db                  ← Room database, schema v23 (see DATABASE below)
 │   ├── repository
-│   └── sync                ← ContentObserver + SmsHistoryImportWorker +
-│                              SmsSyncHandler
+│   ├── sync                ← ContentObserver + SmsHistoryImportWorker +
+│   │                          SmsSyncHandler
+│   └── reaction            ← AndroidReactionParser + AppleReactionParser
+│                              via ReactionFallbackParser (done — this is
+│                              where they live now, not search/parser)
 ├── domain
 │   ├── model
+│   ├── customization       ← preference enums (theme/font/bubble style/
+│   │                          timestamp) + pure color/theme-preset math
 │   └── formatter           ← ExportFormatter (done)
 ├── service
 │   ├── sms                 ← SmsReceiver/MmsManagerWrapper/IncomingNotifier
@@ -52,8 +63,8 @@ com.plusorminustwo.postmark
 │   └── backup              ← WorkManager backup + RestoreWorker + ExportWorker
 │                              (done)
 └── search
-    └── parser              ← AndroidReactionParser + AppleReactionParser
-                                via ReactionFallbackParser (done)
+    └── parser              ← FtsQueryBuilder (FTS4 phrase-prefix query
+                                construction; see TECH STACK above)
 
 This tree predates most of the packages that exist today (domain/
 customization, domain/voicememo, domain/search, ui/contact, ui/forward,
@@ -61,7 +72,7 @@ ui/starred, service/audio, service/customization, …) — see README.md's
 "Project Structure" section for the current, complete layout.
 
 ═══════════════════════════════════════════════════════
-DATABASE — ROOM SCHEMA v20
+DATABASE — ROOM SCHEMA v23
 ═══════════════════════════════════════════════════════
 Thread
 - id, displayName, address, lastMessageAt,
@@ -95,11 +106,23 @@ Message
     feeds the global Starred Images gallery),
   isPinned BOOLEAN DEFAULT false (added v19, any-message pin — distinct
     column from Message.isStarred and from Thread.isPinned; feeds the
-    per-thread Pinned messages panel)
+    per-thread Pinned messages panel),
+  sentAt INTEGER nullable (added v21, provider DATE_SENT — the sender's
+    send time; NULL when the provider recorded 0),
+  deliveredAt INTEGER nullable (added v21, carrier delivery-report time;
+    NULL until/unless a report arrives),
+  remindAt INTEGER nullable (added v22, reply reminder — non-null == flagged;
+    a fired reminder leaves it set until the user clears it)
 
 Reaction
 - id, messageId, senderAddress, emoji,
   timestamp, rawText
+
+ScheduledMessage (scheduled_messages, added v23 — "Schedule send")
+- id, threadId, address, body, scheduledAt, createdAt
+  Deliberately a separate table, NOT a column on messages: a not-yet-sent
+  scheduled text never enters messages (or the provider), so sync dedup,
+  search, stats, and backup can never see it before it fires.
 
 ThreadStats / GlobalStats — REMOVED at v15 (July 12, 2026). These were
 write-only pre-aggregated caches: StatsUpdater kept them current on every
@@ -137,22 +160,34 @@ Migration 16→17: accentColorArgb + chatBackgroundId on threads
 Migration 17→18: sentColorArgb on threads
 Migration 18→19: isPinned on messages
 Migration 19→20: isSpam on threads
+Migration 20→21: sentAt + deliveredAt on messages
+Migration 21→22: remindAt on messages
+Migration 22→23: CREATE TABLE scheduled_messages ("Schedule send")
 
 ═══════════════════════════════════════════════════════
 THEME — CUSTOM DARK (DEFAULT)
 ═══════════════════════════════════════════════════════
-Background primary:   #1C1C1E
-Background secondary: #2C2C2E
-Background tertiary:  #3A3A3C
+Background primary:   #1C1C1E  (colorScheme.background)
+Background secondary: #2C2C2E  (colorScheme.surface)
+Background tertiary:  #3A3A3C  (colorScheme.surfaceVariant / outline)
 Text primary:         #F5F5F0
 Text secondary:       #8E8E93
-Text tertiary:        #636366
-Accent blue:          #378ADD  (sent bubbles, active)
-Accent green:         #30D158  (success, delivery)
-Accent purple:        #BF5AF2  (emoji charts)
-Accent amber:         #FF9F0A  (warnings)
-Sent bubble:          #378ADD
-Received bubble:      #2C2C2E  border #3A3A3C
+Accent blue:          #378ADD  (colorScheme.primary — links/active state)
+Accent green:         #30D158  (colorScheme.secondary — success, delivery)
+Accent purple:        #BF5AF2  (colorScheme.tertiary — emoji charts)
+
+Sent bubble (default, no per-thread accent):     #1A3A5C (colorScheme.primaryContainer)
+Received bubble (default, no per-thread accent): #3A3A3C (colorScheme.surfaceVariant)
+No border on bubbles — MessageBubble has no .border() modifier (verified
+Aug 10, 2026 — a prior version of this doc claimed a #3A3A3C border that
+no longer exists in code).
+Per-thread accentColorArgb/sentColorArgb (schema v17/v18) override these
+via ContactPalette with a vivid, iMessage-style container — see "User
+customization v2" under WHAT IS WORKING below.
+
+(#FF9F0A and #636366 are NOT Theme.kt roles — they're one-off Color()
+literals used only for the response-time tier chart in StatsScreen.kt,
+not a system "warnings"/"text tertiary" color as previously implied here.)
 
 (The PostmarkColors/LocalPostmarkColors extended-color
 system was removed July 18, 2026 — it was never wired in,
@@ -934,28 +969,35 @@ Five additional sync gaps resolved (May 3 audit):
 ═══════════════════════════════════════════════════════
 IN PROGRESS / NEXT UP
 ═══════════════════════════════════════════════════════
-ACTIVE BRANCH: feat/theme-presets (as of July 22 2026 — customization
-work plus an overnight sweep of 16 TODO items; see docs/CHANGELOG.md)
-NOTE: this section goes stale — trust docs/TODO.md and
-docs/CHANGELOG.md over the tier lists below.
+ACTIVE BRANCH: none — the PR/worktree flow was retired July 24, 2026;
+work happens directly on master now (git status confirms: branch master,
+clean, as of this audit). Trust docs/TODO.md and docs/CHANGELOG.md for
+current work, not this section.
 
-TIER 1 — REMAINING (in priority order)
-1. MULTIPART MESSAGE HANDLING
-   Verify all parts arrive before marking delivered;
-   handle out-of-order part delivery.
+TIER 1 — ALL FOUR ITEMS BELOW HAVE SINCE LANDED (verified against code
+Aug 10, 2026). Kept as a record; do not treat as an active backlog.
+1. MULTIPART MESSAGE HANDLING — DONE.
+   service/sms/MultipartSendTracker.kt collapses per-part sent callbacks
+   into one Decision per message (MarkFailed on the first known failure,
+   MarkSent only once every part reports Ok) — exactly the "verify all
+   parts arrive / handle out-of-order delivery" ask below.
+   See MultipartSendTrackerTest.kt.
 
-2. SEND QUEUE
-   Queue outgoing when offline; send on reconnect;
-   show "Queued" bubble state.
+2. SEND QUEUE — DONE.
+   service/sms/SendQueueWorker.kt flushes DELIVERY_STATUS_QUEUED rows
+   (data/db/entity/MessageEntity.kt) once NetworkType.CONNECTED; the
+   "Queued" bubble state renders in ThreadScreen.kt (Icons.Default.Schedule).
+   See SendQueueClassifierTest.kt.
 
 3. SYNC COMPLETENESS — substantially improved June 14, 2026
    Architecture overhaul (NOT IN (3,5) filter, two-phase import, 60s polling) removed
    the main known exclusion gaps. Remaining risk: address normalization edge cases,
    or OEM-specific cursor pagination limits on 100k+ MMS databases.
 
-4. MMS MEDIA — remaining playback
-   Tap image → full-screen viewer, tap video → ExoPlayer dialog.
-   (Audio chip play/pause is now done.)
+4. MMS MEDIA — remaining playback — DONE.
+   FullScreenImageViewer and VideoPlayerDialog both exist in ThreadScreen.kt
+   — matches the "Multi-attachment MMS" July 5, 2026 entry under WHAT IS
+   WORKING above, which already documents this as shipped.
 
 COMPLETED THIS SPRINT (May 10, 2026)
 ✅ Contact detail screen (feat/contact-detail)
@@ -1174,39 +1216,49 @@ COMPLETED THIS SPRINT (May 2, 2026)
 ═══════════════════════════════════════════════════════
 UPCOMING FEATURES (designed, not yet built)
 ═══════════════════════════════════════════════════════
-DELIVERY TIMESTAMPS + READ RECEIPTS
-- content://sms has DATE (received) and DATE_SENT
-  (when message left device). Store both in MessageEntity
-  as sentAt: Long? and deliveredAt: Long? (nullable).
-- Room migration required: MessageEntity v → v+1
-- Bubble delivery indicator: extend DeliveryStatusIndicator
-  to show double-tick (✓✓) tinted in primary colour when
-  readAt is set (MMS only — SMS has no read receipts).
-- Info panel: tapping message action bar Info button
-  (deferred until data is available) slides up a bottom
-  sheet showing sent at / delivered at / read at /
-  character count / message parts count.
-- Read receipts require MMS support live; SMS has no
-  native mechanism. Document as RCS-future roadmap item.
+NOTE (Aug 10, 2026 audit): most items below have since shipped — see the
+inline DONE markers, added/verified against code on this pass.
 
-SEARCH
-- Search within a single thread
-- FTS4 with ^ prefix anchor (word-start only)
-- \b word boundary highlight in results
-- All filters stackable
+DELIVERY TIMESTAMPS — DONE (schema v21, see DATABASE above)
+- MessageEntity.sentAt / deliveredAt (nullable Long) shipped in migration
+  20→21.
+- Info panel — DONE: long-press → Info action (EmojiReactionPopup onInfo,
+  ThreadScreen.kt) opens a bottom sheet built from the pure
+  domain/messageinfo/MessageInfo.kt (messageInfoRows()) — Sent/Received,
+  Delivered (only when deliveredAt is set), Characters, Type, SMS Parts /
+  MMS Attachments. MessageInfoTest.kt covers the row-selection logic.
+- Read receipts — still NOT built. No readAt column exists and there is
+  no double-tick "read" indicator distinct from "delivered". SMS has no
+  native read-receipt mechanism and MMS read reports were never wired up
+  — genuinely still an RCS-future roadmap item, not scheduled work.
+
+SEARCH — effectively all DONE (see PROJECT STRUCTURE's "search screen
+(done — FTS4, filters, sort, contact-match section, in-thread entry)"
+and the July 22, 2026 "Search suite additions" entry under WHAT IS
+WORKING above)
+✅ Search within a single thread — DONE (dedicated Search icon in
+  ThreadScreen's top bar, July 22, 2026)
+- FTS4 prefix matching shipped, but NOT via the "^ prefix anchor" design
+  sketched here — the actual implementation is phrase-prefix `"term*"`
+  (star inside the quotes) via FtsQueryBuilder; see TECH STACK above.
+- Result highlighting exists in SearchScreen.kt (grep-verified); exact
+  \b-word-boundary behavior not re-derived from code on this pass.
 ✅ Thread filter chip — DONE (April 27)
 ✅ Tapping result jumps to message in ThreadScreen — DONE (April 27)
 ✅ Date range filter chips — DONE (April 29)
 ✅ Reaction filter (emoji picker bottom sheet) — DONE (April 29)
 
-BACKUP (Settings → Backup)
-- Backup restore (read JSON, apply to Room with
-  migration version check)
+BACKUP (Settings → Backup) — ALL DONE
+✅ Backup restore — DONE. service/backup/RestoreWorker.kt reads the JSON
+  archive and applies it to Room; BackupSettingsScreen.kt has a working
+  "Restore from backup file…" flow with a confirm dialog.
 ✅ Backup history list — DONE (April 27)
 ✅ WorkManager status indicator — DONE (April 27)
 ✅ Per-thread backup policy dialog — DONE (April 27)
 
-REACTION FALLBACK PARSER (Android + Apple)
+REACTION FALLBACK PARSER (Android + Apple) — DONE, not upcoming
+(fully implemented; see "Emoji reaction pipeline — fully fixed" May 5,
+2026 entry under WHAT IS WORKING above. Kept below as a design reference.)
 - ReactionFallbackParser is the unified entry point (tries
   Android format first, then Apple).
 - AndroidReactionParser: `👍 to "quoted text" [removed]`
@@ -1236,9 +1288,15 @@ KEY DECISIONS LOCKED IN
   2. Thread view ⋮ menu → View stats (shortcut)
   Both navigate to same StatsScreen with threadId arg.
 
-- Export has TWO modes only (no separate AI format):
-  Copy → plain text to clipboard (works for AI + humans)
-  Share → rendered image for visual sharing
+- Export/Copy, current shape (verified against code Aug 10, 2026):
+  Thread selection top bar → Copy: plain text to clipboard via
+  ExportFormatter.formatForCopy() (ThreadScreen.kt) — works for AI + humans.
+  Settings → Backup/Export → Export screen: picks conversations + an
+  optional date range, then a FORMAT — Readable text+media (default) or
+  Postmark backup (restorable) — to a file via the system CreateDocument
+  dialog (ui/settings/export/ExportViewModel.ExportFormat).
+  A rendered-image "Share as image" mode was built and then reverted (see
+  git log) — there is no image-export mode today.
 
 - Search is prefix-only (word start), not substring.
 
@@ -1267,8 +1325,6 @@ REACTION EMOJI STATS ARCHITECTURE
 - buildThreadStatsData(messages, reactions) and
   buildGlobalStatsData(messages, threadCount, reactions)
   both accept optional reactions: List<String> = emptyList().
-  Existing callers (StatsUpdater) pass empty list — no
-  schema change or StatsUpdater change required yet.
 - ReactionDao.observeAll(): Flow<List<ReactionEntity>>
   provides the global reaction stream for StatsViewModel.
 - StatsViewModel injects ReactionDao; derives:
@@ -1278,10 +1334,12 @@ REACTION EMOJI STATS ARCHITECTURE
 - ParsedStats.topReactionEmojis: List<Pair<String,Int>>
   shown as a separate "Top Emoji (Reactions)" card in
   StatsScreen (only visible when non-empty).
-- TODO: StatsUpdater.recomputeAll() does not yet persist
-  topReactionEmojis into ThreadStatsEntity JSON — stats are
-  computed live from Room Flows, so this is only needed for
-  widget/offline scenarios.
+- StatsUpdater and ThreadStatsEntity/GlobalStatsEntity no longer exist —
+  removed at schema v15 (July 12, 2026, see DATABASE above). All stats,
+  including reaction emoji, are computed live from Room Flows on every
+  read; there is no persisted stats cache to keep in sync (verified
+  Aug 10, 2026 — grep for StatsUpdater/recomputeAll finds nothing left
+  in app/src/main except a v14→15 migration comment explaining the drop).
 
 HEATMAP / STATS ARCHITECTURE
 - Heatmap is month-scoped, NOT rolling 56-day.
@@ -1357,12 +1415,16 @@ TESTING CONVENTIONS
     src/androidTest/.../data/db/PostmarkDatabaseTest.kt
 
 CONTACT COLORS / AVATARS
-- avatarColor(name) hashes displayName into an
-  index across an 8-color palette
-- Deterministic — same name always yields same color
+- avatarColor(seed: String) hashes a caller-provided seed string into an
+  index across an 8-color palette (ui/components/LetterAvatar.kt) — the
+  parameter is generic, not name-specific. Most callers (ContactAvatar,
+  ContactDetailScreen, IncomingNotifier) seed it with the contact's raw
+  address for cross-install color stability; StatsScreen's ContactDayRow
+  still seeds it with displayName.
+- Deterministic — same seed always yields same color
 - LetterAvatar composable: colored circle + first letter
   of displayName. Falls back to "?" when name is empty.
-- ContactAvatar composable (NEW): wraps LetterAvatar,
+- ContactAvatar composable: wraps LetterAvatar,
   queries ContactsContract.PhoneLookup on Dispatchers.IO
   to resolve the phone number to a contact photo URI,
   then loads it with Coil. Three fallback levels:
@@ -1373,8 +1435,6 @@ CONTACT COLORS / AVATARS
   both use ContactAvatar (showing real photos when available).
 - ContactDayRow in StatsScreen still uses LetterAvatar
   (only needs a color/letter, no photo context).
-- avatarColor() seed is thread.address (phone number) for
-  cross-install color stability.
 
 APP ICON
 - Adaptive icon: ic_launcher.xml in mipmap-anydpi-v26
