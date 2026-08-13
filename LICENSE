@@ -1,0 +1,39 @@
+MIT License
+
+Copyright (c) 2026 Chris Mendoza
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Scope notes (informational, not additional restrictions on the code):
+
+- Educational use: Postmark is used as a worked example in instructional
+  material by the copyright holder. Readers and students are welcome to copy,
+  adapt, and build on this source code under the MIT terms above, including
+  for their own commercial projects. No separate permission is required.
+- The fonts in app/src/main/res/font/ are licensed under the SIL Open Font
+  License, Version 1.1 — NOT under the MIT License. Redistribution of the
+  font files must comply with the OFL. Full license texts are in
+  docs/font-licenses/ (Inter, JetBrains Mono, Lora, Nunito, Playfair
+  Display, Poppins).
+- This license grants no rights to the "Postmark" name, logo, or app icon;
+  forks and derivative works should ship under their own name and branding.
+- Third-party components (Android SDK, AndroidX, Jetpack Compose, Kotlin,
+  Hilt, Room, Media3) remain governed by their own licenses.

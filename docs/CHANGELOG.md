@@ -4,6 +4,35 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-08-13 (master) — relicensed MIT for textbook use
+
+1148 tests passing (no change — licensing only).
+
+Postmark and ShaftSchematic are the worked examples in a textbook, so readers
+need the right to actually copy and adapt the code. Postmark had no LICENSE at
+all and README said "Private — not yet licensed," which on a public repo means
+readers may look but legally may not reuse a line.
+
+- **MIT**, chosen over Apache-2.0 for brevity: students copying a snippet into
+  their own work face no NOTICE-propagation ceremony, and the license fits on
+  one screen.
+- **Scope notes at the bottom of `LICENSE`** carry what NOTICE would have: an
+  explicit educational-use grant (students may build on this commercially, no
+  permission needed), the SIL Open Font License carve-out for the six bundled
+  fonts, and reservation of the Postmark name and icon so forks ship under
+  their own branding.
+- `README.md`'s License section rewritten to match.
+
+ShaftSchematic was relicensed in parallel with the same structure; its scope
+notes keep the engineering disclaimer and exclude the top-level `assets/`
+photographs of shop hand-drawings from the grant.
+
+Both repos check out clean for relicensing: `git shortlog -sne --all` shows only
+Chris plus the Copilot bot, no third-party contributors whose agreement would be
+required.
+
+---
+
 ## 2026-08-10 (master) — review pass: data layer decoupled from ui, mapper round-trip tests, doc drift
 
 1148 tests passing (+10 new).

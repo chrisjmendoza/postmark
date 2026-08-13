@@ -281,7 +281,17 @@ The live, tiered backlog lives in `docs/TODO.md` — see [Documentation](#docume
 
 ## License
 
-Private — not yet licensed. All rights reserved.
+Licensed under the [MIT License](LICENSE) — Copyright © 2026 Chris Mendoza.
+
+You may use, copy, modify, and distribute this source code, including in commercial
+projects. Postmark is used as a worked example in instructional material, and students
+and readers are explicitly welcome to build on it — no separate permission needed.
+
+Two scope notes, spelled out at the bottom of [LICENSE](LICENSE): the bundled fonts are
+under the SIL Open Font License rather than MIT (full texts in `docs/font-licenses/`),
+and the license grants no rights to the "Postmark" name and icon, so forks should ship
+under their own branding. Third-party components (Android SDK, AndroidX, Jetpack
+Compose) remain under their own licenses.
 
 ---
 
