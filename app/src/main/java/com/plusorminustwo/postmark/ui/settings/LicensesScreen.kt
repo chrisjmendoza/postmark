@@ -45,6 +45,11 @@ private data class LicenseEntry(
 // Hilt/Dagger, Coil, Media3, WorkManager, the emoji picker) get their own row.
 private val LICENSE_ENTRIES = listOf(
     LicenseEntry(
+        name = "Postmark",
+        license = "MIT License — © 2026 Chris Mendoza",
+        url = "https://github.com/chrisjmendoza/postmark"
+    ),
+    LicenseEntry(
         name = "Kotlin & kotlinx.coroutines",
         license = "Apache License 2.0",
         url = "https://github.com/JetBrains/kotlin"
