@@ -76,6 +76,10 @@ Build order follows the spec. Each phase depends on the previous.
 ## Phase 4 — Export 🚧 In Progress
 
 - [x] `ExportFormatter.formatForCopy()` — clean labeled transcript per spec
+- [x] **Copy format options** (Sept 9 2026) — Settings → Copying messages toggles
+  the phone number, dates, timestamps, reactions and attachment placeholders
+  (`CopyFormatOptions`); the number is confined to the header line, and reactions
+  are attributed to the reactor rather than always to the contact
 - ~~Rendered image export / `ExportBottomSheet`~~ — built July 23, **removed July 29 by
   owner decision** (screenshots cover it); selection top bar is a direct Copy action again
 - [ ] AI Export as distinct format option (same as Copy but labelled separately)

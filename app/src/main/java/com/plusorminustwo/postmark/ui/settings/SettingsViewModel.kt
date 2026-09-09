@@ -1,9 +1,11 @@
 package com.plusorminustwo.postmark.ui.settings
 
 import androidx.lifecycle.ViewModel
+import com.plusorminustwo.postmark.data.preferences.CopyFormatPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.PrivacyModeRepository
 import com.plusorminustwo.postmark.data.preferences.ThemePreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
+import com.plusorminustwo.postmark.domain.customization.CopyFormatOptions
 import com.plusorminustwo.postmark.domain.customization.ThemePreference
 import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,8 +16,8 @@ import javax.inject.Inject
  * ViewModel for the Settings screen.
  *
  * Exposes [themePreference] (for the Appearance row's summary subtitle),
- * [timestampPreference], and [privacyModeEnabled] as read-only [StateFlow]s and
- * provides a setter for each. All persistence is delegated to the respective
+ * [timestampPreference], [copyFormat], and [privacyModeEnabled] as read-only
+ * [StateFlow]s and provides a setter for each. All persistence is delegated to the respective
  * repository. The other appearance preferences (font family, bubble font scale,
  * global chat background) moved to [AppearanceViewModel] along with their screen.
  */
@@ -23,15 +25,20 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val themeRepo: ThemePreferenceRepository,
     private val timestampRepo: TimestampPreferenceRepository,
-    private val privacyModeRepo: PrivacyModeRepository
+    private val privacyModeRepo: PrivacyModeRepository,
+    private val copyFormatRepo: CopyFormatPreferenceRepository
 ) : ViewModel() {
     val themePreference: StateFlow<ThemePreference> = themeRepo.preference
     val timestampPreference: StateFlow<TimestampPreference> = timestampRepo.preference
     val privacyModeEnabled: StateFlow<Boolean> = privacyModeRepo.enabled
+    val copyFormat: StateFlow<CopyFormatOptions> = copyFormatRepo.options
 
     /** Updates the timestamp display mode. Change is persisted and reflected immediately. */
     fun setTimestamp(pref: TimestampPreference) = timestampRepo.set(pref)
 
     /** Enables or disables privacy mode (hides message previews in the conversation list). */
     fun setPrivacyMode(enabled: Boolean) = privacyModeRepo.set(enabled)
+
+    /** Updates what the thread Copy action puts on the clipboard. */
+    fun setCopyFormat(options: CopyFormatOptions) = copyFormatRepo.set(options)
 }

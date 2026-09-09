@@ -11,7 +11,6 @@ import com.plusorminustwo.postmark.domain.backup.sanitizeForFileName
 import com.plusorminustwo.postmark.domain.backup.uniqueFileName
 import com.plusorminustwo.postmark.domain.backup.uniqueName
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
-import com.plusorminustwo.postmark.domain.model.SELF_ADDRESS
 import com.plusorminustwo.postmark.domain.model.Thread
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.OutputStream
@@ -102,7 +101,6 @@ class ReadableExportWriter @Inject constructor(
                 val transcript = ExportFormatter.formatForCopy(
                     messages = withReactions,
                     threadDisplayName = displayName,
-                    ownAddress = SELF_ADDRESS,
                     threadAddress = thread.address
                 ) { msg ->
                     mediaByMessage[msg.id]?.let { names ->

@@ -1274,10 +1274,17 @@ instance, but flagged:
       *(Verified July 22 2026 during the stale-checkbox audit:
       `ExportFormatter.formatForCopy` produces exactly this shape —
       header, day separator, sender+time line, body, media placeholder,
-      then a reactions line grouped by emoji. The reactions line reads
-      "  ↩ ❤️ Name" rather than the illustrative "❤️ reacted by Name"
-      above, but the substance — reactions shown, grouped, attributed —
-      matches the intent.)*
+      then a reactions line. **Sept 9 2026:** the reactions line is now
+      grouped by reactor, not by emoji — "  ↩ You reacted ❤️" /
+      "  ↩ Name reacted ❤️ 😂". It previously credited the contact
+      for reactions the local user added: those are stored under
+      `SELF_ADDRESS`, and the Copy call site passed an empty
+      `ownAddress`, so nothing ever matched "You". The phone number now
+      appears in the header line only — an unnamed thread labels its
+      incoming lines "Them" instead of repeating the number — and
+      Settings → Copying messages toggles the number, dates,
+      timestamps, reactions and attachment placeholders
+      (`CopyFormatOptions` / `CopyFormatPreferenceRepository`).)*
 - [x] **Pinch to zoom text** (ThreadScreen) — *(was already shipped; stale
       checkbox ticked July 22 2026 during the stale-checkbox audit)*
       `BubbleFontScaleRepository` persists a 0.8–1.6 multiplier (default

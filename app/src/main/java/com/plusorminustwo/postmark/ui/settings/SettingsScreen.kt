@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
@@ -48,6 +49,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.plusorminustwo.postmark.domain.customization.CopyFormatOptions
 import com.plusorminustwo.postmark.domain.customization.ThemePreference
 import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import kotlinx.coroutines.launch
@@ -69,6 +71,7 @@ fun SettingsScreen(
 ) {
     val themePreference by viewModel.themePreference.collectAsState()
     val timestampPreference by viewModel.timestampPreference.collectAsState()
+    val copyFormat by viewModel.copyFormat.collectAsState()
 
     val context = LocalContext.current
 
@@ -196,6 +199,42 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
+            SettingsSectionHeader(title = "Copying messages")
+            Text(
+                text = "What “Copy” puts on the clipboard when you select messages " +
+                    "in a conversation. The phone number only ever appears in the header line.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
+            )
+            CopyFormatToggle(
+                icon = { Icon(Icons.Default.ContentCopy, null) },
+                title = "Phone number",
+                subtitle = "“Conversation with Sarah (206) 555-1234”",
+                checked = copyFormat.includePhoneNumber
+            ) { viewModel.setCopyFormat(copyFormat.copy(includePhoneNumber = it)) }
+            CopyFormatToggle(
+                title = "Dates",
+                subtitle = "The date line and multi-day dividers",
+                checked = copyFormat.includeDates
+            ) { viewModel.setCopyFormat(copyFormat.copy(includeDates = it)) }
+            CopyFormatToggle(
+                title = "Timestamps",
+                subtitle = "The time after each sender name",
+                checked = copyFormat.includeTimestamps
+            ) { viewModel.setCopyFormat(copyFormat.copy(includeTimestamps = it)) }
+            CopyFormatToggle(
+                title = "Reactions",
+                subtitle = "“↩ You reacted ❤️” under the message reacted to",
+                checked = copyFormat.includeReactions
+            ) { viewModel.setCopyFormat(copyFormat.copy(includeReactions = it)) }
+            CopyFormatToggle(
+                title = "Attachments",
+                subtitle = "“[Photo]” in place of media",
+                checked = copyFormat.includeAttachments
+            ) { viewModel.setCopyFormat(copyFormat.copy(includeAttachments = it)) }
+            HorizontalDivider()
+
             SettingsSectionHeader(title = "Notifications")
             SettingsRow(
                 icon = { Icon(Icons.Default.Notifications, null) },
@@ -282,6 +321,23 @@ private fun AboutRow(context: android.content.Context, onCopied: () -> Unit) {
         }
     }
 }
+
+/** One switch in the "Copying messages" group. Only the first row carries an icon;
+ *  the rest indent to match it so the group reads as one list. */
+@Composable
+private fun CopyFormatToggle(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    icon: @Composable () -> Unit = { Spacer(modifier = Modifier.size(24.dp)) },
+    onCheckedChange: (Boolean) -> Unit
+) = ToggleSettingRow(
+    icon = icon,
+    title = title,
+    subtitle = subtitle,
+    checked = checked,
+    onCheckedChange = onCheckedChange
+)
 
 @Composable
 private fun SettingsSectionHeader(title: String) {
