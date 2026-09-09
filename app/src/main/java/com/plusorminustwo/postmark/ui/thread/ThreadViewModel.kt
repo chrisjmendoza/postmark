@@ -26,6 +26,7 @@ import com.plusorminustwo.postmark.data.preferences.DraftRepository
 import com.plusorminustwo.postmark.data.preferences.GestureHintsRepository
 import com.plusorminustwo.postmark.data.preferences.SaveNumberPromptRepository
 import com.plusorminustwo.postmark.data.preferences.SpamSuspicionRepository
+import com.plusorminustwo.postmark.data.preferences.CopyFormatPreferenceRepository
 import com.plusorminustwo.postmark.data.preferences.TimestampPreferenceRepository
 import com.plusorminustwo.postmark.data.reaction.ReactionFallbackParser
 import com.plusorminustwo.postmark.data.repository.BlockedNumbersRepository
@@ -58,6 +59,7 @@ import com.plusorminustwo.postmark.domain.voicememo.normalizedRecordingLevel
 import com.plusorminustwo.postmark.domain.voicememo.resampleAmplitudes
 import com.plusorminustwo.postmark.domain.voicememo.voiceMemoTransition
 import com.plusorminustwo.postmark.domain.customization.BubbleStylePreference
+import com.plusorminustwo.postmark.domain.customization.CopyFormatOptions
 import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import com.plusorminustwo.postmark.service.audio.VoiceMemoRecorder
 import com.plusorminustwo.postmark.service.customization.ChatBackgroundImageStore
@@ -154,6 +156,7 @@ class ThreadViewModel @Inject constructor(
     private val mmsManagerWrapper: MmsManagerWrapper,
     private val reactionParser: ReactionFallbackParser,
     private val timestampPrefRepo: TimestampPreferenceRepository,
+    private val copyFormatPrefRepo: CopyFormatPreferenceRepository,
     private val fontScaleRepo: BubbleFontScaleRepository,
     private val bubbleStyleRepo: BubbleStylePreferenceRepository,
     private val chatBackgroundPrefRepo: ChatBackgroundPreferenceRepository,
@@ -269,6 +272,9 @@ class ThreadViewModel @Inject constructor(
     fun dismissThreadTips() = gestureHintsRepo.markThreadTipsDismissed()
 
     val timestampPreference: StateFlow<TimestampPreference> = timestampPrefRepo.preference
+
+    /** What the selection bar's Copy action puts on the clipboard — set in Settings. */
+    val copyFormat: StateFlow<CopyFormatOptions> = copyFormatPrefRepo.options
 
     /** Global default chat-background id (null = none); overridden per-thread by
      *  [com.plusorminustwo.postmark.domain.model.Thread.chatBackgroundId] when set. */

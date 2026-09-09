@@ -1,10 +1,10 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: August 10, 2026
+Last updated: September 9, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
-Tests: 1148 passing (`./gradlew test`)
+Tests: 1162 passing (`./gradlew test`)
 
 ═══════════════════════════════════════════════════════
 TECH STACK
@@ -55,7 +55,9 @@ com.plusorminustwo.postmark
 ├── domain
 │   ├── model
 │   ├── customization       ← preference enums (theme/font/bubble style/
-│   │                          timestamp) + pure color/theme-preset math
+│   │                          timestamp) + CopyFormatOptions (clipboard
+│   │                          transcript toggles) + pure color/theme-preset
+│   │                          math
 │   └── formatter           ← ExportFormatter (done)
 ├── service
 │   ├── sms                 ← SmsReceiver/MmsManagerWrapper/IncomingNotifier
@@ -1288,9 +1290,27 @@ KEY DECISIONS LOCKED IN
   2. Thread view ⋮ menu → View stats (shortcut)
   Both navigate to same StatsScreen with threadId arg.
 
-- Export/Copy, current shape (verified against code Aug 10, 2026):
+- Export/Copy, current shape (verified against code Sept 9, 2026):
   Thread selection top bar → Copy: plain text to clipboard via
   ExportFormatter.formatForCopy() (ThreadScreen.kt) — works for AI + humans.
+  Transcript shape:
+      Conversation with Sarah (555) 999-8888
+      April 14, 2024
+      Sarah (9:03 AM)
+      Hey
+
+      You (9:07 AM)
+      Hi back
+        ↩ Sarah reacted ❤️
+  The phone number appears in the header line and NOWHERE else — a thread
+  whose display name has no letters (an unsaved number) labels its incoming
+  lines "Them" rather than repeating the number down the transcript.
+  Reactions group by REACTOR, not emoji; the local user's own reactions are
+  stored under SELF_ADDRESS, which is what makes them read "You reacted".
+  Settings → Copying messages toggles five parts of that output — phone
+  number, dates, timestamps, reactions, attachment placeholders — via
+  CopyFormatOptions / CopyFormatPreferenceRepository. Clipboard only: the
+  readable ZIP export always writes the full-fidelity transcript.
   Settings → Backup/Export → Export screen: picks conversations + an
   optional date range, then a FORMAT — Readable text+media (default) or
   Postmark backup (restorable) — to a file via the system CreateDocument

@@ -4,6 +4,48 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-09-09 (fix/copy-format-options) — copy transcript: reaction attribution, number placement, format toggles
+
+1162 tests passing (+20 new, 1 rewritten test class).
+
+Three related reports about the thread selection bar's Copy action.
+
+- **Reactions were credited to the wrong person.** A heart the user added
+  himself pasted as though the contact had sent it. `ThreadScreen`'s Copy call
+  passed `ownAddress = ""`, but reactions added in-app are stored with
+  `senderAddress = SELF_ADDRESS` ("self") — so the `senderAddress == ownAddress`
+  check never matched and every reaction fell through to the contact's name.
+  `ReadableExportWriter` was the only caller passing the right value, so the
+  parameter was deleted outright and `ExportFormatter` now compares against
+  `SELF_ADDRESS` directly — one canonical marker, one fewer thing to pass.
+  The old test hid the bug by constructing a reaction with
+  `senderAddress = ownAddress`, a combination that never occurs in the DB.
+- **The reaction line groups by reactor, not by emoji.** Was `↩ ❤️ Sarah`;
+  now `↩ You reacted ❤️, Sarah reacted 😂`. Says who did what without the
+  reader having to infer the direction.
+- **The phone number now appears in the header line and nowhere else.** For a
+  saved contact it always did. For an unsaved number the thread's display name
+  IS the number, so every incoming line repeated it down the whole transcript.
+  A display name with no letters is now read as "no name known": the number
+  goes in the header, incoming lines are labelled "Them". Header variants:
+  `Conversation with Sarah (555) 999-8888` / `Conversation with (555) 999-8888`
+  / `Conversation with Sarah` / `Conversation`.
+- **Settings → Copying messages** — five switches (phone number, dates,
+  timestamps, reactions, attachment placeholders), all on by default, backed by
+  `CopyFormatOptions` (domain/customization) + `CopyFormatPreferenceRepository`
+  (SharedPreferences + StateFlow, same shape as `TimestampPreferenceRepository`).
+  Rows live in the existing Settings screen rather than a new sub-screen — no
+  new nav route, no new inset surface. Clipboard only: the readable ZIP export
+  keeps writing the full-fidelity transcript.
+- **A golden test** (`full transcript layout`) pins the whole output end to end,
+  so the next change to the shape has to be deliberate.
+
+Known limitation, unchanged: group threads label every incoming message with
+the thread's joined display name — `ExportFormatter` has no per-participant
+name map.
+
+---
+
 ## 2026-08-13 (master) — relicensed MIT for textbook use
 
 1148 tests passing (no change — licensing only).

@@ -126,6 +126,7 @@ import com.plusorminustwo.postmark.domain.voicememo.shouldCancelDrag
 import com.plusorminustwo.postmark.domain.voicememo.shouldLatchLock
 import com.plusorminustwo.postmark.domain.customization.BubbleStylePreference
 import com.plusorminustwo.postmark.ui.theme.PostmarkTheme
+import com.plusorminustwo.postmark.domain.customization.CopyFormatOptions
 import com.plusorminustwo.postmark.domain.customization.TimestampPreference
 import com.plusorminustwo.postmark.ui.theme.isAppInDarkTheme
 import com.plusorminustwo.postmark.ui.theme.withBubbleScale
@@ -272,6 +273,8 @@ fun ThreadScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val timestampPref by viewModel.timestampPreference.collectAsState()
+    // What the selection bar's Copy action puts on the clipboard (Settings > Copying messages).
+    val copyFormat by viewModel.copyFormat.collectAsState()
     val activeDates by viewModel.activeDates.collectAsState()
     val quickReactionEmojis by viewModel.quickReactionEmojis.collectAsState()
     // Bubble font scale — driven by pinch gesture, persisted across sessions.
@@ -443,6 +446,7 @@ fun ThreadScreen(
     ThreadContent(
         uiState = uiState,
         timestampPref = timestampPref,
+        copyFormat = copyFormat,
         activeDates = activeDates,
         quickReactionEmojis = quickReactionEmojis,
         bubbleFontScale = bubbleFontScale,
@@ -559,6 +563,8 @@ private class Retained<T>(var value: T)
 private fun ThreadContent(
     uiState: ThreadUiState,
     timestampPref: TimestampPreference,
+    // Which optional parts of the copied transcript to emit (Settings > Copying messages).
+    copyFormat: CopyFormatOptions = CopyFormatOptions(),
     activeDates: Set<LocalDate>,
     quickReactionEmojis: List<String>,
     bubbleFontScale: Float = 1.0f,
@@ -1298,10 +1304,10 @@ private fun ThreadContent(
                         // untappable in this window).
                         if (topBarMode != TopBarMode.SELECTION) return@SelectionTopBar
                         val text = ExportFormatter.formatForCopy(
-                            uiState.messages.filter { it.id in uiState.selectedMessageIds },
-                            uiState.thread?.let { t -> t.nickname ?: t.displayName } ?: "",
-                            "",
-                            uiState.thread?.address ?: ""
+                            messages = uiState.messages.filter { it.id in uiState.selectedMessageIds },
+                            threadDisplayName = uiState.thread?.let { t -> t.nickname ?: t.displayName } ?: "",
+                            threadAddress = uiState.thread?.address ?: "",
+                            options = copyFormat
                         )
                         val cb = context.getSystemService(ClipboardManager::class.java)
                         cb.setPrimaryClip(ClipData.newPlainText("Postmark export", text))
