@@ -48,7 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.plusorminustwo.postmark.domain.formatter.formatPhoneNumber
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
-import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
+import com.plusorminustwo.postmark.ui.components.DateRangePickerDialog
 import com.plusorminustwo.postmark.ui.settings.RestoreStatus
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -87,7 +87,7 @@ fun ExportScreen(
     ) { uri -> uri?.let { viewModel.startExport(it) } }
 
     if (showDateSheet) {
-        DateRangeBottomSheet(
+        DateRangePickerDialog(
             onSelect = { start, end ->
                 viewModel.setDateRange(start, end)
                 showDateSheet = false

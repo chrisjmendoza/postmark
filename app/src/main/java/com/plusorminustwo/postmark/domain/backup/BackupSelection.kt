@@ -37,10 +37,9 @@ fun selectThreadsForExport(all: List<Thread>, selection: BackupSelection): List<
 
 /**
  * Converts picked calendar days to inclusive epoch-millis bounds in [zone]:
- * start-of-day of [start] through the last millisecond of [end]. The Material3
- * DateRangePicker hands back UTC-midnight millis that the UI converts to
- * [LocalDate]s (existing convention in ThreadScreen's DateRangeBottomSheet);
- * this maps those calendar days onto the local timeline message timestamps use.
+ * start-of-day of [start] through the last millisecond of [end]. The picker
+ * (ui/components/DateRangePickerDialog) reports plain [LocalDate]s; this maps
+ * those calendar days onto the local timeline message timestamps use.
  */
 fun localDateRangeToMillisBounds(
     start: LocalDate,

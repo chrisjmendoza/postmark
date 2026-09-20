@@ -1,5 +1,5 @@
 # Postmark — Active TODOs
-Last updated: July 24, 2026
+Last updated: September 17, 2026
 Ordered by priority tier. Work top-to-bottom within each tier.
 
 ---
@@ -122,11 +122,20 @@ Ordered by priority tier. Work top-to-bottom within each tier.
       bubble width captured via `onSizeChanged` constrains pills so they
       wrap to a second line instead of overflowing on short messages.
 - [x] **Custom date range selection** — "Date range" option in selection
-      mode; two-field date picker bottom sheet; auto-selects all messages
-      within range. Useful for exporting a full month at once.
+      mode; date picker dialog; auto-selects all messages within range.
+      Useful for exporting a full month at once.
       **July 16 2026 fix (found on-device):** the range now REPLACES the
       current selection and resets scope to MESSAGES — previously it added,
       which was a silent no-op when the All chip was active.
+      **Sept 17 2026 (`feat/paged-date-range-picker`):** the bottom sheet
+      wrapping Material3's `DateRangePicker` is gone. That picker scrolls
+      vertically and the sheet read those drags as its own, so it dismissed
+      itself about as often as it scrolled. Replaced by
+      `ui/components/DateRangePickerDialog` — a centered `AlertDialog`
+      showing one month at a time, paged horizontally, month and year labels
+      tappable for long jumps; calendar math pure in
+      `domain/calendar/MonthGrid.kt` (22 tests). Shared with the Export
+      screen. Still wants an on-device pass.
 - [x] **Draft persistence** (July 16 2026, on-device request) — a typed
       reply now survives leaving the chat, app restarts, and process death:
       `DraftRepository` (own SharedPreferences file, keyed by threadId),
@@ -999,12 +1008,12 @@ Context: placement-editor buttons shipped behind the nav bar (inset modifiers
 resolve to zero inside a Dialog's own window — fixed, see CLAUDE.md rule +
 docs/fable-bg-placement-spec.md §8). A full-app audit found no other live
 instance, but flagged:
-- [ ] **Device-check the three bottom sheets without explicit nav-bar
-      padding** — `DateRangeSheet`'s Cancel/Select row and both SearchScreen
-      filter sheets rely on M3 `ModalBottomSheet` default `contentWindowInsets`
-      alone, while `EmojiPickerBottomSheet` explicitly adds
-      `navigationBarsPadding()` — inconsistent; if any clips on-device,
-      it's a one-line fix.
+- [ ] **Device-check the two SearchScreen filter sheets without explicit
+      nav-bar padding** — they rely on M3 `ModalBottomSheet` default
+      `contentWindowInsets` alone, while `EmojiPickerBottomSheet` explicitly
+      adds `navigationBarsPadding()` — inconsistent; if either clips
+      on-device, it's a one-line fix. (The date-range sheet left this list
+      on Sept 17 2026: it is a centered `AlertDialog` now, not a sheet.)
 - [x] **OnboardingScreen bottom clipping on short screens** (July 23 2026,
       `fix/dynamic-text-reflow`) Closed as part of the dynamic-text-size fix
       below — the column is now `verticalScroll`-able and wrapped in

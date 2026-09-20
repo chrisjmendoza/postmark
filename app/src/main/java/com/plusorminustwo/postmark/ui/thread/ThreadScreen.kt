@@ -99,7 +99,7 @@ import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_PENDING
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_QUEUED
 import com.plusorminustwo.postmark.data.db.entity.DELIVERY_STATUS_SENT
 import com.plusorminustwo.postmark.ui.components.ContactAvatar
-import com.plusorminustwo.postmark.ui.components.DateRangeBottomSheet
+import com.plusorminustwo.postmark.ui.components.DateRangePickerDialog
 import com.plusorminustwo.postmark.ui.contact.addContactIntent
 import com.plusorminustwo.postmark.domain.formatter.ExportFormatter
 import com.plusorminustwo.postmark.domain.messageinfo.MessageInfoValue
@@ -1195,7 +1195,7 @@ private fun ThreadContent(
     }
 
     if (showDateRangePicker) {
-        DateRangeBottomSheet(
+        DateRangePickerDialog(
             onSelect = { start, end ->
                 onSelectByDateRange(start, end)
                 showDateRangePicker = false
@@ -1896,7 +1896,7 @@ private fun SelectionTopBar(
     }
 }
 
-// DateRangeBottomSheet moved to ui/components/DateRangeSheet.kt — shared with the
+// The date-range picker lives in ui/components/DateRangePickerDialog.kt — shared with the
 // backup Export screen.
 
 // ── ScrollToLatestButton ─────────────────────────────────────────────────────────
