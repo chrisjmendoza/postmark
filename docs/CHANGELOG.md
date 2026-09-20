@@ -4,6 +4,51 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-09-17 (feat/paged-date-range-picker) — date range picker: swipe months instead of scrolling years
+
+1184 tests passing (+22 new, 1 new test class).
+
+**The old date-range picker fought the sheet it sat in.** Picking a range —
+from a thread's "Date range" selection option, or on Settings → Backup/Export
+→ Export — opened a bottom sheet holding Material3's `DateRangePicker`, which
+scrolls vertically through every month in one long list. A `ModalBottomSheet`
+reads a vertical drag over its content as a drag on the sheet, so about half
+the time a scroll toward an older month dismissed the whole picker instead.
+Reaching last spring took several tries.
+
+- **It's a dialog now, and it pages sideways.** One month fills the body;
+  swipe left or right to move a month at a time, or use the ‹ › arrows.
+  Horizontal paging doesn't compete with anything, and an `AlertDialog` only
+  closes on Cancel, Back, or a tap outside — never by accident mid-gesture.
+- **The month name and the year are each tappable** for long jumps: month
+  opens a 3×4 month grid, year a scrolling year list (1990 through next year,
+  so scheduled sends stay reachable). Both jump the pager and drop straight
+  back to days. The weekday strip stays in the layout while those grids are
+  open — invisible, not removed — so the dialog never jumps by a row's height.
+- **Tapping days is one rule, not a mode.** First tap sets the start, a later
+  tap sets the end, a tap *before* a pending start restarts there rather than
+  building an inverted range, and a tap after a complete range begins the next
+  one. No reset button — `MonthGrid.tap()` covers every path.
+- **Nothing is hardcoded.** A day cell is a seventh of whatever width the
+  dialog gets, and the body reserves six week rows, so the circles stay round
+  and the height never shifts between a 4-row and a 6-row month. The weekday
+  header and the grid's leading blanks follow the locale's first day of week.
+- **`domain/calendar/MonthGrid.kt`** holds all of it as pure functions —
+  page ↔ month mapping, the month's cells, the tap rule, and how each day
+  should be drawn (`DayRole`) — with 22 unit tests. The composable does
+  layout and nothing else.
+- **`ui/components/DateRangeSheet.kt` is deleted** (70 lines), and with it one
+  of the three bottom sheets flagged in TODO.md for a nav-bar-inset device
+  check: a centered dialog has no bottom edge to clip. `localDateRangeToMillisBounds`
+  keeps working unchanged — the picker was already handing it `LocalDate`s,
+  so its doc comment about Material3's UTC-midnight millis was describing a
+  conversion that no longer happens anywhere.
+
+Both callers — `ThreadScreen`'s date-jump and the Export screen — use the same
+composable, same as before.
+
+---
+
 ## 2026-09-09 (fix/copy-format-options) — copy transcript: reaction attribution, number placement, format toggles
 
 1162 tests passing (+20 new, 1 rewritten test class).

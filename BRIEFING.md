@@ -1,10 +1,10 @@
 ═══════════════════════════════════════════════════════
 POSTMARK — PROJECT BRIEFING
-Last updated: September 9, 2026
+Last updated: September 17, 2026
 ═══════════════════════════════════════════════════════
 Android SMS app. Kotlin + Jetpack Compose.
 Package: com.plusorminustwo.postmark
-Tests: 1162 passing (`./gradlew test`)
+Tests: 1184 passing (`./gradlew test`)
 
 ═══════════════════════════════════════════════════════
 TECH STACK
@@ -1290,7 +1290,7 @@ KEY DECISIONS LOCKED IN
   2. Thread view ⋮ menu → View stats (shortcut)
   Both navigate to same StatsScreen with threadId arg.
 
-- Export/Copy, current shape (verified against code Sept 9, 2026):
+- Export/Copy, current shape (verified against code Sept 17, 2026):
   Thread selection top bar → Copy: plain text to clipboard via
   ExportFormatter.formatForCopy() (ThreadScreen.kt) — works for AI + humans.
   Transcript shape:
@@ -1315,6 +1315,13 @@ KEY DECISIONS LOCKED IN
   optional date range, then a FORMAT — Readable text+media (default) or
   Postmark backup (restorable) — to a file via the system CreateDocument
   dialog (ui/settings/export/ExportViewModel.ExportFormat).
+  The date range comes from ui/components/DateRangePickerDialog — a centered
+  AlertDialog holding one month at a time, paged sideways, with the month and
+  year labels tappable for long jumps. It replaced a bottom sheet wrapping
+  Material3's vertically scrolling DateRangePicker on Sept 17, 2026: the
+  sheet ate the vertical drags and dismissed itself mid-scroll. Calendar math
+  is pure in domain/calendar/MonthGrid.kt (22 tests). Shared with
+  ThreadScreen's "Date range" selection option — same composable, both places.
   A rendered-image "Share as image" mode was built and then reverted (see
   git log) — there is no image-export mode today.
 
@@ -1406,7 +1413,7 @@ TESTING CONVENTIONS
 - Gradle build + unit tests run after every implementation
   session.
 - Test files — historical snapshot below is from 2026-05-05 (26 classes);
-  76 test classes exist as of 2026-07-22 (885 tests passing). Trust the
+  104 test classes exist as of 2026-09-17 (1184 tests passing). Trust the
   src/test + src/androidTest tree and docs/CHANGELOG.md over this list:
     src/test/.../data/sync/StatsAlgorithmsTest.kt
     src/test/.../data/sync/StatsComputationTest.kt

@@ -125,6 +125,7 @@ app/src/main/java/com/plusorminustwo/postmark/
 ├── di/                 # Hilt modules (DatabaseModule, RepositoryModule, BackupModule)
 ├── domain/
 │   ├── backup/         # Backup archive format v2 (pure, JVM-testable)
+│   ├── calendar/       # MonthGrid — pure month/page math behind the date-range picker
 │   ├── contacts/       # SaveNumberPrompt logic
 │   ├── customization/  # Preference enums (theme/font/bubble/timestamp), ContactPalette,
 │   │                   # ChatBackgrounds, ColorMath, BackgroundPlacement, ThemePresets
@@ -155,7 +156,8 @@ app/src/main/java/com/plusorminustwo/postmark/
 │                       # (attachment budget allocation, video transcode planning),
 │                       # IncomingNotifier, spam/block receivers
 ├── ui/
-│   ├── components/     # Shared composables (avatars, color/background pickers)
+│   ├── components/     # Shared composables (avatars, color/background pickers,
+│   │                   # DateRangePickerDialog)
 │   ├── contact/        # Contact detail screen, media gallery
 │   ├── conversations/  # Conversation list, new-conversation screen
 │   ├── forward/        # Forward destination picker
