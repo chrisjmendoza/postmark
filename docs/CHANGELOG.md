@@ -4,6 +4,67 @@ Newest entries on top. Each day is a journal of work completed.
 
 ---
 
+## 2026-09-21 (fix/migration-test-inserts) — instrumented CI green again: three migration tests seeded a row the schema rejects
+
+1184 unit tests passing (unchanged — this fix touches instrumented tests only).
+67 instrumented tests, 3 of which had been failing on every run since 2026-07-24.
+
+**The README's "Instrumented Tests" badge has been red for six consecutive
+runs.** Nothing was wrong with the app, the emulator, or the migrations — three
+test cases were seeding a `messages` row that the database they were seeding it
+into won't accept.
+
+- **The cause.** `helper.createDatabase(name, version)` builds the tables from
+  the **exported schema JSON** for that version, not by replaying migrations.
+  In `20.json`, `21.json` and `22.json` the `messages` table has twelve
+  `NOT NULL` columns with no `DEFAULT` — the exported schema records no default
+  even though the migration that added each column supplies one. The INSERTs in
+  `migration20To21_addsNullableTimestamps`, `migration21To22_addsNullableRemindAt`
+  and `migration22To23_createsScheduledMessagesTable` listed ten of the twelve,
+  omitting `isStarred` and `isPinned`, so each threw
+  `SQLiteConstraintException: NOT NULL constraint failed: messages.isStarred`
+  before reaching the migration it was meant to exercise.
+- **The fix is the two missing columns**, in those three INSERTs and nowhere
+  else. SQLite reports only the first violated constraint, which is why the
+  logs named `isStarred` alone; `isPinned` has the identical definition and
+  would have failed on the next run.
+- **The other fourteen `INSERT INTO messages` statements in the file were
+  checked**, each against the schema JSON for the version its test actually
+  passes to `createDatabase`, and all are consistent. The three broken ones are
+  the newest in the file and had copied a column list that stopped growing at
+  v18 — compare `migration18To19`, which correctly ends `…, isRead, isStarred`.
+- **The migrations were not touched.** `MIGRATION_13_14` and `MIGRATION_18_19`
+  correctly do `ADD COLUMN … NOT NULL DEFAULT 0`, so a real upgraded install
+  has the default and no user was ever affected. Changing them to satisfy a
+  test would have broken real installs.
+- **`migration22To23_createsScheduledMessagesTable` had never run past its
+  first line**, so its `runMigrationsAndValidate` step is untested in practice.
+  Checked by hand rather than assumed: `MIGRATION_22_23`'s `CREATE TABLE` is
+  character-identical to `scheduled_messages`' `createSql` in `23.json`, and
+  Room's unknown-table check excludes `sqlite_sequence` (which the table's
+  `AUTOINCREMENT` creates) — `reactions` has used `AUTOINCREMENT` since before
+  v15, and the v14→15 and v15→16 tests validate green today on that same path.
+- **No `threads` row is needed** alongside those message INSERTs, even though
+  `messages.threadId` is a foreign key and every other test in the file seeds
+  the parent first: `room-testing` 2.7.2 never issues `PRAGMA foreign_keys = ON`
+  (only Room's generated database implementation does, and the migration helper
+  doesn't use it), so constraints aren't enforced in these tests.
+
+**Verification.** `assembleDebugAndroidTest` BUILD SUCCESSFUL; `./gradlew test`
+green at 1184. The connected run itself needs a device this machine doesn't
+have — confirm via **Actions → Instrumented Tests → Run workflow** on this
+branch and expect **67 passed, 0 failed**.
+
+**One decision left for the owner**, logged under CI and test hygiene in
+`docs/TODO.md`: genuine schema drift between the migrations (which give these
+columns a SQL `DEFAULT`) and the entities (which declare none), so fresh
+installs and upgraded installs end up with different DDL. Room's migration
+validation doesn't compare defaults, which is why it has gone unnoticed. Not
+fixed here — adding `@ColumnInfo(defaultValue = …)` regenerates the exported
+schema and changes what validation accepts.
+
+---
+
 ## 2026-09-17 (feat/paged-date-range-picker) — date range picker: swipe months instead of scrolling years
 
 1184 tests passing (+22 new, 1 new test class).

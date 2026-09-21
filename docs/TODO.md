@@ -1708,13 +1708,14 @@ slot in as toggles/rows on that screen.
       failure; 45 min timeout; concurrency group cancels superseded runs.
       Two badges added near the top of README (`distribute.yml` unit tests,
       `instrumented.yml` connected tests).
-      **⚠️ Needs a `workflow_dispatch` run to validate** — this was built and
-      committed from a machine with no way to execute GitHub Actions; YAML
-      was parsed clean with PyYAML and `connectedDebugAndroidTest` was
-      confirmed to exist via `./gradlew tasks --all`, but the action names/
-      versions/emulator flags are unverified until someone runs it for real
-      (Actions tab → Instrumented Tests → Run workflow, on this branch,
-      before merging). Flag any red run back here.
+      **✅ Workflow itself validated on real runs** (2026-09-21) — it was built
+      from a machine with no way to execute GitHub Actions, but the runs since
+      have settled the open questions: KVM enables, the AVD boots, Gradle
+      assembles, and all 67 instrumented tests execute. The action names,
+      versions and emulator flags are correct as written. The six red runs
+      from 2026-07-24 onward were three failing test cases, not infrastructure
+      — fixed on `fix/migration-test-inserts` (2026-09-21). Flag any further
+      red run back here.
       **Cost note for the owner**: this job boots an x86_64 emulator on
       every push to master — expect ~15-25 min per run (hosted-runner
       minutes, not free-tier-friendly at high push volume). Keep as-is if
@@ -1729,7 +1730,8 @@ slot in as toggles/rows on that screen.
       SUCCESSFUL (no device available to actually run them).
 - [x] **Add test size annotations** (July 22 2026) — `@MediumTest` on
       `PostmarkDatabaseTest` (in-memory Room) and `@LargeTest` on
-      `DatabaseMigrationTest` (on-disk DBs, full v1→v18 migration chain).
+      `DatabaseMigrationTest` (on-disk DBs, full migration chain — v1→v18 then,
+      v1→v23 now).
       Scoping decision: JVM unit-test classes under `src/test` deliberately
       left un-annotated — `androidx.test.filters` annotations are meaningless
       off-device and would just be noise there.
@@ -1751,6 +1753,23 @@ slot in as toggles/rows on that screen.
       (`targetSdk` already explicit), `android.enableAppCompileTimeRClass`,
       `android.usesSdkInManifest.disallowed` (no `<uses-sdk>` in any manifest).
       `assembleDebug`/`test` green after each, 898 tests.
+- [ ] **Decide what to do about `NOT NULL DEFAULT` schema drift on `messages`**
+      (surfaced 2026-09-21 while fixing `DatabaseMigrationTest`). The migrations
+      add `isStarred`, `isPinned`, `isRead`, `isMms`, `deliveryStatus` and friends
+      as `ADD COLUMN … NOT NULL DEFAULT 0`, but the entities declare no
+      `@ColumnInfo(defaultValue = …)`, so the exported schema JSON records no
+      default. The two install paths therefore diverge: an **upgraded** install
+      has `isStarred INTEGER NOT NULL DEFAULT 0`, a **fresh** install (Room
+      builds tables from the entities) has `isStarred INTEGER NOT NULL` with no
+      default. Room's migration validation does not compare default values,
+      which is why this has never been flagged. Harmless at runtime — every
+      write goes through Room, which always supplies the column — but it is why
+      `createDatabase(20)` in the migration tests rejects an INSERT that a real
+      v20 device would accept. Options: (a) leave it and keep the test INSERTs
+      exhaustive, as now; (b) add `defaultValue` to the entity columns, which
+      regenerates the schema JSON for the current version only and changes what
+      validation accepts — do not do this casually. Not a bug to fix blind;
+      wants a deliberate call.
 - [ ] **AGP 10 deprecation cleanup, part 2 — `newDsl` / `builtInKotlin`**
       (deferred from `chore/agp10-flags`, 2026-07-23). Root cause identified:
       the obsolete-API warning (`applicationVariants`/`testVariants`/

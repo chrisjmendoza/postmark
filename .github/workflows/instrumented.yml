@@ -2,7 +2,7 @@ name: Instrumented Tests
 
 # Triggers:
 #   - Every push to master (post-merge) — the "on merge to main" job: exercises the
-#     androidTest suite (DatabaseMigrationTest's full v1→v20 migration chain,
+#     androidTest suite (DatabaseMigrationTest's full v1→v23 migration chain,
 #     PostmarkDatabaseTest's in-memory Room DAO tests) that nobody can run locally
 #     most days, since no physical device is attached to the dev machine.
 #   - Manual trigger from GitHub Actions tab (Actions → Instrumented Tests → Run
