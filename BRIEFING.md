@@ -1410,6 +1410,13 @@ TESTING CONVENTIONS
 - Android instrumented tests: Room.inMemoryDatabaseBuilder
   + runBlocking + flow.first(). See PostmarkDatabaseTest
   for helper factories: thread(id), msg(id, threadId, ts).
+- Migration tests (DatabaseMigrationTest): helper.createDatabase(name, n)
+  builds the tables from app/schemas/…/n.json, NOT by replaying
+  migrations — so a seed INSERT must list every NOT NULL column that
+  version's JSON declares, including ones the migrations added with a
+  SQL DEFAULT (the exported schema records no default; see docs/TODO.md).
+  Never copy an older test's column list; read the JSON for the version
+  you pass. Three tests failed CI for two months on exactly this.
 - Gradle build + unit tests run after every implementation
   session.
 - Test files — historical snapshot below is from 2026-05-05 (26 classes);

@@ -505,8 +505,8 @@ class DatabaseMigrationTest {
     fun migration20To21_addsNullableTimestamps() {
         val db20 = helper.createDatabase("test_m2021", 20)
         db20.execSQL(
-            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead)" +
-            " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1)"
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead, isStarred, isPinned)" +
+            " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1, 0, 0)"
         )
 
         PostmarkDatabase.MIGRATION_20_21.migrate(db20)
@@ -533,8 +533,8 @@ class DatabaseMigrationTest {
     fun migration21To22_addsNullableRemindAt() {
         val db21 = helper.createDatabase("test_m2122", 21)
         db21.execSQL(
-            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead)" +
-            " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1)"
+            "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead, isStarred, isPinned)" +
+            " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1, 0, 0)"
         )
 
         PostmarkDatabase.MIGRATION_21_22.migrate(db21)
@@ -566,8 +566,8 @@ class DatabaseMigrationTest {
         // drift between ScheduledMessageEntity and the CREATE TABLE DDL fails here, not on device.
         helper.createDatabase("test_m2223", 22).apply {
             execSQL(
-                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead)" +
-                " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1)"
+                "INSERT INTO messages (id, threadId, address, body, timestamp, isSent, type, deliveryStatus, isMms, isRead, isStarred, isPinned)" +
+                " VALUES (7, 1, '+1', 'sms', 1000000, 1, 2, 0, 0, 1, 0, 0)"
             )
             close()
         }
